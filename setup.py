@@ -30,6 +30,7 @@ URL = "https://github.com/nerfstudio-project/gsplat"
 
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 
+
 def get_ext():
     from torch.utils.cpp_extension import BuildExtension
 

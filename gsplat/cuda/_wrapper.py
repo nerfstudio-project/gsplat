@@ -44,25 +44,36 @@ def _make_lazy_cuda_obj(name: str) -> Any:
         obj = getattr(_C, name_split)
     return obj
 
+
 def has_2dgs():
     from ._backend import _C
+
     return hasattr(_C, "projection_2dgs_fused_fwd")
+
 
 def has_3dgs():
     from ._backend import _C
+
     return hasattr(_C, "projection_ewa_simple_fwd")
+
 
 def has_3dgut():
     from ._backend import _C
+
     return hasattr(_C, "projection_ut_3dgs_fused")
+
 
 def has_adam():
     from ._backend import _C
+
     return hasattr(_C, "adam")
+
 
 def has_reloc():
     from ._backend import _C
+
     return hasattr(_C, "relocation")
+
 
 class RollingShutterType(Enum):
     ROLLING_TOP_TO_BOTTOM = 0
@@ -1275,9 +1286,11 @@ def fully_fused_projection_with_ut(
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
-        ftheta_coeffs.to_cpp()
-        if ftheta_coeffs is not None
-        else FThetaCameraDistortionParameters.to_cpp_default(),
+        (
+            ftheta_coeffs.to_cpp()
+            if ftheta_coeffs is not None
+            else FThetaCameraDistortionParameters.to_cpp_default()
+        ),
     )
     if not calc_compensations:
         compensations = None

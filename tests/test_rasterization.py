@@ -30,6 +30,7 @@ import gsplat
 
 device = torch.device("cuda:0")
 
+
 # Only 3dgs is being tested as per default args with_ut==False and with_eval3d==False
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")

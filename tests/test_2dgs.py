@@ -23,6 +23,7 @@ import gsplat
 
 device = torch.device("cuda:0")
 
+
 def expand(data: dict, batch_dims: Tuple[int, ...]):
     # append multiple batch dimensions to the front of the tensor
     # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
@@ -68,6 +69,7 @@ def test_data():
         "width": W,
         "height": H,
     }
+
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")

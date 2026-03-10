@@ -43,6 +43,7 @@ BUILD_RELOC = os.getenv("BUILD_RELOC")
 
 NUM_CHANNELS = os.getenv("NUM_CHANNELS")
 
+
 def get_build_parameters():
     name = "gsplat_cuda"
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -50,7 +51,7 @@ def get_build_parameters():
     # Include paths -----------------------------------
     extra_include_paths = [
         os.path.join(PATH, "include/"),
-        os.path.join(current_dir, "csrc", "third_party", "glm")
+        os.path.join(current_dir, "csrc", "third_party", "glm"),
     ]
 
     # Source files ------------------------------------
@@ -79,7 +80,7 @@ def get_build_parameters():
     extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
-    extra_cflags += ["-g","-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
+    extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
 
     extra_cuda_cflags += ["-lineinfo"] if DEBUG else []
@@ -126,7 +127,9 @@ def get_build_parameters():
 
     if NUM_CHANNELS is not None:
         # nvcc has a bug where you need to escape the commas in macro values defined with -D.
-        extra_cuda_cflags += ['-DGSPLAT_NUM_CHANNELS="'+NUM_CHANNELS.replace(',','\\,')+'"']
+        extra_cuda_cflags += [
+            '-DGSPLAT_NUM_CHANNELS="' + NUM_CHANNELS.replace(",", "\\,") + '"'
+        ]
         # gcc would not grok the backslash, so here we just pass NUM_CHANNELS as is.
         extra_cflags += [f"-DGSPLAT_NUM_CHANNELS={NUM_CHANNELS}"]
 
@@ -138,8 +141,9 @@ def get_build_parameters():
         sources=sources,
         extra_cflags=extra_cflags,
         extra_cuda_cflags=extra_cuda_cflags,
-        extra_ldflags=extra_ldflags
+        extra_ldflags=extra_ldflags,
     )
+
 
 def build_and_load_gsplat():
     build_params = get_build_parameters()
@@ -161,7 +165,7 @@ def build_and_load_gsplat():
         if os.path.exists(saved_build_params_fname):
             with open(saved_build_params_fname, "r") as f:
                 saved_build_params = SimpleNamespace(**json.load(f))
-            build_params_changed = saved_build_params!=build_params
+            build_params_changed = saved_build_params != build_params
     except Exception as e:
         Console().print(
             f"[bold yellow]gsplat: rebuilding due to error loading saved build parameters: {e}"
@@ -197,7 +201,7 @@ def build_and_load_gsplat():
     def status_context():
         tic = time.time()
         with Console().status(
-                f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={MAX_JOBS if MAX_JOBS else 'max'} (This may take a few minutes the first time)",
+            f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={MAX_JOBS if MAX_JOBS else 'max'} (This may take a few minutes the first time)",
             spinner="bouncingBall",
         ):
             yield
@@ -209,9 +213,13 @@ def build_and_load_gsplat():
 
     # If the build exists, we assume the extension has been built
     # and we can load it.
-    module_exists = os.path.exists(os.path.join(build_dir, f"{build_params.name}.so")) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.lib"))
+    module_exists = os.path.exists(
+        os.path.join(build_dir, f"{build_params.name}.so")
+    ) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.lib"))
 
-    with status_context() if not module_exists or build_params_changed else nullcontext():
+    with (
+        status_context() if not module_exists or build_params_changed else nullcontext()
+    ):
         # If the JIT build happens concurrently in multiple processes,
         # race conditions can occur when removing the lock file at:
         # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736
@@ -240,6 +248,5 @@ def build_and_load_gsplat():
             for envvar in envvars_to_remove:
                 os.environ.pop(envvar)
 
-__all__ = [
-    "get_build_parameters"
-]
+
+__all__ = ["get_build_parameters"]

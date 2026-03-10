@@ -26,6 +26,7 @@ import torch.utils.cpp_extension as jit
 from .build import build_and_load_gsplat
 from rich.console import Console
 
+
 def cuda_toolkit_available():
     """
     Check more robustly if the CUDA toolkit is available.
@@ -46,6 +47,7 @@ def cuda_toolkit_available():
         except FileNotFoundError:
             return False
     return True
+
 
 _C = None
 
