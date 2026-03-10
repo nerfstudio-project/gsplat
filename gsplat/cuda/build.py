@@ -20,7 +20,7 @@ import glob
 import sys
 import torch
 import platform
-import pickle
+import json
 from types import SimpleNamespace
 import torch.utils.cpp_extension as jit
 from contextlib import nullcontext, contextmanager
@@ -154,13 +154,13 @@ def build_and_load_gsplat():
         pass
 
     # Check if the build parameters have changed since last build (if any
-    saved_build_params_fname = os.path.join(build_dir, "build_params.pkl")
+    saved_build_params_fname = os.path.join(build_dir, "build_params.json")
     saved_build_params = None
     build_params_changed = False
     try:
         if os.path.exists(saved_build_params_fname):
-            with open(saved_build_params_fname, "rb") as f:
-                saved_build_params = pickle.load(f)
+            with open(saved_build_params_fname, "r") as f:
+                saved_build_params = SimpleNamespace(**json.load(f))
             build_params_changed = saved_build_params!=build_params
     except Exception as e:
         Console().print(
@@ -190,8 +190,8 @@ def build_and_load_gsplat():
         os.makedirs(build_dir, exist_ok=True)
 
     # Save our current build parameters
-    with open(saved_build_params_fname, "wb") as f:
-        pickle.dump(build_params, f)
+    with open(saved_build_params_fname, "w") as f:
+        json.dump(build_params.__dict__, f)
 
     @contextmanager
     def status_context():
