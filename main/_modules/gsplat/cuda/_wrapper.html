@@ -302,6 +302,7 @@
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.cuda._wrapper</h1><div class="highlight"><pre>
 <span></span><span class="c1"># SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.</span>
+<span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
@@ -345,6 +346,36 @@
     <span class="k">for</span> <span class="n">name_split</span> <span class="ow">in</span> <span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">):</span>
         <span class="n">obj</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="n">name_split</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">obj</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">has_2dgs</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
+
+    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="s2">&quot;projection_2dgs_fused_fwd&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">has_3dgs</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
+
+    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="s2">&quot;projection_ewa_simple_fwd&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">has_3dgut</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
+
+    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="s2">&quot;projection_ut_3dgs_fused&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">has_adam</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
+
+    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="s2">&quot;adam&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">has_reloc</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
+
+    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="s2">&quot;relocation&quot;</span><span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RollingShutterType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
@@ -1585,9 +1616,11 @@
         <span class="n">radial_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">tangential_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">thin_prism_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">ftheta_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
-        <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-        <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="o">.</span><span class="n">to_cpp_default</span><span class="p">(),</span>
+        <span class="p">(</span>
+            <span class="n">ftheta_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="o">.</span><span class="n">to_cpp_default</span><span class="p">()</span>
+        <span class="p">),</span>
     <span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
         <span class="n">compensations</span> <span class="o">=</span> <span class="kc">None</span>
