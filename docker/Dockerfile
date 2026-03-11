@@ -58,6 +58,13 @@ EOS
 # Installs all GSplat dependencies (including dev dependencies) -----------
 FROM python as gsplat-deps
 
+# Dependency validation: ensure Dockerfile deps stay in sync with source files.
+# Aborts the build if the Dockerfile package lists diverge from
+# setup.py (base/dev) or examples/requirements.txt (examples).
+COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
+COPY --link --from=gsplatrepo setup.py /opt/dep-check/setup.py
+COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
+
 # Main library dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
@@ -71,7 +78,12 @@ RUN --mount=type=tmpfs,target=/tmp \
         "typing_extensions; python_version<'3.8'"
     )
 
+    check_gsplat_deps.sh -f /opt/dep-check/setup.py:install -- "${packages[@]}"
+
     pip install "${packages[@]}"
+
+    # Save list so the examples stage can reference it
+    printf '%s\n' "${packages[@]}" > /opt/dep-check/base_packages.txt
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
@@ -99,11 +111,16 @@ RUN --mount=type=tmpfs,target=/tmp \
         "torchpq==0.3.0.6"
     )
 
+    check_gsplat_deps.sh -f /opt/dep-check/setup.py:dev -- "${packages[@]}"
+
     # Tests need cupy, let install faster (and smaller) by targeting a specific compute and rely on CUDA JIT.
     CUPY_NUM_BUILD_JOBS=$(nproc) \
     CUPY_NUM_NVCC_THREADS=$(nproc) \
     CUPY_NVCC_GENERATE_CODE=arch=compute_80,code=compute_80 \
         pip install "${packages[@]}"
+
+    # Save list so the examples stage can reference it
+    printf '%s\n' "${packages[@]}" > /opt/dep-check/dev_packages.txt
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
@@ -112,6 +129,10 @@ EOS
 # Examples dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
+    # Load base + dev package lists saved by previous stages
+    mapfile -t base_pkgs < /opt/dep-check/base_packages.txt
+    mapfile -t dev_pkgs < /opt/dep-check/dev_packages.txt
+
     # fused-ssim only builds for a pre-defined set of architectures.
     # In order to override it, and support, say, Blackwell, we need a more
     # recent commit that allows overriding this set.
@@ -123,8 +144,7 @@ RUN --mount=type=tmpfs,target=/tmp \
     # sm_90: Hopper/Tesla gh100
     # sm_120: Blackwell/GeForce gb20x
     # sm_121: Blackwell/Tesla gb20x, gb21x
-    CUDA_ARCHITECTURES='75;80;89;90;120;121' \
-        pip install --no-build-isolation "git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
+    fused_ssim="git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
 
     # Examples
     packages=(
@@ -142,11 +162,28 @@ RUN --mount=type=tmpfs,target=/tmp \
         "splines==0.3.3"
         "ppisp @ git+https://github.com/nv-tlabs/ppisp@v1.0.0"
         "opencv-python-headless==4.10.0.84"
+        "tqdm==4.67.3"
+        "matplotlib==3.10.8"
+        "Pillow==12.1.1"
     )
+
+    check_gsplat_deps.sh \
+        -f /opt/dep-check/setup.py:install \
+        -f /opt/dep-check/setup.py:dev \
+        -f /opt/dep-check/examples/requirements.txt \
+        -- "${base_pkgs[@]}" "${dev_pkgs[@]}" "$fused_ssim" "${packages[@]}"
+
+    # Build fused_ssim first (needs special env var)
+    CUDA_ARCHITECTURES='75;80;89;90;120;121' \
+        pip install --no-build-isolation "$fused_ssim"
 
     # Needs --no-build-isolation or else fused-ssim can't be installed as
     # it needs torch in its setup.py.
     pip install --no-build-isolation "${packages[@]}"
+
+    # Save combined list for entrypoint runtime check
+    printf '%s\n' "${base_pkgs[@]}" "${dev_pkgs[@]}" \
+        "$fused_ssim" "${packages[@]}" > /opt/dep-check/all_packages.txt
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
@@ -159,7 +196,9 @@ EOS
 FROM python as main
 
 COPY --link --from=gsplat-deps "$PYTHON_VENV_PATH/" "$PYTHON_VENV_PATH/"
+COPY --link --from=gsplat-deps /opt/dep-check/ /opt/dep-check/
 COPY --link --from=ccache ccache /usr/local/bin/ccache
+COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 
 # Now install everything else we need from apt
 RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \

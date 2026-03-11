@@ -1,11 +1,11 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 HOST_UID="${HOST_UID:-0}"
 RUN_AS="${RUN_AS:-${HOST_USER:-root}}"
 
 # We expect to start as root
-if [ "$(id -u)" -ne 0 ]; then
+if (( $(id -u) != 0 )); then
     exec "$@"
 fi
 
@@ -85,6 +85,28 @@ if [ "$HOST_UID" != 0 ]; then
     chmod 0440 "$SUDOERS_FILE"
 
     export HOME="$HOST_HOME"
+fi
+
+# Check if gsplat source deps match what's installed in the image.
+# This warns (but does not block) when the source has been updated
+# but the Docker image hasn't been rebuilt.
+if [[ ! -f /opt/dep-check/all_packages.txt ]]; then
+    echo "ERROR: /opt/dep-check/all_packages.txt not found in the docker image." >&2
+    echo "The docker image was not built correctly." >&2
+    exit 1
+fi
+
+if [[ ! -f "$PWD/setup.py" ]] || ! grep -q 'gsplat' "$PWD/setup.py" 2>/dev/null; then
+    echo "WARNING: gsplat setup.py not found in $PWD — skipping dependency check." >&2
+else
+    mapfile -t pkgs < /opt/dep-check/all_packages.txt
+    args=(-f "$PWD/setup.py:install" -f "$PWD/setup.py:dev")
+    if [[ -f "$PWD/examples/requirements.txt" ]]; then
+        args+=(-f "$PWD/examples/requirements.txt")
+    else
+        echo "WARNING: $PWD/examples/requirements.txt not found — skipping examples dependency check." >&2
+    fi
+    check_gsplat_deps.sh "${args[@]}" -- "${pkgs[@]}" || true
 fi
 
 # Run the command as RUN_AS user
