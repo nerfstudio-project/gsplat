@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -63,7 +64,12 @@ def load_test_data(
 
     # create gaussian attributes
     N = len(means)
-    scales = torch.rand((N, 3), device=device) * 0.02
+    # Generate scales in range [1e-4, 0.02] to avoid numerical instability
+    # Gradient of 1/scale is -1/scale², which explodes for extremely small scales
+    min_scale = 1e-4
+    max_scale = 0.02
+    scales = torch.rand((N, 3), device=device) * (max_scale - min_scale) + min_scale
+
     quats = F.normalize(torch.randn((N, 4), device=device), dim=-1)
     opacities = torch.rand((N,), device=device)
 
