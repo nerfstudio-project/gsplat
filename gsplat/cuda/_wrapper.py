@@ -67,7 +67,28 @@ class ExternalDistortionReferencePolynomial(IntEnum):
     BACKWARD = 2
 
 
-BivariateWindshieldModelParameters = _make_lazy_cuda_cls("BivariateWindshieldModelParameters")
+class BivariateWindshieldModelParameters:
+    """Thin wrapper around the CUDA BivariateWindshieldModelParameters class.
+
+    torch::Library bindings does not allow standalone constants. This
+    wrapper fetches MAX_ORDER and MAX_COEFFS from the C++ static getters
+    and exposes them as class-level attributes, preserving the existing
+    attribute-access calling convention.
+    """
+    _cuda_cls = None
+    MAX_ORDER: int = 5 # default, overriden by C++ value
+    MAX_COEFFS: int = 21 # default, overriden by C++ value
+
+    @classmethod
+    def _ensure_cuda_cls(cls):
+        if cls._cuda_cls is None:
+            cls._cuda_cls = _make_lazy_cuda_cls("BivariateWindshieldModelParameters")
+            cls.MAX_ORDER = cls._cuda_cls.get_max_order()
+            cls.MAX_COEFFS = cls._cuda_cls.get_max_coeffs()
+
+    def __new__(cls):
+        cls._ensure_cuda_cls()
+        return cls._cuda_cls()
 
 def has_camera_wrappers():
     from ._backend import _C
@@ -108,6 +129,7 @@ def create_camera_model(
     tangential_coeffs: Optional[Tensor] = None,
     thin_prism_coeffs: Optional[Tensor] = None,
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     rs_type: RollingShutterType = RollingShutterType.GLOBAL,
     ):
     BaseCameraModelCUDA = _make_lazy_cuda_cls("BaseCameraModel")
@@ -122,6 +144,7 @@ def create_camera_model(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
+        external_distortion_coeffs,
         rs_type)
 
 def world_to_cam(

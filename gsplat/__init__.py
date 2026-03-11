@@ -26,6 +26,7 @@ from .cuda._wrapper import (
     has_3dgs,
     has_3dgut,
     has_adam,
+    has_camera_wrappers,
     has_reloc,
 )
 from .exporter import export_splats
@@ -79,5 +80,6 @@ all = [
     "has_3dgs",
     "has_3dgut",
     "has_adam",
+    "has_camera_wrappers",
     "has_reloc",
 ]

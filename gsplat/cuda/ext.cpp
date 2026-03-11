@@ -7,6 +7,7 @@
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
 #include "CameraWrappers.h"
+#include "ExternalDistortionWrappers.h"
 #endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -216,7 +217,28 @@ TORCH_LIBRARY(gsplat, m) {
         .def_readwrite("horizontal_poly", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly)
         .def_readwrite("vertical_poly", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly)
         .def_readwrite("horizontal_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly_inverse)
-        .def_readwrite("vertical_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly_inverse);
+        .def_readwrite("vertical_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly_inverse)
+        .def_property(
+            "reference_poly",
+            [](const c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> &self
+            ) { return static_cast<int64_t>(self->reference_poly); },
+            [](const c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> &self,
+               int64_t reference_poly) {
+                self->reference_poly =
+                    static_cast<gsplat::extdist::ReferencePolynomialType>(reference_poly);
+            }
+        )
+        // torch::Library is designed for operators, not standalone constants.
+        // We expose these compile-time constants via static getters so Python
+        // can query them from the authoritative C++ definition.
+        .def_static("get_max_order",
+            []() -> int64_t {
+                return gsplat::extdist::BivariateWindshieldModelParameters::MAX_ORDER;
+            })
+        .def_static("get_max_coeffs",
+            []() -> int64_t {
+                return gsplat::extdist::BivariateWindshieldModelParameters::MAX_COEFFS;
+            });
 
     // ==================== Camera Model Bindings ====================
 
@@ -292,6 +314,7 @@ TORCH_LIBRARY(gsplat, m) {
                const std::optional<torch::Tensor> &tangential_coeffs,
                const std::optional<torch::Tensor> &thin_prism_coeffs,
                const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
+               const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs,
                int64_t rs_type) {
                 return gsplat::PyBaseCameraModel<>::create(
                     width,
@@ -303,6 +326,7 @@ TORCH_LIBRARY(gsplat, m) {
                     tangential_coeffs,
                     thin_prism_coeffs,
                     ftheta_coeffs,
+                    external_distortion_coeffs,
                     static_cast<ShutterType>(rs_type)
                 );
             },
@@ -315,9 +339,10 @@ TORCH_LIBRARY(gsplat, m) {
                            int64_t height,
                            const torch::Tensor &focal_lengths,
                            const torch::Tensor &principal_points,
-                           int64_t rs_type) {
+                           int64_t rs_type,
+                           const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs) {
                 return c10::make_intrusive<gsplat::PyPerfectPinholeCameraModel>(
-                    width, height, focal_lengths, principal_points, static_cast<ShutterType>(rs_type)
+                    width, height, focal_lengths, principal_points, static_cast<ShutterType>(rs_type), external_distortion_coeffs
                 );
             }),
             "Constructor",
@@ -325,7 +350,8 @@ TORCH_LIBRARY(gsplat, m) {
              torch::arg("height"),
              torch::arg("focal_lengths"),
              torch::arg("principal_points"),
-             torch::arg("rs_type")}
+             torch::arg("rs_type"),
+             torch::arg("external_distortion_coeffs")}
         );
 
     m.class_<gsplat::PyOpenCVPinholeCameraModel>("OpenCVPinholeCameraModel")
@@ -337,7 +363,8 @@ TORCH_LIBRARY(gsplat, m) {
                            const std::optional<torch::Tensor> &radial_coeffs,
                            const std::optional<torch::Tensor> &tangential_coeffs,
                            const std::optional<torch::Tensor> &thin_prism_coeffs,
-                           int64_t rs_type) {
+                           int64_t rs_type,
+                           const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs) {
                 return c10::make_intrusive<gsplat::PyOpenCVPinholeCameraModel>(
                     width,
                     height,
@@ -346,7 +373,8 @@ TORCH_LIBRARY(gsplat, m) {
                     radial_coeffs,
                     tangential_coeffs,
                     thin_prism_coeffs,
-                    static_cast<ShutterType>(rs_type)
+                    static_cast<ShutterType>(rs_type),
+                    external_distortion_coeffs
                 );
             }),
             "Constructor",
@@ -357,23 +385,21 @@ TORCH_LIBRARY(gsplat, m) {
              torch::arg("radial_coeffs"),
              torch::arg("tangential_coeffs"),
              torch::arg("thin_prism_coeffs"),
-             torch::arg("rs_type")}
+             torch::arg("rs_type"),
+             torch::arg("external_distortion_coeffs")}
         );
 
     m.class_<gsplat::PyOpenCVFisheyeCameraModel>("OpenCVFisheyeCameraModel")
         .def(
-            torch::init([](
-
-                            int64_t width,
-                            int64_t height,
-                            const torch::Tensor &focal_lengths,
-                            const torch::Tensor &principal_points,
-                            const std::optional<torch::Tensor> &radial_coeffs, // [..., 4]
-                            int64_t rs_type
-
-                        ) {
+            torch::init([](int64_t width,
+                           int64_t height,
+                           const torch::Tensor &focal_lengths,
+                           const torch::Tensor &principal_points,
+                           const std::optional<torch::Tensor> &radial_coeffs, // [..., 4]
+                           int64_t rs_type,
+                           const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs) {
                 return c10::make_intrusive<gsplat::PyOpenCVFisheyeCameraModel>(
-                    width, height, focal_lengths, principal_points, radial_coeffs, static_cast<ShutterType>(rs_type)
+                    width, height, focal_lengths, principal_points, radial_coeffs, static_cast<ShutterType>(rs_type), external_distortion_coeffs
                 );
             }),
             "Constructor",
@@ -382,7 +408,8 @@ TORCH_LIBRARY(gsplat, m) {
              torch::arg("focal_lengths"),
              torch::arg("principal_points"),
              torch::arg("radial_coeffs"),
-             torch::arg("rs_type")}
+             torch::arg("rs_type"),
+             torch::arg("external_distortion_coeffs")}
         );
 
     m.class_<gsplat::PyFThetaCameraModel>("FThetaCameraModel")
@@ -395,7 +422,8 @@ TORCH_LIBRARY(gsplat, m) {
                            const torch::Tensor &linear_cde,
                            int64_t reference_poly,
                            const torch::Tensor &max_angle,
-                           int64_t rs_type) {
+                           int64_t rs_type,
+                           const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs) {
                 return c10::make_intrusive<gsplat::PyFThetaCameraModel>(
                     width,
                     height,
@@ -405,7 +433,8 @@ TORCH_LIBRARY(gsplat, m) {
                     linear_cde,
                     static_cast<FThetaCameraDistortionParameters::PolynomialType>(reference_poly),
                     max_angle,
-                    static_cast<ShutterType>(rs_type)
+                    static_cast<ShutterType>(rs_type),
+                    external_distortion_coeffs
                 );
             }),
             "Constructor",
@@ -417,7 +446,8 @@ TORCH_LIBRARY(gsplat, m) {
              torch::arg("linear_cde"),
              torch::arg("reference_poly"),
              torch::arg("max_angle"),
-             torch::arg("rs_type")}
+             torch::arg("rs_type"),
+             torch::arg("external_distortion_coeffs")}
         );
 #endif
 
@@ -473,6 +503,11 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("rasterize_to_pixels_from_world_3dgs_fwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor? sample_counts, Tensor? normals) -> (Tensor, Tensor, Tensor)");
     m.def("rasterize_to_pixels_from_world_3dgs_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor? v_render_normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)");
 #endif
+
+#if GSPLAT_BUILD_CAMERA_WRAPPERS
+    m.def("distort_camera_rays(Tensor rays, Tensor h_poly, Tensor v_poly, Tensor h_inv_poly, Tensor v_inv_poly, int reference_poly, bool inverse) -> Tensor");
+    m.def("eval_bivariate_poly(Tensor x, Tensor y, Tensor poly_coeffs, int order) -> Tensor");
+#endif
 }
 
 TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
@@ -521,5 +556,10 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
     m.impl("projection_ut_3dgs_fused", &gsplat::projection_ut_3dgs_fused);
     m.impl("rasterize_to_pixels_from_world_3dgs_fwd", &gsplat::rasterize_to_pixels_from_world_3dgs_fwd);
     m.impl("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
+#endif
+
+#if GSPLAT_BUILD_CAMERA_WRAPPERS
+    m.impl("distort_camera_rays", &gsplat::extdist::distort_camera_rays_torch_op);
+    m.impl("eval_bivariate_poly", &gsplat::extdist::eval_bivariate_poly_wrapper);
 #endif
 }
