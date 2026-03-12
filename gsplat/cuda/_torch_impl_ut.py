@@ -41,6 +41,7 @@ from ._torch_cameras import (
     _interpolate_shutter_pose,
 )
 
+
 def _compute_ut_weights(
     ut_params: UnscentedTransformParameters,
     device: torch.device,
@@ -74,14 +75,10 @@ def _compute_ut_weights(
 
     # Build weight tensors (7 elements: 1 center + 6 others)
     weights_mean = torch.tensor(
-        [weight_center_mean] + [weight_others] * 6,
-        device=device,
-        dtype=dtype
+        [weight_center_mean] + [weight_others] * 6, device=device, dtype=dtype
     )
     weights_cov = torch.tensor(
-        [weight_center_cov] + [weight_others] * 6,
-        device=device,
-        dtype=dtype
+        [weight_center_cov] + [weight_others] * 6, device=device, dtype=dtype
     )
 
     return weights_mean, weights_cov
@@ -128,33 +125,38 @@ def _world_gaussian_sigma_points(
     #   This gives: column j = R[:, j] * scales[j] (j-th basis vector scaled)
     #   Result: 3x3 matrix with 3 scaled basis vectors as columns
     # Then transpose to get deltas as rows for easier concatenation
-    deltas = math.sqrt(D + lambda_) * R * scales.unsqueeze(-2)  # [..., N, 3, 3], 3 deltas as columns
+    deltas = (
+        math.sqrt(D + lambda_) * R * scales.unsqueeze(-2)
+    )  # [..., N, 3, 3], 3 deltas as columns
     deltas = deltas.transpose(-2, -1)  # [..., N, 3, 3], 3 deltas as rows
 
     # Build sigma points: [center, +deltas, -deltas]
     means_expanded = means.unsqueeze(-2)  # [..., N, 1, 3]
 
     # Concatenate: point 0 (center), points 1-3 (+deltas), points 4-6 (-deltas)
-    sigma_points_world = torch.cat([
-        means_expanded,           # [..., N, 1, 3] - point 0
-        means_expanded + deltas,  # [..., N, 3, 3] - points 1-3
-        means_expanded - deltas   # [..., N, 3, 3] - points 4-6
-    ], dim=-2)  # [..., N, 7, 3]
+    sigma_points_world = torch.cat(
+        [
+            means_expanded,  # [..., N, 1, 3] - point 0
+            means_expanded + deltas,  # [..., N, 3, 3] - points 1-3
+            means_expanded - deltas,  # [..., N, 3, 3] - points 4-6
+        ],
+        dim=-2,
+    )  # [..., N, 7, 3]
 
     return sigma_points_world
+
 
 def _world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     camera: _BaseCameraModel,
     means: Tensor,  # [B, N, 3]
     quats: Tensor,  # [B, N, 4]
     scales: Tensor,  # [B, N, 3]
-    pose_start: Tensor, # [B, C, 7]
-    pose_end: Tensor, # [B, C, 7]
+    pose_start: Tensor,  # [B, C, 7]
+    pose_end: Tensor,  # [B, C, 7]
     ut_params: UnscentedTransformParameters,
 ) -> Tuple[Tensor, Tensor]:
     """Project a 3D Gaussian to 2D using the Unscented Transform to handle non-linear
-    camera models (distortion, fisheye, rolling shutter).
-"""
+    camera models (distortion, fisheye, rolling shutter)."""
     B = means.shape[:-2]
     N = means.shape[-2]
     C = pose_start.shape[-2]
@@ -176,21 +178,17 @@ def _world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     # Project sigma points using camera model
 
     # Expand sigma points for each camera: [..., N, 7, 3] -> [..., C, N, 7, 3]
-    sigma_points_world_exp = sigma_points_world.unsqueeze(-4).expand(
-        B + (C, N, 7, 3)
-    )
+    sigma_points_world_exp = sigma_points_world.unsqueeze(-4).expand(B + (C, N, 7, 3))
 
     # Flatten only N and sigma points, keep C separate: [B, C, N, 7, 3] -> [B, C, N*7, 3]
     # Camera model is batched over C, so each camera processes its own N*7 points
-    sigma_points_world_flat = sigma_points_world_exp.reshape(
-        B + (C, N * 7, 3)
-    )
+    sigma_points_world_flat = sigma_points_world_exp.reshape(B + (C, N * 7, 3))
 
     # Project using camera model.
     points_2d_flat, valid_flat = camera.world_point_to_image_point_shutter_pose(
         world_points=sigma_points_world_flat,  # [..., C, N*7, 3] world points per camera
         shutter_pose_start=pose_start,  # [..., C, 7]
-        shutter_pose_end=pose_end,    # [..., C, 7]
+        shutter_pose_end=pose_end,  # [..., C, 7]
         margin_factor=ut_params.in_image_margin_factor,
     )
 
@@ -204,7 +202,9 @@ def _world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         # CUDA early-exits on first invalid point, using partial sum
         # Simulate this with cumulative validity mask
         # cumulative_valid[..., i] = True if points 0..i are ALL valid
-        cumulative_valid = torch.cumprod(valid_points.to(torch.float32), dim=-1).to(torch.bool)
+        cumulative_valid = torch.cumprod(valid_points.to(torch.float32), dim=-1).to(
+            torch.bool
+        )
 
         # All sigma points must be valid for Gaussian to be valid
         assert_shape("cumulative_valid", cumulative_valid, B + (C, N, 7))
@@ -216,7 +216,9 @@ def _world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
 
         # Broadcast weights with mask: weights_mean [7] -> [B, C, N, 7]
         # Use proper broadcasting: expand weights_mean to match effective_mask shape
-        weights_mean_expanded = weights_mean.view([1] * len(B) + [1, 1, 7])  # [B, 1, 1, 7]
+        weights_mean_expanded = weights_mean.view(
+            [1] * len(B) + [1, 1, 7]
+        )  # [B, 1, 1, 7]
         weights_mean_eff = weights_mean_expanded * effective_mask  # [B, C, N, 7]
 
         weights_cov_expanded = weights_cov.view([1] * len(B) + [1, 1, 7])
@@ -225,28 +227,36 @@ def _world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         # Compute weighted mean: mean_2d = Σ w_mean[i] * points_2d[i]
         # Use masked weights (early-exit simulation)
         # weights_mean_eff: [B, C, N, 7], points_2d: [B, C, N, 7, 2]
-        mean_2d = torch.sum(weights_mean_eff[..., None] * points_2d, dim=-2)  # [B, C, N, 2]
+        mean_2d = torch.sum(
+            weights_mean_eff[..., None] * points_2d, dim=-2
+        )  # [B, C, N, 2]
     else:
         # At least one sigma point must be valid - use all points
         valid_gaussian = torch.any(valid_points, dim=-1)  # [B, C, N]
         # Use all points
-        mean_2d = torch.einsum('i,...nij->...nj', weights_mean, points_2d)  # [B, C, N, 2]
+        mean_2d = torch.einsum(
+            "i,...nij->...nj", weights_mean, points_2d
+        )  # [B, C, N, 2]
 
     # Compute weighted covariance
     delta_2d = points_2d - mean_2d.unsqueeze(-2)  # [B, C, N, 7, 2]
-    outer_products = torch.einsum('...i,...j->...ij', delta_2d, delta_2d)  # [B, C, N, 7, 2, 2]
+    outer_products = torch.einsum(
+        "...i,...j->...ij", delta_2d, delta_2d
+    )  # [B, C, N, 7, 2, 2]
 
     if ut_params.require_all_sigma_points_valid:
         # Use masked weights: [B, C, N, 7] with [B, C, N, 7, 2, 2]
-        cov_2d = torch.sum(weights_cov_eff[..., None, None] * outer_products, dim=-3)  # [..., C, N, 2, 2]
+        cov_2d = torch.sum(
+            weights_cov_eff[..., None, None] * outer_products, dim=-3
+        )  # [..., C, N, 2, 2]
     else:
-        cov_2d = torch.einsum('i,...nijk->...njk', weights_cov, outer_products)
+        cov_2d = torch.einsum("i,...nijk->...njk", weights_cov, outer_products)
 
     return mean_2d, cov_2d, valid_gaussian
 
 
 def _add_blur(
-    cov_2d: Tensor, # [B, C, N, 2, 2]
+    cov_2d: Tensor,  # [B, C, N, 2, 2]
     eps2d: float,
 ) -> Tensor:
     B = cov_2d.shape[:-4]
@@ -257,9 +267,9 @@ def _add_blur(
     """Add eps2d to the covariance matrix for numerical stability."""
     det_orig = torch.linalg.det(cov_2d)  # [B, C, N]
 
-    cov_2d = cov_2d + eps2d*torch.eye(2, dtype=cov_2d.dtype, device=cov_2d.device)
+    cov_2d = cov_2d + eps2d * torch.eye(2, dtype=cov_2d.dtype, device=cov_2d.device)
     det_blur = torch.linalg.det(cov_2d)
-    compensation = torch.sqrt(torch.clamp(det_orig / det_blur, min=0.0)) # [B, C, N]
+    compensation = torch.sqrt(torch.clamp(det_orig / det_blur, min=0.0))  # [B, C, N]
 
     assert_shape("det_blur", det_blur, B + (C, N))
     assert_shape("cov_2d", cov_2d, B + (C, N, 2, 2))
@@ -349,8 +359,12 @@ def _fully_fused_projection_with_ut(
     device = means.device
     dtype = means.dtype
 
-    assert dtype == torch.float32, f"CUDA uses float32, but got {dtype}. This will cause large divergences!"
-    assert viewmats.dtype == torch.float32, f"viewmats must be float32, got {viewmats.dtype}"
+    assert (
+        dtype == torch.float32
+    ), f"CUDA uses float32, but got {dtype}. This will cause large divergences!"
+    assert (
+        viewmats.dtype == torch.float32
+    ), f"viewmats must be float32, got {viewmats.dtype}"
     assert Ks.dtype == torch.float32, f"Ks must be float32, got {Ks.dtype}"
 
     # Validate camera model support
@@ -363,10 +377,13 @@ def _fully_fused_projection_with_ut(
 
     # Extract focal lengths and principal points from K matrix
     # K is [B, C, 3, 3] with structure [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
-    focal_lengths = torch.stack([
-        Ks[..., 0, 0],  # fx
-        Ks[..., 1, 1],  # fy
-    ], dim=-1)  # [B, C, 2]
+    focal_lengths = torch.stack(
+        [
+            Ks[..., 0, 0],  # fx
+            Ks[..., 1, 1],  # fy
+        ],
+        dim=-1,
+    )  # [B, C, 2]
     principal_points = Ks[..., :2, 2]  # [B, C, 2] - extract [cx, cy]
 
     # Create camera model
@@ -406,11 +423,10 @@ def _fully_fused_projection_with_ut(
     # Full sigma points are transformed inside projection function.
 
     # means: [B, N, 3], R_cam: [B, C, 3, 3], t_cam: [B, C, 3]
-    means_cam = torch.einsum(
-        '...cij,...nj->...cni',
-        R_cam,   # [B, C, 3, 3]
-        means    # [B, N, 3]
-    ) + t_cam[..., None, :] # [B, C, N, 3]
+    means_cam = (
+        torch.einsum("...cij,...nj->...cni", R_cam, means)  # [B, C, 3, 3]  # [B, N, 3]
+        + t_cam[..., None, :]
+    )  # [B, C, N, 3]
 
     # Check if Gaussian center is within frustum.
     # Use transformed center point (means_cam) for depth check
@@ -418,7 +434,11 @@ def _fully_fused_projection_with_ut(
     in_frustum = (center_z >= near_plane) & (center_z <= far_plane)
 
     # Projection using unscented transform
-    mean_2d, cov_2d, valid_gaussian = _world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
+    (
+        mean_2d,
+        cov_2d,
+        valid_gaussian,
+    ) = _world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         camera=camera,
         means=means,
         quats=quats,
@@ -432,9 +452,9 @@ def _fully_fused_projection_with_ut(
     valid_gaussian = valid_gaussian & in_frustum
 
     (
-        det, # [B, C, N]
-        cov_2d, # [B, C, N, 2, 2]
-        compensations # [B, C, N]
+        det,  # [B, C, N]
+        cov_2d,  # [B, C, N, 2, 2]
+        compensations,  # [B, C, N]
     ) = _add_blur(cov_2d, eps2d)
 
     valid_gaussian = valid_gaussian & (det > 0.0)
@@ -446,7 +466,7 @@ def _fully_fused_projection_with_ut(
 
     # Apply opacity-based culling
     # Reference: https://arxiv.org/pdf/2402.00525 Section B.2
-    ALPHA_THRESHOLD: float = float(1.0)/float(255.0)  # Minimum visible opacity
+    ALPHA_THRESHOLD: float = float(1.0) / float(255.0)  # Minimum visible opacity
 
     # Default extend
     extend = torch.full(B + (C, N), 3.33, dtype=dtype, device=device)
@@ -464,7 +484,9 @@ def _fully_fused_projection_with_ut(
             extend,
             # Clamp to avoid sqrt(negative).
             # Opacities < ALPHA_THRESHOLD are discarded already, no harm done.
-            torch.sqrt(2.0 * torch.log(torch.clamp(opacity / ALPHA_THRESHOLD, min=1.0)))
+            torch.sqrt(
+                2.0 * torch.log(torch.clamp(opacity / ALPHA_THRESHOLD, min=1.0))
+            ),
         )  # [B, C, N]
 
     # Compute radii with eigenvalue-based tight bounding box
@@ -479,10 +501,9 @@ def _fully_fused_projection_with_ut(
     r1 = extend * torch.sqrt(v1)  # [B, C, N]
 
     # Compute radii for both x and y axes
-    radius = torch.ceil(torch.minimum(
-        extend[...,None] * torch.sqrt(cov_diag),
-        r1[..., None]
-    ))  # [B, C, N, 2]
+    radius = torch.ceil(
+        torch.minimum(extend[..., None] * torch.sqrt(cov_diag), r1[..., None])
+    )  # [B, C, N, 2]
 
     # Apply radius clipping and image bounds culling
 
@@ -492,10 +513,11 @@ def _fully_fused_projection_with_ut(
 
     # Image bounds culling: cull Gaussians outside image
     # Check if bounding box overlaps with image: (center ± radius) overlaps [0, width/height)
-    image_bounds = torch.tensor([width, height], dtype=radius.dtype, device=radius.device)
+    image_bounds = torch.tensor(
+        [width, height], dtype=radius.dtype, device=radius.device
+    )
     in_image = torch.all(
-        (mean_2d + radius > 0) & (mean_2d - radius < image_bounds),
-        dim=-1
+        (mean_2d + radius > 0) & (mean_2d - radius < image_bounds), dim=-1
     )
     valid_gaussian = valid_gaussian & in_image
 
@@ -503,44 +525,32 @@ def _fully_fused_projection_with_ut(
     # For invalid Gaussians, radii should be 0 (default)
     radii_computed = radius.to(torch.int32)  # [B, C, N, 2]
     radii = torch.where(
-        valid_gaussian[..., None],
-        radii_computed,
-        torch.zeros_like(radii_computed)
+        valid_gaussian[..., None], radii_computed, torch.zeros_like(radii_computed)
     )
 
-    means2d = torch.where(
-        valid_gaussian[..., None],
-        mean_2d,
-        torch.zeros_like(mean_2d)
-    )
+    means2d = torch.where(valid_gaussian[..., None], mean_2d, torch.zeros_like(mean_2d))
 
-    depths = torch.where(
-        valid_gaussian,
-        center_z,
-        torch.zeros_like(center_z)
-    )
+    depths = torch.where(valid_gaussian, center_z, torch.zeros_like(center_z))
 
     # Extract conics as [xx, xy, yy] (symmetric representation)
-    conics_computed = torch.stack([
-        cov_2d_inv[..., 0, 0],  # xx
-        cov_2d_inv[..., 0, 1],  # xy
-        cov_2d_inv[..., 1, 1]   # yy
-    ], dim=-1)  # [B, C, N, 3]
+    conics_computed = torch.stack(
+        [
+            cov_2d_inv[..., 0, 0],  # xx
+            cov_2d_inv[..., 0, 1],  # xy
+            cov_2d_inv[..., 1, 1],  # yy
+        ],
+        dim=-1,
+    )  # [B, C, N, 3]
     conics = torch.where(
-        valid_gaussian[..., None],
-        conics_computed,
-        torch.zeros_like(conics_computed)
+        valid_gaussian[..., None], conics_computed, torch.zeros_like(conics_computed)
     )
 
     # Mask compensation output if requested, otherwise return zeros
     if calc_compensations:
         compensations = torch.where(
-            valid_gaussian,
-            compensations,
-            torch.zeros_like(compensations)
+            valid_gaussian, compensations, torch.zeros_like(compensations)
         )
     else:
         compensations = None
 
     return radii, means2d, depths, conics, compensations
-

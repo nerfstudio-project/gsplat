@@ -761,17 +761,29 @@ def rasterize_to_pixels_eval3d(
     """
 
     colors, alphas, *_ = rasterize_to_pixels_eval3d_extra(
-        means=means, quats=quats, scales=scales, colors=colors, opacities=opacities,
-        viewmats=viewmats, Ks=Ks,
-        image_width=image_width, image_height=image_height,
-        tile_size=tile_size, isect_offsets=isect_offsets, flatten_ids=flatten_ids,
+        means=means,
+        quats=quats,
+        scales=scales,
+        colors=colors,
+        opacities=opacities,
+        viewmats=viewmats,
+        Ks=Ks,
+        image_width=image_width,
+        image_height=image_height,
+        tile_size=tile_size,
+        isect_offsets=isect_offsets,
+        flatten_ids=flatten_ids,
         backgrounds=backgrounds,
         masks=masks,
         camera_model=camera_model,
         ut_params=ut_params,
-        radial_coeffs=radial_coeffs, tangential_coeffs=tangential_coeffs, thin_prism_coeffs=thin_prism_coeffs, ftheta_coeffs=ftheta_coeffs,
-        rolling_shutter=rolling_shutter, viewmats_rs=viewmats_rs,
-        return_sample_counts=False
+        radial_coeffs=radial_coeffs,
+        tangential_coeffs=tangential_coeffs,
+        thin_prism_coeffs=thin_prism_coeffs,
+        ftheta_coeffs=ftheta_coeffs,
+        rolling_shutter=rolling_shutter,
+        viewmats_rs=viewmats_rs,
+        return_sample_counts=False,
     )
     return colors, alphas
 
@@ -801,7 +813,7 @@ def rasterize_to_pixels_eval3d_extra(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
-    return_sample_counts: bool = False
+    return_sample_counts: bool = False,
 ) -> Tuple[Tensor, Tensor, Tuple, Optional[Tuple]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
@@ -924,7 +936,12 @@ def rasterize_to_pixels_eval3d_extra(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas, last_ids, sample_counts = _RasterizeToPixelsEval3D.apply(
+    (
+        render_colors,
+        render_alphas,
+        last_ids,
+        sample_counts,
+    ) = _RasterizeToPixelsEval3D.apply(
         means.contiguous(),
         quats.contiguous(),
         scales.contiguous(),
@@ -1555,9 +1572,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
 
             # Allocate with correct final shape (batch_dims, C, H, W)
             sample_counts = torch.empty(
-                batch_dims + (C, height, width),
-                dtype=torch.int32,
-                device=means.device
+                batch_dims + (C, height, width), dtype=torch.int32, device=means.device
             )
         else:
             sample_counts = None
@@ -1625,7 +1640,9 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         v_render_colors: Tensor,  # [..., C, H, W, 3]
         v_render_alphas: Tensor,  # [..., C, H, W, 1]
         v_last_ids: Optional[Tensor],  # None - last_ids is integer (non-differentiable)
-        v_sample_counts: Optional[Tensor],  # None - sample_counts is integer (non-differentiable)
+        v_sample_counts: Optional[
+            Tensor
+        ],  # None - sample_counts is integer (non-differentiable)
     ):
         (
             means,

@@ -62,11 +62,14 @@ def _generate_rays_from_pixels(
     py = pixel_coords[..., 1]
 
     # Compute ray directions in camera space
-    ray_d_cam = torch.stack([
-        (px - cx) / fx,
-        (py - cy) / fy,
-        torch.ones_like(px, dtype=means_dtype),
-    ], dim=-1)  # [..., N, 3]
+    ray_d_cam = torch.stack(
+        [
+            (px - cx) / fx,
+            (py - cy) / fy,
+            torch.ones_like(px, dtype=means_dtype),
+        ],
+        dim=-1,
+    )  # [..., N, 3]
 
     # Normalize ray directions
     ray_d_cam = _safe_normalize(ray_d_cam)  # [..., N, 3]
@@ -132,15 +135,15 @@ def _compute_ray_gaussian_distance(
         grayDist: [..., N] - Squared distance from ray to Gaussian center
     """
     # Transform ray origin and direction to Gaussian space
-    gro = torch.matmul(iscl_rot, (ray_o - xyz)[...,None]).squeeze(-1) # [..., 3]
-    grd = torch.matmul(iscl_rot, ray_d[...,None]).squeeze(-1) # [..., 3]
+    gro = torch.matmul(iscl_rot, (ray_o - xyz)[..., None]).squeeze(-1)  # [..., 3]
+    grd = torch.matmul(iscl_rot, ray_d[..., None]).squeeze(-1)  # [..., 3]
 
     # Safe normalization
     grd = _safe_normalize(grd)  # [..., 3]
 
     # Compute distance via cross product
-    gcrod = torch.linalg.cross(grd, gro) # [..., 3]
-    grayDist = torch.sum(gcrod * gcrod, dim=-1) # [..., 1]
+    gcrod = torch.linalg.cross(grd, gro)  # [..., 3]
+    grayDist = torch.sum(gcrod * gcrod, dim=-1)  # [..., 1]
 
     return grayDist
 
@@ -175,8 +178,9 @@ def _compute_gaussian_alphas(
     power = -0.5 * grayDist
     alphas = torch.clamp(opac * torch.exp(power), max=max_alpha)
 
-    assert torch.all((alphas >= 0) & (alphas <= 1.0)), \
-        f"Invalid alphas: range=[{alphas.min()}, {alphas.max()}]"
+    assert torch.all(
+        (alphas >= 0) & (alphas <= 1.0)
+    ), f"Invalid alphas: range=[{alphas.min()}, {alphas.max()}]"
 
     return alphas
 
@@ -197,7 +201,9 @@ def accumulate_eval3d(
     flatten_idx: Tensor,  # [M] - index in original flatten_ids
     rs_type: RollingShutterType = RollingShutterType.GLOBAL,  # Rolling shutter type
     viewmats_rs: Optional[Tensor] = None,  # [..., 4, 4] - optional for rolling shutter
-    base_transmittance: Optional[Tensor] = None,  # [I, image_height, image_width] - base transmittance for batched accumulation
+    base_transmittance: Optional[
+        Tensor
+    ] = None,  # [I, image_height, image_width] - base transmittance for batched accumulation
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """Alpha compositing with ray-based 3D Gaussian evaluation in Pure PyTorch.
 
@@ -241,8 +247,8 @@ def accumulate_eval3d(
     # Get dimensions
     # Note: means/quats/scales are SHARED across cameras (batch_dims, N, 3/4/3)
     #       colors/opacities are PER-IMAGE [I, N, ...] where I = B*C
-    B = math.prod(means.shape[:-2]) # batch dims
-    N = means.shape[-2] # number of Gaussians
+    B = math.prod(means.shape[:-2])  # batch dims
+    N = means.shape[-2]  # number of Gaussians
     channels = colors.shape[-1]
     device = means.device
 
@@ -256,17 +262,22 @@ def accumulate_eval3d(
     scales_flat = scales.reshape(B, N, 3)
 
     # 2. Get pixel coordinates for all M intersections
-    pixel_coords = torch.stack([
-        (pixel_ids % image_width).float() + 0.5,  # pixel center x
-        (pixel_ids // image_width).float() + 0.5,  # pixel center y
-    ], dim=-1)  # [M, 2]
+    pixel_coords = torch.stack(
+        [
+            (pixel_ids % image_width).float() + 0.5,  # pixel center x
+            (pixel_ids // image_width).float() + 0.5,  # pixel center y
+        ],
+        dim=-1,
+    )  # [M, 2]
 
     # Create focal_lengths and principal_points tensors out of Ks[image_ids]
     # Ks[image_ids]: [M, 3, 3]
     Ks_selected = Ks[image_ids]  # [M, 3, 3]
     focal_lengths = Ks_selected[:, [0, 1], [0, 1]]  # [M, 2], fx and fy
     principal_points = Ks_selected[:, [0, 1], [2, 2]]  # [M, 2], cx and cy
-    camera = _PerfectPinholeCameraModel(focal_lengths, principal_points, image_width, image_height, rs_type)
+    camera = _PerfectPinholeCameraModel(
+        focal_lengths, principal_points, image_width, image_height, rs_type
+    )
 
     pose_start = _viewmat_to_pose(viewmats[image_ids])
     if viewmats_rs is None:
@@ -282,15 +293,13 @@ def accumulate_eval3d(
     R_cam_to_world = _quat_to_rotmat(_quat_inverse(pose_q))
     cam_centers = _pose_camera_world_position(pose)
 
-
     # 4. Generate rays from pixels
     ray_o, ray_d = _generate_rays_from_pixels(
-        pixel_coords, cam_centers, R_cam_to_world,
-        Ks[image_ids], means.dtype
-    ) # [M, 3, 1]
+        pixel_coords, cam_centers, R_cam_to_world, Ks[image_ids], means.dtype
+    )  # [M, 3, 1]
 
     # 5. Compute Gaussian transform to map Gaussians to world space
-    iscl_rot = _compute_gaussian_transform(quats_flat, scales_flat) # [B, N, 3, 3]
+    iscl_rot = _compute_gaussian_transform(quats_flat, scales_flat)  # [B, N, 3, 3]
 
     # 6. Get Gaussian parameters for all M intersections
     # Extract batch index from image_ids (image_ids = batch_id * C + camera_id)
@@ -324,8 +333,9 @@ def accumulate_eval3d(
     total_pixels = I * image_height * image_width
 
     # CRITICAL: Verify ray indices are sorted (required for packed_info)
-    assert torch.all(ray_indices[1:] >= ray_indices[:-1]), \
-        "indices must be sorted for packed_info"
+    assert torch.all(
+        ray_indices[1:] >= ray_indices[:-1]
+    ), "indices must be sorted for packed_info"
 
     # Create packed_info for nerfacc (more memory efficient than ray_indices)
     from nerfacc import pack_info
@@ -356,8 +366,12 @@ def accumulate_eval3d(
     ray_indices = ray_indices[valid_mask]
     flatten_idx = flatten_idx[valid_mask]
 
-    renders = accumulate_along_rays(weights, gauss_colors, ray_indices=ray_indices, n_rays=total_pixels)  # [total_pixels, channels]
-    alphas = accumulate_along_rays(weights, None, ray_indices=ray_indices, n_rays=total_pixels)  # [total_pixels, 1]
+    renders = accumulate_along_rays(
+        weights, gauss_colors, ray_indices=ray_indices, n_rays=total_pixels
+    )  # [total_pixels, channels]
+    alphas = accumulate_along_rays(
+        weights, None, ray_indices=ray_indices, n_rays=total_pixels
+    )  # [total_pixels, 1]
 
     # Compute last flatten_idx per pixel (vectorized using packed_info)
     # CUDA stores: last_ids[pix_id] = cur_idx (index in flatten_ids)
@@ -365,7 +379,10 @@ def accumulate_eval3d(
 
     # Create packed_info from final filtered indices
     from nerfacc import pack_info
-    chunk_starts, chunk_cnts = pack_info(ray_indices, total_pixels).unbind(dim=-1)  # [total_pixels] each
+
+    chunk_starts, chunk_cnts = pack_info(ray_indices, total_pixels).unbind(
+        dim=-1
+    )  # [total_pixels] each
 
     # Last sample position = start + count - 1 (for rays with samples)
     has_samples = chunk_cnts > 0
@@ -406,7 +423,9 @@ def _rasterize_to_pixels_eval3d(
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     batch_per_iter: int = 200,
     rs_type: RollingShutterType = RollingShutterType.GLOBAL,  # Rolling shutter type
-    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4] - optional for rolling shutter
+    viewmats_rs: Optional[
+        Tensor
+    ] = None,  # [..., C, 4, 4] - optional for rolling shutter
     return_last_ids: bool = False,
     return_sample_counts: bool = False,
 ):
@@ -452,7 +471,11 @@ def _rasterize_to_pixels_eval3d(
         - (colors, alphas, sample_counts) if return_last_ids=False and return_sample_counts=True
         - (colors, alphas, last_ids, sample_counts) if both are True
     """
-    from ._wrapper import rasterize_to_indices_in_range, fully_fused_projection, quat_scale_to_covar_preci
+    from ._wrapper import (
+        rasterize_to_indices_in_range,
+        fully_fused_projection,
+        quat_scale_to_covar_preci,
+    )
 
     # Get dimensions - treat [..., C, N, ...] as flattened images
     batch_dims = means.shape[:-2]
@@ -476,7 +499,9 @@ def _rasterize_to_pixels_eval3d(
     viewmats_exp = viewmats.reshape(I, 4, 4)
     viewmats_rs_exp = viewmats_rs.reshape(I, 4, 4) if viewmats_rs is not None else None
     Ks_exp = Ks.reshape(I, 3, 3)
-    isect_offsets_exp = isect_offsets.reshape(I, isect_offsets.shape[-2], isect_offsets.shape[-1])
+    isect_offsets_exp = isect_offsets.reshape(
+        I, isect_offsets.shape[-2], isect_offsets.shape[-1]
+    )
 
     # Decode flatten_ids and create properly ordered (gs_id, pix_id, img_id) lists for nerfacc
     # nerfacc requires: sorted by pixel_id first, then by depth within each pixel
@@ -487,10 +512,9 @@ def _rasterize_to_pixels_eval3d(
     n_isects = len(flatten_ids)
 
     # Flatten isect_offsets and append n_isects (matches CUDA pattern)
-    isect_offsets_fl = torch.cat([
-        isect_offsets_exp.flatten(),
-        torch.tensor([n_isects], device=device)
-    ])
+    isect_offsets_fl = torch.cat(
+        [isect_offsets_exp.flatten(), torch.tensor([n_isects], device=device)]
+    )
 
     # Calculate batching parameters
     # max_range = maximum number of Gaussians in any single tile
@@ -501,8 +525,12 @@ def _rasterize_to_pixels_eval3d(
     # Initialize outputs
     render_colors = torch.zeros((I, image_height, image_width, channels), device=device)
     render_alphas = torch.zeros((I, image_height, image_width, 1), device=device)
-    last_ids = torch.full((I, image_height, image_width), -1, dtype=torch.int32, device=device)
-    sample_counts = torch.zeros((I, image_height, image_width), dtype=torch.int32, device=device)
+    last_ids = torch.full(
+        (I, image_height, image_width), -1, dtype=torch.int32, device=device
+    )
+    sample_counts = torch.zeros(
+        (I, image_height, image_width), dtype=torch.int32, device=device
+    )
 
     # Convert offsets to CPU for indexing
     isect_offsets_cpu = isect_offsets_fl.cpu().numpy()
@@ -541,7 +569,9 @@ def _rasterize_to_pixels_eval3d(
 
                     # Match CUDA logic for end index
                     tile_id_local = ty * tile_width + tx
-                    is_last_tile_of_last_image = (img_id == I - 1) and (tile_id_local == tile_width * tile_height - 1)
+                    is_last_tile_of_last_image = (img_id == I - 1) and (
+                        tile_id_local == tile_width * tile_height - 1
+                    )
 
                     if is_last_tile_of_last_image:
                         end_idx = n_isects
@@ -561,7 +591,9 @@ def _rasterize_to_pixels_eval3d(
                         continue  # No Gaussians in this batch for this tile
 
                     # Get Gaussians for this batch slice
-                    batch_flatten_ids = flatten_ids[start_idx + local_start:start_idx + local_end]
+                    batch_flatten_ids = flatten_ids[
+                        start_idx + local_start : start_idx + local_end
+                    ]
                     batch_gauss_ids = batch_flatten_ids % N
                     # batch_num_gauss = number of Gaussians in this batch slice for this tile
                     batch_num_gauss = local_end - local_start
@@ -576,9 +608,11 @@ def _rasterize_to_pixels_eval3d(
                     py_grid, px_grid = torch.meshgrid(
                         torch.arange(py_start, py_end, device=device),
                         torch.arange(px_start, px_end, device=device),
-                        indexing='ij'
+                        indexing="ij",
                     )
-                    pix_ids_in_tile = py_grid.flatten() * image_width + px_grid.flatten()
+                    pix_ids_in_tile = (
+                        py_grid.flatten() * image_width + px_grid.flatten()
+                    )
                     num_pixels = len(pix_ids_in_tile)
 
                     # Create flatten_ids indices for this batch
@@ -586,13 +620,22 @@ def _rasterize_to_pixels_eval3d(
                         start_idx + local_start,
                         start_idx + local_end,
                         device=device,
-                        dtype=torch.long
+                        dtype=torch.long,
                     )
 
                     # Expand and append
                     all_gs_ids.append(batch_gauss_ids.repeat(num_pixels))
-                    all_pix_ids.append(pix_ids_in_tile.repeat_interleave(batch_num_gauss))
-                    all_img_ids.append(torch.full((num_pixels * batch_num_gauss,), img_id, device=device, dtype=torch.long))
+                    all_pix_ids.append(
+                        pix_ids_in_tile.repeat_interleave(batch_num_gauss)
+                    )
+                    all_img_ids.append(
+                        torch.full(
+                            (num_pixels * batch_num_gauss,),
+                            img_id,
+                            device=device,
+                            dtype=torch.long,
+                        )
+                    )
                     all_flatten_idx.append(batch_flatten_indices.repeat(num_pixels))
 
         # Concatenate batch lists
@@ -614,11 +657,18 @@ def _rasterize_to_pixels_eval3d(
 
         # Accumulate this batch with current transmittance as base
         renders_step, alphas_step, last_ids_step, counts_step = accumulate_eval3d(
-            means, quats, scales,
-            opacities_exp, colors_exp,
-            viewmats_exp, Ks_exp,
-            batch_gs_ids, batch_pix_ids, batch_img_ids,
-            image_width, image_height,
+            means,
+            quats,
+            scales,
+            opacities_exp,
+            colors_exp,
+            viewmats_exp,
+            Ks_exp,
+            batch_gs_ids,
+            batch_pix_ids,
+            batch_img_ids,
+            image_width,
+            image_height,
             batch_flatten_idx,
             rs_type,
             viewmats_rs_exp,
@@ -636,8 +686,12 @@ def _rasterize_to_pixels_eval3d(
         sample_counts = sample_counts + counts_step
 
     # Reshape back to original dimensions
-    render_colors = render_colors.reshape(batch_dims + (C, image_height, image_width, channels))
-    render_alphas = render_alphas.reshape(batch_dims + (C, image_height, image_width, 1))
+    render_colors = render_colors.reshape(
+        batch_dims + (C, image_height, image_width, channels)
+    )
+    render_alphas = render_alphas.reshape(
+        batch_dims + (C, image_height, image_width, 1)
+    )
     last_ids = last_ids.reshape(batch_dims + (C, image_height, image_width))
     sample_counts = sample_counts.reshape(batch_dims + (C, image_height, image_width))
 

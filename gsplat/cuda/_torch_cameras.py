@@ -32,12 +32,13 @@ from ._wrapper import (
     RollingShutterType,
     FThetaPolynomialType,
     FThetaCameraDistortionParameters,
-    _make_lazy_cuda_obj
+    _make_lazy_cuda_obj,
 )
 
 ShutterType = _make_lazy_cuda_obj("ShutterType")
 BaseCameraModel = _make_lazy_cuda_obj("BaseCameraModel")
 FThetaPolynomialTypeCUDA = _make_lazy_cuda_obj("FThetaPolynomialType")
+
 
 def _project_to_image(
     cam_ray: Tensor,  # [B, 2] normalized camera coordinates
@@ -61,7 +62,7 @@ def _project_to_image(
     assert_shape("focal_lengths", focal_lengths, B + (2,))
     assert_shape("principal_points", principal_points, B + (2,))
 
-    result = cam_ray*focal_lengths + principal_points
+    result = cam_ray * focal_lengths + principal_points
 
     # Postconditions
     assert_shape("result", result, B + (2,))
@@ -97,6 +98,7 @@ def _unproject_from_image(
 
     return result
 
+
 def _viewmat_to_pose(viewmat: Tensor) -> Tensor:
     """
     Convert 4x4 view matrix to 7D pose tensor [t_x, t_y, t_z, q_w, q_x, q_y, q_z].
@@ -112,8 +114,8 @@ def _viewmat_to_pose(viewmat: Tensor) -> Tensor:
     assert_shape("viewmat", viewmat, B + (4, 4))
 
     R = viewmat[..., :3, :3]  # [B, 3, 3]
-    t = viewmat[..., :3, 3]   # [B, 3]
-    q = _rotmat_to_quat(R)    # [B, 4] in format (w, x, y, z)
+    t = viewmat[..., :3, 3]  # [B, 3]
+    q = _rotmat_to_quat(R)  # [B, 4] in format (w, x, y, z)
     # Concatenate: [t_x, t_y, t_z, q_w, q_x, q_y, q_z]
     result = torch.cat([t, q], dim=-1)  # [B, 7]
 
@@ -141,7 +143,9 @@ def _pose_camera_world_position(pose: Tensor) -> Tensor:
 
     t = pose[..., :3]  # [B, 3] translation
     q = pose[..., 3:]  # [B, 4] quaternion
-    result = torch.matmul(_quat_to_rotmat(_quat_inverse(q)), -t[..., None]).squeeze(-1)  # [B, 3]
+    result = torch.matmul(_quat_to_rotmat(_quat_inverse(q)), -t[..., None]).squeeze(
+        -1
+    )  # [B, 3]
 
     # Postconditions
     assert_shape("result", result, B + (3,))
@@ -149,7 +153,9 @@ def _pose_camera_world_position(pose: Tensor) -> Tensor:
     return result
 
 
-def _pose_camera_ray_to_world_ray(pose: Tensor, camera_ray: Tensor) -> Tuple[Tensor, Tensor]:
+def _pose_camera_ray_to_world_ray(
+    pose: Tensor, camera_ray: Tensor
+) -> Tuple[Tensor, Tensor]:
     """
     Transform camera ray to world ray using pose.
 
@@ -172,7 +178,7 @@ def _pose_camera_ray_to_world_ray(pose: Tensor, camera_ray: Tensor) -> Tuple[Ten
 
     t = pose[..., :3]  # [B, 3] translation
     q = pose[..., 3:]  # [B, 4] quaternion
-    R_inv = _quat_to_rotmat(_quat_inverse(q)) # [B, 3, 3]
+    R_inv = _quat_to_rotmat(_quat_inverse(q))  # [B, 3, 3]
 
     # Compute origin: -R_inv @ t
     origin = torch.matmul(-R_inv, t[..., None]).squeeze(-1)  # [B, 3]
@@ -233,7 +239,9 @@ class _BaseCameraModel(ABC):
         else:
             self.shutter_type = shutter_type
 
-        assert isinstance(self.shutter_type, ShutterType), f"shutter_type must be a ShutterType, got {type(self.shutter_type)}"
+        assert isinstance(
+            self.shutter_type, ShutterType
+        ), f"shutter_type must be a ShutterType, got {type(self.shutter_type)}"
 
     @staticmethod
     def create(
@@ -247,7 +255,7 @@ class _BaseCameraModel(ABC):
         thin_prism_coeffs: Optional[Tensor] = None,
         ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
         rs_type: RollingShutterType | ShutterType = RollingShutterType.GLOBAL,
-    ) -> '_BaseCameraModel':
+    ) -> "_BaseCameraModel":
         """
         Factory method to create appropriate camera model.
             Args:
@@ -273,17 +281,27 @@ class _BaseCameraModel(ABC):
         B = principal_points.shape[:-1]
         assert_shape("principal_points", principal_points, B + (2,))
         focal_lengths is None or assert_shape("focal_lengths", focal_lengths, B + (2,))
-        radial_coeffs is None or assert_shape("radial_coeffs", radial_coeffs, B+(1,))
-        tangential_coeffs is None or assert_shape("tangential_coeffs", tangential_coeffs, B + (2,))
-        thin_prism_coeffs is None or assert_shape("thin_prism_coeffs", thin_prism_coeffs, B + (4,))
+        radial_coeffs is None or assert_shape("radial_coeffs", radial_coeffs, B + (1,))
+        tangential_coeffs is None or assert_shape(
+            "tangential_coeffs", tangential_coeffs, B + (2,)
+        )
+        thin_prism_coeffs is None or assert_shape(
+            "thin_prism_coeffs", thin_prism_coeffs, B + (4,)
+        )
 
         if camera_model == "pinhole":
             if ftheta_coeffs is not None:
-                raise ValueError("pinhole camera model does not support ftheta_coeffs parameter")
+                raise ValueError(
+                    "pinhole camera model does not support ftheta_coeffs parameter"
+                )
             if focal_lengths is None:
                 raise ValueError("focal_lengths is required for pinhole camera model")
 
-            if radial_coeffs is not None or tangential_coeffs is not None or thin_prism_coeffs is not None:
+            if (
+                radial_coeffs is not None
+                or tangential_coeffs is not None
+                or thin_prism_coeffs is not None
+            ):
                 return _OpenCVPinholeCameraModel(
                     focal_lengths=focal_lengths,
                     principal_points=principal_points,
@@ -305,9 +323,13 @@ class _BaseCameraModel(ABC):
 
         elif camera_model == "fisheye":
             if ftheta_coeffs is not None:
-                raise ValueError("fisheye camera model does not support ftheta_coeffs parameter")
+                raise ValueError(
+                    "fisheye camera model does not support ftheta_coeffs parameter"
+                )
             if tangential_coeffs is not None or thin_prism_coeffs is not None:
-                raise ValueError("fisheye camera model does not support tangential_coeffs or thin_prism_coeffs parameters")
+                raise ValueError(
+                    "fisheye camera model does not support tangential_coeffs or thin_prism_coeffs parameters"
+                )
             if focal_lengths is None:
                 raise ValueError("focal_lengths is required for fisheye camera model")
 
@@ -323,10 +345,18 @@ class _BaseCameraModel(ABC):
         elif camera_model == "ftheta":
             if ftheta_coeffs is None:
                 raise ValueError("ftheta requires ftheta_coeffs parameter")
-            if radial_coeffs is not None or tangential_coeffs is not None or thin_prism_coeffs is not None:
-                raise ValueError("ftheta camera model does not support radial_coeffs, tangential_coeffs, or thin_prism_coeffs parameters")
+            if (
+                radial_coeffs is not None
+                or tangential_coeffs is not None
+                or thin_prism_coeffs is not None
+            ):
+                raise ValueError(
+                    "ftheta camera model does not support radial_coeffs, tangential_coeffs, or thin_prism_coeffs parameters"
+                )
             if focal_lengths is not None:
-                raise ValueError("ftheta camera model does not support focal_lengths parameter")
+                raise ValueError(
+                    "ftheta camera model does not support focal_lengths parameter"
+                )
 
             # Use ftheta_coeffs directly (no conversion needed)
             return _FThetaCameraModel(
@@ -343,7 +373,8 @@ class _BaseCameraModel(ABC):
                 f"Supported: pinhole, fisheye, ftheta"
             )
 
-    def shutter_relative_frame_time(self,
+    def shutter_relative_frame_time(
+        self,
         pixel_coords: Tensor,  # [M, 2] (x, y) coordinates
     ) -> Tensor:
         """Compute relative frame time for rolling shutter based on pixel position.
@@ -367,34 +398,48 @@ class _BaseCameraModel(ABC):
             # Note: This value is typically unused since viewmats_rs is None for GLOBAL
             t = torch.full(M, 0.0, device=device, dtype=pixel_coords.dtype)
         else:
-            px = pixel_coords[..., 0] # [M]
-            py = pixel_coords[..., 1] # [M]
+            px = pixel_coords[..., 0]  # [M]
+            py = pixel_coords[..., 1]  # [M]
 
             if self.shutter_type == ShutterType.ROLLING_TOP_TO_BOTTOM:
-                t = (torch.floor(py) / float(self.height - 1)) if self.height > 1 else 0.5
+                t = (
+                    (torch.floor(py) / float(self.height - 1))
+                    if self.height > 1
+                    else 0.5
+                )
             elif self.shutter_type == ShutterType.ROLLING_LEFT_TO_RIGHT:
                 t = (torch.floor(px) / float(self.width - 1)) if self.width > 1 else 0.5
             elif self.shutter_type == ShutterType.ROLLING_BOTTOM_TO_TOP:
                 # TODO: this returns > 1 for the topmost row, but should be 1
-                t = ((self.height - torch.ceil(py)) / float(self.height - 1)) if self.height > 1 else 0.5
+                t = (
+                    ((self.height - torch.ceil(py)) / float(self.height - 1))
+                    if self.height > 1
+                    else 0.5
+                )
             else:
                 # TODO: this returns > 1 for the rightmost column, but should be 1
                 assert self.shutter_type == ShutterType.ROLLING_RIGHT_TO_LEFT
-                t = ((self.width - torch.ceil(px)) / float(self.width - 1)) if self.width > 1 else 0.5
+                t = (
+                    ((self.width - torch.ceil(px)) / float(self.width - 1))
+                    if self.width > 1
+                    else 0.5
+                )
 
         # Postconditions
         assert_shape("t", t, M)
         return t
 
     @abstractmethod
-    def camera_ray_to_image_point(self,
+    def camera_ray_to_image_point(
+        self,
         camera_ray: Tensor,
         margin_factor: float,
     ) -> Tuple[Tensor, Tensor]:
         ...
 
     @abstractmethod
-    def image_point_to_camera_ray(self,
+    def image_point_to_camera_ray(
+        self,
         image_point: Tensor,
     ) -> Tuple[Tensor, Tensor]:
         ...
@@ -409,7 +454,8 @@ class _BaseCameraModel(ABC):
     def principal_points(self) -> Tensor:
         ...
 
-    def image_point_to_world_ray_shutter_pose(self,
+    def image_point_to_world_ray_shutter_pose(
+        self,
         image_point: Tensor,  # [B, M, 2]
         shutter_pose_start: Tensor,  # [B, 7]
         shutter_pose_end: Tensor,  # [B, 7]
@@ -426,7 +472,11 @@ class _BaseCameraModel(ABC):
         """
         # Preconditions
         B = shutter_pose_start.shape[:-1]
-        M = (image_point.shape[-2],) if image_point.ndim == shutter_pose_start.ndim+1 else ()
+        M = (
+            (image_point.shape[-2],)
+            if image_point.ndim == shutter_pose_start.ndim + 1
+            else ()
+        )
         assert_shape("image_point", image_point, B + M + (2,))
         assert_shape("shutter_pose_start", shutter_pose_start, B + (7,))
         assert_shape("shutter_pose_end", shutter_pose_end, B + (7,))
@@ -434,10 +484,14 @@ class _BaseCameraModel(ABC):
         camera_ray, valid = self.image_point_to_camera_ray(image_point)
 
         relative_time = self.shutter_relative_frame_time(image_point)
-        interpolated_pose = _interpolate_shutter_pose(shutter_pose_start[..., None,:],
-                                                      shutter_pose_end[..., None,:],
-                                                      relative_time)
-        world_ray_org, world_ray_dir = _pose_camera_ray_to_world_ray(interpolated_pose, camera_ray)
+        interpolated_pose = _interpolate_shutter_pose(
+            shutter_pose_start[..., None, :],
+            shutter_pose_end[..., None, :],
+            relative_time,
+        )
+        world_ray_org, world_ray_dir = _pose_camera_ray_to_world_ray(
+            interpolated_pose, camera_ray
+        )
 
         # Invalid world rays are set to 0
         world_ray_org = world_ray_org * valid[..., None]
@@ -449,12 +503,13 @@ class _BaseCameraModel(ABC):
         assert_shape("valid", valid, B + M)
         return world_ray_org, world_ray_dir, valid
 
-    def world_point_to_image_point_shutter_pose(self,
+    def world_point_to_image_point_shutter_pose(
+        self,
         world_points: Tensor,  # [B, M, 3] - points in world space
         shutter_pose_start: Tensor,  # [B, 7]
         shutter_pose_end: Tensor,  # [B, 7]
         margin_factor: float,
-        rolling_shutter_iterations = 10,
+        rolling_shutter_iterations=10,
     ) -> Tuple[Tensor, Tensor]:
         """Project world points to image coordinates with rolling shutter correction.
 
@@ -478,14 +533,20 @@ class _BaseCameraModel(ABC):
         """
         # Preconditions
         B = shutter_pose_start.shape[:-1]
-        M = (world_points.shape[-2],) if world_points.ndim == shutter_pose_start.ndim+1 else ()
+        M = (
+            (world_points.shape[-2],)
+            if world_points.ndim == shutter_pose_start.ndim + 1
+            else ()
+        )
         assert_shape("world_points", world_points, B + M + (3,))
         assert_shape("shutter_pose_start", shutter_pose_start, B + (7,))
         assert_shape("shutter_pose_end", shutter_pose_end, B + (7,))
 
         image_points_start, valid_start = self.camera_ray_to_image_point(
-            _pose_world_points_to_camera_ray(shutter_pose_start[..., None,:], world_points),
-            margin_factor
+            _pose_world_points_to_camera_ray(
+                shutter_pose_start[..., None, :], world_points
+            ),
+            margin_factor,
         )
 
         if self.shutter_type == ShutterType.GLOBAL:
@@ -494,15 +555,15 @@ class _BaseCameraModel(ABC):
             return image_points_start, valid_start
 
         image_points_end, valid_end = self.camera_ray_to_image_point(
-            _pose_world_points_to_camera_ray(shutter_pose_end[..., None,:], world_points),
-            margin_factor
+            _pose_world_points_to_camera_ray(
+                shutter_pose_end[..., None, :], world_points
+            ),
+            margin_factor,
         )
 
         # Select initial image point: prefer start if valid, otherwise use end
         init_image_points = torch.where(
-            valid_start[..., None],
-            image_points_start,
-            image_points_end
+            valid_start[..., None], image_points_start, image_points_end
         )  # [B, M, 2]
 
         # Iterative refinement for rolling shutter
@@ -517,17 +578,18 @@ class _BaseCameraModel(ABC):
                 break
 
             # Compute relative frame time based on current image point position
-            relative_time = self.shutter_relative_frame_time(image_points_rs_prev)  # [B, M]
+            relative_time = self.shutter_relative_frame_time(
+                image_points_rs_prev
+            )  # [B, M]
 
             pose_rs = _interpolate_shutter_pose(
-                shutter_pose_start[..., None,:],
-                shutter_pose_end[..., None,:],
-                relative_time
+                shutter_pose_start[..., None, :],
+                shutter_pose_end[..., None, :],
+                relative_time,
             )
 
             image_points_rs, valid_rs = self.camera_ray_to_image_point(
-                _pose_world_points_to_camera_ray(pose_rs, world_points),
-                margin_factor
+                _pose_world_points_to_camera_ray(pose_rs, world_points), margin_factor
             )
 
             image_points_rs_prev = image_points_rs
@@ -535,9 +597,7 @@ class _BaseCameraModel(ABC):
         # Points with all valid iterations return image_points_rs_prev with true
         # points with any invalid iteration return init_image_points with false
         final_image_points = torch.where(
-            valid[..., None],
-            image_points_rs_prev,
-            init_image_points
+            valid[..., None], image_points_rs_prev, init_image_points
         )
         # Postconditions
         assert_shape("final_image_points", final_image_points, B + M + (2,))
@@ -606,7 +666,8 @@ class _PerfectPinholeCameraModel(_BaseCameraModel):
     def principal_points(self) -> Tensor:
         return self._principal_points
 
-    def camera_ray_to_image_point(self,
+    def camera_ray_to_image_point(
+        self,
         cam_ray: Tensor,
         margin_factor: float,
     ) -> Tuple[Tensor, Tensor]:
@@ -620,11 +681,15 @@ class _PerfectPinholeCameraModel(_BaseCameraModel):
         # Perspective projection: [x/z, y/z]
         uv = cam_ray[..., :2] / cam_ray[..., 2:3]
 
-        image_point = _project_to_image(uv, self.focal_lengths[..., None, :], self.principal_points[..., None, :])
+        image_point = _project_to_image(
+            uv, self.focal_lengths[..., None, :], self.principal_points[..., None, :]
+        )
 
         # Zero out points behind camera
         # (CUDA behavior: only depth invalidity zeros coordinates)
-        image_point = torch.where(valid_depth[..., None], image_point, torch.zeros_like(image_point))
+        image_point = torch.where(
+            valid_depth[..., None], image_point, torch.zeros_like(image_point)
+        )
 
         # Check if points are within image bounds
         valid_bounds = self.check_image_bounds(image_point, margin_factor)
@@ -637,7 +702,8 @@ class _PerfectPinholeCameraModel(_BaseCameraModel):
 
         return image_point, valid
 
-    def image_point_to_camera_ray(self,
+    def image_point_to_camera_ray(
+        self,
         image_point: Tensor,
     ) -> Tuple[Tensor, Tensor]:
         """
@@ -653,8 +719,14 @@ class _PerfectPinholeCameraModel(_BaseCameraModel):
         assert_shape("image_point", image_point, M + (2,))
 
         # Unproject the image point to camera ray
-        camera_ray = _unproject_from_image(image_point, self.focal_lengths[..., None,:], self.principal_points[..., None,:])
-        camera_ray = torch.cat([camera_ray, torch.ones_like(camera_ray[..., :1])], dim=-1)
+        camera_ray = _unproject_from_image(
+            image_point,
+            self.focal_lengths[..., None, :],
+            self.principal_points[..., None, :],
+        )
+        camera_ray = torch.cat(
+            [camera_ray, torch.ones_like(camera_ray[..., :1])], dim=-1
+        )
 
         result = _safe_normalize(camera_ray)
         valid = torch.full_like(camera_ray[..., 0], True, dtype=torch.bool)
@@ -664,6 +736,7 @@ class _PerfectPinholeCameraModel(_BaseCameraModel):
         assert_shape("valid", valid, M)
         return result, valid
 
+
 class _OpenCVPinholeCameraModel(_BaseCameraModel):
     def __init__(
         self,
@@ -672,9 +745,9 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         width: int,
         height: int,
         rs_type: RollingShutterType | ShutterType,
-        radial_coeffs: Optional[Tensor] = None, # [B, 4] or [B, 6]
-        tangential_coeffs: Optional[Tensor] = None, # [B, 2]
-        thin_prism_coeffs: Optional[Tensor] = None, # [B, 4]
+        radial_coeffs: Optional[Tensor] = None,  # [B, 4] or [B, 6]
+        tangential_coeffs: Optional[Tensor] = None,  # [B, 2]
+        thin_prism_coeffs: Optional[Tensor] = None,  # [B, 4]
         max_undistortion_iterations: int = 5,
         min_2d_norm: float = 1e-12,
     ):
@@ -682,9 +755,15 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         B = focal_lengths.shape[:-1]
         assert_shape("focal_lengths", focal_lengths, B + (2,))
         assert_shape("principal_points", principal_points, B + (2,))
-        radial_coeffs is None or assert_shape("radial_coeffs", radial_coeffs[:-1], B+(1,))
-        tangential_coeffs is None or assert_shape("tangential_coeffs", tangential_coeffs, B + (2,))
-        thin_prism_coeffs is None or assert_shape("thin_prism_coeffs", thin_prism_coeffs, B + (4,))
+        radial_coeffs is None or assert_shape(
+            "radial_coeffs", radial_coeffs[:-1], B + (1,)
+        )
+        tangential_coeffs is None or assert_shape(
+            "tangential_coeffs", tangential_coeffs, B + (2,)
+        )
+        thin_prism_coeffs is None or assert_shape(
+            "thin_prism_coeffs", thin_prism_coeffs, B + (4,)
+        )
 
         super().__init__(width, height, rs_type)
         self._focal_lengths = focal_lengths  # [B, 2]
@@ -698,7 +777,9 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         # Radial coefficients: [B, 4] or [B, 6]
         if radial_coeffs is not None:
             # Pad to 6 components
-            radial_coeffs = F.pad(radial_coeffs, (0, 6-radial_coeffs.shape[-1]), value=0.0)
+            radial_coeffs = F.pad(
+                radial_coeffs, (0, 6 - radial_coeffs.shape[-1]), value=0.0
+            )
             self.radial_coeffs = radial_coeffs
         else:
             self.radial_coeffs = torch.zeros(B + (6,), device=device, dtype=dtype)
@@ -756,22 +837,22 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         v = uv[..., 1]  # [B, M]
 
         # Compute auxiliary terms (always computed in CUDA)
-        uv_squared = torch.stack([u*u, v*v], dim=-1)  # [B, M, 2]
+        uv_squared = torch.stack([u * u, v * v], dim=-1)  # [B, M, 2]
         r2 = uv_squared[..., 0] + uv_squared[..., 1]  # [B, M]
         a1 = 2.0 * u * v  # [B, M]
-        a2 = r2 + 2.0*uv_squared[..., 0]  # [B, M]
-        a3 = r2 + 2.0*uv_squared[..., 1]  # [B, M]
+        a2 = r2 + 2.0 * uv_squared[..., 0]  # [B, M]
+        a3 = r2 + 2.0 * uv_squared[..., 1]  # [B, M]
 
         # Compute icD (radial distortion factor)
-        icD_numerator = 1.0 + r2*(k1 + r2*(k2 + r2*k3))
-        icD_denominator = 1.0 + r2*(k4 + r2*(k5 + r2*k6))
+        icD_numerator = 1.0 + r2 * (k1 + r2 * (k2 + r2 * k3))
+        icD_denominator = 1.0 + r2 * (k4 + r2 * (k5 + r2 * k6))
 
         # No clamping - let icD be as extreme as needed to match CUDA behavior
         icD = icD_numerator / icD_denominator  # [B, M]
 
         # Compute delta (tangential + thin prism)
-        delta_x = p1*a1 + p2*a2 + r2*(s1 + r2*s2)  # [B, M]
-        delta_y = p1*a3 + p2*a1 + r2*(s3 + r2*s4)  # [B, M]
+        delta_x = p1 * a1 + p2 * a2 + r2 * (s1 + r2 * s2)  # [B, M]
+        delta_y = p1 * a3 + p2 * a1 + r2 * (s3 + r2 * s4)  # [B, M]
         delta = torch.stack([delta_x, delta_y], dim=-1)  # [B, M, 2]
 
         # Postconditions
@@ -781,7 +862,8 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
 
         return icD, delta, r2
 
-    def camera_ray_to_image_point(self,
+    def camera_ray_to_image_point(
+        self,
         cam_ray: Tensor,
         margin_factor: float,
     ) -> Tuple[Tensor, Tensor]:
@@ -798,10 +880,12 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         icD, delta, r2 = self._compute_distortion(uv)
         valid_distortion = icD > 0.8
 
-        uvND = icD.unsqueeze(-1)*uv + delta
+        uvND = icD.unsqueeze(-1) * uv + delta
 
         # Apply intrinsics: [u, v] * [fx, fy] + [cx, cy] -> [M, 2]
-        image_point = _project_to_image(uvND, self.focal_lengths[..., None,:], self.principal_points[..., None,:])
+        image_point = _project_to_image(
+            uvND, self.focal_lengths[..., None, :], self.principal_points[..., None, :]
+        )
 
         valid_bounds = self.check_image_bounds(image_point, margin_factor)
 
@@ -815,7 +899,7 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
 
     def _compute_undistortion_iterative(
         self,
-        image_point: torch.Tensor, # [M, 2] - distorted image points
+        image_point: torch.Tensor,  # [M, 2] - distorted image points
     ) -> torch.Tensor:
         """
         Undistort image points using an iterative method.
@@ -829,7 +913,11 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         assert_shape("image_point", image_point, M + (2,))
 
         # Initial guess for the undistorted point
-        cam_point_0 = _unproject_from_image(image_point, self.focal_lengths[..., None,:], self.principal_points[..., None,:])
+        cam_point_0 = _unproject_from_image(
+            image_point,
+            self.focal_lengths[..., None, :],
+            self.principal_points[..., None, :],
+        )
 
         # Start from distorted points as initial guess
         uv_hat = cam_point_0
@@ -844,7 +932,7 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
             converged = torch.dot(residual, residual) < self.min_2d_norm
 
             if torch.all(converged, dim=-1):
-                break;
+                break
 
             uv_hat = uv_next
 
@@ -853,7 +941,9 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
 
         return uv_hat
 
-    def _compute_residual_and_jacobian(self, uv_hat: torch.Tensor, uv: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+    def _compute_residual_and_jacobian(
+        self, uv_hat: torch.Tensor, uv: torch.Tensor
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Computes the residual and Jacobian for the Newton method of undistortion.
         This matches the CUDA implementation exactly.
@@ -892,19 +982,19 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         s4 = self.thin_prism_coeffs[..., 3:4]  # [B, 1]
 
         # Compute r = x² + y²
-        r = x*x + y*y
+        r = x * x + y * y
         r2 = r * r
 
         # Compute α = 1 + k1·r + k2·r² + k3·r³
         # Compute β = 1 + k4·r + k5·r² + k6·r³
         # Compute d = α/β (inverse radial distortion coefficient)
-        alpha = 1.0 + r*(k1 + r*(k2 + r*k3))
-        beta = 1.0 + r*(k4 + r*(k5 + r*k6))
-        d = alpha / beta # iCD
+        alpha = 1.0 + r * (k1 + r * (k2 + r * k3))
+        beta = 1.0 + r * (k4 + r * (k5 + r * k6))
+        d = alpha / beta  # iCD
 
         # Negative iCD means the distortion makes point flipped across
         # the image center. This cannot be produced by real lenses.
-        valid = (d > 0.0)
+        valid = d > 0.0
 
         # The perfect projection is:
         # xd = x·d + 2·p1·x·y + p2·(r + 2·x²) + s1·r + s2·r²
@@ -916,44 +1006,46 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         #
         # The solution satisfies fx = 0 and fy = 0
 
-        fx = d*x + 2*p1*x*y + p2*(r + 2*x*x) + s1*r + s2*r2 - xd
-        fy = d*y + 2*p2*x*y + p1*(r + 2*y*y) + s3*r + s4*r2 - yd
+        fx = d * x + 2 * p1 * x * y + p2 * (r + 2 * x * x) + s1 * r + s2 * r2 - xd
+        fy = d * y + 2 * p2 * x * y + p1 * (r + 2 * y * y) + s3 * r + s4 * r2 - yd
 
         # Compute derivatives for the Jacobian
         # First, compute derivatives of α and β w.r.t. r
-        alpha_r = k1 + r*(2.0*k2 + r*(3.0*k3))
-        beta_r = k4 + r*(2.0*k5 + r*(3.0*k6))
+        alpha_r = k1 + r * (2.0 * k2 + r * (3.0 * k3))
+        beta_r = k4 + r * (2.0 * k5 + r * (3.0 * k6))
 
         # Compute derivative of d w.r.t. r (using quotient rule)
-        d_r = (alpha_r*beta - alpha*beta_r) / (beta * beta)
+        d_r = (alpha_r * beta - alpha * beta_r) / (beta * beta)
 
         # Compute derivative of d w.r.t. x and y (using chain rule: ∂d/∂x = d_r·∂r/∂x)
         d_x = 2.0 * x * d_r
         d_y = 2.0 * y * d_r
 
         # Compute Jacobian components: ∂fx/∂x, ∂fx/∂y, ∂fy/∂x, ∂fy/∂y
-        fx_x = d + d_x*x + 2.0*p1*y + 6.0*p2*x
-        fx_x = fx_x + 2.0*x*(s1 + 2.0*s2*r)
+        fx_x = d + d_x * x + 2.0 * p1 * y + 6.0 * p2 * x
+        fx_x = fx_x + 2.0 * x * (s1 + 2.0 * s2 * r)
 
-        fx_y = d_y*x + 2.0*p1*x + 2.0*p2*y
-        fx_y = fx_y + 2.0*y*(s1 + 2.0*s2*r)
+        fx_y = d_y * x + 2.0 * p1 * x + 2.0 * p2 * y
+        fx_y = fx_y + 2.0 * y * (s1 + 2.0 * s2 * r)
 
-        fy_x = d_x*y + 2.0*p2*y + 2.0*p1*x
-        fy_x = fy_x + 2.0*x*(s3 + 2.0*s4*r)
+        fy_x = d_x * y + 2.0 * p2 * y + 2.0 * p1 * x
+        fy_x = fy_x + 2.0 * x * (s3 + 2.0 * s4 * r)
 
-        fy_y = d + d_y*y + 2.0*p2*x + 6.0*p1*y
-        fy_y = fy_y + 2.0*y*(s3 + 2.0*s4*r)
+        fy_y = d + d_y * y + 2.0 * p2 * x + 6.0 * p1 * y
+        fy_y = fy_y + 2.0 * y * (s3 + 2.0 * s4 * r)
 
         # Stack residuals and jacobian
         residual = torch.stack([fx, fy], dim=-1)  # [M, 2]
-        jacobian = torch.stack([
-            torch.stack([fx_x, fx_y], dim=-1),
-            torch.stack([fy_x, fy_y], dim=-1)
-        ], dim=-2)  # [M, 2, 2]
+        jacobian = torch.stack(
+            [torch.stack([fx_x, fx_y], dim=-1), torch.stack([fy_x, fy_y], dim=-1)],
+            dim=-2,
+        )  # [M, 2, 2]
 
         # Expand valid mask for broadcasting: [M] -> [M, 1] for residual, [M, 1, 1] for jacobian
         residual = torch.where(valid[..., None], residual, torch.zeros_like(residual))
-        jacobian = torch.where(valid[..., None, None], jacobian, torch.zeros_like(jacobian))
+        jacobian = torch.where(
+            valid[..., None, None], jacobian, torch.zeros_like(jacobian)
+        )
 
         # Postconditions
         assert_shape("residual", residual, M + (2,))
@@ -979,7 +1071,11 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         assert_shape("image_point", image_point, M + (2,))
 
         # Initial guess: undistorted normalized cam coordinates
-        uv_0 = _unproject_from_image(image_point, self.focal_lengths[..., None,:], self.principal_points[..., None,:])
+        uv_0 = _unproject_from_image(
+            image_point,
+            self.focal_lengths[..., None, :],
+            self.principal_points[..., None, :],
+        )
 
         # No points have converged initially
         converged = torch.zeros_like(image_point[..., 0], dtype=torch.bool)
@@ -990,7 +1086,9 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         eps: float = 1e-6
         uv_hat = uv_0
         for i in range(self.max_undistortion_iterations):
-            res, J, valid_jac = self._compute_residual_and_jacobian(uv_hat, uv_0)  # [M, 2], [M, 2, 2]
+            res, J, valid_jac = self._compute_residual_and_jacobian(
+                uv_hat, uv_0
+            )  # [M, 2], [M, 2, 2]
             valid_points = valid_points & valid_jac
 
             det = torch.linalg.det(J)
@@ -1004,16 +1102,19 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
             fy_y = J[..., 1, 1]
 
             # Compute delta = -J⁻¹·res
-            delta = -torch.stack([
-                (fx*fy_y - fy*fx_y)/det,
-                (fy*fx_x - fx*fy_x)/det
-            ], dim=-1)
+            delta = -torch.stack(
+                [(fx * fy_y - fy * fx_y) / det, (fy * fx_x - fx * fy_x) / det], dim=-1
+            )
 
             # Do not update points that already converged or aren't valid
-            uv_hat = torch.where((converged | ~valid_points)[..., None], uv_hat, uv_hat + delta)
+            uv_hat = torch.where(
+                (converged | ~valid_points)[..., None], uv_hat, uv_hat + delta
+            )
 
             # Check if both delta.x and delta.y are less than eps
-            delta_converged = (torch.abs(delta[..., 0]) < eps) & (torch.abs(delta[..., 1]) < eps)
+            delta_converged = (torch.abs(delta[..., 0]) < eps) & (
+                torch.abs(delta[..., 1]) < eps
+            )
             converged = converged | (valid_points & delta_converged)
 
         # Postconditions
@@ -1022,7 +1123,8 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
 
         return uv_hat, converged
 
-    def image_point_to_camera_ray(self,
+    def image_point_to_camera_ray(
+        self,
         image_point: Tensor,
     ) -> Tuple[Tensor, Tensor]:
         # Preconditions
@@ -1031,11 +1133,9 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
 
         uv, converged = self._compute_undistortion_newton(image_point)
 
-        camera_ray = torch.stack([
-            uv[..., 0],
-            uv[..., 1],
-            torch.ones_like(uv[..., 0])
-        ], dim=-1)
+        camera_ray = torch.stack(
+            [uv[..., 0], uv[..., 1], torch.ones_like(uv[..., 0])], dim=-1
+        )
 
         camera_ray = _safe_normalize(camera_ray)
 
@@ -1043,6 +1143,7 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         assert_shape("camera_ray", camera_ray, M + (3,))
         assert_shape("converged", converged, M)
         return camera_ray, converged
+
 
 class _OpenCVFisheyeCameraModel(_BaseCameraModel):
     """
@@ -1107,23 +1208,33 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
 
         # Initialize 9th-degree odd-only forward polynomial
         # Maps angles to normalized distances: θ¹ + k₁·θ³ + k₂·θ⁵ + k₃·θ⁷ + k₄·θ⁹
-        self.forward_poly_odd = OddPolynomialProxy(torch.stack([
-            torch.ones_like(k1),   # coefficient for θ¹
-            k1,                    # coefficient for θ³
-            k2,                    # coefficient for θ⁵
-            k3,                    # coefficient for θ⁷
-            k4,                    # coefficient for θ⁹
-        ], dim=-1))  # [B, 5]
+        self.forward_poly_odd = OddPolynomialProxy(
+            torch.stack(
+                [
+                    torch.ones_like(k1),  # coefficient for θ¹
+                    k1,  # coefficient for θ³
+                    k2,  # coefficient for θ⁵
+                    k3,  # coefficient for θ⁷
+                    k4,  # coefficient for θ⁹
+                ],
+                dim=-1,
+            )
+        )  # [B, 5]
 
         # 8th-degree even polynomial (derivative of forward polynomial)
         # 1 + 3·k₁·θ² + 5·k₂·θ⁴ + 7·k₃·θ⁶ + 9·k₄·θ⁸
-        self.dforward_poly_even = EvenPolynomialProxy(torch.stack([
-            torch.ones_like(k1),   # constant term
-            3.0 * k1,              # coefficient for θ²
-            5.0 * k2,              # coefficient for θ⁴
-            7.0 * k3,              # coefficient for θ⁶
-            9.0 * k4,              # coefficient for θ⁸
-        ], dim=-1))  # [B, 5]
+        self.dforward_poly_even = EvenPolynomialProxy(
+            torch.stack(
+                [
+                    torch.ones_like(k1),  # constant term
+                    3.0 * k1,  # coefficient for θ²
+                    5.0 * k2,  # coefficient for θ⁴
+                    7.0 * k3,  # coefficient for θ⁶
+                    9.0 * k4,  # coefficient for θ⁸
+                ],
+                dim=-1,
+            )
+        )  # [B, 5]
 
         # Compute maximum diagonal distances from principal point to image corners
         fx = focal_lengths[..., 0]  # [B]
@@ -1133,76 +1244,90 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
 
         max_diag_x = torch.maximum(width - cx, cx)  # [B]
         max_diag_y = torch.maximum(height - cy, cy)  # [B]
-        max_radius_pixels = torch.sqrt(max_diag_x * max_diag_x + max_diag_y * max_diag_y)  # [B]
+        max_radius_pixels = torch.sqrt(
+            max_diag_x * max_diag_x + max_diag_y * max_diag_y
+        )  # [B]
 
         # Compute max_angle (maximum valid angle for the fisheye model)
         k4_is_zero = torch.abs(k4) < 1e-10  # [B]
 
         # Case 1: k4 == 0 (simpler case)
         # Solve for where derivative polynomial equals zero
-        max_angle_k4_zero = torch.sqrt(self._compute_max_angle(
-            3.0 * k1,  # a
-            5.0 * k2,  # b
-            7.0 * k3,  # c
-        ))  # [B, 3]
+        max_angle_k4_zero = torch.sqrt(
+            self._compute_max_angle(
+                3.0 * k1,  # a
+                5.0 * k2,  # b
+                7.0 * k3,  # c
+            )
+        )  # [B, 3]
 
         # Case 2: k₄ ≠ 0 (full cubic case)
         # Use Newton iteration to find where derivative equals zero
-        ddforward_poly_odd = OddPolynomialProxy(torch.stack([
-            6.0 * k1,    # coefficient for θ¹
-            20.0 * k2,   # coefficient for θ³
-            42.0 * k3,   # coefficient for θ⁵
-            72.0 * k4,   # coefficient for θ⁷
-        ], dim=-1))  # [B, 4]
+        ddforward_poly_odd = OddPolynomialProxy(
+            torch.stack(
+                [
+                    6.0 * k1,  # coefficient for θ¹
+                    20.0 * k2,  # coefficient for θ³
+                    42.0 * k3,  # coefficient for θ⁵
+                    72.0 * k4,  # coefficient for θ⁷
+                ],
+                dim=-1,
+            )
+        )  # [B, 4]
 
         # Initial approximation: θ ≈ π/2
         approx_poly_even = EvenPolynomialProxy(
             torch.ones((*B, 1), device=device, dtype=dtype) * 1.57
-        ) # [B,1]
+        )  # [B,1]
 
         # Calculate the maximum angle where the derivative polynomial equals zero.
         max_angle_k4_nonzero, converged = _eval_poly_inverse_horner_newton(
             self.dforward_poly_even,
             ddforward_poly_odd,
             approx_poly_even,
-            torch.zeros_like(k1[...,None]),  # [B,1] target value (zero)
+            torch.zeros_like(k1[..., None]),  # [B,1] target value (zero)
             n_iterations=newton_iterations,
         )  # [B,1]
-        max_angle_k4_nonzero = max_angle_k4_nonzero.squeeze(-1) # [B]
-        converged = converged.squeeze(-1) # [B]
+        max_angle_k4_nonzero = max_angle_k4_nonzero.squeeze(-1)  # [B]
+        converged = converged.squeeze(-1)  # [B]
 
         # Mark invalid solutions
         max_angle_k4_nonzero = torch.where(
             converged & (max_angle_k4_nonzero > 0.0),
             max_angle_k4_nonzero,
-            torch.tensor(float('inf'), device=device, dtype=dtype)
-        ) # [B]
+            torch.tensor(float("inf"), device=device, dtype=dtype),
+        )  # [B]
 
         # Choose between the two cases
-        max_angle = torch.where(k4_is_zero, max_angle_k4_zero, max_angle_k4_nonzero)  # [B]
+        max_angle = torch.where(
+            k4_is_zero, max_angle_k4_zero, max_angle_k4_nonzero
+        )  # [B]
 
         # Clamp max_angle to image bounds
         max_angle = torch.minimum(
-            max_angle,
-            torch.maximum(
-                max_radius_pixels / fx,
-                max_radius_pixels / fy
-            )
+            max_angle, torch.maximum(max_radius_pixels / fx, max_radius_pixels / fy)
         )  # [B]
 
         self.max_angle = max_angle  # [B]
 
         # Approximate backward polynomial (linear approximation for initial guess)
         # Maps normalized distances to angles (very crude approximation)
-        max_normalized_dist = torch.maximum(width/2.0/fx, height/2.0/fy) # [B]
+        max_normalized_dist = torch.maximum(width / 2.0 / fx, height / 2.0 / fy)  # [B]
 
-        self.approx_backward_poly = FullPolynomialProxy(torch.stack([
-            torch.zeros_like(max_angle),  # constant term (0)
-            max_angle / max_normalized_dist  # linear term
-        ], dim=-1))  # [B, 2]
+        self.approx_backward_poly = FullPolynomialProxy(
+            torch.stack(
+                [
+                    torch.zeros_like(max_angle),  # constant term (0)
+                    max_angle / max_normalized_dist,  # linear term
+                ],
+                dim=-1,
+            )
+        )  # [B, 2]
 
         # Postconditions
-        assert self.max_angle.shape == B, f"max_angle must have shape {B}, got {self.max_angle.shape}"
+        assert (
+            self.max_angle.shape == B
+        ), f"max_angle must have shape {B}, got {self.max_angle.shape}"
         assert_shape("approx_backward_poly", self.approx_backward_poly.coeffs, B + (2,))
         assert_shape("forward_poly_odd", self.forward_poly_odd.coeffs, B + (5,))
         assert_shape("dforward_poly_even", self.dforward_poly_even.coeffs, B + (5,))
@@ -1237,7 +1362,7 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         assert_shape("b", b, B)
         assert_shape("c", c, B)
 
-        INF = torch.tensor(float('inf'), device=a.device, dtype=a.dtype)
+        INF = torch.tensor(float("inf"), device=a.device, dtype=a.dtype)
         PI = torch.tensor(math.pi, device=a.device, dtype=a.dtype)
 
         # Case 1: c == 0 (quadratic or linear)
@@ -1265,11 +1390,11 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         # Case 2a: delta >= 0 (one real root)
         has_real_root = ~is_c_zero & (delta_cubic >= 0.0)
         d2 = torch.sqrt(delta_cubic)
-        cube_root = torch.sign((d2 + t1) / 2.0) * torch.pow(torch.abs((d2 + t1) / 2.0), 1.0 / 3.0)
+        cube_root = torch.sign((d2 + t1) / 2.0) * torch.pow(
+            torch.abs((d2 + t1) / 2.0), 1.0 / 3.0
+        )
         real_root_result = torch.where(
-            cube_root != 0,
-            (cube_root - (t2 / cube_root) - boc) / 3.0,
-            INF
+            cube_root != 0, (cube_root - (t2 / cube_root) - boc) / 3.0, INF
         )
         real_root_result = torch.where(real_root_result > 0.0, real_root_result, INF)
 
@@ -1289,10 +1414,19 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
             soln = torch.minimum(soln, s)
 
         # Combine all cases
-        result = torch.where(is_linear, linear_result,
-                    torch.where(has_quad_solution, quad_result,
-                        torch.where(has_real_root, real_root_result,
-                            torch.where(has_three_roots, soln, INF))))
+        result = torch.where(
+            is_linear,
+            linear_result,
+            torch.where(
+                has_quad_solution,
+                quad_result,
+                torch.where(
+                    has_real_root,
+                    real_root_result,
+                    torch.where(has_three_roots, soln, INF),
+                ),
+            ),
+        )
 
         # Postconditions
         assert_shape("result", result, B)
@@ -1319,19 +1453,25 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         """
         # Preconditions
         B = self.focal_lengths.shape[:-1]
-        M = (math.prod(cam_ray.shape[:-1]) // math.prod(B),) if cam_ray.ndim != self.focal_lengths.ndim else ()
+        M = (
+            (math.prod(cam_ray.shape[:-1]) // math.prod(B),)
+            if cam_ray.ndim != self.focal_lengths.ndim
+            else ()
+        )
         assert_shape("cam_ray", cam_ray, B + M + (3,))
 
         # Points behind camera are invalid
         valid = cam_ray[..., 2] > 0.0  # [B, M]
 
         # Compute norm of xy components using numerically stable method
-        cam_ray_xy_norm = _numerically_stable_norm2(cam_ray[..., 0], cam_ray[..., 1])  # [B, M]
+        cam_ray_xy_norm = _numerically_stable_norm2(
+            cam_ray[..., 0], cam_ray[..., 1]
+        )  # [B, M]
         # If norm is zero (point along principal axis), set to epsilon
         cam_ray_xy_norm = torch.where(
             cam_ray_xy_norm <= 0.0,
             torch.full_like(cam_ray_xy_norm, torch.finfo(cam_ray.dtype).eps),
-            cam_ray_xy_norm
+            cam_ray_xy_norm,
         )
 
         # Compute angle θ = atan2(‖xy‖, z)
@@ -1349,9 +1489,11 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         valid = valid & (delta > 0.0)  # [B, M]
 
         # Perspective projection
-        uv = delta[..., None]*cam_ray[..., :2]
+        uv = delta[..., None] * cam_ray[..., :2]
 
-        image_point = _project_to_image(uv, self.focal_lengths[..., None, :], self.principal_points[..., None, :])
+        image_point = _project_to_image(
+            uv, self.focal_lengths[..., None, :], self.principal_points[..., None, :]
+        )
 
         # Check image bounds
         valid_bounds = self.check_image_bounds(image_point, margin_factor)  # [B,M]
@@ -1386,7 +1528,11 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         assert_shape("image_point", image_point, M + (2,))
 
         # Normalize image coordinates to get uv (unproject from image)
-        uv = _unproject_from_image(image_point, self.focal_lengths[..., None,:], self.principal_points[..., None,:])  # [M, 2]
+        uv = _unproject_from_image(
+            image_point,
+            self.focal_lengths[..., None, :],
+            self.principal_points[..., None, :],
+        )  # [M, 2]
 
         # Compute radial distance (normalized)
         delta = torch.linalg.norm(uv, dim=-1)  # [..., M]
@@ -1404,7 +1550,9 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         )  # [..., M], [..., M]
 
         # Mark invalid: negative θ, θ ≥ max_angle, or not converged
-        valid = (theta >= 0.0) & (theta < self.max_angle[..., None]) & converged  # [..., M]
+        valid = (
+            (theta >= 0.0) & (theta < self.max_angle[..., None]) & converged
+        )  # [..., M]
 
         # Compute camera ray direction
         # At image center (δ ~ 0), return straight ahead [0, 0, 1]
@@ -1413,18 +1561,24 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
 
         # Non-center case: scale by sin(θ)/δ
         scale_factor = torch.sin(theta) / delta  # [..., M]
-        camera_ray = torch.stack([
-            scale_factor * uv[..., 0],
-            scale_factor * uv[..., 1],
-            torch.cos(theta),
-        ], dim=-1)  # [..., M, 3]
+        camera_ray = torch.stack(
+            [
+                scale_factor * uv[..., 0],
+                scale_factor * uv[..., 1],
+                torch.cos(theta),
+            ],
+            dim=-1,
+        )  # [..., M, 3]
 
         # Center case: straight ahead
-        camera_ray_center = torch.stack([
-            torch.zeros_like(theta),
-            torch.zeros_like(theta),
-            torch.ones_like(theta),
-        ], dim=-1)  # [..., M, 3]
+        camera_ray_center = torch.stack(
+            [
+                torch.zeros_like(theta),
+                torch.zeros_like(theta),
+                torch.ones_like(theta),
+            ],
+            dim=-1,
+        )  # [..., M, 3]
 
         camera_ray = torch.where(is_center[..., None], camera_ray_center, camera_ray)
 
@@ -1486,8 +1640,12 @@ class _FThetaCameraModel(_BaseCameraModel):
         # Preconditions
         B = principal_points.shape[:-1]
         assert_shape("principal_points", principal_points, B + (2,))
-        assert len(dist_params.pixeldist_to_angle_poly) == 6, "pixeldist_to_angle_poly must have 6 coefficients"
-        assert len(dist_params.angle_to_pixeldist_poly) == 6, "angle_to_pixeldist_poly must have 6 coefficients"
+        assert (
+            len(dist_params.pixeldist_to_angle_poly) == 6
+        ), "pixeldist_to_angle_poly must have 6 coefficients"
+        assert (
+            len(dist_params.angle_to_pixeldist_poly) == 6
+        ), "angle_to_pixeldist_poly must have 6 coefficients"
         assert len(dist_params.linear_cde) == 3, "linear_cde must have 3 coefficients"
 
         super().__init__(width, height, rs_type)
@@ -1500,18 +1658,42 @@ class _FThetaCameraModel(_BaseCameraModel):
         else:
             self.reference_poly_type = dist_params.reference_poly
 
-        assert isinstance(self.reference_poly_type, FThetaPolynomialTypeCUDA), "reference_poly must be a FThetaPolynomialTypeCUDA"
+        assert isinstance(
+            self.reference_poly_type, FThetaPolynomialTypeCUDA
+        ), "reference_poly must be a FThetaPolynomialTypeCUDA"
 
         # FTheta model convention: image origin = center of first pixel
         # Therefore offset principal point by +0.5 (matches CUDA lines 1075-1076)
         self._principal_points = principal_points + 0.5  # [B, 2]
         if len(B) == 0:
-            self.max_angle = torch.tensor(dist_params.max_angle, device=device, dtype=dtype)
+            self.max_angle = torch.tensor(
+                dist_params.max_angle, device=device, dtype=dtype
+            )
         else:
-            self.max_angle = torch.tensor([dist_params.max_angle], device=device, dtype=dtype).expand(*B)  # [B]
-        self.linear_cde = torch.tensor(dist_params.linear_cde).clone().to(device=device, dtype=dtype).expand(*B, -1).squeeze(-1)  # [B,3]
-        self.pixeldist_to_angle_poly = torch.tensor(dist_params.pixeldist_to_angle_poly).clone().to(device=device, dtype=dtype).expand(*B, -1)  # [B,6]
-        self.angle_to_pixeldist_poly = torch.tensor(dist_params.angle_to_pixeldist_poly).clone().to(device=device, dtype=dtype).expand(*B, -1)  # [B,6]
+            self.max_angle = torch.tensor(
+                [dist_params.max_angle], device=device, dtype=dtype
+            ).expand(
+                *B
+            )  # [B]
+        self.linear_cde = (
+            torch.tensor(dist_params.linear_cde)
+            .clone()
+            .to(device=device, dtype=dtype)
+            .expand(*B, -1)
+            .squeeze(-1)
+        )  # [B,3]
+        self.pixeldist_to_angle_poly = (
+            torch.tensor(dist_params.pixeldist_to_angle_poly)
+            .clone()
+            .to(device=device, dtype=dtype)
+            .expand(*B, -1)
+        )  # [B,6]
+        self.angle_to_pixeldist_poly = (
+            torch.tensor(dist_params.angle_to_pixeldist_poly)
+            .clone()
+            .to(device=device, dtype=dtype)
+            .expand(*B, -1)
+        )  # [B,6]
         self.min_2d_norm = min_2d_norm
         self.newton_iterations = newton_iterations
 
@@ -1519,34 +1701,54 @@ class _FThetaCameraModel(_BaseCameraModel):
         dtype = principal_points.dtype
 
         # Convert polynomial coefficients to Tensors and create PolynomialProxy objects
-        self.angle_to_pixeldist_poly = FullPolynomialProxy(self.angle_to_pixeldist_poly) # [B,6]
-        self.pixeldist_to_angle_poly = FullPolynomialProxy(self.pixeldist_to_angle_poly) # [B,6]
+        self.angle_to_pixeldist_poly = FullPolynomialProxy(
+            self.angle_to_pixeldist_poly
+        )  # [B,6]
+        self.pixeldist_to_angle_poly = FullPolynomialProxy(
+            self.pixeldist_to_angle_poly
+        )  # [B,6]
 
         # Compute derivative of reference polynomial (matches CUDA lines 1066-1071)
         # Derivative: d/dx[c₀ + c₁·x + c₂·x² + ...] = c₁ + 2·c₂·x + 3·c₃·x² + ...
         if self.reference_poly_type == FThetaPolynomialTypeCUDA.PIXELDIST_TO_ANGLE:
             # Backward poly is reference: derivative of pixeldist_to_angle_poly
-            self.dreference_poly = FullPolynomialProxy(torch.stack([
-                1.0 * self.pixeldist_to_angle_poly.coeffs[...,1],
-                2.0 * self.pixeldist_to_angle_poly.coeffs[...,2],
-                3.0 * self.pixeldist_to_angle_poly.coeffs[...,3],
-                4.0 * self.pixeldist_to_angle_poly.coeffs[...,4],
-                5.0 * self.pixeldist_to_angle_poly.coeffs[...,5],
-            ], dim=-1))  # [B,5]
+            self.dreference_poly = FullPolynomialProxy(
+                torch.stack(
+                    [
+                        1.0 * self.pixeldist_to_angle_poly.coeffs[..., 1],
+                        2.0 * self.pixeldist_to_angle_poly.coeffs[..., 2],
+                        3.0 * self.pixeldist_to_angle_poly.coeffs[..., 3],
+                        4.0 * self.pixeldist_to_angle_poly.coeffs[..., 4],
+                        5.0 * self.pixeldist_to_angle_poly.coeffs[..., 5],
+                    ],
+                    dim=-1,
+                )
+            )  # [B,5]
         else:
-            assert self.reference_poly_type == FThetaPolynomialTypeCUDA.ANGLE_TO_PIXELDIST
+            assert (
+                self.reference_poly_type == FThetaPolynomialTypeCUDA.ANGLE_TO_PIXELDIST
+            )
             # Forward poly is reference: derivative of angle_to_pixeldist_poly
-            self.dreference_poly = FullPolynomialProxy(torch.stack([
-                1.0 * self.angle_to_pixeldist_poly.coeffs[...,1],
-                2.0 * self.angle_to_pixeldist_poly.coeffs[...,2],
-                3.0 * self.angle_to_pixeldist_poly.coeffs[...,3],
-                4.0 * self.angle_to_pixeldist_poly.coeffs[...,4],
-                5.0 * self.angle_to_pixeldist_poly.coeffs[...,5],
-            ], dim=-1))  # [B,5]
+            self.dreference_poly = FullPolynomialProxy(
+                torch.stack(
+                    [
+                        1.0 * self.angle_to_pixeldist_poly.coeffs[..., 1],
+                        2.0 * self.angle_to_pixeldist_poly.coeffs[..., 2],
+                        3.0 * self.angle_to_pixeldist_poly.coeffs[..., 3],
+                        4.0 * self.angle_to_pixeldist_poly.coeffs[..., 4],
+                        5.0 * self.angle_to_pixeldist_poly.coeffs[..., 5],
+                    ],
+                    dim=-1,
+                )
+            )  # [B,5]
 
         # Postconditions
-        assert_shape("angle_to_pixeldist_poly", self.angle_to_pixeldist_poly.coeffs, B + (6,))
-        assert_shape("pixeldist_to_angle_poly", self.pixeldist_to_angle_poly.coeffs, B + (6,))
+        assert_shape(
+            "angle_to_pixeldist_poly", self.angle_to_pixeldist_poly.coeffs, B + (6,)
+        )
+        assert_shape(
+            "pixeldist_to_angle_poly", self.pixeldist_to_angle_poly.coeffs, B + (6,)
+        )
         assert_shape("dreference_poly", self.dreference_poly.coeffs, B + (5,))
         assert_shape("max_angle", self.max_angle, B)
         assert_shape("linear_cde", self.linear_cde, B + (3,))
@@ -1563,10 +1765,12 @@ class _FThetaCameraModel(_BaseCameraModel):
 
         # Try to use the reference polynomial for a better estimate.
         if self.reference_poly_type == FThetaPolynomialTypeCUDA.PIXELDIST_TO_ANGLE:
-            flen = (1.0/self.pixeldist_to_angle_poly.coeffs[..., [1,1]])
+            flen = 1.0 / self.pixeldist_to_angle_poly.coeffs[..., [1, 1]]
         else:
-            assert self.reference_poly_type == FThetaPolynomialTypeCUDA.ANGLE_TO_PIXELDIST
-            flen = self.angle_to_pixeldist_poly.coeffs[..., [1,1]]
+            assert (
+                self.reference_poly_type == FThetaPolynomialTypeCUDA.ANGLE_TO_PIXELDIST
+            )
+            flen = self.angle_to_pixeldist_poly.coeffs[..., [1, 1]]
 
         return flen.expand(self.principal_points.shape)
 
@@ -1596,12 +1800,14 @@ class _FThetaCameraModel(_BaseCameraModel):
         not_behind_camera = cam_ray[..., 2] > 0.0  # [M]
 
         # Compute norm of xy components using numerically stable method
-        cam_ray_xy_norm = _numerically_stable_norm2(cam_ray[..., 0], cam_ray[..., 1])  # [M]
+        cam_ray_xy_norm = _numerically_stable_norm2(
+            cam_ray[..., 0], cam_ray[..., 1]
+        )  # [M]
         # If norm is zero (point along principal axis), set to epsilon
         cam_ray_xy_norm = torch.where(
             cam_ray_xy_norm <= 0.0,
             torch.full_like(cam_ray_xy_norm, torch.finfo(cam_ray.dtype).eps),
-            cam_ray_xy_norm
+            cam_ray_xy_norm,
         )
 
         # Compute angle θ = atan2(‖xy‖, z)
@@ -1633,26 +1839,36 @@ class _FThetaCameraModel(_BaseCameraModel):
 
         # Apply delta to normalized xy to get f(θ)-weighted 2D vectors
         # Then apply linear transform A = [[c, d], [e, 1]]
-        c = self.linear_cde[..., 0:1] # [B,1]
-        d = self.linear_cde[..., 1:2] # [B,1]
-        e = self.linear_cde[..., 2:3] # [B,1]
+        c = self.linear_cde[..., 0:1]  # [B,1]
+        d = self.linear_cde[..., 1:2]  # [B,1]
+        e = self.linear_cde[..., 2:3]  # [B,1]
         cx = self.principal_points[..., 0:1]  # [B,1]
         cy = self.principal_points[..., 1:2]  # [B,1]
 
         # Normalized xy vectors and apply delta scaling
-        image_point_x = delta*cam_ray[..., 0] / cam_ray_xy_norm # [M]
-        image_point_y = delta*cam_ray[..., 1] / cam_ray_xy_norm # [M]
+        image_point_x = delta * cam_ray[..., 0] / cam_ray_xy_norm  # [M]
+        image_point_y = delta * cam_ray[..., 1] / cam_ray_xy_norm  # [M]
 
         # Apply linear transform relative to principal point
-        image_point = torch.stack([c*image_point_x + d*image_point_y + cx,
-                                   e*image_point_x + image_point_y + cy], dim=-1) # [M, 2]
+        image_point = torch.stack(
+            [
+                c * image_point_x + d * image_point_y + cx,
+                e * image_point_x + image_point_y + cy,
+            ],
+            dim=-1,
+        )  # [M, 2]
 
         # Check image bounds (matches CUDA image_point_in_image_bounds_margin)
         valid_bounds = self.check_image_bounds(image_point, margin_factor)  # [M]
 
         # Mark FOV-clamped points as invalid
         # TODO: This isn't happening, we need to compare against theta_full (not clamped)!
-        valid = not_behind_camera & converged & (theta <= self.max_angle[..., None]) & valid_bounds
+        valid = (
+            not_behind_camera
+            & converged
+            & (theta <= self.max_angle[..., None])
+            & valid_bounds
+        )
 
         # Set to zero the image_points behind camera or that didn't converge.
         image_point = image_point * (converged & not_behind_camera)[..., None]
@@ -1689,22 +1905,25 @@ class _FThetaCameraModel(_BaseCameraModel):
         # Linear transform: A = [[c, d], [e, 1]]
         # Inverse: A⁻¹ = [[1, -d], [-e, c]] / (c - e·d)
         # Matches CUDA lines 1142-1145
-        c = self.linear_cde[..., 0:1] # [B,1]
-        d = self.linear_cde[..., 1:2] # [B,1]
-        e = self.linear_cde[..., 2:3] # [B,1]
+        c = self.linear_cde[..., 0:1]  # [B,1]
+        d = self.linear_cde[..., 1:2]  # [B,1]
+        e = self.linear_cde[..., 2:3]  # [B,1]
         cx = self.principal_points[..., 0:1]  # [B,1]
         cy = self.principal_points[..., 1:2]  # [B,1]
 
         # Subtract principal point
-        px = image_point[..., 0] - cx # [M]
-        py = image_point[..., 1] - cy # [M]
+        px = image_point[..., 0] - cx  # [M]
+        py = image_point[..., 1] - cy  # [M]
 
         # Apply inverse linear transform
         det_inv = 1.0 / (c - e * d)  # [B,1]
-        uv = torch.stack([
-            (px - d*py) * det_inv,
-            (-e*px + c*py) * det_inv,
-        ], dim=-1)  # [M, 2]
+        uv = torch.stack(
+            [
+                (px - d * py) * det_inv,
+                (-e * px + c * py) * det_inv,
+            ],
+            dim=-1,
+        )  # [M, 2]
 
         # Compute radial distance (normalized)
         delta = torch.linalg.norm(uv, dim=-1)  # [M]
@@ -1733,20 +1952,28 @@ class _FThetaCameraModel(_BaseCameraModel):
 
         # Non-center case: scale by sin(θ)/δ
         scale_factor = torch.sin(theta) / delta  # [M]
-        camera_ray = torch.stack([
-            scale_factor * uv[..., 0],
-            scale_factor * uv[..., 1],
-            torch.cos(theta),
-        ], dim=-1)  # [M, 3]
+        camera_ray = torch.stack(
+            [
+                scale_factor * uv[..., 0],
+                scale_factor * uv[..., 1],
+                torch.cos(theta),
+            ],
+            dim=-1,
+        )  # [M, 3]
 
         # Center case: straight ahead
-        camera_ray_center = torch.stack([
-            torch.zeros_like(theta),
-            torch.zeros_like(theta),
-            torch.ones_like(theta),
-        ], dim=-1)  # [M, 3]
+        camera_ray_center = torch.stack(
+            [
+                torch.zeros_like(theta),
+                torch.zeros_like(theta),
+                torch.ones_like(theta),
+            ],
+            dim=-1,
+        )  # [M, 3]
 
-        camera_ray = torch.where((is_center | ~converged)[..., None], camera_ray_center, camera_ray)
+        camera_ray = torch.where(
+            (is_center | ~converged)[..., None], camera_ray_center, camera_ray
+        )
 
         camera_ray = _safe_normalize(camera_ray)
 
@@ -1760,7 +1987,7 @@ class _FThetaCameraModel(_BaseCameraModel):
 def _interpolate_shutter_pose(
     pose_start: Tensor,  # [B, 7]
     pose_end: Tensor,  # [B, 7]
-    relative_time: Tensor # [B]
+    relative_time: Tensor,  # [B]
 ) -> Tensor:  # [B, 7]
     """
     Interpolate a shutter pose between two poses.
@@ -1782,8 +2009,8 @@ def _interpolate_shutter_pose(
     # Extract translation and quaternion from 7D pose tensors
     t_start = pose_start[..., :3]  # [B, 3]
     q_start = pose_start[..., 3:]  # [B, 4]
-    t_end = pose_end[..., :3]      # [B, 3]
-    q_end = pose_end[..., 3:]      # [B, 4]
+    t_end = pose_end[..., :3]  # [B, 3]
+    q_end = pose_end[..., 3:]  # [B, 4]
 
     alpha = relative_time[..., None]
 

@@ -477,7 +477,7 @@ def rasterization(
         # Use provided UT parameters or create default
         if ut_params is None:
             ut_params = UnscentedTransformParameters()
-        
+
         proj_results = fully_fused_projection_with_ut(
             means,
             quats,

@@ -22,6 +22,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal, assert_never
 
+
 def _persp_proj(
     means: Tensor,  # [..., C, N, 3]
     covars: Tensor,  # [..., C, N, 3, 3]

@@ -40,25 +40,25 @@ device = torch.device("cuda:0")
     [
         # Standard tests: all combinations with with_eval3d=False
         *product(
-            [True, False],           # per_view_color
-            [None, 3],               # sh_degree
-            ["RGB", "RGB+D", "D"],   # render_mode
-            [True, False],           # packed
-            [(), (2,), (1, 2)],      # batch_dims
-            [False],                 # with_eval3d
-            [False]                  # with_ut
+            [True, False],  # per_view_color
+            [None, 3],  # sh_degree
+            ["RGB", "RGB+D", "D"],  # render_mode
+            [True, False],  # packed
+            [(), (2,), (1, 2)],  # batch_dims
+            [False],  # with_eval3d
+            [False],  # with_ut
         ),
         # 3DGUT
         *product(
-            [True, False],           # per_view_color
-            [None, 3],               # sh_degree
-            ["RGB"],                 # render_mode (only RGB)
-            [False],                 # packed (must be False)
-            [(), (2,)],              # batch_dims (reduced subset)
-            [True],                  # with_eval3d
-            [True]                   # with_ut
+            [True, False],  # per_view_color
+            [None, 3],  # sh_degree
+            ["RGB"],  # render_mode (only RGB)
+            [False],  # packed (must be False)
+            [(), (2,)],  # batch_dims (reduced subset)
+            [True],  # with_eval3d
+            [True],  # with_ut
         ),
-    ]
+    ],
 )
 def test_rasterization(
     per_view_color: bool,
@@ -115,7 +115,7 @@ def test_rasterization(
         render_mode=render_mode,
         packed=packed,
         with_eval3d=with_eval3d,
-        with_ut=with_ut
+        with_ut=with_ut,
     )
 
     if render_mode == "D":
@@ -145,4 +145,3 @@ def test_rasterization(
     atol = 5e-4 if with_eval3d else 1e-4
     torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
-

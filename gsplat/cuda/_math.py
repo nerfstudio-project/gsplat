@@ -44,11 +44,11 @@ def _numerically_stable_norm2(x: Tensor, y: Tensor) -> Tensor:
     nonzero_mask = max_val > 0.0
 
     # For non-zero max: compute norm = max · √(1 + (min/max)²)
-    min_max_ratio = torch.where(nonzero_mask, min_val / max_val, torch.zeros_like(min_val))
+    min_max_ratio = torch.where(
+        nonzero_mask, min_val / max_val, torch.zeros_like(min_val)
+    )
     result = torch.where(
-        nonzero_mask,
-        max_val * torch.sqrt(1.0 + min_max_ratio * min_max_ratio),
-        result
+        nonzero_mask, max_val * torch.sqrt(1.0 + min_max_ratio * min_max_ratio), result
     )
 
     # Postconditions
@@ -60,6 +60,7 @@ def _numerically_stable_norm2(x: Tensor, y: Tensor) -> Tensor:
 # ============================================================================
 # Polynomial Helper Classes and Functions
 # ============================================================================
+
 
 class PolynomialProxy(ABC):
     """
@@ -113,17 +114,18 @@ class FullPolynomialProxy(PolynomialProxy):
         assert_shape("x", x, B + (1,))
 
         # Start with highest order coefficient, keeping trailing dim for broadcasting
-        result = self.coeffs[..., N-1:N]
+        result = self.coeffs[..., N - 1 : N]
 
         # Horner's method: iterate backwards through remaining coefficients
         for i in range(N - 2, -1, -1):
             # Standard broadcasting: result * x + coeff_i
-            result = result * x + self.coeffs[..., i:i+1]
+            result = result * x + self.coeffs[..., i : i + 1]
 
         # Postconditions
         assert_shape("result", result, B + (1,))
 
         return result
+
 
 class OddPolynomialProxy(PolynomialProxy):
     """
@@ -149,10 +151,11 @@ class OddPolynomialProxy(PolynomialProxy):
         assert_shape("x", x, B + (1,))
 
         # Factor out x: y = x · (c₀ + c₁·x² + c₂·x⁴ + ...)
-        result = x * FullPolynomialProxy(self.coeffs).eval_horner(x*x)
+        result = x * FullPolynomialProxy(self.coeffs).eval_horner(x * x)
 
         assert_shape("result", result, B + (1,))
         return result
+
 
 class EvenPolynomialProxy(PolynomialProxy):
     """
@@ -175,7 +178,7 @@ class EvenPolynomialProxy(PolynomialProxy):
         assert_shape("x", x, B + (1,))
 
         # Substitute x² for x: y = c₀ + c₁·x² + c₂·x⁴ + ...
-        result = FullPolynomialProxy(self.coeffs).eval_horner(x*x)
+        result = FullPolynomialProxy(self.coeffs).eval_horner(x * x)
 
         assert_shape("result", result, B + (1,))
         return result
@@ -212,9 +215,9 @@ def _eval_poly_inverse_horner_newton(
     B = poly.coeffs.shape[:-1]
     N = poly.coeffs.shape[-1]
     M = y.shape[-1]
-    assert_shape("poly", poly.coeffs, B+(1,))
-    assert_shape("dpoly", dpoly.coeffs, B+(1,))
-    assert_shape("inv_poly_approx", inv_poly_approx.coeffs, B+(1,))
+    assert_shape("poly", poly.coeffs, B + (1,))
+    assert_shape("dpoly", dpoly.coeffs, B + (1,))
+    assert_shape("inv_poly_approx", inv_poly_approx.coeffs, B + (1,))
     assert_shape("y", y, B + (M,))
 
     # Get initial approximation x₀ = approx_f⁻¹(y)
@@ -253,10 +256,10 @@ def _eval_poly_inverse_horner_newton(
     return x, converged
 
 
-
 # ============================================================================
 # Quaternion Operations
 # ============================================================================
+
 
 class SafeNormalize(torch.autograd.Function):
     """
@@ -281,9 +284,7 @@ class SafeNormalize(torch.autograd.Function):
         # Compute 1/sqrt(norm_sq) where norm_sq > 0, else 0
         # Use where to avoid NaN in backward
         inv_norm = torch.where(
-            norm_sq > 0.0,
-            torch.rsqrt(norm_sq),
-            torch.zeros_like(norm_sq)
+            norm_sq > 0.0, torch.rsqrt(norm_sq), torch.zeros_like(norm_sq)
         )
 
         # Normalized output
@@ -322,11 +323,7 @@ class SafeNormalize(torch.autograd.Function):
         il = inv_norm
 
         # il3 = 1/(||v||^3) = (1/||v||) * (1/||v||^2)
-        il3 = torch.where(
-            norm_sq > 0.0,
-            inv_norm / norm_sq,
-            torch.zeros_like(inv_norm)
-        )
+        il3 = torch.where(norm_sq > 0.0, inv_norm / norm_sq, torch.zeros_like(inv_norm))
 
         # dot(grad_out, v)
         dot_product = (grad_output * v).sum(dim=dim, keepdim=True)
@@ -378,13 +375,25 @@ def _rotmat_to_quat(R: Tensor) -> Tensor:
     fourWSquaredMinus1 = R_flat[:, 0, 0] + R_flat[:, 1, 1] + R_flat[:, 2, 2]  # trace
 
     # Find largest component
-    fourBiggestSquaredMinus1 = torch.stack([
-        fourWSquaredMinus1, fourXSquaredMinus1, fourYSquaredMinus1, fourZSquaredMinus1
-    ], dim=1)
+    fourBiggestSquaredMinus1 = torch.stack(
+        [
+            fourWSquaredMinus1,
+            fourXSquaredMinus1,
+            fourYSquaredMinus1,
+            fourZSquaredMinus1,
+        ],
+        dim=1,
+    )
     biggestIndex = torch.argmax(fourBiggestSquaredMinus1, dim=1)
 
     # Compute largest component value and multiplier
-    biggestVal = torch.sqrt(fourBiggestSquaredMinus1.gather(1, biggestIndex.unsqueeze(1)).squeeze(1) + 1.0) * 0.5
+    biggestVal = (
+        torch.sqrt(
+            fourBiggestSquaredMinus1.gather(1, biggestIndex.unsqueeze(1)).squeeze(1)
+            + 1.0
+        )
+        * 0.5
+    )
     mult = 0.25 / biggestVal
 
     # Initialize quaternion
@@ -465,12 +474,15 @@ def _quat_inverse(q: Tensor) -> Tensor:
     B = q.shape[:-1]
     assert_shape("q", q, B + (4,))
 
-    result = torch.stack([
-        q[..., 0],   # w stays same
-        -q[..., 1],  # -x
-        -q[..., 2],  # -y
-        -q[..., 3],  # -z
-    ], dim=-1)
+    result = torch.stack(
+        [
+            q[..., 0],  # w stays same
+            -q[..., 1],  # -x
+            -q[..., 2],  # -y
+            -q[..., 3],  # -z
+        ],
+        dim=-1,
+    )
 
     # Postconditions
     assert_shape("result", result, B + (4,))
@@ -499,8 +511,8 @@ def _quat_rotate(q: Tensor, v: Tensor) -> Tensor:
 
     q = _safe_normalize(q)
 
-    w, x, y, z = torch.unbind(q, dim=-1) # [..., N]
-    vx, vy, vz = torch.unbind(v, dim=-1) # [..., N]
+    w, x, y, z = torch.unbind(q, dim=-1)  # [..., N]
+    vx, vy, vz = torch.unbind(v, dim=-1)  # [..., N]
 
     # Compute q * (0, v) * q_conjugate using quaternion multiplication formula
     # Result is: v + 2*cross(q.xyz, cross(q.xyz, v) + w*v)
@@ -529,11 +541,11 @@ def _quat_multiply(q1: Tensor, q2: Tensor, dim: int = -1) -> Tensor:
     """
 
     # Preconditions
-    dim = dim+q1.ndim if dim < 0 else dim
+    dim = dim + q1.ndim if dim < 0 else dim
     A = q1.shape[:dim]
-    B = q1.shape[dim+1:]
-    assert_shape("q1", q1, A+(4,)+B)
-    assert_shape("q2", q2, A+(4,)+B)
+    B = q1.shape[dim + 1 :]
+    assert_shape("q1", q1, A + (4,) + B)
+    assert_shape("q2", q2, A + (4,) + B)
 
     # Decompose the quaternions into scalar and vector parts
     w1 = torch.narrow(q1, dim, 0, 1)
@@ -541,13 +553,13 @@ def _quat_multiply(q1: Tensor, q2: Tensor, dim: int = -1) -> Tensor:
     w2 = torch.narrow(q2, dim, 0, 1)
     v2 = torch.narrow(q2, dim, 1, 3)
 
-    w = w1*w2 - torch.sum(v1*v2, dim=dim, keepdim=True)
-    v = w1*v2 + w2*v1 + torch.cross(v1, v2, dim=dim)
+    w = w1 * w2 - torch.sum(v1 * v2, dim=dim, keepdim=True)
+    v = w1 * v2 + w2 * v1 + torch.cross(v1, v2, dim=dim)
 
     result = torch.cat([w, v], dim=dim)
 
     # Postconditions
-    assert_shape("result", result, A+(4,)+B)
+    assert_shape("result", result, A + (4,) + B)
     return result
 
 
@@ -574,7 +586,7 @@ def _quat_slerp(x: Tensor, y: Tensor, t: Tensor) -> Tensor:
     a = t[..., None]
 
     # Compute dot product (cosTheta)
-    cosTheta = torch.sum(x*y, dim=-1, keepdim=True)
+    cosTheta = torch.sum(x * y, dim=-1, keepdim=True)
 
     # If cosTheta < 0, negate q1 to take short path
     z = torch.where(cosTheta < 0, -y, y)
@@ -583,20 +595,22 @@ def _quat_slerp(x: Tensor, y: Tensor, t: Tensor) -> Tensor:
     # Linear interpolation when close to 1 (threshold ≈ 1 - epsilon)
     threshold = 1.0 - 1e-6
 
-    resultLerp = (1.0 - a)*x + a*z
+    resultLerp = (1.0 - a) * x + a * z
 
     # Check if any quaternions need slerp (are not close)
     if (cosTheta <= threshold).any():
         theta = torch.acos(cosTheta)
-        assert theta.isfinite().all(), f"cosTheta ∈ [{cosTheta.min().item(),cosTheta.max().item()}]"
+        assert (
+            theta.isfinite().all()
+        ), f"cosTheta ∈ [{cosTheta.min().item(),cosTheta.max().item()}]"
 
         sinTheta = torch.sin(theta)
-        resultSlerp = (torch.sin((1.0-a)*theta)*x + torch.sin(a*theta)*z)/sinTheta
+        resultSlerp = (
+            torch.sin((1.0 - a) * theta) * x + torch.sin(a * theta) * z
+        ) / sinTheta
 
         # Use linear interpolation where close, slerp where distant
-        result = torch.where(cosTheta > threshold,
-                            resultLerp,
-                            resultSlerp)
+        result = torch.where(cosTheta > threshold, resultLerp, resultSlerp)
     else:
         # All quaternions are close - use lerp for all
         result = resultLerp
@@ -611,6 +625,7 @@ def _quat_scale_to_preci_half(quats: Tensor, scales: Tensor) -> Tensor:
     R = _quat_to_rotmat(quats)
     M = R * (1.0 / scales[..., None, :])
     return M
+
 
 def _quat_to_rotmat(quats: Tensor) -> Tensor:
     """Convert quaternion to rotation matrix."""
@@ -683,6 +698,7 @@ def _quat_scale_to_covar_preci(
 # Polynomial Utilities
 # ============================================================================
 
+
 def compute_inverse_polynomial(forward_poly_coeffs, input_range, num_samples=1000):
     """
     Compute the inverse polynomial coefficients using least squares fitting.
@@ -703,7 +719,9 @@ def compute_inverse_polynomial(forward_poly_coeffs, input_range, num_samples=100
                    accuracy is insufficient (max error > 0.1% of range)
     """
     # Sample uniformly across input range
-    x_samples = np.linspace(input_range[0], input_range[1], num_samples, dtype=np.float64)
+    x_samples = np.linspace(
+        input_range[0], input_range[1], num_samples, dtype=np.float64
+    )
 
     # Evaluate forward polynomial: y = f(x)
     # np.polyval expects coefficients in descending order [c5, c4, c3, c2, c1, c0]
@@ -746,4 +764,3 @@ def compute_inverse_polynomial(forward_poly_coeffs, input_range, num_samples=100
         )
 
     return inverse_coeffs.astype(np.float32).tolist()
-
