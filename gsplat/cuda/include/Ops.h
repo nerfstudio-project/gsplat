@@ -79,7 +79,7 @@ projection_ewa_3dgs_fused_fwd(
     const bool calc_compensations,
     const CameraModelType camera_model
 );
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
     const at::Tensor means,                // [..., N, 3]
@@ -101,7 +101,8 @@ projection_ewa_3dgs_fused_bwd(
     const at::Tensor v_depths,                      // [..., C, N]
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
-    const bool viewmats_requires_grad
+    const bool viewmats_requires_grad,
+    const bool Ks_requires_grad
 );
 
 // On top of fusing the operations like `projection_ewa_3dgs_fused_{fwd, bwd}`,
@@ -327,7 +328,7 @@ projection_2dgs_fused_fwd(
     const float far_plane,
     const float radius_clip
 );
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_fused_bwd(
     // fwd inputs
     const at::Tensor means,    // [..., N, 3]
@@ -345,7 +346,8 @@ projection_2dgs_fused_bwd(
     const at::Tensor v_depths,         // [..., C, N]
     const at::Tensor v_normals,        // [..., C, N, 3]
     const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
-    const bool viewmats_requires_grad
+    const bool viewmats_requires_grad,
+    const bool Ks_requires_grad
 );
 
 std::tuple<
@@ -370,7 +372,7 @@ projection_2dgs_packed_fwd(
     const float far_plane,
     const float radius_clip
 );
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_packed_bwd(
     // fwd inputs
     const at::Tensor means,    // [..., N, 3]
@@ -391,6 +393,7 @@ projection_2dgs_packed_bwd(
     const at::Tensor v_ray_transforms, // [nnz, 3, 3]
     const at::Tensor v_normals,        // [nnz, 3]
     const bool viewmats_requires_grad,
+    const bool Ks_requires_grad,
     const bool sparse_grad
 );
 
