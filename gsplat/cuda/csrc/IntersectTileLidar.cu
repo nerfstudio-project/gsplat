@@ -105,8 +105,10 @@ namespace {
         return idx;
     }
 
-    inline __device__ int sample_tile_el(int dense_el, const int *cdf_elevation)
+    __device__ inline int sample_tile_el(int dense_el, const int *cdf_elevation, int elevation_cdf_resolution)
     {
+        assert(0 <= dense_el);
+        assert(dense_el <= elevation_cdf_resolution);
         return cdf_elevation[dense_el];
     }
 }
@@ -231,8 +233,14 @@ __global__ void intersect_tile_lidar_kernel(
         }
         return;
     }
-    const int tile_min_el = sample_tile_el(min_dense_el, lidar.cdf_elevation);
-    const int tile_max_el = sample_tile_el(max_dense_el, lidar.cdf_elevation);
+    // [min_dense_el,max_dense_el) is a half-open range.
+    // Make sure that [tile_min_el,tile_max_el) also is.
+    // - If min_dense_el==max_dense_el -> tile_min_el==tile_max_el (no tiles)
+    // - If min_dense_el<max_dense_el -> tile_min_el<tile_max_el. (at least one tile)
+    const int tile_min_el = sample_tile_el(min_dense_el, lidar.cdf_elevation, raycdf_size_el);
+    assert(max_dense_el >= 1);
+    const int tile_max_el = min(sample_tile_el(max_dense_el - 1, lidar.cdf_elevation, raycdf_size_el) + 1,
+                                (int)lidar.n_bins_elevation);
 
     // Sample A azimuth.
     const int begA_dense = sample_dense_az<RoundFloor>(begA_pix_az, fov_span_pix_az, raycdf_size_az);

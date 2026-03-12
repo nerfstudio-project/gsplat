@@ -35,6 +35,8 @@ def lidar_sample_tileid(
     rel_pix: SphericalUnitCoord,
     round_fn,
 ) -> LidarSampleTileIdReturn:
+    assert round_fn is torch.floor or round_fn is torch.ceil
+
     kToPixel = ANGLE_TO_PIXEL_SCALING_FACTOR
 
     fov_span_pix_az = kToPixel * lidar.fov_horiz_rad.span
@@ -58,9 +60,27 @@ def lidar_sample_tileid(
     )
     assert torch.all(idxdense.elevation < lidar.tiling.cdf_elevation.shape[0])
 
+    dense_el = idxdense.elevation
+    if round_fn is torch.ceil:
+        # [min_dense_el, max_dense_el) is a half-open range, so the coarse
+        # tile range [tile_min_el, tile_max_el) must be too.
+        # CDF[max_dense_el] gives the coarse bin that dense bin max_dense_el
+        # *belongs to*, not the exclusive upper bound.
+        # Use CDF[max_dense_el - 1] + 1 instead.
+        tile_el = torch.where(
+            dense_el >= 1,
+            torch.clamp(
+                lidar.tiling.cdf_elevation[torch.clamp(dense_el - 1, min=0)] + 1,
+                max=lidar.tiling.n_bins_elevation,
+            ),
+            lidar.tiling.cdf_elevation[dense_el],
+        )
+    else:
+        tile_el = lidar.tiling.cdf_elevation[dense_el]
+
     idx = SphericalUnitCoord(
         azimuth=round_fn(norm_az * lidar.tiling.n_bins_azimuth).to(dtype=torch.int32),
-        elevation=lidar.tiling.cdf_elevation[idxdense.elevation],
+        elevation=tile_el,
     )
 
     return LidarSampleTileIdReturn(

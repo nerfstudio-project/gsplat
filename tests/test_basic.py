@@ -842,7 +842,9 @@ def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
 
     n_bins_elevation = 11
     n_bins_azimuth = 21
-    cdf_resolution_elevation = 11
+    # Use a non-identity CDF (multiple dense bins per coarse bin) so that
+    # the elevation CDF half-open range logic is exercised in every test.
+    cdf_resolution_elevation = 33
     cdf_resolution_azimuth = n_dense_tiles_azimuth
 
     # Build sparse mask from requested ray azimuth position(s).
@@ -893,10 +895,20 @@ def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
     cdf[1:, 1:] = dense_mask.to(torch.int32)
     cdf_dense_ray_mask = cdf.cumsum(dim=0).cumsum(dim=1).to(torch.int32)
 
-    assert n_bins_elevation == cdf_resolution_elevation
-    cdf_elevation = torch.arange(
-        0, n_bins_elevation + 1, dtype=torch.int32, device=device
+    # Build elevation CDF: maps dense elevation index -> coarse elevation bin.
+    # Identity when cdf_resolution_elevation == n_bins_elevation;
+    # multiple dense bins per coarse bin otherwise.
+    cdf_elevation = torch.tensor(
+        [
+            i * n_bins_elevation // cdf_resolution_elevation
+            for i in range(cdf_resolution_elevation + 1)
+        ],
+        dtype=torch.int32,
+        device=device,
     )
+    # The CDF must have plateaus (consecutive equal values) so that the
+    # elevation half-open range logic is actually exercised.
+    assert torch.any(cdf_elevation[1:] == cdf_elevation[:-1])
 
     # These aren't used, but need to have the correct shape.
     tiles_pack_info = torch.zeros(
