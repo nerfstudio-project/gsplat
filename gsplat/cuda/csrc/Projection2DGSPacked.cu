@@ -51,6 +51,7 @@ __global__ void projection_2dgs_packed_fwd_kernel(
     const scalar_t near_plane,
     const scalar_t far_plane,
     const scalar_t radius_clip,
+    const CameraModelType camera_model,
     const int32_t
         *__restrict__ block_accum,    // [B * C * blocks_per_row] packing helper
     int32_t *__restrict__ block_cnts, // [B * C * blocks_per_row] packing helper
@@ -119,17 +120,41 @@ __global__ void projection_2dgs_packed_fwd_kernel(
         mat3 RS_camera =
             R * quat_to_rotmat(glm::make_vec4(quats)) *
             mat3(scales[0], 0.0, 0.0, 0.0, scales[1], 0.0, 0.0, 0.0, 1.0);
-        ;
-        mat3 WH = mat3(RS_camera[0], RS_camera[1], mean_c);
 
-        mat3 world_2_pix =
-            mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
-        M = glm::transpose(WH) * world_2_pix;
-
-        // compute AABB
-        const vec3 M0 = vec3(M[0][0], M[0][1], M[0][2]);
-        const vec3 M1 = vec3(M[1][0], M[1][1], M[1][2]);
-        const vec3 M2 = vec3(M[2][0], M[2][1], M[2][2]);
+        vec3 M0, M1, M2;
+        switch (camera_model) {
+        case CameraModelType::PINHOLE: {
+            mat3 WH = mat3(RS_camera[0], RS_camera[1], mean_c);
+            mat3 world_2_pix =
+                mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
+            M = glm::transpose(WH) * world_2_pix;
+            M0 = vec3(M[0][0], M[0][1], M[0][2]);
+            M1 = vec3(M[1][0], M[1][1], M[1][2]);
+            M2 = vec3(M[2][0], M[2][1], M[2][2]);
+            break;
+        }
+        case CameraModelType::ORTHO:
+            M0 = vec3(
+                Ks[0] * RS_camera[0].x,
+                Ks[0] * RS_camera[1].x,
+                Ks[0] * mean_c.x + Ks[2]
+            );
+            M1 = vec3(
+                Ks[4] * RS_camera[0].y,
+                Ks[4] * RS_camera[1].y,
+                Ks[4] * mean_c.y + Ks[5]
+            );
+            M2 = vec3(0.0f, 0.0f, 1.0f);
+            M = mat3(M0, M1, M2);
+            break;
+        default:
+            valid = false;
+            break;
+        }
+        if (!valid) {
+            // Unsupported camera model.
+            valid = false;
+        }
 
         const vec3 temp_point = vec3(1.0f, 1.0f, -1.0f);
         const float distance = sum(temp_point * M2 * M2);
@@ -142,8 +167,10 @@ __global__ void projection_2dgs_packed_fwd_kernel(
 
         const vec2 temp = {sum(f * M0 * M0), sum(f * M1 * M1)};
         const vec2 half_extend = mean2d * mean2d - temp;
-        radius_x = ceil(3.33f * sqrt(max(1e-4, half_extend.x)));
-        radius_y = ceil(3.33f * sqrt(max(1e-4, half_extend.y)));
+        constexpr float RADIUS_SIGMA_SCALE = 3.33f;
+        constexpr float MIN_HALF_EXTENT = 1e-4f;
+        radius_x = ceil(RADIUS_SIGMA_SCALE * sqrt(max(MIN_HALF_EXTENT, half_extend.x)));
+        radius_y = ceil(RADIUS_SIGMA_SCALE * sqrt(max(MIN_HALF_EXTENT, half_extend.y)));
 
         if (radius_x <= radius_clip && radius_y <= radius_clip) {
             valid = false;
@@ -233,6 +260,7 @@ void launch_projection_2dgs_packed_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
+    const CameraModelType camera_model,
     const at::optional<at::Tensor>
         block_accum, // [B * C * blocks_per_row] packing helper
     // outputs
@@ -280,6 +308,7 @@ void launch_projection_2dgs_packed_fwd_kernel(
             near_plane,
             far_plane,
             radius_clip,
+            camera_model,
             block_accum.has_value() ? block_accum.value().data_ptr<int32_t>()
                                     : nullptr,
             block_cnts.has_value() ? block_cnts.value().data_ptr<int32_t>()
@@ -315,6 +344,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
+    const CameraModelType camera_model,
     // fwd outputs
     const int64_t *__restrict__ batch_ids,       // [nnz]
     const int64_t *__restrict__ camera_ids,      // [nnz]
@@ -372,21 +402,6 @@ __global__ void projection_2dgs_packed_bwd_kernel(
 
     vec4 quat = glm::make_vec4(quats + bid * N * 4 + gid * 4);
     vec2 scale = glm::make_vec2(scales + bid * N * 3 + gid * 3);
-    mat3 P = mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
-
-    mat3 _v_ray_transforms = mat3(
-        v_ray_transforms[0],
-        v_ray_transforms[1],
-        v_ray_transforms[2],
-        v_ray_transforms[3],
-        v_ray_transforms[4],
-        v_ray_transforms[5],
-        v_ray_transforms[6],
-        v_ray_transforms[7],
-        v_ray_transforms[8]
-    );
-
-    _v_ray_transforms[2][2] += v_depths[0];
 
     vec3 v_normal = glm::make_vec3(v_normals);
 
@@ -395,24 +410,64 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     vec4 v_quat(0.f);
     mat3 v_R(0.f);
     vec3 v_t(0.f);
-    compute_ray_transforms_aabb_vjp(
-        ray_transforms,
-        v_means2d,
-        v_normal,
-        R,
-        P,
-        t,
-        mean_w,
-        mean_c,
-        quat,
-        scale,
-        _v_ray_transforms,
-        v_quat,
-        v_scale,
-        v_mean,
-        v_R,
-        v_t
-    );
+    switch (camera_model) {
+    case CameraModelType::PINHOLE: {
+        mat3 P = mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
+        mat3 _v_ray_transforms = mat3(
+            v_ray_transforms[0],
+            v_ray_transforms[1],
+            v_ray_transforms[2],
+            v_ray_transforms[3],
+            v_ray_transforms[4],
+            v_ray_transforms[5],
+            v_ray_transforms[6],
+            v_ray_transforms[7],
+            v_ray_transforms[8]
+        );
+        _v_ray_transforms[2][2] += v_depths[0];
+        compute_ray_transforms_aabb_vjp(
+            ray_transforms,
+            v_means2d,
+            v_normal,
+            R,
+            P,
+            t,
+            mean_w,
+            mean_c,
+            quat,
+            scale,
+            _v_ray_transforms,
+            v_quat,
+            v_scale,
+            v_mean,
+            v_R,
+            v_t
+        );
+        break;
+    }
+    case CameraModelType::ORTHO:
+        compute_ray_transforms_aabb_ortho_vjp(
+            v_ray_transforms,
+            v_means2d,
+            v_depths[0],
+            v_normal,
+            R,
+            mean_w,
+            mean_c,
+            quat,
+            scale,
+            Ks[0],
+            Ks[4],
+            v_quat,
+            v_scale,
+            v_mean,
+            v_R,
+            v_t
+        );
+        break;
+    default:
+        return;
+    }
 
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     if (sparse_grad) {
@@ -500,6 +555,7 @@ void launch_projection_2dgs_packed_bwd_kernel(
     const at::Tensor v_ray_transforms, // [nnz, 3, 3]
     const at::Tensor v_normals,        // [nnz, 3]
     const bool sparse_grad,
+    const CameraModelType camera_model,
     // grad inputs
     at::Tensor v_means,                 // [..., N, 3] or [nnz, 3]
     at::Tensor v_quats,                 // [..., N, 4] or [nnz, 4]
@@ -533,6 +589,7 @@ void launch_projection_2dgs_packed_bwd_kernel(
             Ks.data_ptr<float>(),
             image_width,
             image_height,
+            camera_model,
             batch_ids.data_ptr<int64_t>(),
             camera_ids.data_ptr<int64_t>(),
             gaussian_ids.data_ptr<int64_t>(),

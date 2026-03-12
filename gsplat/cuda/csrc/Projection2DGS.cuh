@@ -106,4 +106,60 @@ inline __device__ void compute_ray_transforms_aabb_vjp(
     v_t += v_M[2];
 }
 
+inline __device__ void compute_ray_transforms_aabb_ortho_vjp(
+    const float *v_ray_transforms,
+    const float *v_means2d,
+    const float v_depth,
+    const vec3 v_normals,
+    const mat3 W,
+    const vec3 mean_w,
+    const vec3 mean_c,
+    const vec4 quat,
+    const vec2 scale,
+    const float fx,
+    const float fy,
+    vec4 &v_quat,
+    vec2 &v_scale,
+    vec3 &v_mean,
+    mat3 &v_R,
+    vec3 &v_t
+) {
+    float g00 = v_ray_transforms[0];
+    float g01 = v_ray_transforms[1];
+    float g02 = v_ray_transforms[2] + v_means2d[0];
+    float g10 = v_ray_transforms[3];
+    float g11 = v_ray_transforms[4];
+    float g12 = v_ray_transforms[5] + v_means2d[1];
+
+    vec3 v_mean_c = vec3(fx * g02, fy * g12, v_depth);
+    mat3 v_RS_cam = mat3(
+        vec3(fx * g00, fy * g10, 0.f),
+        vec3(fx * g01, fy * g11, 0.f),
+        vec3(0.f)
+    );
+
+    mat3 R = quat_to_rotmat(quat);
+    vec3 tn = W * R[2];
+    float cos = glm::dot(-tn, mean_c);
+    float multiplier = cos > 0 ? 1 : -1;
+    v_RS_cam[2] += v_normals * multiplier;
+
+    mat3 W_t = glm::transpose(W);
+    mat3 v_RS = W_t * v_RS_cam;
+    vec3 v_mean_w = W_t * v_mean_c;
+
+    mat3 v_Rot = mat3(v_RS[0] * scale[0], v_RS[1] * scale[1], v_RS[2]);
+    quat_to_rotmat_vjp(quat, v_Rot, v_quat);
+    v_scale[0] += glm::dot(v_RS[0], R[0]);
+    v_scale[1] += glm::dot(v_RS[1], R[1]);
+
+    v_mean += v_mean_w;
+    v_R += glm::outerProduct(v_mean_c, mean_w);
+
+    mat3 RS = quat_to_rotmat(quat) *
+              mat3(scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, 1.0);
+    v_R += v_RS_cam * glm::transpose(RS);
+    v_t += v_mean_c;
+}
+
 } // namespace gsplat

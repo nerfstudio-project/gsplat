@@ -63,6 +63,7 @@ __global__ void projection_2dgs_fused_fwd_kernel(
         far_plane, // Far clipping plane (for finite range used in z sorting)
     const scalar_t radius_clip, // Radius clipping threshold (through away small
                                 // primitives)
+    const CameraModelType camera_model,
     // outputs
     int32_t *__restrict__ radii, // [B, C, N, 2]   The maximum radius of the projected
                                  // Gaussians in pixel unit. Int32 tensor.
@@ -174,34 +175,41 @@ __global__ void projection_2dgs_fused_fwd_kernel(
         mat3(scales[0], 0.0, 0.0, 0.0, scales[1], 0.0, 0.0, 0.0, 1.0);
 
     mat3 WH = mat3(RS_camera[0], RS_camera[1], mean_c);
+    vec3 M0, M1, M2;
+    switch (camera_model) {
+    case CameraModelType::PINHOLE: {
+        // projective transformation matrix: Camera -> Screen
+        // when write in this order, the matrix is actually K^T as glm will read
+        // it in column major order [Ks[0],  0,  0] [0,   Ks[4],  0]
+        // [Ks[2], Ks[5],  1]
+        mat3 world_2_pix =
+            mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
 
-    // projective transformation matrix: Camera -> Screen
-    // when write in this order, the matrix is actually K^T as glm will read it
-    // in column major order [Ks[0],  0,  0] [0,   Ks[4],  0] [Ks[2], Ks[5],  1]
-    mat3 world_2_pix =
-        mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
-
-    // WH is defined as [R⋅v_x, R⋅v_y, mean_c]: q_uv = [u,v,-1] -> q_cam =
-    // [c1,c2,c3] here is the issue, world_2_pix is actually K^T M is thus
-    // (KWH)^T = (WH)^T * K^T = (WH)^T * world_2_pix thus M stores the "row
-    // majored" version of KWH, or column major version of (KWH)^T
-    mat3 M = glm::transpose(WH) * world_2_pix;
+        // WH is defined as [R⋅v_x, R⋅v_y, mean_c]: q_uv = [u,v,-1] -> q_cam =
+        // [c1,c2,c3] here is the issue, world_2_pix is actually K^T M is thus
+        // (KWH)^T = (WH)^T * K^T = (WH)^T * world_2_pix thus M stores the "row
+        // majored" version of KWH, or column major version of (KWH)^T
+        mat3 M = glm::transpose(WH) * world_2_pix;
+        M0 = vec3(M[0][0], M[0][1], M[0][2]);
+        M1 = vec3(M[1][0], M[1][1], M[1][2]);
+        M2 = vec3(M[2][0], M[2][1], M[2][2]);
+        break;
+    }
+    case CameraModelType::ORTHO:
+        M0 = vec3(Ks[0] * RS_camera[0].x, Ks[0] * RS_camera[1].x, Ks[0] * mean_c.x + Ks[2]);
+        M1 = vec3(Ks[4] * RS_camera[0].y, Ks[4] * RS_camera[1].y, Ks[4] * mean_c.y + Ks[5]);
+        M2 = vec3(0.0f, 0.0f, 1.0f);
+        break;
+    default:
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
+        return;
+    }
     /**
      * ===============================================
      * Compute AABB
      * ===============================================
      */
-
-    // compute AABB
-    const vec3 M0 = vec3(
-        M[0][0], M[0][1], M[0][2]
-    ); // the first column of KWH^T, thus first row of KWH
-    const vec3 M1 = vec3(
-        M[1][0], M[1][1], M[1][2]
-    ); // the second column of KWH^T, thus second row of KWH
-    const vec3 M2 = vec3(
-        M[2][0], M[2][1], M[2][2]
-    ); // the third column of KWH^T, thus third row of KWH
 
     // we know that KWH brings [u,v,-1] to ray1, ray2, ray3] = [xz, yz, z]
     // temp_point is [1,1,-1], which is a "corner" of the UV space.
@@ -238,8 +246,10 @@ __global__ void projection_2dgs_fused_fwd_kernel(
     const vec2 half_extend = mean2d * mean2d - temp;
 
     // ==============================================
-    const float radius_x = ceil(3.33f * sqrt(max(1e-4, half_extend.x)));
-    const float radius_y = ceil(3.33f * sqrt(max(1e-4, half_extend.y)));
+    constexpr float RADIUS_SIGMA_SCALE = 3.33f;
+    constexpr float MIN_HALF_EXTENT = 1e-4f;
+    const float radius_x = ceil(RADIUS_SIGMA_SCALE * sqrt(max(MIN_HALF_EXTENT, half_extend.x)));
+    const float radius_y = ceil(RADIUS_SIGMA_SCALE * sqrt(max(MIN_HALF_EXTENT, half_extend.y)));
 
     if (radius_x <= radius_clip && radius_y <= radius_clip) {
         radii[idx * 2] = 0;
@@ -298,6 +308,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
+    const CameraModelType camera_model,
     // outputs
     at::Tensor radii,          // [..., C, N, 2]
     at::Tensor means2d,        // [..., C, N, 2]
@@ -334,6 +345,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
             near_plane,
             far_plane,
             radius_clip,
+            camera_model,
             radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(),
             depths.data_ptr<float>(),
@@ -355,6 +367,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
+    const CameraModelType camera_model,
     // fwd outputs
     const int32_t *__restrict__ radii,           // [B, C, N, 2]
     const scalar_t *__restrict__ ray_transforms, // [B, C, N, 3, 3]
@@ -410,22 +423,6 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     vec4 quat = glm::make_vec4(quats + bid * N * 4 + gid * 4);
     vec2 scale = glm::make_vec2(scales + bid * N * 3 + gid * 3);
 
-    mat3 P = mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
-
-    mat3 _v_ray_transforms = mat3(
-        v_ray_transforms[0],
-        v_ray_transforms[1],
-        v_ray_transforms[2],
-        v_ray_transforms[3],
-        v_ray_transforms[4],
-        v_ray_transforms[5],
-        v_ray_transforms[6],
-        v_ray_transforms[7],
-        v_ray_transforms[8]
-    );
-
-    _v_ray_transforms[2][2] += v_depths[0];
-
     vec3 v_normal = glm::make_vec3(v_normals);
 
     vec3 v_mean(0.f);
@@ -433,24 +430,64 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     vec4 v_quat(0.f);
     mat3 v_R(0.f);
     vec3 v_t(0.f);
-    compute_ray_transforms_aabb_vjp(
-        ray_transforms,
-        v_means2d,
-        v_normal,
-        R,
-        P,
-        t,
-        mean_w,
-        mean_c,
-        quat,
-        scale,
-        _v_ray_transforms,
-        v_quat,
-        v_scale,
-        v_mean,
-        v_R,
-        v_t
-    );
+    switch (camera_model) {
+    case CameraModelType::PINHOLE: {
+        mat3 P = mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
+        mat3 _v_ray_transforms = mat3(
+            v_ray_transforms[0],
+            v_ray_transforms[1],
+            v_ray_transforms[2],
+            v_ray_transforms[3],
+            v_ray_transforms[4],
+            v_ray_transforms[5],
+            v_ray_transforms[6],
+            v_ray_transforms[7],
+            v_ray_transforms[8]
+        );
+        _v_ray_transforms[2][2] += v_depths[0];
+        compute_ray_transforms_aabb_vjp(
+            ray_transforms,
+            v_means2d,
+            v_normal,
+            R,
+            P,
+            t,
+            mean_w,
+            mean_c,
+            quat,
+            scale,
+            _v_ray_transforms,
+            v_quat,
+            v_scale,
+            v_mean,
+            v_R,
+            v_t
+        );
+        break;
+    }
+    case CameraModelType::ORTHO:
+        compute_ray_transforms_aabb_ortho_vjp(
+            v_ray_transforms,
+            v_means2d,
+            v_depths[0],
+            v_normal,
+            R,
+            mean_w,
+            mean_c,
+            quat,
+            scale,
+            Ks[0],
+            Ks[4],
+            v_quat,
+            v_scale,
+            v_mean,
+            v_R,
+            v_t
+        );
+        break;
+    default:
+        return;
+    }
 
     // #if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction
@@ -517,6 +554,7 @@ void launch_projection_2dgs_fused_bwd_kernel(
     const at::Tensor v_normals,        // [..., C, N, 3]
     const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
     const bool viewmats_requires_grad,
+    const CameraModelType camera_model,
     // outputs
     at::Tensor v_means,   // [..., N, 3]
     at::Tensor v_quats,   // [..., N, 4]
@@ -549,6 +587,7 @@ void launch_projection_2dgs_fused_bwd_kernel(
             Ks.data_ptr<float>(),
             image_width,
             image_height,
+            camera_model,
             radii.data_ptr<int32_t>(),
             ray_transforms.data_ptr<float>(),
             v_means2d.data_ptr<float>(),

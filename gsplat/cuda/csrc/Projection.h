@@ -181,6 +181,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
+    const CameraModelType camera_model,
     // outputs
     at::Tensor radii,          // [..., C, N, 2]
     at::Tensor means2d,        // [..., C, N, 2]
@@ -206,6 +207,7 @@ void launch_projection_2dgs_fused_bwd_kernel(
     const at::Tensor v_normals,        // [..., C, N, 3]
     const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
     const bool viewmats_requires_grad,
+    const CameraModelType camera_model,
     // outputs
     at::Tensor v_means,   // [..., N, 3]
     at::Tensor v_quats,   // [..., N, 4]
@@ -225,6 +227,7 @@ void launch_projection_2dgs_packed_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
+    const CameraModelType camera_model,
     const at::optional<at::Tensor>
         block_accum, // [B * C * blocks_per_row] packing helper
     // outputs
@@ -259,6 +262,7 @@ void launch_projection_2dgs_packed_bwd_kernel(
     const at::Tensor v_ray_transforms, // [nnz, 3, 3]
     const at::Tensor v_normals,        // [nnz, 3]
     const bool sparse_grad,
+    const CameraModelType camera_model,
     // grad inputs
     at::Tensor v_means,                 // [..., N, 3] or [nnz, 3]
     at::Tensor v_quats,                 // [..., N, 4] or [nnz, 4]
