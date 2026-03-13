@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -330,7 +330,13 @@ def test_rasterize_to_pixels_2dgs(
     normals.requires_grad = True
     densify.requires_grad = True
 
-    (render_colors, render_alphas, render_normals, _, _,) = rasterize_to_pixels_2dgs(
+    (
+        render_colors,
+        render_alphas,
+        render_normals,
+        _,
+        _,
+    ) = rasterize_to_pixels_2dgs(
         means2d,
         ray_transforms,
         colors,
