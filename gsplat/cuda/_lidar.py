@@ -13,16 +13,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from torch import Tensor
-import torch
+import hashlib
 import math
-import numpy as np
-from scipy import spatial as scipy_spatial
-from enum import Enum
-from dataclasses import dataclass, field, InitVar
-from typing import Optional
-from types import SimpleNamespace
-from typing_extensions import override
 from functools import lru_cache
+from dataclasses import dataclass, field, InitVar
+from enum import Enum
+from types import SimpleNamespace
+from typing import Optional
+
+import numpy as np
+import torch
+from scipy import spatial as scipy_spatial
+from typing_extensions import override
+
+
+def _tensor_hash(tensor: Tensor) -> int:
+    """Stable content hash for a tensor (shape, dtype, and values), compatible with PyTorch versions without torch.hash_tensor."""
+    hash_fn = getattr(torch, "hash_tensor", None)
+    if hash_fn is not None:
+        return int(hash_fn(tensor).item())
+    # Contiguous so the same logical content hashes identically regardless of strides/view
+    t = tensor.detach().cpu().contiguous()
+    header = (str(tuple(t.shape)) + str(t.dtype)).encode()
+    data = header + t.numpy().tobytes()
+    return int.from_bytes(hashlib.sha256(data).digest()[:8], "big")
 
 
 class SpinningDirection(Enum):
@@ -281,9 +295,9 @@ class RowOffsetStructuredSpinningLidarModelParameters(
         return hash(
             (
                 super().__hash__(),
-                int(torch.hash_tensor(self.row_elevations_rad).item()),
-                int(torch.hash_tensor(self.column_azimuths_rad).item()),
-                int(torch.hash_tensor(self.row_azimuth_offsets_rad).item()),
+                _tensor_hash(self.row_elevations_rad),
+                _tensor_hash(self.column_azimuths_rad),
+                _tensor_hash(self.row_azimuth_offsets_rad),
             )
         )
 
