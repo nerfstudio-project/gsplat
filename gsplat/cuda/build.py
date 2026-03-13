@@ -88,11 +88,10 @@ def get_build_parameters():
     extra_cuda_cflags += ["-lineinfo"] if DEBUG else []
 
     # Silencing of warnings
-    extra_cflags += ["-Wno-attributes"]
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
     extra_cuda_cflags += ["-diag-suppress", "20012,186"]
     if not os.name == "nt":
-        extra_cflags += ["-Wno-sign-compare"]
+        extra_cflags += ["-Wno-sign-compare", "-Wno-attributes"]
 
     if BUILD_2DGS is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
