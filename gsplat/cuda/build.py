@@ -69,8 +69,12 @@ def get_build_parameters():
     extra_ldflags = []
 
     if sys.platform == "win32":
-        extra_cflags += ["/std=c++20", "-DWIN32_LEAN_AND_MEAN"]
-        extra_cuda_cflags += ["-allow-unsupported-compiler"]
+        extra_cflags += ["/std:c++20", "-DWIN32_LEAN_AND_MEAN"]
+        extra_cuda_cflags += [
+            "-std=c++20",
+            "-allow-unsupported-compiler",
+            "-DWIN32_LEAN_AND_MEAN",
+        ]
     else:
         extra_cflags = ["-std=c++20"]
 
@@ -82,7 +86,16 @@ def get_build_parameters():
     extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
-    extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
+    if sys.platform == "win32":
+        if DEBUG:
+            extra_cflags += ["/Zi", "/Od"]
+            extra_cuda_cflags += ["-O0"]
+        else:
+            extra_cflags += ["/O2", "-DNDEBUG"]
+            extra_cuda_cflags += ["-O3", "-DNDEBUG"]
+    else:
+        extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
+
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
 
     extra_cuda_cflags += ["-lineinfo"] if DEBUG else []
@@ -95,22 +108,33 @@ def get_build_parameters():
 
     if BUILD_2DGS is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
     if BUILD_3DGS is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_3DGS={BUILD_3DGS}"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += [f"-DGSPLAT_BUILD_3DGS={BUILD_3DGS}"]
     if BUILD_3DGUT is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_3DGUT={BUILD_3DGUT}"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += [f"-DGSPLAT_BUILD_3DGUT={BUILD_3DGUT}"]
     if BUILD_ADAM is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_ADAM={BUILD_ADAM}"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += [f"-DGSPLAT_BUILD_ADAM={BUILD_ADAM}"]
     if BUILD_RELOC is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_RELOC={BUILD_RELOC}"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += [f"-DGSPLAT_BUILD_RELOC={BUILD_RELOC}"]
     if BUILD_CAMERA_WRAPPERS:
-        extra_cuda_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
         extra_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
     else:
         # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
         sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
 
-    extra_ldflags += [] if WITH_SYMBOLS else ["-s"]
+    extra_ldflags += [] if WITH_SYMBOLS or sys.platform == "win32" else ["-s"]
 
     if torch.version.hip:
         # USE_ROCM was added to later versions of PyTorch.
@@ -126,11 +150,18 @@ def get_build_parameters():
         and sys.platform != "darwin"
     ):
         extra_cflags += ["-DAT_PARALLEL_OPENMP"]
-        extra_cflags += ["/openmp"] if sys.platform == "win32" else ["-fopenmp"]
+        if sys.platform == "win32":
+            extra_cflags += ["/openmp"]
+            extra_cuda_cflags += ["-Xcompiler", "/openmp"]
+        else:
+            extra_cflags += ["-fopenmp"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += ["-DAT_PARALLEL_OPENMP"]
     else:
         print("Compiling without OpenMP...")
 
-    extra_cuda_cflags += extra_cflags
+    if sys.platform != "win32":
+        extra_cuda_cflags += extra_cflags
 
     if NUM_CHANNELS is not None:
         # nvcc has a bug where you need to escape the commas in macro values defined with -D.
