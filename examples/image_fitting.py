@@ -11,6 +11,7 @@ from PIL import Image
 from torch import Tensor, optim
 
 from gsplat import rasterization, rasterization_2dgs
+from gsplat.losses import mse_loss
 
 
 class SimpleTrainer:
@@ -84,7 +85,6 @@ class SimpleTrainer:
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
         )
-        mse_loss = torch.nn.MSELoss()
         frames = []
         times = [0] * 2  # rasterization, backward
         K = torch.tensor(
@@ -119,7 +119,7 @@ class SimpleTrainer:
             out_img = renders[0]
             torch.cuda.synchronize()
             times[0] += time.time() - start
-            loss = mse_loss(out_img, self.gt_image)
+            loss = mse_loss(out_img, self.gt_image).mean()
             optimizer.zero_grad()
             start = time.time()
             loss.backward()

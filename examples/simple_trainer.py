@@ -22,7 +22,14 @@ from datasets.traj import (
     generate_interpolated_path,
     generate_spiral_path,
 )
-from fused_ssim import fused_ssim
+from gsplat.losses import (
+    depth_l1_loss,
+    l1_loss,
+    opacity_reg_loss,
+    scale_reg_loss,
+    ssim_loss,
+    total_variation_loss,
+)
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -808,9 +815,9 @@ class Runner:
             )
 
             # loss
-            l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+            l1loss = l1_loss(colors, pixels).mean()
+            ssimloss = ssim_loss(
+                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2)
             )
             loss = torch.lerp(l1loss, ssimloss, cfg.ssim_lambda)
             if cfg.depth_loss:
@@ -828,9 +835,9 @@ class Runner:
                 )  # [1, 1, M, 1]
                 depths = depths.squeeze(3).squeeze(1)  # [1, M]
                 # calculate loss in disparity space
-                disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
-                disp_gt = 1.0 / depths_gt  # [1, M]
-                depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
+                depthloss = depth_l1_loss(
+                    depths, depths_gt, scene_scale=self.scene_scale
+                )
                 loss += depthloss * cfg.depth_lambda
             if cfg.post_processing == "bilateral_grid":
                 post_processing_reg_loss = 10 * total_variation_loss(
@@ -845,9 +852,9 @@ class Runner:
 
             # regularizations
             if cfg.opacity_reg > 0.0:
-                loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
+                loss += cfg.opacity_reg * opacity_reg_loss(self.splats["opacities"])
             if cfg.scale_reg > 0.0:
-                loss += cfg.scale_reg * torch.exp(self.splats["scales"]).mean()
+                loss += cfg.scale_reg * scale_reg_loss(self.splats["scales"])
 
             loss.backward()
 
@@ -1344,18 +1351,16 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     # Import post-processing modules based on configuration
     # These imports must be here (not in __main__) for distributed workers
     if cfg.post_processing == "bilateral_grid":
-        global BilateralGrid, slice, total_variation_loss
+        global BilateralGrid, slice
         if cfg.bilateral_grid_fused:
             from fused_bilagrid import (
                 BilateralGrid,
                 slice,
-                total_variation_loss,
             )
         else:
             from lib_bilagrid import (
                 BilateralGrid,
                 slice,
-                total_variation_loss,
             )
     elif cfg.post_processing == "ppisp":
         global PPISP, PPISPConfig, export_ppisp_report
