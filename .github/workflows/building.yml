@@ -102,9 +102,17 @@ jobs:
         shell: bash
 
       - name: Build wheel
+        env:
+          # Step-level env so Windows Python sees CUDA_HOME (bash export does not propagate to python.exe)
+          CUDA_HOME: ${{ runner.os == 'Windows' && (matrix.cuda-version == 'cu124' && 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4' || 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.1') || '' }}
         run: |
           pip install wheel rich
-          source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export PATH="${CUDA_HOME}/bin:${PATH}"
+            export TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;9.0"
+          else
+            source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+          fi
           MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
         shell: bash
 
