@@ -16,19 +16,18 @@ if [ "$HOST_UID" != 0 ]; then
         exit 1
     fi
     if [ "$HOST_UID" -lt 1000 ]; then
-        echo "ERROR: HOST_UID ($HOST_UID) must be >= 1000" >&2
-        exit 1
+        echo "WARNING: HOST_UID ($HOST_UID) is below 1000; this may collide with a system account inside the container." >&2
     fi
     HOST_GID="${HOST_GID:-$HOST_UID}"
     HOST_GROUP="${HOST_GROUP:-$HOST_USER}"
     HOST_HOME="${HOST_HOME:-/home/$HOST_USER}"
     if [ "$HOST_GID" -lt 1000 ]; then
-        echo "ERROR: HOST_GID ($HOST_GID) must be >= 1000" >&2
-        exit 1
+        echo "WARNING: HOST_GID ($HOST_GID) is below 1000; this may collide with a system group inside the container." >&2
     fi
 
     # Set up group (skip if exact match already exists, e.g. container restart)
     existing_group="$(getent group "$HOST_GID" | cut -d: -f1 || true)"
+    useradd_group="$HOST_GROUP"
     if [ -z "$existing_group" ]; then
         # GID is free — check that the name is also free
         if getent group "$HOST_GROUP" > /dev/null 2>&1; then
@@ -39,6 +38,7 @@ if [ "$HOST_UID" != 0 ]; then
     elif [ "$existing_group" != "$HOST_GROUP" ]; then
         echo "WARNING: HOST_GID ($HOST_GID) is already taken by group '$existing_group' inside the container" >&2
         echo "         The group name of gsplat code inside and outside the container won't match, but this is harmless." >&2
+        useradd_group="$HOST_GID"
     fi
 
     # Set up user (skip if exact match already exists, e.g. container restart)
@@ -49,7 +49,7 @@ if [ "$HOST_UID" != 0 ]; then
             echo "ERROR: user '$HOST_USER' already exists with a different UID" >&2
             exit 1
         fi
-        useradd -u "$HOST_UID" -g "$HOST_GROUP" -d "$HOST_HOME" -s /bin/bash "$HOST_USER"
+        useradd -u "$HOST_UID" -g "$useradd_group" -d "$HOST_HOME" -s /bin/bash "$HOST_USER"
 
         # Create home directory if it doesn't exist yet
         if [ ! -d "$HOST_HOME" ]; then
