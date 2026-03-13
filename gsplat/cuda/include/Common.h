@@ -49,6 +49,7 @@ enum CameraModelType {
     ORTHO = 1,
     FISHEYE = 2,
     FTHETA = 3,
+    LIDAR = 4,
 };
 
 #define N_THREADS_PACKED 256
@@ -60,6 +61,8 @@ enum CameraModelType {
 // i.e. TRANSMITTANCE_THRESHOLD = (1 - MAX_ALPHA)^2
 #define MAX_ALPHA 0.99f
 #define TRANSMITTANCE_THRESHOLD 1e-4f
+
+#define MAX_KERNEL_DENSITY_CUTOFF 0.0113
 
 #ifdef __CUDACC__
 #   define GSPLAT_NOINLINE __noinline__

@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 import pytest
 import torch
 
+from tests.test_cameras import parse_lidar_camera
 from gsplat.rendering import RenderMode
 import gsplat
 from gsplat.cuda._constants import ALPHA_THRESHOLD
@@ -21,7 +22,7 @@ device = torch.device("cuda:0")
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
-    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,extra_signals_info",
+    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info",
     [
         pytest.param(*params, marks=[
             # test based on with_eval3d (5)  and with_ut (6)
@@ -39,6 +40,7 @@ device = torch.device("cuda:0")
                     [(), (2,), (1, 2)],      # batch_dims
                     [False],                 # with_eval3d
                     [False],                 # with_ut
+                    ["pinhole"],             # camera_model
                     [None],                  # extra_signals_info
                 ),
                 # 3DGUT
@@ -50,6 +52,7 @@ device = torch.device("cuda:0")
                     [(), (2,)],              # batch_dims (reduced subset)
                     [True],                  # with_eval3d
                     [True],                  # with_ut
+                    ["pinhole","lidar"],     # camera_model
                     [None,(None,20),(3,3)],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
                 ),
                 # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
@@ -64,6 +67,7 @@ device = torch.device("cuda:0")
                     [()],                    # batch_dims
                     [True],                  # with_eval3d
                     [True],                  # with_ut
+                    ["pinhole"],             # camera_model
                     [None,(None,20)],        # extra_signals_info — (None,20) triggers padding
                 ),
             )
@@ -77,6 +81,7 @@ def test_rasterization(
     batch_dims: Tuple[int, ...],
     with_eval3d: bool,
     with_ut: bool,
+    camera_model: str,
     extra_signals_info: Optional[tuple],
 ):
     from gsplat.rendering import _rasterization, rasterization
@@ -103,9 +108,6 @@ def test_rasterization(
                 batch_dims + (N, (sh_degree + 1) ** 2, 3), device=device
             )
 
-    width, height = 300, 200
-    focal = 300.0
-
     if extra_signals_info is None:
         extra_signals_sh_degree = None
         extra_signals = None
@@ -128,6 +130,17 @@ def test_rasterization(
                     batch_dims + (N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size), device=device
                 )
 
+    if camera_model == "lidar":
+        params = parse_lidar_camera("at128", batch_dims, 0, 0, device=device)
+        lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(**params)
+        width = lidar.n_rows
+        height = lidar.n_columns
+        focal = width
+    else:
+        width, height = 300, 200
+        focal = 300.0
+        lidar = None
+
     Ks = torch.tensor(
         [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
         device=device,
@@ -149,6 +162,8 @@ def test_rasterization(
         packed=packed,
         with_eval3d=with_eval3d,
         with_ut=with_ut,
+        camera_model=camera_model,
+        lidar_coeffs=lidar,
         extra_signals=extra_signals,
         extra_signals_sh_degree=extra_signals_sh_degree,
     )
@@ -174,6 +189,8 @@ def test_rasterization(
         render_mode=render_mode,
         with_eval3d=with_eval3d,
         with_ut=with_ut,
+        camera_model=camera_model,
+        lidar_coeffs=lidar,
         extra_signals=extra_signals,
         extra_signals_sh_degree=extra_signals_sh_degree,
     )

@@ -28,7 +28,7 @@ from ._torch_cameras import (
     _interpolate_shutter_pose,
 )
 from ._wrapper import RollingShutterType
-from ._constants import ALPHA_THRESHOLD, TRANSMITTANCE_THRESHOLD
+from ._constants import ALPHA_THRESHOLD, TRANSMITTANCE_THRESHOLD, MAX_KERNEL_DENSITY_CUTOFF
 
 
 def _generate_rays_from_pixels(
@@ -181,12 +181,13 @@ def _compute_gaussian_alphas(
 
     # Gaussian response
     power = -0.5 * grayDist
-    alphas = torch.clamp(opac * torch.exp(power), max=max_alpha)
+    max_response = torch.exp(power)
+    alphas = torch.clamp(opac * max_response, max=max_alpha)
 
     assert torch.all((alphas >= 0) & (alphas <= 1.0)), \
         f"Invalid alphas: range=[{alphas.min()}, {alphas.max()}]"
 
-    return alphas
+    return alphas, max_response
 
 
 def accumulate_eval3d(
@@ -349,11 +350,11 @@ def accumulate_eval3d(
         gauss_colors = torch.cat([gauss_colors[..., :-1], hitDist[..., None]], dim=-1)
 
     # 8. Compute Gaussian alphas
-    alphas = _compute_gaussian_alphas(grayDist, opac, TRANSMITTANCE_THRESHOLD)
+    alphas, max_response = _compute_gaussian_alphas(grayDist, opac, TRANSMITTANCE_THRESHOLD)
 
     # 9. Filter out low-contribution Gaussians (explicit masking)
     # CUDA: if (alpha < 1.f / 255.f) continue;
-    valid_mask = alphas >= ALPHA_THRESHOLD
+    valid_mask = (alphas >= ALPHA_THRESHOLD) & (max_response > MAX_KERNEL_DENSITY_CUTOFF)
 
     # Apply filter to all arrays early to reduce memory usage
     alphas = alphas[valid_mask]

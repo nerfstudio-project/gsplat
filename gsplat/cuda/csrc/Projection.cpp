@@ -5,12 +5,16 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/torch.h>
 
 #include "Common.h"     // where all the macros are defined
 #include "Ops.h"        // a collection of all gsplat operators
 #include "Projection.h" // where the launch function is declared
 #include "Cameras.h"
+#include "Lidars.h"
+#include "Lidars.cuh"
 #include "Config.h"
+
 
 namespace gsplat {
 
@@ -944,6 +948,7 @@ projection_ut_3dgs_fused_impl(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
     DEVICE_GUARD(means);
@@ -1028,6 +1033,7 @@ projection_ut_3dgs_fused_impl(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
+        lidar_coeffs,
         external_distortion_params,
         // outputs
         radii,
@@ -1069,6 +1075,7 @@ projection_ut_3dgs_fused(
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
     return projection_ut_3dgs_fused_impl(
@@ -1094,6 +1101,7 @@ projection_ut_3dgs_fused(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
+        lidar_coeffs,
         external_distortion_params
     );
 }

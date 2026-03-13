@@ -12,6 +12,8 @@
 #include "Cameras.cuh"
 #include "ExternalDistortion.h"
 #include "ExternalDistortion.cuh"
+#include "Lidars.cuh"
+#include "Ops.h"
 
 namespace gsplat {
 
@@ -323,6 +325,19 @@ public:
         ShutterType rs_type,
         const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
     );
+};
+
+/**
+ * @brief Lidar camera model for spinning lidar sensors
+ */
+class PyRowOffsetStructuredSpinningLidarModel : public PyBaseCameraModel<RowOffsetStructuredSpinningLidarModel>
+{
+public:
+    explicit PyRowOffsetStructuredSpinningLidarModel(RowOffsetStructuredSpinningLidarModelParametersExt params);
+
+private:
+    // Store the parameters to keep its tensors.
+    RowOffsetStructuredSpinningLidarModelParametersExt m_params;
 };
 
 } // namespace gsplat
