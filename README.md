@@ -67,6 +67,15 @@ the examples (requires to install some exta dependencies via `pip install -r exa
 - [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
 - [Render a large scene in real-time.](https://docs.gsplat.studio/main/examples/large_scale.html)
 
+## Docker
+
+We provide a script for building docker image
+
+```bash
+bash docker/build_image.sh
+```
+
+Then you can run task in docker container
 
 ## Development and Contribution
 
