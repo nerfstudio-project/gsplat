@@ -1895,6 +1895,7 @@ def fully_fused_projection_2dgs(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     radius_clip: float = 0.0,
+    dual_visible: bool = True,
     packed: bool = False,
     sparse_grad: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
@@ -1911,9 +1912,11 @@ def fully_fused_projection_2dgs(
         Ks: Camera intrinsics. [..., C, 3, 3]
         width: Image width.
         height: Image height.
+        eps2d: Epsilon for 2D projection.
         near_plane: Near plane distance. Default: 0.01.
         far_plane: Far plane distance. Default: 200.
         radius_clip: Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.
+        dual_visible: Whether the 2dgs should be visible from both the front and the back. Default: True.
         packed: If True, the output tensors will be packed into a flattened tensor. Default: False.
         sparse_grad (Experimental): This is only effective when `packed` is True. If True, during backward the gradients
           of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
@@ -1972,6 +1975,7 @@ def fully_fused_projection_2dgs(
             far_plane,
             radius_clip,
             sparse_grad,
+            dual_visible,
         )
     else:
         return _FullyFusedProjection2DGS.apply(
@@ -1986,6 +1990,7 @@ def fully_fused_projection_2dgs(
             near_plane,
             far_plane,
             radius_clip,
+            dual_visible,
         )
 
 
@@ -2006,6 +2011,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         radius_clip: float,
+        dual_visible: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         radii, means2d, depths, ray_transforms, normals = _make_lazy_cuda_func(
             "projection_2dgs_fused_fwd"
@@ -2021,6 +2027,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             near_plane,
             far_plane,
             radius_clip,
+            dual_visible,
         )
         ctx.save_for_backward(
             means,
@@ -2113,6 +2120,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         sparse_grad: bool,
+        dual_visible: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         (
             indptr,
@@ -2135,6 +2143,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             near_plane,
             far_plane,
             radius_clip,
+            dual_visible,
         )
         ctx.save_for_backward(
             batch_ids,

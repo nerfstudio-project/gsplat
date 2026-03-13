@@ -588,7 +588,8 @@ projection_2dgs_fused_fwd(
     const float eps2d,
     const float near_plane,
     const float far_plane,
-    const float radius_clip
+    const float radius_clip,
+    const bool dual_visible
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -634,6 +635,7 @@ projection_2dgs_fused_fwd(
         near_plane,
         far_plane,
         radius_clip,
+        dual_visible,
         // outputs
         radii,
         means2d,
@@ -731,7 +733,8 @@ projection_2dgs_packed_fwd(
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const float radius_clip
+    const float radius_clip,
+    const bool dual_visible
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -767,6 +770,7 @@ projection_2dgs_packed_fwd(
             near_plane,
             far_plane,
             radius_clip,
+            dual_visible,
             c10::nullopt, // block_accum
             // outputs
             block_cnts,
@@ -810,6 +814,7 @@ projection_2dgs_packed_fwd(
             near_plane,
             far_plane,
             radius_clip,
+            dual_visible,
             block_accum,
             // outputs
             c10::nullopt, // block_cnts
