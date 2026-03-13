@@ -22,7 +22,11 @@
 
 // for CUB_WRAPPER
 #include <c10/cuda/CUDACachingAllocator.h>
-#include <cub/cub.cuh>
+// Minimal CUB includes to avoid pulling in dispatch_histogram.cuh, which uses
+// __half comparison operators that are disabled by PyTorch (__CUDA_NO_HALF_OPERATORS__)
+// and cause Windows MSVC build failures (see NVIDIA/cub#484, NVIDIA/cccl#1766).
+#include <cub/device/device_radix_sort.cuh>
+#include <cub/device/device_segmented_radix_sort.cuh>
 
 #include "Common.h"
 #include "Intersect.h"
