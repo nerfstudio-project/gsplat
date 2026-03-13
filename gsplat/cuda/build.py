@@ -86,13 +86,14 @@ def get_build_parameters():
     extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
+    # MSVC (cl) does not support -O3/-O0; use -O2/-Od (torch converts - to /)
     if sys.platform == "win32":
         if DEBUG:
             extra_cflags += ["/Zi", "/Od"]
-            extra_cuda_cflags += ["-O0"]
+            extra_cuda_cflags += ["-Od"]
         else:
             extra_cflags += ["/O2", "-DNDEBUG"]
-            extra_cuda_cflags += ["-O3", "-DNDEBUG"]
+            extra_cuda_cflags += ["-O2", "-DNDEBUG"]
     else:
         extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
 
