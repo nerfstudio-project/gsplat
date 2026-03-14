@@ -1469,9 +1469,11 @@ def fully_fused_projection_with_ut(
             if ftheta_coeffs is not None
             else FThetaCameraDistortionParameters.to_cpp_default()
         ),
-        external_distortion_coeffs.to_cpp()
-        if external_distortion_coeffs is not None
-        else None,
+        (
+            external_distortion_coeffs.to_cpp()
+            if external_distortion_coeffs is not None
+            else None
+        ),
     )
     if not calc_compensations:
         compensations = None
