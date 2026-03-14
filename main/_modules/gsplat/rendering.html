@@ -341,6 +341,7 @@
     <span class="n">rasterize_to_pixels</span><span class="p">,</span>
     <span class="n">rasterize_to_pixels_2dgs</span><span class="p">,</span>
     <span class="n">rasterize_to_pixels_eval3d</span><span class="p">,</span>
+    <span class="n">rasterize_to_pixels_eval3d_extra</span><span class="p">,</span>
     <span class="n">spherical_harmonics</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.distributed</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -464,6 +465,7 @@
     <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">with_ut</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">return_normals</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">global_z_order</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
         <span class="n">Tensor</span>
@@ -633,6 +635,10 @@
 <span class="sd">        with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.</span>
 <span class="sd">        with_eval3d: Whether to calculate Gaussian response in 3D world space, instead</span>
 <span class="sd">            of 2D image space. Default is False.</span>
+<span class="sd">        return_normals: Whether to compute and return accumulated normals per pixel.</span>
+<span class="sd">            Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)</span>
+<span class="sd">            transformed by rotation, flipped if facing away from ray). Requires</span>
+<span class="sd">            with_eval3d=True. Default is False.</span>
 <span class="sd">        global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for</span>
 <span class="sd">            sorting Gaussians during rasterization. When True, Gaussians are sorted by their</span>
 <span class="sd">            z-coordinate in camera space. When False, they are sorted by their Euclidean</span>
@@ -797,6 +803,12 @@
         <span class="p">),</span> <span class="s2">&quot;UT and eval3d requires to provide quats and scales.&quot;</span>
         <span class="k">assert</span> <span class="n">packed</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;Packed mode is not supported with UT.&quot;</span>
         <span class="k">assert</span> <span class="n">sparse_grad</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;Sparse grad is not supported with UT.&quot;</span>
+
+    <span class="k">if</span> <span class="n">return_normals</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">with_eval3d</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;return_normals=True requires with_eval3d=True. &quot;</span>
+            <span class="s2">&quot;Normal computation is only supported in eval3d mode.&quot;</span>
+        <span class="p">)</span>
 
     <span class="c1"># Validate hit distance modes require eval3d</span>
     <span class="n">hit_distance_modes</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">}</span>
@@ -1151,6 +1163,7 @@
         <span class="c1"># slice into chunks</span>
         <span class="n">n_chunks</span> <span class="o">=</span> <span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">channel_chunk</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">channel_chunk</span>
         <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
+        <span class="n">render_normals</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># Only compute normals in first chunk</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_chunks</span><span class="p">):</span>
             <span class="n">colors_chunk</span> <span class="o">=</span> <span class="n">colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">i</span> <span class="o">*</span> <span class="n">channel_chunk</span> <span class="p">:</span> <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">channel_chunk</span><span class="p">]</span>
             <span class="n">backgrounds_chunk</span> <span class="o">=</span> <span class="p">(</span>
@@ -1159,11 +1172,19 @@
                 <span class="k">else</span> <span class="kc">None</span>
             <span class="p">)</span>
             <span class="k">if</span> <span class="n">with_eval3d</span><span class="p">:</span>
-                <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">rasterize_to_pixels_eval3d</span><span class="p">(</span>
+                <span class="c1"># Only compute normals in first chunk (normals don&#39;t depend on colors)</span>
+                <span class="n">return_normals_chunk</span> <span class="o">=</span> <span class="n">return_normals</span> <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="kc">False</span>
+                <span class="p">(</span>
+                    <span class="n">render_colors_</span><span class="p">,</span>
+                    <span class="n">render_alphas_</span><span class="p">,</span>
+                    <span class="n">_</span><span class="p">,</span>
+                    <span class="n">_</span><span class="p">,</span>
+                    <span class="n">render_normals_</span><span class="p">,</span>
+                <span class="p">)</span> <span class="o">=</span> <span class="n">rasterize_to_pixels_eval3d_extra</span><span class="p">(</span>
                     <span class="n">means</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
                     <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
                     <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
-                    <span class="n">colors_chunk</span><span class="o">=</span><span class="n">colors_chunk</span><span class="p">,</span>
+                    <span class="n">colors</span><span class="o">=</span><span class="n">colors_chunk</span><span class="p">,</span>
                     <span class="n">opacities</span><span class="o">=</span><span class="n">opacities</span><span class="p">,</span>
                     <span class="n">viewmats</span><span class="o">=</span><span class="n">viewmats</span><span class="p">,</span>
                     <span class="n">Ks</span><span class="o">=</span><span class="n">Ks</span><span class="p">,</span>
@@ -1182,7 +1203,10 @@
                     <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
                     <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
                     <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">use_hit_distance</span><span class="p">,</span>
+                    <span class="n">return_normals</span><span class="o">=</span><span class="n">return_normals_chunk</span><span class="p">,</span>
                 <span class="p">)</span>
+                <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">render_normals_</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">render_normals</span> <span class="o">=</span> <span class="n">render_normals_</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -1208,8 +1232,15 @@
         <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">render_colors</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
         <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">render_alphas</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># discard the rest</span>
     <span class="k">else</span><span class="p">:</span>
+        <span class="n">render_normals</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">if</span> <span class="n">with_eval3d</span><span class="p">:</span>
-            <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">rasterize_to_pixels_eval3d</span><span class="p">(</span>
+            <span class="p">(</span>
+                <span class="n">render_colors</span><span class="p">,</span>
+                <span class="n">render_alphas</span><span class="p">,</span>
+                <span class="n">_</span><span class="p">,</span>
+                <span class="n">_</span><span class="p">,</span>
+                <span class="n">render_normals</span><span class="p">,</span>
+            <span class="p">)</span> <span class="o">=</span> <span class="n">rasterize_to_pixels_eval3d_extra</span><span class="p">(</span>
                 <span class="n">means</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
                 <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
                 <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
@@ -1232,6 +1263,7 @@
                 <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
                 <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
                 <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">use_hit_distance</span><span class="p">,</span>
+                <span class="n">return_normals</span><span class="o">=</span><span class="n">return_normals</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -1260,6 +1292,10 @@
             <span class="p">],</span>
             <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
         <span class="p">)</span>
+
+    <span class="c1"># Add normals to meta if computed</span>
+    <span class="k">if</span> <span class="n">return_normals</span><span class="p">:</span>
+        <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;normals&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_normals</span>
 
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">meta</span></div>
 
