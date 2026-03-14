@@ -1,13 +1,14 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +21,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/glm.hpp>
 
 namespace gsplat {
 
@@ -69,5 +71,11 @@ enum CameraModelType {
 
 #define N_THREADS_PACKED 256
 #define ALPHA_THRESHOLD (1.f / 255.f)
+
+#ifdef __CUDACC__
+#   define GSPLAT_NOINLINE __noinline__
+#else
+#   define GSPLAT_NOINLINE
+#endif
 
 } // namespace gsplat

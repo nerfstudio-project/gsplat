@@ -25,8 +25,10 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
+#include <cuda/std/optional>
 
 #include "Common.h"
+#include "ExternalDistortion.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
 #include "Cameras.cuh"
@@ -69,6 +71,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
@@ -155,6 +158,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 cm_params.shutter_type = rs_type;
                 cm_params.principal_point = { principal_point.x, principal_point.y };
                 cm_params.focal_length = { focal_length.x, focal_length.y };
+                cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+                    &external_distortion_device_params.value() : nullptr;
                 PerfectPinholeCameraModel camera_model(cm_params);
                 ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
             } else {
@@ -172,6 +177,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 if (thin_prism_coeffs != nullptr) {
                     cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
                 }
+                cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+                    &external_distortion_device_params.value() : nullptr;
                 OpenCVPinholeCameraModel camera_model(cm_params);
                 ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
             }
@@ -184,6 +191,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             if (radial_coeffs != nullptr) {
                 cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
             }
+            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+                &external_distortion_device_params.value() : nullptr;
             OpenCVFisheyeCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
         } else if (camera_model_type == CameraModelType::FTHETA) {
@@ -192,6 +201,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.dist = ftheta_coeffs;
+            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+                &external_distortion_device_params.value() : nullptr;
             FThetaCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
         } else {
@@ -596,6 +607,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
     // intersections
     const at::Tensor tile_offsets,    // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,     // [n_isects]
@@ -655,6 +667,11 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         );
     }
 
+    cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
+    if (external_distortion_params.has_value()) {
+        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(external_distortion_params.value());
+    }
+
     rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
             B,
@@ -695,6 +712,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 ? thin_prism_coeffs.value().data_ptr<float>()
                 : nullptr,
             ftheta_coeffs,
+            external_distortion_device_params,
             // intersections
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
@@ -740,6 +758,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const at::optional<at::Tensor> tangential_coeffs,                     \
         const at::optional<at::Tensor> thin_prism_coeffs,                     \
         const FThetaCameraDistortionParameters ftheta_coeffs,                 \
+        const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params, \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
         const bool use_hit_distance,                                           \

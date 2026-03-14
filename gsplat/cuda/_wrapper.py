@@ -26,6 +26,7 @@ from typing_extensions import Literal
 from gsplat._helper import assert_shape
 
 CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta"]
+ExternalDistortionModelMeta = Literal["bivariate-windshield"]
 
 
 def _make_lazy_cuda_func(name: str) -> Callable:
@@ -113,6 +114,49 @@ class UnscentedTransformParameters:
         p.kappa = self.kappa
         p.in_image_margin_factor = self.in_image_margin_factor
         p.require_all_sigma_points_valid = self.require_all_sigma_points_valid
+        return p
+
+
+class ExternalDistortionReferencePolynomial(Enum):
+    FORWARD = 1
+    BACKWARD = 2
+
+    def to_cpp(self) -> Any:
+        return _make_lazy_cuda_obj(f"ExternalDistortionReferencePolynomial.{self.name}")
+
+
+@dataclass
+class BivariateWindshieldModelParameters:
+    MAX_ORDER = 5
+    MAX_COEFFS = 21
+
+    reference_poly: ExternalDistortionReferencePolynomial
+    horizontal_poly: Tensor  # [..., (N + 1) * (N + 2) / 2]
+    vertical_poly: Tensor  # [..., (N + 1) * (N + 2) / 2]
+    horizontal_poly_inverse: Tensor  # [..., (N + 1) * (N + 2) / 2]
+    vertical_poly_inverse: Tensor  # [..., (N + 1) * (N + 2) / 2]
+
+    def __init__(
+        self,
+        reference_poly: ExternalDistortionReferencePolynomial,
+        horizontal_poly: Tensor,
+        vertical_poly: Tensor,
+        horizontal_poly_inverse: Tensor,
+        vertical_poly_inverse: Tensor,
+    ):
+        self.reference_poly = reference_poly
+        self.horizontal_poly = horizontal_poly
+        self.vertical_poly = vertical_poly
+        self.horizontal_poly_inverse = horizontal_poly_inverse
+        self.vertical_poly_inverse = vertical_poly_inverse
+
+    def to_cpp(self) -> Any:
+        p = _make_lazy_cuda_obj("BivariateWindshieldModelParameters")()
+        p.reference_poly = self.reference_poly.to_cpp()
+        p.horizontal_poly = self.horizontal_poly.contiguous()
+        p.vertical_poly = self.vertical_poly.contiguous()
+        p.horizontal_poly_inverse = self.horizontal_poly_inverse.contiguous()
+        p.vertical_poly_inverse = self.vertical_poly_inverse.contiguous()
         return p
 
 
@@ -752,6 +796,7 @@ def rasterize_to_pixels_eval3d(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -793,6 +838,7 @@ def rasterize_to_pixels_eval3d(
         tangential_coeffs=tangential_coeffs,
         thin_prism_coeffs=thin_prism_coeffs,
         ftheta_coeffs=ftheta_coeffs,
+        external_distortion_coeffs=external_distortion_coeffs,
         rolling_shutter=rolling_shutter,
         viewmats_rs=viewmats_rs,
         return_sample_counts=False,
@@ -825,6 +871,7 @@ def rasterize_to_pixels_eval3d_extra(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -992,6 +1039,7 @@ def rasterize_to_pixels_eval3d_extra(
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
         ftheta_coeffs,
+        external_distortion_coeffs,
         # rolling shutter
         rolling_shutter,
         viewmats_rs.contiguous() if viewmats_rs is not None else None,
@@ -1353,6 +1401,7 @@ def fully_fused_projection_with_ut(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -1424,6 +1473,11 @@ def fully_fused_projection_with_ut(
             ftheta_coeffs.to_cpp()
             if ftheta_coeffs is not None
             else FThetaCameraDistortionParameters.to_cpp_default()
+        ),
+        (
+            external_distortion_coeffs.to_cpp()
+            if external_distortion_coeffs is not None
+            else None
         ),
     )
     if not calc_compensations:
@@ -1589,6 +1643,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
         thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
         ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+        external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
         # rolling shutter
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
         viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -1607,6 +1662,11 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             else FThetaCameraDistortionParameters.to_cpp_default()
         )
 
+        external_distortion_coeffs = (
+            external_distortion_coeffs.to_cpp()
+            if external_distortion_coeffs is not None
+            else None
+        )
         # Extract batch_dims for sample_counts allocation
         batch_dims = means.shape[:-2]
         C = viewmats.size(-3)
@@ -1654,6 +1714,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
+            external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
             use_hit_distance,
@@ -1688,6 +1749,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.camera_model_type = camera_model_type
         ctx.tile_size = tile_size
         ctx.ftheta_coeffs = ftheta_coeffs
+        ctx.external_distortion_coeffs = external_distortion_coeffs
         ctx.use_hit_distance = use_hit_distance
 
         return render_colors, render_alphas, last_ids, sample_counts, render_normals
@@ -1730,6 +1792,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         tile_size = ctx.tile_size
         ftheta_coeffs = ctx.ftheta_coeffs
+        external_distortion_coeffs = ctx.external_distortion_coeffs
         use_hit_distance = ctx.use_hit_distance
 
         (
@@ -1761,6 +1824,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
+            external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
             use_hit_distance,
@@ -1804,6 +1868,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # tangential_coeffs
             None,  # thin_prism_coeffs
             None,  # ftheta_coeffs
+            None,  # external_distortion_coeffs
             None,  # rolling_shutter
             None,  # viewmats_rs
             None,  # return_sample_counts (flag, no gradient)
