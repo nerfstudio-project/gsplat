@@ -309,7 +309,7 @@ def _fully_fused_projection_with_ut(
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
     camera_model: CameraModel = "pinhole",
-    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    ut_params: Optional[UnscentedTransformParameters] = None,
     radial_coeffs: Optional[Tensor] = None,
     tangential_coeffs: Optional[Tensor] = None,
     thin_prism_coeffs: Optional[Tensor] = None,
@@ -363,6 +363,9 @@ def _fully_fused_projection_with_ut(
         conics: Inverse covariances (conics) [..., C, N, 3] (xx, xy, yy)
         compensations: Opacity compensation factors [..., C, N] (or None)
     """
+    if ut_params is None:
+        ut_params = UnscentedTransformParameters()
+
     # Validate inputs
     B = means.shape[:-2]
     N = means.shape[-2]

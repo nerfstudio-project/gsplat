@@ -54,21 +54,30 @@ def _make_lazy_cuda_cls(name: str) -> Any:
     from ._backend import _C
 
     if _C is None:
-        # Extension not built or failed to load (e.g. BUILD_NO_CUDA=1).
-        # Return a placeholder class so that imports succeed; instantiation
-        # or use will raise a clear error.
-        class _UnavailableCudaCls:
-            __name__ = name
+        return _unavailable_cuda_cls(name)
 
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                raise RuntimeError(
-                    "gsplat CUDA extension is not available (not built or failed to load). "
-                    f"Cannot instantiate '{name}'."
-                )
+    try:
+        return getattr(torch.classes.gsplat, name)
+    except RuntimeError as e:
+        # Class not registered (e.g. extension built without it or partial load).
+        if "does not exist" in str(e) or "torch::class_" in str(e):
+            return _unavailable_cuda_cls(name)
+        raise
 
-        return _UnavailableCudaCls
 
-    return getattr(torch.classes.gsplat, name)
+def _unavailable_cuda_cls(name: str) -> Any:
+    """Placeholder class when the CUDA extension is not available."""
+
+    class _UnavailableCudaCls:
+        __name__ = name
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError(
+                "gsplat CUDA extension is not available (not built or failed to load). "
+                f"Cannot instantiate '{name}'."
+            )
+
+    return _UnavailableCudaCls
 
 
 def _make_lazy_cuda_obj(name: str) -> Any:
@@ -782,7 +791,7 @@ def rasterize_to_pixels_eval3d(
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: CameraModel = "pinhole",
-    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    ut_params: Optional[UnscentedTransformParameters] = None,
     rays: Optional[Tensor] = None,  # [..., C, H, W, 6]
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -808,6 +817,8 @@ def rasterize_to_pixels_eval3d(
         - **Rendered colors**. [..., C, image_height, image_width, channels]
         - **Rendered alphas**. [..., C, image_height, image_width, 1]
     """
+    if ut_params is None:
+        ut_params = UnscentedTransformParameters()
 
     colors, alphas, *_ = rasterize_to_pixels_eval3d_extra(
         means=means,
@@ -857,7 +868,7 @@ def rasterize_to_pixels_eval3d_extra(
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: CameraModel = "pinhole",
-    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    ut_params: Optional[UnscentedTransformParameters] = None,
     rays: Optional[Tensor] = None,  # [..., C, P, 6]
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -893,6 +904,9 @@ def rasterize_to_pixels_eval3d_extra(
         - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.
         - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.
     """
+    if ut_params is None:
+        ut_params = UnscentedTransformParameters()
+
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
     N = means.size(-2)
@@ -1398,7 +1412,7 @@ def fully_fused_projection_with_ut(
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
     camera_model: CameraModel = "pinhole",
-    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    ut_params: Optional[UnscentedTransformParameters] = None,
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -1421,10 +1435,13 @@ def fully_fused_projection_with_ut(
     Args:
         global_z_order: Defines how Gaussians are sorted for depth ordering. If True (default),
             Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted
-            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically
+            by their Euclidean distance from the camera origin.             The z-coordinate sorting is typically
             faster and sufficient for most cases, while Euclidean distance can be useful for scenes
             with wide field-of-view or non-standard camera models. Default: True.
     """
+    if ut_params is None:
+        ut_params = UnscentedTransformParameters()
+
     batch_dims = means.shape[:-2]
     N = means.shape[-2]
     C = viewmats.shape[-3]
@@ -1636,7 +1653,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
         flatten_ids: Tensor,  # [..., n_isects]
         camera_model: CameraModel = "pinhole",
-        ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+        ut_params: Optional[UnscentedTransformParameters] = None,
         rays: Optional[Tensor] = None,  # [..., C, P, 6]
         # distortion
         radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -1651,6 +1668,9 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         use_hit_distance: bool = False,
         return_normals: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
+        if ut_params is None:
+            ut_params = UnscentedTransformParameters()
+
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
