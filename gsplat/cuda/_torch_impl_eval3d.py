@@ -44,6 +44,7 @@ from ._torch_cameras import (
     _interpolate_shutter_pose,
 )
 from ._wrapper import RollingShutterType
+from ._constants import ALPHA_THRESHOLD, TRANSMITTANCE_THRESHOLD
 
 
 def _generate_rays_from_pixels(
@@ -191,12 +192,12 @@ def _compute_gaussian_alphas(
     Returns:
         alphas: [..., M] - Alpha values
     """
-    # Alpha clamp: max_alpha = 1 - 10*trans_threshold
+    # Alpha clamp: max_alpha = 1 - sqrt(trans_threshold)
     # Prevents numerical issues:
     # 1. Avoids alpha=1.0 which would make T=0 and kill gradient flow
     # 2. Prevents gradient singularities in prod(1-alpha) computation
-    # 3. Ensures 10x safety margin above transmittance threshold
-    max_alpha = 1.0 - 10.0 * trans_threshold
+    # 3. Ensures transmittance must reach max_alpha once before termination
+    max_alpha = 1.0 - math.sqrt(trans_threshold)
 
     # Gaussian response
     power = -0.5 * grayDist
@@ -380,13 +381,11 @@ def accumulate_eval3d(
         gauss_colors = torch.cat([gauss_colors[..., :-1], hitDist[..., None]], dim=-1)
 
     # 8. Compute Gaussian alphas
-    trans_threshold = 1e-4
-    alpha_threshold = 1.0 / 255.0
-    alphas = _compute_gaussian_alphas(grayDist, opac, trans_threshold)
+    alphas = _compute_gaussian_alphas(grayDist, opac, TRANSMITTANCE_THRESHOLD)
 
     # 9. Filter out low-contribution Gaussians (explicit masking)
     # CUDA: if (alpha < 1.f / 255.f) continue;
-    valid_mask = alphas >= alpha_threshold
+    valid_mask = alphas >= ALPHA_THRESHOLD
 
     # Apply filter to all arrays early to reduce memory usage
     alphas = alphas[valid_mask]
@@ -424,11 +423,10 @@ def accumulate_eval3d(
         trans = trans * base_trans_per_sample
 
     # Filter by transmittance to match CUDA early termination
-    # CUDA: next_T = T * (1-alpha); if (next_T <= trans_threshold) break;
+    # CUDA: next_T = T * (1-alpha); if (next_T <= TRANSMITTANCE_THRESHOLD) break;
     # Keep samples where next_T > threshold (will be processed before break)
-    # Note: trans_threshold defined above along with max_alpha
     next_T = trans * (1.0 - alphas)
-    valid_mask = next_T > trans_threshold
+    valid_mask = next_T > TRANSMITTANCE_THRESHOLD
 
     weights = weights[valid_mask]
     gauss_colors = gauss_colors[valid_mask]

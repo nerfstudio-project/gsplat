@@ -59,6 +59,7 @@ from gsplat.cuda._wrapper import (
 )
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
+from gsplat.cuda._constants import ALPHA_THRESHOLD
 
 device = torch.device("cuda:0")
 
@@ -1120,8 +1121,6 @@ def test_rasterize_to_pixels_eval3d(
     #    discarded in one and not in the other due to the low transmission threshold.
     #    Error tolerance is higher,
 
-    alpha_threshold = 1.0 / 255.0
-
     # match: last_ids match (same accumulation endpoint)
     cuda_has_isect = render_last_ids >= 0  # [batch, C, H, W]
     ref_has_isect = _render_last_ids >= 0
@@ -1152,7 +1151,7 @@ def test_rasterize_to_pixels_eval3d(
         render_alphas * vis_mismatch,
         _render_alphas * vis_mismatch,
         rtol=0,
-        atol=alpha_threshold + 1e-5,
+        atol=ALPHA_THRESHOLD + 1e-5,
     )
     torch.testing.assert_close(
         render_alphas * count_mismatch,
@@ -1169,12 +1168,12 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(
         render_colors * count_match, _render_colors * count_match, rtol=3e-3, atol=1e-3
     )
-    # Bumped tolerance due to release mode optimizations. In debug mode it's alpha_threshold+1e-5.
+    # Bumped tolerance due to release mode optimizations. In debug mode it's ALPHA_THRESHOLD+1e-5.
     torch.testing.assert_close(
         render_colors * vis_mismatch,
         _render_colors * vis_mismatch,
         rtol=0,
-        atol=alpha_threshold + 5e-3,
+        atol=ALPHA_THRESHOLD + 5e-3,
     )
     torch.testing.assert_close(
         render_colors * count_mismatch,
