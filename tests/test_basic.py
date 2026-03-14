@@ -39,6 +39,7 @@ from gsplat._helper import (
 import gsplat
 
 from gsplat.cuda._backend import _C
+
 if _C is None:
     pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
 
