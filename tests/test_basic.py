@@ -484,6 +484,7 @@ def test_fully_fused_projection_packed(
 @pytest.mark.skipif(
     not torch.cuda.is_available(), reason="CUDA required for UT projection"
 )
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize(
     "require_all_valid", [True, False], ids=["allvalid", "somevalid"]
@@ -831,6 +832,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 # Since we have comprehensive camera model tests, we don't need to add
 # a camera model axis to this test. We use perfect pinhole model instead.
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("channels", [3])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize(
@@ -846,7 +848,7 @@ def test_rasterize_to_pixels_eval3d(
 ):
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._wrapper import (
-        fully_fused_projection,
+        fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
         quat_scale_to_covar_preci,
@@ -897,11 +899,9 @@ def test_rasterize_to_pixels_eval3d(
     else:
         viewmats_rs = None
 
-    covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
-
     # Project Gaussians to 2D for tile intersections
-    radii, means2d, depths, conics, compensations = fully_fused_projection(
-        means, covars, None, None, viewmats, Ks, width, height
+    radii, means2d, depths, conics, compensations = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
     )
     opacities_broadcast = torch.broadcast_to(
         opacities[..., None, :], batch_dims + (C, N)
