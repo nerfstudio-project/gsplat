@@ -28,8 +28,6 @@
 #include <torch/extension.h>
 #include <memory>
 #include "Cameras.cuh"
-#include "Lidars.cuh"
-#include "Ops.h"
 
 namespace gsplat {
 
@@ -138,11 +136,11 @@ public:
         int height,
         const std::string& camera_model,
         const torch::Tensor& principal_points,
-        const std::optional<torch::Tensor>& radial_coeffs,
-        const std::optional<torch::Tensor>& tangential_coeffs,
-        const std::optional<torch::Tensor>& focal_lengths,
-        const std::optional<torch::Tensor>& thin_prism_coeffs,
-        const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>>& ftheta_coeffs,
+        const std::optional<torch::Tensor> &focal_lengths,
+        const std::optional<torch::Tensor> &radial_coeffs,
+        const std::optional<torch::Tensor> &tangential_coeffs,
+        const std::optional<torch::Tensor> &thin_prism_coeffs,
+        const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
         ShutterType rs_type
     );
 };
@@ -314,19 +312,6 @@ public:
         const torch::Tensor &max_angle,                // [...]
         ShutterType rs_type
     );
-};
-
-/**
- * @brief Lidar camera model for spinning lidar sensors
- */
-class PyRowOffsetStructuredSpinningLidarModel : public PyBaseCameraModel<RowOffsetStructuredSpinningLidarModel>
-{
-public:
-    explicit PyRowOffsetStructuredSpinningLidarModel(RowOffsetStructuredSpinningLidarModelParametersExt params);
-
-private:
-    // Store the parameters to keep its tensors.
-    RowOffsetStructuredSpinningLidarModelParametersExt m_params;
 };
 
 } // namespace gsplat

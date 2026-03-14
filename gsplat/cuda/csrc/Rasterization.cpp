@@ -677,7 +677,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
@@ -756,7 +755,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
             tangential_coeffs,                                                 \
             thin_prism_coeffs,                                                 \
             ftheta_coeffs,                                                     \
-            lidar_coeffs,                                                      \
             external_distortion_params,                                        \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
@@ -808,7 +806,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
@@ -839,7 +836,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
-        lidar_coeffs,
         external_distortion_params,
         tile_offsets,
         flatten_ids,
@@ -876,7 +872,6 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
@@ -957,7 +952,6 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
             tangential_coeffs,                                                \
             thin_prism_coeffs,                                               \
             ftheta_coeffs,                                                     \
-            lidar_coeffs,                                                      \
             external_distortion_params,                                        \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
@@ -1018,7 +1012,6 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
@@ -1054,7 +1047,6 @@ rasterize_to_pixels_from_world_3dgs_bwd(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
-        lidar_coeffs,
         external_distortion_params,
         tile_offsets,
         flatten_ids,

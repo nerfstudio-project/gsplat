@@ -48,7 +48,6 @@ from ._wrapper import (
     RollingShutterType,
     FThetaPolynomialType,
     FThetaCameraDistortionParameters,
-    SpinningDirection,
 )
 
 
@@ -238,46 +237,37 @@ def _pose_world_points_to_camera_ray(pose: Tensor, world_points: Tensor) -> Tens
 
 
 class _BaseCameraModel(ABC):
-    def __init__(
-        self,
-        width: int,
-        height: int,
-        shutter_type: RollingShutterType = RollingShutterType.GLOBAL,
-    ):
+    def __init__(self, width: int, height: int, shutter_type: RollingShutterType):
         self.width = width
         self.height = height
         self.shutter_type = shutter_type
 
     @staticmethod
     def create(
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        camera_model: str = "pinhole",
-        principal_points: Optional[Tensor] = None,  # [B, 2]
+        width: int,
+        height: int,
+        camera_model: str,
+        principal_points: Tensor,  # [B, 2]
         focal_lengths: Optional[Tensor] = None,  # [B, 2]
         radial_coeffs: Optional[Tensor] = None,
         tangential_coeffs: Optional[Tensor] = None,
         thin_prism_coeffs: Optional[Tensor] = None,
         ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
         rs_type: RollingShutterType = RollingShutterType.GLOBAL,
-        # Optional[RowOffsetStructuredSpinningLidarModelParameters]
-        # Can't type it here to avoid circular import with _torch_lidars
-        lidar_coeffs=None,
     ) -> "_BaseCameraModel":
         """
         Factory method to create appropriate camera model.
             Args:
-            width: Image width (required for non-lidar models)
-            height: Image height (required for non-lidar models)
-            camera_model: "pinhole", "fisheye", "ftheta", or "lidar"
-            principal_points: Principal points [B, 2] (cx, cy) - required for non-lidar models
+            width: Image width
+            height: Image height
+            camera_model: "pinhole", "fisheye", or "ftheta"
+            principal_points: Principal points [B, 2] (cx, cy) - required for all models
             focal_lengths: Focal lengths [B, 2] (fx, fy) - required for pinhole and fisheye
             radial_coeffs: [B, 6] or [B, 4] radial distortion coefficients (pinhole/fisheye)
             tangential_coeffs: [B, 2] tangential distortion coefficients (pinhole only)
             thin_prism_coeffs: [B, 4] thin prism distortion coefficients (pinhole only)
             ftheta_coeffs: F-theta parameters (ftheta only)
             rs_type: Rolling shutter type (default: GLOBAL)
-            lidar_coeffs: Lidar camera parameters (lidar only)
 
         Returns:
             Camera model instance
@@ -286,20 +276,7 @@ class _BaseCameraModel(ABC):
             For ftheta model, focal_lengths parameter is not used as focal length
             is embedded in the polynomial distortion model.
         """
-        if camera_model == "lidar":
-            assert (
-                lidar_coeffs is not None
-            ), "lidar_coeffs is required for lidar camera model"
-            from ._torch_lidars import _RowOffsetStructuredSpinningLidarModel
-
-            return _RowOffsetStructuredSpinningLidarModel(lidar_coeffs)
-
-        # Preconditions for non-lidar models
-        assert width is not None, "width is required for non-lidar camera models"
-        assert height is not None, "height is required for non-lidar camera models"
-        assert (
-            principal_points is not None
-        ), "principal_points is required for non-lidar camera models"
+        # Preconditions
         B = principal_points.shape[:-1]
         assert_shape("principal_points", principal_points, B + (2,))
         focal_lengths is None or assert_shape("focal_lengths", focal_lengths, B + (2,))
@@ -392,7 +369,7 @@ class _BaseCameraModel(ABC):
         else:
             raise ValueError(
                 f"Unsupported camera model: {camera_model}. "
-                f"Supported: pinhole, fisheye, ftheta, lidar"
+                f"Supported: pinhole, fisheye, ftheta"
             )
 
     def shutter_relative_frame_time(

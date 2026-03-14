@@ -30,7 +30,6 @@
 #include "ExternalDistortion.cuh"
 #include "Rasterization.h"
 #include "Cameras.cuh"
-#include "Lidars.cuh"
 #include "Utils.cuh"
 #include "MacroUtils.h"
 
@@ -74,7 +73,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
     const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
-    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
     const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
@@ -94,37 +92,10 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     int32_t iid = block.group_index().x;
     int32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
+    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
+    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
-    uint32_t i, j;
-    bool inside;
-
-    if(camera_model_type == CameraModelType::LIDAR) {
-        assert(lidar_device_coeffs);
-        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
-        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
-        const int tile_element_id = block.thread_rank();
-        if(tile_element_id < element_count)
-        {
-            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // row_elevation
-            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // col_azimuth
-            assert(0 <= i);
-            assert(i < image_height);
-            assert(0 <= j);
-            assert(j < image_width);
-            inside = true;
-        }
-        else
-        {
-            inside = false;
-        }
-    }
-    else
-    {
-        i = block.group_index().y * tile_size + block.thread_index().y;
-        j = block.group_index().z * tile_size + block.thread_index().x;
-        inside = (i < image_height && j < image_width);
-    }
-
+    bool inside = (i < image_height && j < image_width);
     bool return_normals = render_normals != nullptr;
 
     tile_offsets += iid * tile_height * tile_width;
@@ -220,10 +191,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
                 &external_distortion_device_params.value() : nullptr;
             FThetaCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else if (camera_model_type == CameraModelType::LIDAR) {
-            assert(lidar_device_coeffs);
-            RowOffsetStructuredSpinningLidarModel camera_model(*lidar_device_coeffs);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
         } else {
             // should never reach here
@@ -367,9 +334,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             const vec3 gcrod = glm::cross(grd, gro);
             const float grayDist = glm::dot(gcrod, gcrod);
             const float power = -0.5f * grayDist;
-            float max_response = __expf(power);
-            float alpha = min(MAX_ALPHA, opac * max_response);
-            if (alpha < 1.f / 255.f || max_response <= MAX_KERNEL_DENSITY_CUTOFF) {
+
+            float alpha = min(MAX_ALPHA, opac * __expf(power));
+            if (alpha < 1.f / 255.f) {
                 continue;
             }
 
@@ -484,7 +451,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     // external distortion
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
@@ -545,16 +511,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(*external_distortion_params.value());
     }
 
-    cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs = cuda::std::nullopt;
-    if (lidar_coeffs.has_value()) {
-        TORCH_CHECK(camera_model == CameraModelType::LIDAR, "If lidar sensor coefficients are given, the camera model must be lidar");
-        lidar_device_coeffs = *lidar_coeffs.value();
-    }
-    else
-    {
-        TORCH_CHECK(camera_model != CameraModelType::LIDAR, "If the sensor isn't lidar, lidar coefficients must not be given");
-    }
-
     rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
             B,
@@ -595,7 +551,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 ? thin_prism_coeffs.value().data_ptr<float>()
                 : nullptr,
             ftheta_device_coeffs,
-            lidar_device_coeffs,
             external_distortion_device_params,
             // intersections
             tile_offsets.data_ptr<int32_t>(),
@@ -636,9 +591,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const at::optional<at::Tensor> thin_prism_coeffs,                      \
         const c10::intrusive_ptr<FThetaCameraDistortionParameters>             \
             &ftheta_coeffs,                                                    \
-        const at::optional<c10::intrusive_ptr<                                 \
-            RowOffsetStructuredSpinningLidarModelParametersExt>>               \
-            &lidar_coeffs,                                                     \
         const at::optional<                                                    \
             c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>   \
             &external_distortion_params,                                       \

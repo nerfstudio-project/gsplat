@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -43,11 +44,7 @@ from ._torch_cameras import (
     _interpolate_shutter_pose,
 )
 from ._wrapper import RollingShutterType
-from ._constants import (
-    ALPHA_THRESHOLD,
-    TRANSMITTANCE_THRESHOLD,
-    MAX_KERNEL_DENSITY_CUTOFF,
-)
+from ._constants import ALPHA_THRESHOLD, TRANSMITTANCE_THRESHOLD
 
 
 def _generate_rays_from_pixels(
@@ -204,14 +201,13 @@ def _compute_gaussian_alphas(
 
     # Gaussian response
     power = -0.5 * grayDist
-    max_response = torch.exp(power)
-    alphas = torch.clamp(opac * max_response, max=max_alpha)
+    alphas = torch.clamp(opac * torch.exp(power), max=max_alpha)
 
     assert torch.all(
         (alphas >= 0) & (alphas <= 1.0)
     ), f"Invalid alphas: range=[{alphas.min()}, {alphas.max()}]"
 
-    return alphas, max_response
+    return alphas
 
 
 def accumulate_eval3d(
@@ -385,15 +381,11 @@ def accumulate_eval3d(
         gauss_colors = torch.cat([gauss_colors[..., :-1], hitDist[..., None]], dim=-1)
 
     # 8. Compute Gaussian alphas
-    alphas, max_response = _compute_gaussian_alphas(
-        grayDist, opac, TRANSMITTANCE_THRESHOLD
-    )
+    alphas = _compute_gaussian_alphas(grayDist, opac, TRANSMITTANCE_THRESHOLD)
 
     # 9. Filter out low-contribution Gaussians (explicit masking)
     # CUDA: if (alpha < 1.f / 255.f) continue;
-    valid_mask = (alphas >= ALPHA_THRESHOLD) & (
-        max_response > MAX_KERNEL_DENSITY_CUTOFF
-    )
+    valid_mask = alphas >= ALPHA_THRESHOLD
 
     # Apply filter to all arrays early to reduce memory usage
     alphas = alphas[valid_mask]

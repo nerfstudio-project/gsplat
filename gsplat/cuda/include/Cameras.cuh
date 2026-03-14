@@ -416,7 +416,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         }
 
         return interpolate_shutter_pose(
-                   derived->shutter_relative_frame_time(image_point),
+                   shutter_relative_frame_time(image_point),
                    rolling_shutter_parameters
         )
             .camera_ray_to_world_ray(camera_ray.ray_dir);
@@ -479,7 +479,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 #pragma unroll
         for (auto j = 0; j < N_ROLLING_SHUTTER_ITERATIONS; ++j) {
             relative_frame_time =
-                derived->shutter_relative_frame_time(image_points_rs_prev);
+                shutter_relative_frame_time(image_points_rs_prev);
 
             t_rs = (1.f - relative_frame_time) * t_start +
                    relative_frame_time * t_end;
@@ -1116,8 +1116,6 @@ struct OpenCVFisheyeCameraModel
         }
     }
 };
-
-
 
 
 struct FThetaCameraDistortionDeviceParams {

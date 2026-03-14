@@ -217,12 +217,6 @@ public:
         return m_data != nullptr;
     }
 
-    __host__ __device__
-    T *data() const
-    {
-        return m_data;
-    }
-
 private:
     T* m_data;
     const std::array<int64_t, ndims> m_sizes;
