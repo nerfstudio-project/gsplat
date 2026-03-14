@@ -328,6 +328,7 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.cuda._wrapper</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">RollingShutterType</span><span class="p">,</span>
+    <span class="n">CameraModel</span><span class="p">,</span>
     <span class="n">FThetaCameraDistortionParameters</span><span class="p">,</span>
     <span class="n">FThetaPolynomialType</span><span class="p">,</span>
     <span class="n">UnscentedTransformParameters</span><span class="p">,</span>
@@ -348,6 +349,12 @@
     <span class="n">all_to_all_tensor_list</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">depth_to_normal</span><span class="p">,</span> <span class="n">get_projection_matrix</span>
+
+<span class="c1"># Gaussian depth modes (D/ED): use projection depth (controlled by global_z_order)</span>
+<span class="c1"># Hit distance modes (d/Ed): compute along-ray distance in rasterization</span>
+<span class="n">RenderMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span>
+
+<span class="n">RasterizeMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_compute_view_dirs_packed</span><span class="p">(</span>
@@ -445,17 +452,18 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">render_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
+    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
     <span class="n">channel_chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span>
     <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="n">segmented</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">with_ut</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">global_z_order</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="c1"># distortion</span>
     <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
@@ -500,11 +508,20 @@
 
 <span class="sd">    .. note::</span>
 <span class="sd">        **Depth Rendering**: This function supports colors or/and depths via `render_mode`.</span>
-<span class="sd">        The supported modes are &quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;, and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the</span>
-<span class="sd">        colored image that respects the `colors` argument. &quot;D&quot; renders the accumulated z-depth</span>
-<span class="sd">        :math:`\\sum_i w_i z_i`. &quot;ED&quot; renders the expected z-depth</span>
-<span class="sd">        :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. &quot;RGB+D&quot; and &quot;RGB+ED&quot; render both</span>
-<span class="sd">        the colored image and the depth, in which the depth is the last channel of the output.</span>
+
+<span class="sd">        **Gaussian Depth Modes** (use projection depth, controlled by `global_z_order`):</span>
+<span class="sd">        - &quot;D&quot;: Accumulated Gaussian depth :math:`\\sum_i w_i z_i`</span>
+<span class="sd">        - &quot;ED&quot;: Expected Gaussian depth :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`</span>
+<span class="sd">        - &quot;RGB+D&quot;: RGB + accumulated Gaussian depth</span>
+<span class="sd">        - &quot;RGB+ED&quot;: RGB + expected Gaussian depth</span>
+
+<span class="sd">        **Hit Distance Modes** (compute along-ray distance in rasterization):</span>
+<span class="sd">        - &quot;d&quot;: Accumulated hit distance :math:`\\sum_i w_i d_i`</span>
+<span class="sd">        - &quot;Ed&quot;: Expected hit distance :math:`\\frac{\\sum_i w_i d_i}{\\sum_i w_i}`</span>
+<span class="sd">        - &quot;RGB-d&quot;: RGB + accumulated hit distance</span>
+<span class="sd">        - &quot;RGB-Ed&quot;: RGB + expected hit distance</span>
+
+<span class="sd">        &quot;RGB&quot; renders only the colored image. For combined modes, depth is the last channel.</span>
 
 <span class="sd">    .. note::</span>
 <span class="sd">        **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between</span>
@@ -583,9 +600,11 @@
 <span class="sd">        tile_size: The size of the tiles for rasterization. Default is 16.</span>
 <span class="sd">            (Note: other values are not tested)</span>
 <span class="sd">        backgrounds: The background colors. [..., C, D]. Default is None.</span>
-<span class="sd">        render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;,</span>
-<span class="sd">            and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image, &quot;D&quot; renders the accumulated depth, and</span>
-<span class="sd">            &quot;ED&quot; renders the expected depth. Default is &quot;RGB&quot;.</span>
+<span class="sd">        render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;d&quot;, &quot;Ed&quot;, &quot;D&quot;, &quot;ED&quot;,</span>
+<span class="sd">            &quot;RGB-d&quot;, &quot;RGB-Ed&quot;, &quot;RGB+D&quot;, and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image.</span>
+<span class="sd">            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance</span>
+<span class="sd">            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)</span>
+<span class="sd">            are normalized by opacity. Default is &quot;RGB&quot;.</span>
 <span class="sd">        sparse_grad: If true, the gradients for {means, quats, scales} will be stored in</span>
 <span class="sd">            a COO sparse layout. This can be helpful for saving memory. Default is False.</span>
 <span class="sd">        absgrad: If true, the absolute gradients of the projected 2D means</span>
@@ -610,6 +629,10 @@
 <span class="sd">        with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.</span>
 <span class="sd">        with_eval3d: Whether to calculate Gaussian response in 3D world space, instead</span>
 <span class="sd">            of 2D image space. Default is False.</span>
+<span class="sd">        global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for</span>
+<span class="sd">            sorting Gaussians during rasterization. When True, Gaussians are sorted by their</span>
+<span class="sd">            z-coordinate in camera space. When False, they are sorted by their Euclidean</span>
+<span class="sd">            distance from the camera origin. Default is True.</span>
 <span class="sd">        radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.</span>
 <span class="sd">            For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape</span>
 <span class="sd">            should be [..., C, 4].</span>
@@ -684,7 +707,18 @@
     <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span>
-    <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">],</span> <span class="n">render_mode</span>
+    <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span>
+        <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;d&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;Ed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;D&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;ED&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span>
+    <span class="p">],</span> <span class="n">render_mode</span>
+    <span class="k">assert</span> <span class="n">global_z_order</span> <span class="ow">or</span> <span class="n">with_ut</span><span class="p">,</span> <span class="s2">&quot;global_z_order can be false only if with_ut=True&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">reshape_view</span><span class="p">(</span><span class="n">C</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">world_view</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">N_world</span><span class="p">:</span> <span class="nb">list</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
         <span class="n">view_list</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
@@ -756,6 +790,15 @@
         <span class="k">assert</span> <span class="n">packed</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;Packed mode is not supported with UT.&quot;</span>
         <span class="k">assert</span> <span class="n">sparse_grad</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;Sparse grad is not supported with UT.&quot;</span>
 
+    <span class="c1"># Validate hit distance modes require eval3d</span>
+    <span class="n">hit_distance_modes</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">}</span>
+    <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="n">hit_distance_modes</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">with_eval3d</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Hit distance mode &#39;</span><span class="si">{</span><span class="n">render_mode</span><span class="si">}</span><span class="s2">&#39; requires with_eval3d=True. &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;Classic mode only supports Gaussian depth modes (&#39;D&#39;, &#39;ED&#39;, &#39;RGB+D&#39;, &#39;RGB+ED&#39;). &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;Either set with_eval3d=True or use a Gaussian depth render_mode.&quot;</span>
+        <span class="p">)</span>
+
     <span class="c1"># Implement the multi-GPU strategy proposed in</span>
     <span class="c1"># `On Scaling Up 3D Gaussian Splatting Training &lt;https://arxiv.org/abs/2406.18533&gt;`.</span>
     <span class="c1">#</span>
@@ -806,6 +849,7 @@
             <span class="n">ftheta_coeffs</span><span class="o">=</span><span class="n">ftheta_coeffs</span><span class="p">,</span>
             <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
             <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
+            <span class="n">global_z_order</span><span class="o">=</span><span class="n">global_z_order</span><span class="p">,</span>
         <span class="p">)</span>
 
     <span class="k">else</span><span class="p">:</span>
@@ -1022,9 +1066,18 @@
             <span class="n">opacities</span> <span class="o">=</span> <span class="n">reshape_view</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">opacities</span><span class="p">,</span> <span class="n">N_world</span><span class="p">)</span>
             <span class="n">colors</span> <span class="o">=</span> <span class="n">reshape_view</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">colors</span><span class="p">,</span> <span class="n">N_world</span><span class="p">)</span>
 
+    <span class="c1"># Determine if we need hit distance (computed in rasterization) or Gaussian depth (from projection)</span>
+    <span class="c1"># (hit_distance_modes already defined at validation stage)</span>
+    <span class="n">use_hit_distance</span> <span class="o">=</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="n">hit_distance_modes</span>
+
     <span class="c1"># Rasterize to pixels</span>
-    <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]:</span>
-        <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">((</span><span class="n">colors</span><span class="p">,</span> <span class="n">depths</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]),</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">use_hit_distance</span><span class="p">:</span>
+            <span class="c1"># Hit distance modes: use zeros as placeholder (kernel will overwrite with hit distance)</span>
+            <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">((</span><span class="n">colors</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">depths</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">])),</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Gaussian depth modes: use projection depth</span>
+            <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">((</span><span class="n">colors</span><span class="p">,</span> <span class="n">depths</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]),</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
                 <span class="p">[</span>
@@ -1033,8 +1086,13 @@
                 <span class="p">],</span>
                 <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
             <span class="p">)</span>
-    <span class="k">elif</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">]:</span>
-        <span class="n">colors</span> <span class="o">=</span> <span class="n">depths</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
+    <span class="k">elif</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">use_hit_distance</span><span class="p">:</span>
+            <span class="c1"># Hit distance modes: zeros as placeholder (kernel will overwrite)</span>
+            <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">depths</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Gaussian depth modes: use projection depth</span>
+            <span class="n">colors</span> <span class="o">=</span> <span class="n">depths</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
         <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">backgrounds</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>  <span class="c1"># RGB</span>
@@ -1110,6 +1168,7 @@
                     <span class="n">ftheta_coeffs</span><span class="o">=</span><span class="n">ftheta_coeffs</span><span class="p">,</span>
                     <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
                     <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
+                    <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">use_hit_distance</span><span class="p">,</span>
                 <span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
@@ -1153,6 +1212,7 @@
                 <span class="n">ftheta_coeffs</span><span class="o">=</span><span class="n">ftheta_coeffs</span><span class="p">,</span>
                 <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
                 <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
+                <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">use_hit_distance</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
@@ -1169,7 +1229,8 @@
                 <span class="n">packed</span><span class="o">=</span><span class="n">packed</span><span class="p">,</span>
                 <span class="n">absgrad</span><span class="o">=</span><span class="n">absgrad</span><span class="p">,</span>
             <span class="p">)</span>
-    <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]:</span>
+    <span class="c1"># Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)</span>
+    <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]:</span>
         <span class="c1"># normalize the accumulated depth to get the expected depth</span>
         <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
             <span class="p">[</span>
@@ -1199,8 +1260,8 @@
     <span class="n">sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">render_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
-    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
+    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
     <span class="n">channel_chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span>
     <span class="n">batch_per_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
     <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
@@ -1242,7 +1303,17 @@
     <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span>
-    <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">],</span> <span class="n">render_mode</span>
+    <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span>
+        <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;d&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;Ed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;D&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;ED&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span>
+    <span class="p">],</span> <span class="n">render_mode</span>
 
     <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="c1"># treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]</span>
@@ -1764,7 +1835,7 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">render_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+    <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">distloss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
@@ -1803,9 +1874,11 @@
 <span class="sd">        tile_size: The size of the tiles for rasterization. Default is 16.</span>
 <span class="sd">            (Note: other values are not tested)</span>
 <span class="sd">        backgrounds: The background colors. [C, D]. Default is None.</span>
-<span class="sd">        render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;D&quot;, &quot;ED&quot;, &quot;RGB+D&quot;,</span>
-<span class="sd">            and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image, &quot;D&quot; renders the accumulated depth, and</span>
-<span class="sd">            &quot;ED&quot; renders the expected depth. Default is &quot;RGB&quot;.</span>
+<span class="sd">        render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;d&quot;, &quot;Ed&quot;, &quot;D&quot;, &quot;ED&quot;,</span>
+<span class="sd">            &quot;RGB-d&quot;, &quot;RGB-Ed&quot;, &quot;RGB+D&quot;, and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image.</span>
+<span class="sd">            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance</span>
+<span class="sd">            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)</span>
+<span class="sd">            are normalized by opacity. Default is &quot;RGB&quot;.</span>
 <span class="sd">        sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in</span>
 <span class="sd">            a COO sparse layout. This can be helpful for saving memory. Default is False.</span>
 <span class="sd">        absgrad: If true, the absolute gradients of the projected 2D means</span>
@@ -1886,14 +1959,28 @@
     <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span>
-    <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">],</span> <span class="n">render_mode</span>
+    <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span>
+        <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;d&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;Ed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;D&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;ED&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span>
+    <span class="p">],</span> <span class="n">render_mode</span>
     <span class="k">if</span> <span class="n">distloss</span><span class="p">:</span>
         <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span>
+            <span class="s2">&quot;d&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;Ed&quot;</span><span class="p">,</span>
             <span class="s2">&quot;D&quot;</span><span class="p">,</span>
             <span class="s2">&quot;ED&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span>
             <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span>
             <span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span>
-        <span class="p">],</span> <span class="sa">f</span><span class="s2">&quot;distloss requires depth rendering, render_mode should be D, ED, RGB+D, RGB+ED, but got </span><span class="si">{</span><span class="n">render_mode</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">],</span> <span class="sa">f</span><span class="s2">&quot;distloss requires depth rendering, render_mode should be d, Ed, D, ED, RGB-d, RGB-Ed, RGB+D, or RGB+ED, but got </span><span class="si">{</span><span class="n">render_mode</span><span class="si">}</span><span class="s2">&quot;</span>
 
     <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="c1"># treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]</span>
