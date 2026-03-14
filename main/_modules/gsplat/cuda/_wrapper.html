@@ -326,6 +326,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing_extensions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gsplat._helper</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_shape</span>
 
 <span class="n">CameraModel</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span>
 
@@ -344,9 +345,14 @@
     <span class="c1"># pylint: disable=import-outside-toplevel</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
 
+    <span class="k">if</span> <span class="n">_C</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+            <span class="s2">&quot;gsplat CUDA extension is not available (not built or failed to load). &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;Cannot access &#39;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39;.&quot;</span>
+        <span class="p">)</span>
     <span class="n">obj</span> <span class="o">=</span> <span class="n">_C</span>
     <span class="k">for</span> <span class="n">name_split</span> <span class="ow">in</span> <span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">):</span>
-        <span class="n">obj</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="n">name_split</span><span class="p">)</span>
+        <span class="n">obj</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">obj</span><span class="p">,</span> <span class="n">name_split</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">obj</span>
 
 
@@ -1067,6 +1073,7 @@
     <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, tile_height, tile_width]</span>
     <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
+    <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 6]</span>
     <span class="c1"># distortion</span>
     <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
@@ -1098,6 +1105,7 @@
         <span class="n">opacities</span><span class="o">=</span><span class="n">opacities</span><span class="p">,</span>
         <span class="n">viewmats</span><span class="o">=</span><span class="n">viewmats</span><span class="p">,</span>
         <span class="n">Ks</span><span class="o">=</span><span class="n">Ks</span><span class="p">,</span>
+        <span class="n">rays</span><span class="o">=</span><span class="n">rays</span><span class="p">,</span>
         <span class="n">image_width</span><span class="o">=</span><span class="n">image_width</span><span class="p">,</span>
         <span class="n">image_height</span><span class="o">=</span><span class="n">image_height</span><span class="p">,</span>
         <span class="n">tile_size</span><span class="o">=</span><span class="n">tile_size</span><span class="p">,</span>
@@ -1136,6 +1144,7 @@
     <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, tile_height, tile_width]</span>
     <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
+    <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, P, 6]</span>
     <span class="c1"># distortion</span>
     <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
@@ -1168,6 +1177,7 @@
     <span class="n">num_batch_dims</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
     <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span>
     <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">P</span> <span class="o">=</span> <span class="n">rays</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mi">0</span>
     <span class="n">channels</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
     <span class="n">device</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">device</span>
 
@@ -1176,6 +1186,11 @@
     <span class="k">assert</span> <span class="n">scales</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">scales</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">assert_shape</span><span class="p">(</span><span class="s2">&quot;rays&quot;</span><span class="p">,</span> <span class="n">rays</span><span class="p">,</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">P</span><span class="p">,</span> <span class="mi">6</span><span class="p">))</span>
+        <span class="k">assert</span> <span class="p">(</span>
+            <span class="n">rays</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span>
+        <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;rays must be torch.float32, got </span><span class="si">{</span><span class="n">rays</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">&quot;</span>
 
     <span class="k">assert</span> <span class="n">colors</span><span class="o">.</span><span class="n">ndim</span> <span class="ow">in</span> <span class="p">(</span><span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">2</span><span class="p">,</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span><span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">2</span><span class="p">:</span>
@@ -1290,6 +1305,7 @@
         <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">camera_model</span><span class="p">,</span>
         <span class="n">ut_params</span><span class="p">,</span>
+        <span class="n">rays</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="c1"># distortion</span>
         <span class="n">radial_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">tangential_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
@@ -1888,6 +1904,7 @@
         <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., n_isects]</span>
         <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
         <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
+        <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, P, 6]</span>
         <span class="c1"># distortion</span>
         <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
         <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
@@ -1942,6 +1959,7 @@
             <span class="n">camera_model_type</span><span class="p">,</span>
             <span class="n">ut_params</span><span class="p">,</span>
             <span class="n">rs_type</span><span class="p">,</span>
+            <span class="n">rays</span><span class="p">,</span>
             <span class="n">radial_coeffs</span><span class="p">,</span>
             <span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="p">,</span>
@@ -1963,6 +1981,7 @@
             <span class="n">viewmats</span><span class="p">,</span>
             <span class="n">viewmats_rs</span><span class="p">,</span>
             <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">rays</span><span class="p">,</span>
             <span class="n">radial_coeffs</span><span class="p">,</span>
             <span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="p">,</span>
@@ -2003,6 +2022,7 @@
             <span class="n">viewmats</span><span class="p">,</span>
             <span class="n">viewmats_rs</span><span class="p">,</span>
             <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">rays</span><span class="p">,</span>
             <span class="n">radial_coeffs</span><span class="p">,</span>
             <span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="p">,</span>
@@ -2020,9 +2040,14 @@
         <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ftheta_coeffs</span>
         <span class="n">use_hit_distance</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">use_hit_distance</span>
 
-        <span class="p">(</span><span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">,</span> <span class="n">v_opacities</span><span class="p">,)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_bwd&quot;</span>
-        <span class="p">)(</span>
+        <span class="p">(</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_quats</span><span class="p">,</span>
+            <span class="n">v_scales</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_rays</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_bwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
@@ -2039,6 +2064,7 @@
             <span class="n">camera_model_type</span><span class="p">,</span>
             <span class="n">ut_params</span><span class="p">,</span>
             <span class="n">rs_type</span><span class="p">,</span>
+            <span class="n">rays</span><span class="p">,</span>
             <span class="n">radial_coeffs</span><span class="p">,</span>
             <span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="p">,</span>
@@ -2059,8 +2085,9 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="n">v_backgrounds</span> <span class="o">=</span> <span class="kc">None</span>
 
-        <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">7</span><span class="p">]:</span>  <span class="c1"># viewmats</span>
-            <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+        <span class="c1"># Check not needed anymore because we return v_rays directly</span>
+        <span class="c1"># if ctx.needs_input_grad[7]:  # viewmats</span>
+        <span class="c1">#    raise NotImplementedError</span>
 
         <span class="k">return</span> <span class="p">(</span>
             <span class="n">v_means</span><span class="p">,</span>
@@ -2079,6 +2106,7 @@
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># flatten_ids</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># camera_model</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># ut_params</span>
+            <span class="n">v_rays</span><span class="p">,</span>  <span class="c1"># rays</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># radial_coeffs</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tangential_coeffs</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># thin_prism_coeffs</span>

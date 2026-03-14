@@ -325,6 +325,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch.nn.functional</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">F</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing_extensions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">._helper</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_shape</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.cuda._wrapper</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">RollingShutterType</span><span class="p">,</span>
@@ -464,6 +465,9 @@
     <span class="n">with_ut</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">global_z_order</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
+        <span class="n">Tensor</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 6] -&gt; ox, oy, oz, dx*spread, dy*spread, dz*spread</span>
     <span class="c1"># distortion</span>
     <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
@@ -693,6 +697,8 @@
     <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">3</span><span class="p">]</span>
     <span class="n">I</span> <span class="o">=</span> <span class="n">B</span> <span class="o">*</span> <span class="n">C</span>
+    <span class="n">H</span> <span class="o">=</span> <span class="n">height</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="n">width</span>
     <span class="n">device</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">device</span>
     <span class="k">assert</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">if</span> <span class="n">covars</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -707,6 +713,8 @@
     <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">assert_shape</span><span class="p">(</span><span class="s2">&quot;rays&quot;</span><span class="p">,</span> <span class="n">rays</span><span class="p">,</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="mi">6</span><span class="p">))</span>
     <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span>
         <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
         <span class="s2">&quot;d&quot;</span><span class="p">,</span>
@@ -816,8 +824,12 @@
         <span class="c1"># Enforce that the number of cameras is the same across all ranks.</span>
         <span class="n">C_world</span> <span class="o">=</span> <span class="p">[</span><span class="n">C</span><span class="p">]</span> <span class="o">*</span> <span class="n">world_size</span>
         <span class="n">viewmats</span><span class="p">,</span> <span class="n">Ks</span> <span class="o">=</span> <span class="n">all_gather_tensor_list</span><span class="p">(</span><span class="n">world_size</span><span class="p">,</span> <span class="p">[</span><span class="n">viewmats</span><span class="p">,</span> <span class="n">Ks</span><span class="p">])</span>
+
         <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="p">(</span><span class="n">viewmats_rs</span><span class="p">,)</span> <span class="o">=</span> <span class="n">all_gather_tensor_list</span><span class="p">(</span><span class="n">world_size</span><span class="p">,</span> <span class="p">[</span><span class="n">viewmats_rs</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="p">(</span><span class="n">rays</span><span class="p">,)</span> <span class="o">=</span> <span class="n">all_gather_tensor_list</span><span class="p">(</span><span class="n">world_size</span><span class="p">,</span> <span class="p">[</span><span class="n">rays</span><span class="p">])</span>
 
         <span class="c1"># Silently change C from local #Cameras to global #Cameras.</span>
         <span class="n">C</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span>
@@ -828,14 +840,14 @@
             <span class="n">ut_params</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">()</span>
 
         <span class="n">proj_results</span> <span class="o">=</span> <span class="n">fully_fused_projection_with_ut</span><span class="p">(</span>
-            <span class="n">means</span><span class="p">,</span>
-            <span class="n">quats</span><span class="p">,</span>
-            <span class="n">scales</span><span class="p">,</span>
-            <span class="n">opacities</span><span class="p">,</span>  <span class="c1"># use opacities to compute a tigher bound for radii.</span>
-            <span class="n">viewmats</span><span class="p">,</span>
-            <span class="n">Ks</span><span class="p">,</span>
-            <span class="n">width</span><span class="p">,</span>
-            <span class="n">height</span><span class="p">,</span>
+            <span class="n">means</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="o">=</span><span class="n">opacities</span><span class="p">,</span>  <span class="c1"># use opacities to compute a tigher bound for radii.</span>
+            <span class="n">viewmats</span><span class="o">=</span><span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="o">=</span><span class="n">Ks</span><span class="p">,</span>
+            <span class="n">width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
             <span class="n">eps2d</span><span class="o">=</span><span class="n">eps2d</span><span class="p">,</span>
             <span class="n">near_plane</span><span class="o">=</span><span class="n">near_plane</span><span class="p">,</span>
             <span class="n">far_plane</span><span class="o">=</span><span class="n">far_plane</span><span class="p">,</span>
@@ -1148,18 +1160,19 @@
             <span class="p">)</span>
             <span class="k">if</span> <span class="n">with_eval3d</span><span class="p">:</span>
                 <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">rasterize_to_pixels_eval3d</span><span class="p">(</span>
-                    <span class="n">means</span><span class="p">,</span>
-                    <span class="n">quats</span><span class="p">,</span>
-                    <span class="n">scales</span><span class="p">,</span>
-                    <span class="n">colors_chunk</span><span class="p">,</span>
-                    <span class="n">opacities</span><span class="p">,</span>
-                    <span class="n">viewmats</span><span class="p">,</span>
-                    <span class="n">Ks</span><span class="p">,</span>
-                    <span class="n">width</span><span class="p">,</span>
-                    <span class="n">height</span><span class="p">,</span>
-                    <span class="n">tile_size</span><span class="p">,</span>
-                    <span class="n">isect_offsets</span><span class="p">,</span>
-                    <span class="n">flatten_ids</span><span class="p">,</span>
+                    <span class="n">means</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
+                    <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
+                    <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+                    <span class="n">colors_chunk</span><span class="o">=</span><span class="n">colors_chunk</span><span class="p">,</span>
+                    <span class="n">opacities</span><span class="o">=</span><span class="n">opacities</span><span class="p">,</span>
+                    <span class="n">viewmats</span><span class="o">=</span><span class="n">viewmats</span><span class="p">,</span>
+                    <span class="n">Ks</span><span class="o">=</span><span class="n">Ks</span><span class="p">,</span>
+                    <span class="n">rays</span><span class="o">=</span><span class="n">rays</span><span class="p">,</span>
+                    <span class="n">image_width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+                    <span class="n">image_height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
+                    <span class="n">tile_size</span><span class="o">=</span><span class="n">tile_size</span><span class="p">,</span>
+                    <span class="n">isect_offsets</span><span class="o">=</span><span class="n">isect_offsets</span><span class="p">,</span>
+                    <span class="n">flatten_ids</span><span class="o">=</span><span class="n">flatten_ids</span><span class="p">,</span>
                     <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds_chunk</span><span class="p">,</span>
                     <span class="n">camera_model</span><span class="o">=</span><span class="n">camera_model</span><span class="p">,</span>
                     <span class="n">radial_coeffs</span><span class="o">=</span><span class="n">radial_coeffs</span><span class="p">,</span>
@@ -1171,6 +1184,11 @@
                     <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">use_hit_distance</span><span class="p">,</span>
                 <span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">&quot;Rays input is only supported with with_eval3d=True&quot;</span>
+                    <span class="p">)</span>
+
                 <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
                     <span class="n">means2d</span><span class="p">,</span>
                     <span class="n">conics</span><span class="p">,</span>
@@ -1192,18 +1210,19 @@
     <span class="k">else</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">with_eval3d</span><span class="p">:</span>
             <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">rasterize_to_pixels_eval3d</span><span class="p">(</span>
-                <span class="n">means</span><span class="p">,</span>
-                <span class="n">quats</span><span class="p">,</span>
-                <span class="n">scales</span><span class="p">,</span>
-                <span class="n">colors</span><span class="p">,</span>
-                <span class="n">opacities</span><span class="p">,</span>
-                <span class="n">viewmats</span><span class="p">,</span>
-                <span class="n">Ks</span><span class="p">,</span>
-                <span class="n">width</span><span class="p">,</span>
-                <span class="n">height</span><span class="p">,</span>
-                <span class="n">tile_size</span><span class="p">,</span>
-                <span class="n">isect_offsets</span><span class="p">,</span>
-                <span class="n">flatten_ids</span><span class="p">,</span>
+                <span class="n">means</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
+                <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
+                <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+                <span class="n">colors</span><span class="o">=</span><span class="n">colors</span><span class="p">,</span>
+                <span class="n">opacities</span><span class="o">=</span><span class="n">opacities</span><span class="p">,</span>
+                <span class="n">viewmats</span><span class="o">=</span><span class="n">viewmats</span><span class="p">,</span>
+                <span class="n">Ks</span><span class="o">=</span><span class="n">Ks</span><span class="p">,</span>
+                <span class="n">rays</span><span class="o">=</span><span class="n">rays</span><span class="p">,</span>
+                <span class="n">image_width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+                <span class="n">image_height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
+                <span class="n">tile_size</span><span class="o">=</span><span class="n">tile_size</span><span class="p">,</span>
+                <span class="n">isect_offsets</span><span class="o">=</span><span class="n">isect_offsets</span><span class="p">,</span>
+                <span class="n">flatten_ids</span><span class="o">=</span><span class="n">flatten_ids</span><span class="p">,</span>
                 <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds</span><span class="p">,</span>
                 <span class="n">camera_model</span><span class="o">=</span><span class="n">camera_model</span><span class="p">,</span>
                 <span class="n">radial_coeffs</span><span class="o">=</span><span class="n">radial_coeffs</span><span class="p">,</span>
@@ -1215,6 +1234,8 @@
                 <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">use_hit_distance</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Rays input is only supported with with_eval3d=True&quot;</span><span class="p">)</span>
             <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
                 <span class="n">means2d</span><span class="p">,</span>
                 <span class="n">conics</span><span class="p">,</span>
@@ -1259,6 +1280,9 @@
     <span class="n">eps2d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.3</span><span class="p">,</span>
     <span class="n">sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+    <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
+        <span class="n">Tensor</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 6] -&gt; ox, oy, oz, dx*spread, dy*spread, dz*spread</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
     <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
@@ -1296,6 +1320,8 @@
     <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">3</span><span class="p">]</span>
     <span class="n">I</span> <span class="o">=</span> <span class="n">B</span> <span class="o">*</span> <span class="n">C</span>
+    <span class="n">H</span> <span class="o">=</span> <span class="n">height</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="n">width</span>
     <span class="n">device</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">device</span>
     <span class="k">assert</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">quats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">quats</span><span class="o">.</span><span class="n">shape</span>
@@ -1314,6 +1340,7 @@
         <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span>
         <span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span>
     <span class="p">],</span> <span class="n">render_mode</span>
+    <span class="k">assert</span> <span class="n">rays</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">rays</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="mi">6</span><span class="p">),</span> <span class="n">rays</span><span class="o">.</span><span class="n">shape</span>
 
     <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="c1"># treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]</span>
@@ -1340,20 +1367,23 @@
 
     <span class="k">if</span> <span class="n">with_ut</span><span class="p">:</span>
         <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_fully_fused_projection_with_ut</span><span class="p">(</span>
-            <span class="n">means</span><span class="p">,</span>
-            <span class="n">quats</span><span class="p">,</span>
-            <span class="n">scales</span><span class="p">,</span>
-            <span class="n">opacities</span><span class="p">,</span>
-            <span class="n">viewmats</span><span class="p">,</span>
-            <span class="n">Ks</span><span class="p">,</span>
-            <span class="n">width</span><span class="p">,</span>
-            <span class="n">height</span><span class="p">,</span>
+            <span class="n">means</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="o">=</span><span class="n">opacities</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="o">=</span><span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="o">=</span><span class="n">Ks</span><span class="p">,</span>
+            <span class="n">width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
             <span class="n">eps2d</span><span class="o">=</span><span class="n">eps2d</span><span class="p">,</span>
             <span class="n">near_plane</span><span class="o">=</span><span class="n">near_plane</span><span class="p">,</span>
             <span class="n">far_plane</span><span class="o">=</span><span class="n">far_plane</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="o">=</span><span class="p">(</span><span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">),</span>
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Rays input is only supported with with_eval3d=True&quot;</span><span class="p">)</span>
+
         <span class="c1"># Project Gaussians to 2D.</span>
         <span class="c1"># The results are with shape [..., C, N, ...]. Only the elements with radii &gt; 0 are valid.</span>
         <span class="n">covars</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_quat_scale_to_covar_preci</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">scales</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="n">triu</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
@@ -1460,21 +1490,26 @@
                 <span class="c1"># Using CUDA code due to its speed. This function is already</span>
                 <span class="c1"># being thoroughtly tested in test_basic.py</span>
                 <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">rasterize_to_pixels_eval3d</span><span class="p">(</span>
-                    <span class="n">means</span><span class="p">,</span>
-                    <span class="n">quats</span><span class="p">,</span>
-                    <span class="n">scales</span><span class="p">,</span>
-                    <span class="n">colors_chunk</span><span class="p">,</span>
-                    <span class="n">opacities</span><span class="p">,</span>
-                    <span class="n">viewmats</span><span class="p">,</span>
-                    <span class="n">Ks</span><span class="p">,</span>
-                    <span class="n">width</span><span class="p">,</span>
-                    <span class="n">height</span><span class="p">,</span>
+                    <span class="n">means</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
+                    <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
+                    <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+                    <span class="n">colors_chunk</span><span class="o">=</span><span class="n">colors_chunk</span><span class="p">,</span>
+                    <span class="n">opacities</span><span class="o">=</span><span class="n">opacities</span><span class="p">,</span>
+                    <span class="n">viewmats</span><span class="o">=</span><span class="n">viewmats</span><span class="p">,</span>
+                    <span class="n">Ks</span><span class="o">=</span><span class="n">Ks</span><span class="p">,</span>
+                    <span class="n">image_width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+                    <span class="n">image_height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
+                    <span class="n">rays</span><span class="o">=</span><span class="n">rays</span><span class="p">,</span>
                     <span class="n">tile_size</span><span class="o">=</span><span class="n">tile_size</span><span class="p">,</span>
                     <span class="n">isect_offsets</span><span class="o">=</span><span class="n">isect_offsets</span><span class="p">,</span>
                     <span class="n">flatten_ids</span><span class="o">=</span><span class="n">flatten_ids</span><span class="p">,</span>
                     <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds_chunk</span><span class="p">,</span>
                 <span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">&quot;Rays input is only supported with with_eval3d=True&quot;</span>
+                    <span class="p">)</span>
                 <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">_rasterize_to_pixels</span><span class="p">(</span>
                     <span class="n">means2d</span><span class="p">,</span>
                     <span class="n">conics</span><span class="p">,</span>
@@ -1498,21 +1533,24 @@
             <span class="c1"># Using CUDA code due to its speed. This function is already</span>
             <span class="c1"># being thoroughtly tested in test_basic.py</span>
             <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">rasterize_to_pixels_eval3d</span><span class="p">(</span>
-                <span class="n">means</span><span class="p">,</span>
-                <span class="n">quats</span><span class="p">,</span>
-                <span class="n">scales</span><span class="p">,</span>
-                <span class="n">colors</span><span class="p">,</span>
-                <span class="n">opacities</span><span class="p">,</span>
-                <span class="n">viewmats</span><span class="p">,</span>
-                <span class="n">Ks</span><span class="p">,</span>
-                <span class="n">width</span><span class="p">,</span>
-                <span class="n">height</span><span class="p">,</span>
+                <span class="n">means</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
+                <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
+                <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+                <span class="n">colors</span><span class="o">=</span><span class="n">colors</span><span class="p">,</span>
+                <span class="n">opacities</span><span class="o">=</span><span class="n">opacities</span><span class="p">,</span>
+                <span class="n">viewmats</span><span class="o">=</span><span class="n">viewmats</span><span class="p">,</span>
+                <span class="n">Ks</span><span class="o">=</span><span class="n">Ks</span><span class="p">,</span>
+                <span class="n">image_width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+                <span class="n">image_height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
+                <span class="n">rays</span><span class="o">=</span><span class="n">rays</span><span class="p">,</span>
                 <span class="n">tile_size</span><span class="o">=</span><span class="n">tile_size</span><span class="p">,</span>
                 <span class="n">isect_offsets</span><span class="o">=</span><span class="n">isect_offsets</span><span class="p">,</span>
                 <span class="n">flatten_ids</span><span class="o">=</span><span class="n">flatten_ids</span><span class="p">,</span>
                 <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Rays input is only supported with with_eval3d=True&quot;</span><span class="p">)</span>
             <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">_rasterize_to_pixels</span><span class="p">(</span>
                 <span class="n">means2d</span><span class="p">,</span>
                 <span class="n">conics</span><span class="p">,</span>
