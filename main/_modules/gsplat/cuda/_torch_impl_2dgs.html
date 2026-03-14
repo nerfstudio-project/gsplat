@@ -324,6 +324,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.cuda._math</span><span class="w"> </span><span class="kn">import</span> <span class="n">_quat_scale_to_matrix</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.cuda._constants</span><span class="w"> </span><span class="kn">import</span> <span class="n">MAX_ALPHA</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_fully_fused_projection_2dgs</span><span class="p">(</span>
@@ -488,7 +489,7 @@
     <span class="n">sigmas</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">sigmas_3d</span><span class="p">,</span> <span class="n">sigmas_2d</span><span class="p">)</span>  <span class="c1"># [M]</span>
 
     <span class="n">alphas</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">clamp_max</span><span class="p">(</span>
-        <span class="n">opacities</span><span class="p">[</span><span class="n">image_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">]</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">sigmas</span><span class="p">),</span> <span class="mf">0.999</span>
+        <span class="n">opacities</span><span class="p">[</span><span class="n">image_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">]</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">sigmas</span><span class="p">),</span> <span class="n">MAX_ALPHA</span>
     <span class="p">)</span>
 
     <span class="n">indices</span> <span class="o">=</span> <span class="n">image_ids</span> <span class="o">*</span> <span class="n">image_height</span> <span class="o">*</span> <span class="n">image_width</span> <span class="o">+</span> <span class="n">pixel_ids</span>
