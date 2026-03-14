@@ -78,6 +78,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     scalar_t
         *__restrict__ render_colors,      // [B, C, image_height, image_width, CDIM]
     scalar_t *__restrict__ render_alphas, // [B, C, image_height, image_width, 1]
+    scalar_t *__restrict__ render_normals, // [B, C, image_height, image_width, 3] optional (can be nullptr)
     int32_t *__restrict__ last_ids,       // [B, C, image_height, image_width]
     int32_t *__restrict__ sample_counts   // [B, C, image_height, image_width] optional (can be nullptr)
 ) {
@@ -92,10 +93,14 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     bool inside = (i < image_height && j < image_width);
+    bool return_normals = render_normals != nullptr;
 
     tile_offsets += iid * tile_height * tile_width;
     render_colors += iid * image_height * image_width * CDIM;
     render_alphas += iid * image_height * image_width;
+    if (render_normals != nullptr) {
+        render_normals += iid * image_height * image_width * 3;
+    }
     last_ids += iid * image_height * image_width;
     if (sample_counts != nullptr) {
         sample_counts += iid * image_height * image_width;
@@ -232,6 +237,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         reinterpret_cast<mat3 *>(&xyz_opacity_batch[block_size]); // [block_size]
     vec3 *scale_batch =
         reinterpret_cast<vec3 *>(&iscl_rot_batch[block_size]); // [block_size]
+        vec3 *normal_batch =
+        reinterpret_cast<vec3 *>(&scale_batch[block_size]); // [block_size] (only used if return_normals)
+    // Normal is the third column of rotation matrix R (canonical normal (0,0,1) transformed to world)
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -249,6 +257,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     uint32_t tr = block.thread_rank();
 
     float pix_out[CDIM] = {0.f};
+    vec3 normal_out = {0.f, 0.f, 0.f};  // Accumulated normal (only used if return_normals)
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -289,6 +298,12 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             mat3 iscl_rot = S * glm::transpose(R);
             iscl_rot_batch[tr] = iscl_rot;
             scale_batch[tr] = scale;
+            
+            // Store normal if computing normals
+            // Normal = R * (0, 0, 1) = third column of R
+            if (return_normals) {
+                normal_batch[tr] = R[2];
+            }
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -299,7 +314,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
             const vec4 xyz_opac = xyz_opacity_batch[t];
             const float opac = xyz_opac[3];
-            const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};            
+            const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
             const mat3 iscl_rot = iscl_rot_batch[t];
             const vec3 scale = scale_batch[t];
 
@@ -346,6 +361,22 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                     pix_out[k] += c_ptr[k] * vis;
                 }
             }
+            
+            // Accumulate normal if computing normals
+            if (return_normals) {
+                const vec3 unnormalized_normal = normal_batch[t];
+                
+                // Direction resolution: flip if facing away from ray
+                // (same as nRend: if dot(normal, ray_direction) > 0, flip)
+                const bool flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
+                const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+                
+                // Normalize (should already be unit length, but ensure stability)
+                const vec3 normal = safe_normalize(unnormalized_flipped);
+
+                normal_out += normal * vis;
+            }
+            
             cur_idx = batch_start + t;
             n_accumulated++;  // Increment sample count
 
@@ -365,6 +396,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             render_colors[pix_id * CDIM + k] =
                 backgrounds == nullptr ? pix_out[k]
                                        : (pix_out[k] + T * backgrounds[k]);
+        }
+        // Write accumulated normals if computing normals
+        if (render_normals != nullptr) {
+#pragma unroll
+            for (uint32_t k = 0; k < 3; ++k) {
+                render_normals[pix_id * 3 + k] = normal_out[k];
+            }
         }
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
@@ -410,7 +448,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     at::Tensor renders, // [..., C, image_height, image_width, channels]
     at::Tensor alphas,  // [..., C, image_height, image_width]
     at::Tensor last_ids, // [..., C, image_height, image_width]
-    at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width]
+    at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
+    at::optional<at::Tensor> normals  // [..., C, image_height, image_width, 3]
 ) {
     // Note: quats need to be normalized before passing in.
 
@@ -430,9 +469,10 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     dim3 threads = {tile_size, tile_size, 1};
     dim3 grid = {I, tile_height, tile_width};
 
+    // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch + scale_batch + normal_batch
     int64_t shmem_size =
         tile_size * tile_size * 
-        (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3));
+        (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3) + sizeof(vec3));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -495,6 +535,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             use_hit_distance,
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
+            normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>(),
             sample_counts.has_value() ? sample_counts.value().data_ptr<int32_t>() : nullptr
         );
@@ -532,7 +573,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const at::Tensor renders,                                              \
         const at::Tensor alphas,                                               \
         const at::Tensor last_ids,                                             \
-        const at::optional<at::Tensor> sample_counts                           \
+        const at::optional<at::Tensor> sample_counts,                          \
+        const at::optional<at::Tensor> normals                                 \
     );
 
 GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)

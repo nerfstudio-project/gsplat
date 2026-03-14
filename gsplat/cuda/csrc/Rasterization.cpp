@@ -681,7 +681,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
-    const at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width] optional
+    const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
+    const at::optional<at::Tensor> normals // [..., C, image_height, image_width, 3] optional output tensor
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -750,7 +751,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
             renders,                                                           \
             alphas,                                                            \
             last_ids,                                                          \
-            sample_counts                                                      \
+            sample_counts,                                                     \
+            normals                                                            \
         );                                                                     \
         break;
 
@@ -804,7 +806,8 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::Tensor last_ids,      // [..., C, image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
-    const at::Tensor v_render_alphas // [..., C, image_height, image_width, 1]
+    const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
+    const at::optional<at::Tensor> v_render_normals // [..., C, image_height, image_width, 3]
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -826,6 +829,9 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     }
     if (rays.has_value()) {
         CHECK_INPUT(rays.value());
+    }
+    if (v_render_normals.has_value()) {
+        CHECK_INPUT(v_render_normals.value());
     }
 
     uint32_t channels = colors.size(-1);
@@ -868,6 +874,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
             last_ids,                                                          \
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
+            v_render_normals,                                                  \
             v_means,                                                           \
             v_quats,                                                           \
             v_scales,                                                          \

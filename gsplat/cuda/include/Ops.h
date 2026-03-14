@@ -544,7 +544,8 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
-    const at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width]
+    const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
+    const at::optional<at::Tensor> normals // [..., C, image_height, image_width, 3]
 );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
@@ -584,7 +585,8 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::Tensor last_ids,        // [..., C, image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
-    const at::Tensor v_render_alphas  // [..., C, image_height, image_width, 1]
+    const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
+    const at::optional<at::Tensor> v_render_normals // [..., C, image_height, image_width, 3]
 );
 
 } // namespace gsplat

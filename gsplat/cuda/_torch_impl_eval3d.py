@@ -230,7 +230,8 @@ def accumulate_eval3d(
         Tensor
     ] = None,  # [I, image_height, image_width] - base transmittance for batched accumulation
     use_hit_distance: bool = False,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    return_normals: bool = False,  # Whether to compute normals
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """Alpha compositing with ray-based 3D Gaussian evaluation in Pure PyTorch.
 
     Similar to accumulate(), but computes Gaussian responses in 3D world space
@@ -264,6 +265,7 @@ def accumulate_eval3d(
         - **alphas**: Accumulated opacities. [..., image_height, image_width, 1]
         - **last_ids**: Last flatten_idx per pixel. [..., image_height, image_width]
         - **sample_counts**: Number of samples per pixel. [..., image_height, image_width]
+        - **normals**: Accumulated normals if return_normals=True, else None. [..., image_height, image_width, 3]
     """
     try:
         from nerfacc import accumulate_along_rays, render_weight_from_alpha
@@ -343,6 +345,30 @@ def accumulate_eval3d(
     opac = opacities[image_ids, gaussian_ids]
     gauss_colors = colors[image_ids, gaussian_ids]
 
+    # 6b. Compute normals if requested
+    # Normal computation follows nRend: canonical normal (0,0,1) transformed by rotation
+    gauss_normals = None
+    if return_normals:
+        quats_per_gauss = quats_flat[batch_ids, gaussian_ids]  # [M, 4]
+        R = _quat_to_rotmat(quats_per_gauss)  # [M, 3, 3]
+
+        # Canonical normal in Gaussian space: (0, 0, 1)
+        # Transform to world space: R @ [0, 0, 1]^T = R[:, 2] (third column)
+        gauss_normals = R[:, :, 2]  # [M, 3]
+
+        # Direction resolution: flip if facing away from ray
+        # (same as nRend: if dot(normal, ray_direction) > 0, flip)
+        ray_d_normalized = _safe_normalize(ray_d)  # [M, 3]
+        dot_product = torch.sum(
+            gauss_normals * ray_d_normalized, dim=-1, keepdim=True
+        )  # [M, 1]
+        gauss_normals = torch.where(
+            dot_product > 0, -gauss_normals, gauss_normals
+        )  # [M, 3]
+
+        # Normalize (should already be unit length, but ensure numerical stability)
+        gauss_normals = _safe_normalize(gauss_normals)  # [M, 3]
+
     # 7. Compute ray-Gaussian distances
     grayDist, hitDist = _compute_ray_gaussian_distance(
         ray_o, ray_d, xyz, iscl_rot, scale_per_gauss
@@ -365,6 +391,8 @@ def accumulate_eval3d(
     # Apply filter to all arrays early to reduce memory usage
     alphas = alphas[valid_mask]
     gauss_colors = gauss_colors[valid_mask]
+    if gauss_normals is not None:
+        gauss_normals = gauss_normals[valid_mask]
     image_ids = image_ids[valid_mask]
     pixel_ids = pixel_ids[valid_mask]
     flatten_idx = flatten_idx[valid_mask]
@@ -404,6 +432,8 @@ def accumulate_eval3d(
 
     weights = weights[valid_mask]
     gauss_colors = gauss_colors[valid_mask]
+    if gauss_normals is not None:
+        gauss_normals = gauss_normals[valid_mask]
     ray_indices = ray_indices[valid_mask]
     flatten_idx = flatten_idx[valid_mask]
 
@@ -413,6 +443,14 @@ def accumulate_eval3d(
     alphas = accumulate_along_rays(
         weights, None, ray_indices=ray_indices, n_rays=total_pixels
     )  # [total_pixels, 1]
+
+    # Accumulate normals if computed
+    if gauss_normals is not None:
+        normals = accumulate_along_rays(
+            weights, gauss_normals, ray_indices=ray_indices, n_rays=total_pixels
+        )  # [total_pixels, 3]
+    else:
+        normals = None
 
     # Compute last flatten_idx per pixel (vectorized using packed_info)
     # CUDA stores: last_ids[pix_id] = cur_idx (index in flatten_ids)
@@ -441,8 +479,10 @@ def accumulate_eval3d(
     alphas = alphas.reshape(I, image_height, image_width, 1)
     last_ids = last_ids.reshape(I, image_height, image_width)
     sample_counts = sample_counts.reshape(I, image_height, image_width)
+    if normals is not None:
+        normals = normals.reshape(I, image_height, image_width, 3)
 
-    return renders, alphas, last_ids, sample_counts
+    return renders, alphas, last_ids, sample_counts, normals
 
 
 # Only supports PerfectPinholeCameraModel.
@@ -471,6 +511,7 @@ def _rasterize_to_pixels_eval3d(
     return_last_ids: bool = False,
     return_sample_counts: bool = False,
     use_hit_distance: bool = False,
+    return_normals: bool = False,  # Whether to compute normals
 ):
     """PyTorch reference implementation of rasterize_to_pixels_eval3d().
 
@@ -506,13 +547,18 @@ def _rasterize_to_pixels_eval3d(
             to each pixel. Default: False.
         return_sample_counts: If True, return the number of samples (Gaussians)
             evaluated per pixel. Default: False.
+        return_normals: If True, compute and return accumulated normals per pixel.
+            Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
+            transformed by rotation, flipped if facing away from ray). Default: False.
 
     Returns:
         A tuple with variable length depending on parameters:
-        - (colors, alphas) if both return_last_ids and return_sample_counts are False
-        - (colors, alphas, last_ids) if return_last_ids=True and return_sample_counts=False
-        - (colors, alphas, sample_counts) if return_last_ids=False and return_sample_counts=True
-        - (colors, alphas, last_ids, sample_counts) if both are True
+        - (colors, alphas) if all optional returns are False
+        - (colors, alphas, last_ids) if return_last_ids=True
+        - (colors, alphas, sample_counts) if return_sample_counts=True
+        - (colors, alphas, normals) if return_normals=True
+        - Various combinations if multiple flags are True
+        The order is always: colors, alphas, [last_ids], [sample_counts], [normals]
     """
     from ._wrapper import (
         rasterize_to_indices_in_range,
@@ -577,6 +623,11 @@ def _rasterize_to_pixels_eval3d(
     )
     sample_counts = torch.zeros(
         (I, image_height, image_width), dtype=torch.int32, device=device
+    )
+    render_normals = (
+        torch.zeros((I, image_height, image_width, 3), device=device)
+        if return_normals
+        else None
     )
 
     # Convert offsets to CPU for indexing
@@ -703,7 +754,13 @@ def _rasterize_to_pixels_eval3d(
         batch_flatten_idx = batch_flatten_idx[sort_indices]
 
         # Accumulate this batch with current transmittance as base
-        renders_step, alphas_step, last_ids_step, counts_step = accumulate_eval3d(
+        (
+            renders_step,
+            alphas_step,
+            last_ids_step,
+            counts_step,
+            normals_step,
+        ) = accumulate_eval3d(
             means,
             quats,
             scales,
@@ -722,11 +779,16 @@ def _rasterize_to_pixels_eval3d(
             viewmats_rs_exp,
             base_transmittance=transmittances,  # Pass current transmittance
             use_hit_distance=use_hit_distance,
+            return_normals=return_normals,
         )
 
         # Composite results using transmittance
         render_colors = render_colors + renders_step * transmittances[..., None]
         render_alphas = render_alphas + alphas_step * transmittances[..., None]
+
+        # Composite normals (same accumulation pattern as colors)
+        if normals_step is not None and render_normals is not None:
+            render_normals = render_normals + normals_step * transmittances[..., None]
 
         # Update last_ids (keep most recent non-(-1) value)
         last_ids = torch.where(last_ids_step >= 0, last_ids_step, last_ids)
@@ -743,6 +805,10 @@ def _rasterize_to_pixels_eval3d(
     )
     last_ids = last_ids.reshape(batch_dims + (C, image_height, image_width))
     sample_counts = sample_counts.reshape(batch_dims + (C, image_height, image_width))
+    if render_normals is not None:
+        render_normals = render_normals.reshape(
+            batch_dims + (C, image_height, image_width, 3)
+        )
 
     # Add background
     if backgrounds is not None:
@@ -751,10 +817,13 @@ def _rasterize_to_pixels_eval3d(
         )
 
     # Build return tuple based on requested outputs
-    outputs = [render_colors, render_alphas]
+    # Order: colors, alphas, [last_ids], [sample_counts], [normals]
+    outputs: list[Tensor] = [render_colors, render_alphas]
     if return_last_ids:
         outputs.append(last_ids)
     if return_sample_counts:
         outputs.append(sample_counts)
+    if return_normals:
+        outputs.append(render_normals)
 
     return tuple(outputs)
