@@ -1,13 +1,14 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <cuda_runtime.h>
 
 // Silence warnings / errors of the form
 //
@@ -52,6 +54,9 @@ struct RollingShutterParameters {
     glm::fquat q_start;
     glm::fvec3 t_end;
     glm::fquat q_end;
+
+    __device__
+    RollingShutterParameters() = default;
 
     __device__
     RollingShutterParameters(const float *se3_start, const float *se3_end) {

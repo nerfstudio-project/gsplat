@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,7 +20,7 @@ from typing import Optional, Tuple
 import torch
 from torch import Tensor
 
-from gsplat.cuda._torch_impl import _quat_scale_to_matrix
+from gsplat.cuda._math import _quat_scale_to_matrix
 
 
 def _fully_fused_projection_2dgs(

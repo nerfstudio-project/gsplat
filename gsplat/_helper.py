@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,6 +20,29 @@ from typing import Optional, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+
+def expand_named_params(named_params):
+    """
+    Expand a list of (name, value) tuples into pytest.param objects with IDs.
+
+    Args:
+        named_params: List of (name, value) tuples where name is the test ID
+                     and value is the parameter value.
+
+    Returns:
+        List of pytest.param objects with IDs set.
+
+    Example:
+        >>> ROLLING_SHUTTER_TYPES = [
+        ...     ("L2R", RollingShutterType.ROLLING_LEFT_TO_RIGHT),
+        ...     ("R2L", RollingShutterType.ROLLING_RIGHT_TO_LEFT),
+        ... ]
+        >>> @pytest.mark.parametrize("rs_type", expand_named_params(ROLLING_SHUTTER_TYPES))
+    """
+    import pytest
+
+    return [pytest.param(value, id=name) for name, value in named_params]
 
 
 def load_test_data(
@@ -74,3 +97,116 @@ def load_test_data(
     opacities = torch.rand((N,), device=device)
 
     return means, quats, scales, opacities, colors, viewmats, Ks, width, height
+
+
+def get_inlier_abserror_mask(actual, expected, *, quantile=None, atol=None, rtol=None):
+    """
+    Create mask for inliers based on error thresholds.
+
+    Combines quantile-based filtering with absolute/relative tolerance checks.
+    Uses the same condition as torch.testing.assert_close.
+
+    Args:
+        actual: Actual tensor (e.g., CUDA implementation)
+        expected: Expected tensor (e.g., reference implementation)
+        quantile: Quantile threshold in [0, 1] (e.g., 0.99 = mask out worst 1%). Optional.
+        atol: Absolute tolerance. Optional.
+        rtol: Relative tolerance (relative to expected). Optional. Requires atol if specified.
+
+    Returns:
+        Boolean mask same shape as inputs, True for inliers (values within all specified thresholds)
+    """
+    # Validate arguments
+    assert (
+        rtol is None or atol is not None
+    ), "If rtol is specified, atol must also be specified"
+
+    abs_diff = (actual - expected).abs()
+
+    # Build mask by combining conditions
+    mask = torch.ones_like(abs_diff, dtype=torch.bool)
+
+    # Apply quantile threshold if specified
+    if quantile is not None:
+        quantile_threshold = torch.quantile(abs_diff, quantile).item()
+        mask = mask & (abs_diff <= quantile_threshold)
+
+    # Apply atol/rtol threshold if specified
+    if atol is not None:
+        rtol_val = rtol if rtol is not None else 0
+        # Relative tolerance (element-wise, depends on expected values)
+        threshold = atol + rtol_val * expected.abs()
+        mask = mask & (abs_diff <= threshold)
+
+    return mask
+
+
+def assert_shape(name: str, t: torch.Tensor, shape: tuple):
+    """
+    Check if the shape of a tensor matches a given shape.
+
+    Args:
+        name: Name of the tensor
+        t: Tensor to check
+        shape: Shape to check against
+    """
+    if t.ndim != len(shape):
+        raise ValueError(
+            f"{name} must have rank {len(shape)} like {shape}, got {t.shape}"
+        )
+
+    try:
+        torch.broadcast_shapes(t.shape, shape)
+        return True
+    except Exception:
+        raise ValueError(f"{name} must have shape {shape}, got {t.shape}")
+
+
+def assert_close(
+    actual,
+    expected,
+    *,
+    allow_subclasses=True,
+    rtol=None,
+    atol=None,
+    equal_nan=False,
+    check_device=True,
+    check_dtype=True,
+    check_layout=True,
+    check_stride=False,
+    msg=None,
+):
+    # rtol, atol = 0,0
+
+    torch.testing.assert_close(
+        actual,
+        expected,
+        allow_subclasses=allow_subclasses,
+        rtol=rtol,
+        atol=atol,
+        equal_nan=equal_nan,
+        check_device=check_device,
+        check_dtype=check_dtype,
+        check_layout=check_layout,
+        check_stride=check_stride,
+        msg=msg,
+    )
+
+
+def assert_mismatch_ratio(actual, expected, *, max=1e-5):
+    """
+    Assert that the mismatch ratio is less than a given tolerance.
+    """
+    if max is None:
+        max = 1e-5
+
+    # max=0
+
+    assert actual.shape == expected.shape, f"{actual.shape=} {expected.shape=}"
+
+    mismatch = (actual != expected).sum().item()
+    total = expected.numel()
+    mismatch_ratio = mismatch / total if total > 0 else 1
+    assert (
+        mismatch_ratio <= max
+    ), f"Too many validity mismatches: {mismatch}/{total} ({mismatch_ratio*100:.2f}%) "

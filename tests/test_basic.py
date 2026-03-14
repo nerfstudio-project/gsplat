@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,14 +24,20 @@ pytest <THIS_PY_FILE> -s
 
 import math
 import os
+from itertools import product
 
 import pytest
 import torch
 from typing_extensions import Literal, Tuple, assert_never
+import torch.nn.functional as F
 
-from gsplat._helper import load_test_data
+from gsplat._helper import (
+    load_test_data,
+    get_inlier_abserror_mask,
+    assert_mismatch_ratio,
+)
 import gsplat
-
+from gsplat.cuda._wrapper import RollingShutterType, UnscentedTransformParameters
 
 device = torch.device("cuda:0")
 
@@ -83,7 +89,7 @@ def test_data():
 @pytest.mark.parametrize("triu", [False, True])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int, ...]):
-    from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
+    from gsplat.cuda._math import _quat_scale_to_covar_preci
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci
 
     torch.manual_seed(42)
@@ -471,6 +477,191 @@ def test_fully_fused_projection_packed(
     torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
 
 
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA required for UT projection"
+)
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+@pytest.mark.parametrize(
+    "require_all_valid", [True, False], ids=["allvalid", "somevalid"]
+)
+@pytest.mark.parametrize(
+    "rolling_shutter",
+    [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM],
+)
+def test_fully_fused_projection_ut(
+    test_data,
+    batch_dims: Tuple[int, ...],
+    require_all_valid: bool,
+    rolling_shutter: RollingShutterType,
+):
+    """Unified test for UT projection with CUDA vs PyTorch reference.
+
+    Args:
+        test_data: Test data fixture (test_garden.npz)
+        batch_dims: Batch dimensions to test
+        require_all_valid: UT parameter for sigma point validity
+        rolling_shutter: Rolling shutter mode (GLOBAL, ROLLING_*, etc.)
+    """
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+
+    # Expand test data to batch dimensions
+    test_data = expand(test_data, batch_dims)
+
+    means = test_data["means"]
+    quats = test_data["quats"]
+    scales = test_data["scales"]
+    opacities = test_data["opacities"]
+    viewmats = test_data["viewmats"]
+    Ks = test_data["Ks"]
+    width = test_data["width"]
+    height = test_data["height"]
+
+    # Create UT parameters
+    ut_params = UnscentedTransformParameters(
+        require_all_sigma_points_valid=require_all_valid
+    )
+
+    # Setup rolling shutter (end viewmats) if not GLOBAL
+    if rolling_shutter != RollingShutterType.GLOBAL:
+        viewmats_rs = viewmats.clone()
+        # Add small translation to simulate camera motion (5% of scene scale)
+        viewmats_rs[..., :3, 3] += torch.randn_like(viewmats[..., :3, 3]) * 0.05
+    else:
+        viewmats_rs = None
+
+    means.requires_grad = True
+    quats.requires_grad = True
+    scales.requires_grad = True
+    opacities.requires_grad = True
+
+    # ========================================================================
+    # FORWARD PASS: CUDA vs PyTorch reference
+    # ========================================================================
+
+    parameters = {
+        "means": means,
+        "quats": quats,
+        "scales": scales,
+        "opacities": opacities,
+        "viewmats": viewmats,
+        "Ks": Ks,
+        "width": width,
+        "height": height,
+        "camera_model": "pinhole",
+        "eps2d": 0.3,
+        "near_plane": 0.01,
+        "far_plane": 1e10,
+        "radius_clip": 0.0,
+        "calc_compensations": True,
+        "ut_params": ut_params,
+        "rolling_shutter": rolling_shutter,
+        "viewmats_rs": viewmats_rs,
+    }
+
+    # Run CUDA implementation
+    (
+        radii_cuda,
+        means2d_cuda,
+        depths_cuda,
+        conics_cuda,
+        comps_cuda,
+    ) = fully_fused_projection_with_ut(**parameters)
+
+    # Run PyTorch reference implementation
+    (
+        radii_torch,
+        means2d_torch,
+        depths_torch,
+        conics_torch,
+        comps_torch,
+    ) = _fully_fused_projection_with_ut(**parameters)
+
+    # Compare outputs - use same selection pattern as test_basic.py
+    # Only compare Gaussians that BOTH implementations marked as valid
+    cuda_sel = (radii_cuda > 0).all(dim=-1)
+    torch_sel = (radii_torch > 0).all(dim=-1)
+
+    # Check that the number of mismatches is small (< 0.1% of total Gaussians)
+    # Numerical differences can cause edge-case Gaussians to be culled differently
+    assert_mismatch_ratio(cuda_sel, torch_sel, max=1e-3)
+
+    sel = cuda_sel & torch_sel
+
+    assert sel.any(), f"No valid Gaussians found"
+
+    # ========================================================================
+    # ASSERTIONS: Compare outputs with appropriate tolerances
+    # ========================================================================
+
+    # Radii: Integer values, allow small differences due to ceil() rounding
+    # With require_all_valid=True, early-exit can cause larger FP32 differences
+    # Rolling shutter uses iterative refinement (10 iterations) which accumulates
+    # numerical differences through the opacity-aware radius computation pipeline
+    if rolling_shutter == RollingShutterType.GLOBAL:
+        radii_atol = 2.0  # Only ceil() differences for global shutter
+    else:
+        radii_atol = (
+            10.0  # Rolling shutter: iterative refinement amplifies FP32 differences
+        )
+
+    torch.testing.assert_close(
+        radii_cuda[sel].float(), radii_torch[sel].float(), rtol=0, atol=radii_atol
+    )
+
+    # means2d: Sub-pixel precision expected
+    # Relaxed tolerances appropriate for UT's multi-step numerical pipeline
+    # UT involves sigma point generation, projection, and weighted averaging
+    # which accumulates small FP32 differences between CUDA and PyTorch
+    torch.testing.assert_close(
+        means2d_cuda[sel],
+        means2d_torch[sel],
+        rtol=0.5,  # 50% relative tolerance (handles high rel diff at near-zero values)
+        atol=0.05,  # 0.05 pixel absolute tolerance (great sub-pixel accuracy)
+    )
+
+    # depths: High precision expected
+    # Depths are computed from camera transformation, less accumulation than means2d
+    torch.testing.assert_close(
+        depths_cuda[sel],
+        depths_torch[sel],
+        rtol=1e-6,  # 0.0001% relative tolerance (excellent precision)
+        atol=2e-6,  # 2e-6 absolute tolerance (2x safety margin)
+    )
+
+    # conics: Moderate precision
+    # Conics involve covariance inverse which can amplify small numerical differences
+    # Near-zero conic values can have large relative differences but small absolute differences
+    # Rolling shutter: iterative refinement affects 2D covariance which propagates to conics
+    if rolling_shutter == RollingShutterType.GLOBAL:
+        conics_rtol, conics_atol = 1e-2, 1e-2
+    else:
+        conics_rtol, conics_atol = (
+            10.0,
+            1.0,
+        )  # Rolling shutter amplifies differences in conic computation
+
+    torch.testing.assert_close(
+        conics_cuda[sel], conics_torch[sel], rtol=conics_rtol, atol=conics_atol
+    )
+
+    # compensations: Moderate precision
+    # Compensations involve sqrt(det_orig/det_blur) which can be sensitive
+    # Small differences in determinants can cause larger differences in sqrt ratio
+    # Rolling shutter: changes in 2D covariance determinant cascade through compensation
+    if rolling_shutter == RollingShutterType.GLOBAL:
+        comps_rtol, comps_atol = 0.1, 0.01  # Global: max_abs=0.0034, max_rel=4.3%
+    else:
+        comps_rtol, comps_atol = (
+            0.25,
+            0.15,
+        )  # Rolling shutter: max_abs=0.110, max_rel=18.4%
+
+    torch.testing.assert_close(
+        comps_cuda[sel], comps_torch[sel], rtol=comps_rtol, atol=comps_atol
+    )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_isect(test_data, batch_dims: Tuple[int, ...]):
@@ -628,6 +819,373 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_opacities, _v_opacities, rtol=8e-3, atol=6e-3)
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
+
+
+# Since we have comprehensive camera model tests, we don't need to add
+# a camera model axis to this test. We use perfect pinhole model instead.
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("channels", [3])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+@pytest.mark.parametrize(
+    "rs_type", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM]
+)
+def test_rasterize_to_pixels_eval3d(
+    test_data, channels: int, batch_dims: Tuple[int, ...], rs_type: RollingShutterType
+):
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection,
+        isect_offset_encode,
+        isect_tiles,
+        quat_scale_to_covar_preci,
+        rasterize_to_pixels_eval3d_extra,
+        RollingShutterType,
+    )
+
+    N = test_data["means"].shape[-2]  # number of Gaussians
+    C = test_data["viewmats"].shape[-3]  # number of cameras
+    I = math.prod(batch_dims) * C  # number of images (I = B * C)
+
+    downscale = 4 * I
+
+    # Reduce image dimensions by half to save memory
+    test_data["height"] = test_data["height"] // downscale
+    test_data["width"] = test_data["width"] // downscale
+    # Adjust camera intrinsics for smaller image
+    test_data["Ks"] = test_data["Ks"].clone()
+    test_data["Ks"][..., 0, 0] /= downscale  # fx
+    test_data["Ks"][..., 1, 1] /= downscale  # fy
+    test_data["Ks"][..., 0, 2] /= downscale  # cx
+    test_data["Ks"][..., 1, 2] /= downscale  # cy
+
+    test_data.update(
+        {
+            "colors": torch.rand(C, N, channels, device=device),
+            "backgrounds": torch.rand((C, channels), device=device),
+        }
+    )
+    test_data = expand(test_data, batch_dims)
+    Ks = test_data["Ks"]
+    viewmats = test_data["viewmats"]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"]
+    scales = test_data["scales"] * 0.1
+    means = test_data["means"]
+    opacities = test_data["opacities"]
+    colors = test_data["colors"]
+    backgrounds = test_data["backgrounds"]
+
+    # Create viewmats_rs for rolling shutter testing
+    if rs_type != RollingShutterType.GLOBAL:
+        # Simulate camera motion with small perturbation
+        viewmats_rs = viewmats.clone()
+        # Add small translation (5% of scene scale)
+        viewmats_rs[..., :3, 3] += torch.randn_like(viewmats[..., :3, 3]) * 0.05
+    else:
+        viewmats_rs = None
+
+    covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
+
+    # Project Gaussians to 2D for tile intersections
+    radii, means2d, depths, conics, compensations = fully_fused_projection(
+        means, covars, None, None, viewmats, Ks, width, height
+    )
+    opacities_broadcast = torch.broadcast_to(
+        opacities[..., None, :], batch_dims + (C, N)
+    )
+
+    # Identify intersecting tiles
+    tile_size = 16
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+    isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
+
+    means.requires_grad = True
+    quats.requires_grad = True
+    scales.requires_grad = True
+    colors.requires_grad = True
+    opacities_broadcast.requires_grad = True
+    backgrounds.requires_grad = True
+
+    # forward - CUDA implementation
+    (
+        render_colors,
+        render_alphas,
+        render_last_ids,
+        render_sample_counts,
+    ) = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_broadcast,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+        return_sample_counts=True,
+        rolling_shutter=rs_type,
+        viewmats_rs=viewmats_rs,
+    )
+
+    # forward - PyTorch reference implementation (with tiling optimization)
+    (
+        _render_colors,
+        _render_alphas,
+        _render_last_ids,
+        _render_sample_counts,
+    ) = _rasterize_to_pixels_eval3d(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_broadcast,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size=tile_size,
+        isect_offsets=isect_offsets,
+        flatten_ids=flatten_ids,
+        backgrounds=backgrounds,
+        return_last_ids=True,
+        return_sample_counts=True,
+        rs_type=rs_type,
+        viewmats_rs=viewmats_rs,
+    )
+
+    # Validate: last_ids and alpha must be consistent
+    # Alpha > 0 if and only if there's a Gaussian intersecting with the pixel's ray (last_ids >= 0)
+    cuda_consistent = (render_last_ids >= 0) == (render_alphas.squeeze(-1) > 0)
+    ref_consistent = (_render_last_ids >= 0) == (_render_alphas.squeeze(-1) > 0)
+
+    torch.testing.assert_close(
+        ref_consistent.float(),
+        torch.ones_like(ref_consistent, dtype=torch.float32),
+        atol=0,
+        rtol=0,
+    )
+    torch.testing.assert_close(
+        cuda_consistent.float(),
+        torch.ones_like(cuda_consistent, dtype=torch.float32),
+        atol=0,
+        rtol=0,
+    )
+
+    # Validate: last_ids and sample_counts must be consistent:
+    # Sample counts must be > 0 if and only if there's
+    # a Gaussian intersecting with the pixel's ray (last_ids >= 0)
+    cuda_consistent = (render_sample_counts > 0) == (render_last_ids >= 0)
+    ref_consistent = (_render_sample_counts > 0) == (_render_last_ids >= 0)
+
+    torch.testing.assert_close(
+        ref_consistent.float(),
+        torch.ones_like(ref_consistent, dtype=torch.float32),
+        atol=0,
+        rtol=0,
+    )
+    torch.testing.assert_close(
+        cuda_consistent.float(),
+        torch.ones_like(cuda_consistent, dtype=torch.float32),
+        atol=0,
+        rtol=0,
+    )
+
+    # Categorize pixels into 3 groups with different error tolerances.
+    # 1. The number of samples accumulated per pixel are the same in both ref and cuda.
+    #    Error tolerance must be low, and due to small numerical errors.
+    # 2. One has samples accumulated, the other doesn't
+    #    This might happen again due to small numerical errors, but related to the
+    #    threshold for discarding samples with low alpha.
+    #    Error tolerance is even higher and related to the alpha threshold.
+    # 3. Both have samples accumulated, but different counts
+    #    This happens due to small numerical errors that lead to the sample being
+    #    discarded in one and not in the other due to the low transmission threshold.
+    #    Error tolerance is higher,
+
+    alpha_threshold = 1.0 / 255.0
+
+    # match: last_ids match (same accumulation endpoint)
+    cuda_has_isect = render_last_ids >= 0  # [batch, C, H, W]
+    ref_has_isect = _render_last_ids >= 0
+
+    # 1. count_match: same number of samples accumulated
+    count_match = render_sample_counts == _render_sample_counts  # [batch, C, H, W]
+    # 2. vis_mismatch: One has samples, one doesn't (not visible)
+    vis_mismatch = cuda_has_isect ^ ref_has_isect
+    # 3. count_mismatch: Both have samples but different counts
+    count_mismatch = ~(count_match | vis_mismatch)
+
+    # Each pixel must be in only one of the three groups
+    assert not (count_mismatch & vis_mismatch).any()
+    assert not (count_match & vis_mismatch).any()
+    assert not (count_mismatch & count_match).any()
+
+    count_match = count_match.unsqueeze(-1).float()
+    count_mismatch = count_mismatch.unsqueeze(-1).float()
+    vis_mismatch = vis_mismatch.unsqueeze(-1).float()
+
+    assert count_match.sum() > 0
+
+    # Compare alphas for each group
+    torch.testing.assert_close(
+        render_alphas * count_match, _render_alphas * count_match, rtol=1e-2, atol=2e-3
+    )
+    torch.testing.assert_close(
+        render_alphas * vis_mismatch,
+        _render_alphas * vis_mismatch,
+        rtol=0,
+        atol=alpha_threshold + 1e-5,
+    )
+    torch.testing.assert_close(
+        render_alphas * count_mismatch,
+        _render_alphas * count_mismatch,
+        rtol=0,
+        atol=5e-3,
+    )
+
+    # Compare colors for each group (expand masks to [batch, C, H, W, 3])
+    count_match = count_match.expand_as(render_colors)
+    vis_mismatch = vis_mismatch.expand_as(render_colors)
+    count_mismatch = count_mismatch.expand_as(render_colors)
+
+    torch.testing.assert_close(
+        render_colors * count_match, _render_colors * count_match, rtol=3e-3, atol=1e-3
+    )
+    # Bumped tolerance due to release mode optimizations. In debug mode it's alpha_threshold+1e-5.
+    torch.testing.assert_close(
+        render_colors * vis_mismatch,
+        _render_colors * vis_mismatch,
+        rtol=0,
+        atol=alpha_threshold + 5e-3,
+    )
+    torch.testing.assert_close(
+        render_colors * count_mismatch,
+        _render_colors * count_mismatch,
+        rtol=2e-2,
+        atol=3e-3,
+    )
+
+    # Test the gradients now
+
+    v_render_colors = torch.randn_like(render_colors)
+    v_render_alphas = torch.randn_like(render_alphas)
+
+    (
+        v_means,
+        v_quats,
+        v_scales,
+        v_colors,
+        v_opacities,
+        v_backgrounds,
+    ) = torch.autograd.grad(
+        (render_colors * v_render_colors).sum()
+        + (render_alphas * v_render_alphas).sum(),
+        (means, quats, scales, colors, opacities_broadcast, backgrounds),
+    )
+
+    (
+        _v_means,
+        _v_quats,
+        _v_scales,
+        _v_colors,
+        _v_opacities,
+        _v_backgrounds,
+    ) = torch.autograd.grad(
+        (_render_colors * v_render_colors).sum()
+        + (_render_alphas * v_render_alphas).sum(),
+        (means, quats, scales, colors, opacities_broadcast, backgrounds),
+    )
+
+    # Create visibility mask [N] for Gaussians
+    # We want to consider only visible gaussians so that the invisible ones don't
+    # skew the error statistics.
+    visible_mask = torch.zeros(N, dtype=torch.bool, device=device)
+    visible_mask[(flatten_ids % N).unique().long()] = True
+
+    # Reshape gradients to uniform shape [C_or_1, N, channels] for consistent masking
+    v_means = v_means[None, ...]  # [N, 3] → [1, N, 3]
+    _v_means = _v_means[None, ...]
+    v_quats = v_quats[None, ...]  # [N, 4] → [1, N, 4]
+    _v_quats = _v_quats[None, ...]
+    v_scales = v_scales[None, ...]  # [N, 3] → [1, N, 3]
+    _v_scales = _v_scales[None, ...]
+    v_opacities = v_opacities[..., None]  # [C, N] → [C, N, 1]
+    _v_opacities = _v_opacities[..., None]
+    # v_colors already [C, N, 3]
+
+    # Expand visibility mask to [1, N, 1] for broadcasting
+    visible_mask = visible_mask[None, :, None]
+
+    assert visible_mask.sum() > 0
+
+    # Extract visible elements once (use reshaped gradients for expand_as)
+    means_mask = visible_mask.expand_as(v_means) & get_inlier_abserror_mask(
+        v_means, _v_means, quantile=0.90
+    )
+    scales_mask = visible_mask.expand_as(v_scales) & get_inlier_abserror_mask(
+        v_scales, _v_scales, quantile=0.90
+    )
+    quats_mask = visible_mask.expand_as(v_quats) & get_inlier_abserror_mask(
+        v_quats, _v_quats, quantile=0.99
+    )
+    colors_mask = visible_mask.expand_as(v_colors) & get_inlier_abserror_mask(
+        v_colors, _v_colors, quantile=0.99
+    )
+    opacities_mask = visible_mask.expand_as(v_opacities) & get_inlier_abserror_mask(
+        v_opacities, _v_opacities, quantile=0.99
+    )
+    backgrounds_mask = get_inlier_abserror_mask(
+        v_backgrounds, _v_backgrounds, quantile=0.99
+    )
+
+    assert means_mask.sum() > 0
+    assert scales_mask.sum() > 0
+    assert quats_mask.sum() > 0
+    assert colors_mask.sum() > 0
+    assert opacities_mask.sum() > 0
+    assert backgrounds_mask.sum() > 0
+
+    # Compare backward gradients, excluding the ones that fall above the quantile threshold.
+    torch.testing.assert_close(
+        v_means * means_mask.float(), _v_means * means_mask.float(), rtol=0, atol=4e-2
+    )
+    torch.testing.assert_close(
+        v_scales * scales_mask.float(),
+        _v_scales * scales_mask.float(),
+        rtol=0,
+        atol=5e-2,
+    )
+    torch.testing.assert_close(
+        v_quats * quats_mask.float(), _v_quats * quats_mask.float(), rtol=0, atol=5e-4
+    )
+    torch.testing.assert_close(
+        v_colors * colors_mask.float(),
+        _v_colors * colors_mask.float(),
+        rtol=0,
+        atol=1e-4,
+    )
+    torch.testing.assert_close(
+        v_opacities * opacities_mask.float(),
+        _v_opacities * opacities_mask.float(),
+        rtol=0,
+        atol=1.5e-4,
+    )
+    torch.testing.assert_close(
+        v_backgrounds * backgrounds_mask.float(),
+        _v_backgrounds * backgrounds_mask.float(),
+        rtol=0,
+        atol=1.6e-2,
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

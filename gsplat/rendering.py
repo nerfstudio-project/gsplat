@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +27,7 @@ from .cuda._wrapper import (
     RollingShutterType,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
+    UnscentedTransformParameters,
     fully_fused_projection,
     fully_fused_projection_2dgs,
     fully_fused_projection_with_ut,
@@ -157,6 +159,8 @@ def rasterization(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    # unscented transform (for 3DGUT)
+    ut_params: Optional[UnscentedTransformParameters] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -471,6 +475,10 @@ def rasterization(
         C = len(viewmats)
 
     if with_ut:
+        # Use provided UT parameters or create default
+        if ut_params is None:
+            ut_params = UnscentedTransformParameters()
+
         proj_results = fully_fused_projection_with_ut(
             means,
             quats,
@@ -486,6 +494,7 @@ def rasterization(
             radius_clip=radius_clip,
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
+            ut_params=ut_params,
             radial_coeffs=radial_coeffs,
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
@@ -638,7 +647,7 @@ def rasterization(
             (radii,) = all_to_all_tensor_list(
                 world_size, [radii], cnts, output_splits=collected_splits
             )
-            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+            means2d, depths, conics, opacities, colors = all_to_all_tensor_list(
                 world_size,
                 [means2d, depths, conics, opacities, colors],
                 cnts,
@@ -666,7 +675,7 @@ def rasterization(
             gaussian_ids = gaussian_ids + offsets
 
             # all to all communication across all ranks.
-            (camera_ids, gaussian_ids) = all_to_all_tensor_list(
+            camera_ids, gaussian_ids = all_to_all_tensor_list(
                 world_size,
                 [camera_ids, gaussian_ids],
                 cnts,
@@ -690,7 +699,7 @@ def rasterization(
             )
             radii = reshape_view(C, radii, N_world)
 
-            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+            means2d, depths, conics, opacities, colors = all_to_all_tensor_list(
                 world_size,
                 [
                     means2d.flatten(0, 1),
@@ -888,6 +897,8 @@ def _rasterization(
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     batch_per_iter: int = 100,
+    with_eval3d: bool = False,
+    with_ut: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """A version of rasterization() that utilies on PyTorch's autograd.
 
@@ -906,9 +917,11 @@ def _rasterization(
     """
     from gsplat.cuda._torch_impl import (
         _fully_fused_projection,
-        _quat_scale_to_covar_preci,
         _rasterize_to_pixels,
     )
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+    from gsplat.cuda._math import _quat_scale_to_covar_preci
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
@@ -948,21 +961,37 @@ def _rasterization(
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
-    # Project Gaussians to 2D.
-    # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-    covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
-    radii, means2d, depths, conics, compensations = _fully_fused_projection(
-        means,
-        covars,
-        viewmats,
-        Ks,
-        width,
-        height,
-        eps2d=eps2d,
-        near_plane=near_plane,
-        far_plane=far_plane,
-        calc_compensations=(rasterize_mode == "antialiased"),
-    )
+    if with_ut:
+        radii, means2d, depths, conics, compensations = _fully_fused_projection_with_ut(
+            means,
+            quats,
+            scales,
+            opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d=eps2d,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            calc_compensations=(rasterize_mode == "antialiased"),
+        )
+    else:
+        # Project Gaussians to 2D.
+        # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
+        covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
+        radii, means2d, depths, conics, compensations = _fully_fused_projection(
+            means,
+            covars,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d=eps2d,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            calc_compensations=(rasterize_mode == "antialiased"),
+        )
     opacities = torch.broadcast_to(
         opacities[..., None, :], batch_dims + (C, N)
     )  # [..., C, N]
@@ -1037,6 +1066,8 @@ def _rasterization(
             backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
     else:  # RGB
         pass
+
+    # Chunking logic for both eval3d and standard paths
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
@@ -1048,37 +1079,76 @@ def _rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = _rasterize_to_pixels(
+            if with_eval3d:
+                # Using CUDA code due to its speed. This function is already
+                # being thoroughtly tested in test_basic.py
+                render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
+                    means,
+                    quats,
+                    scales,
+                    colors_chunk,
+                    opacities,
+                    viewmats,
+                    Ks,
+                    width,
+                    height,
+                    tile_size=tile_size,
+                    isect_offsets=isect_offsets,
+                    flatten_ids=flatten_ids,
+                    backgrounds=backgrounds_chunk,
+                )
+            else:
+                render_colors_, render_alphas_ = _rasterize_to_pixels(
+                    means2d,
+                    conics,
+                    colors_chunk,
+                    opacities,
+                    width,
+                    height,
+                    tile_size,
+                    isect_offsets,
+                    flatten_ids,
+                    backgrounds=backgrounds_chunk,
+                    batch_per_iter=batch_per_iter,
+                )
+            render_colors.append(render_colors_)
+            render_alphas.append(render_alphas_)
+        render_colors = torch.cat(render_colors, dim=-1)
+        render_alphas = render_alphas[0]  # discard the rest
+    else:
+        # No chunking needed
+        if with_eval3d:
+            # Using CUDA code due to its speed. This function is already
+            # being thoroughtly tested in test_basic.py
+            render_colors, render_alphas = rasterize_to_pixels_eval3d(
+                means,
+                quats,
+                scales,
+                colors,
+                opacities,
+                viewmats,
+                Ks,
+                width,
+                height,
+                tile_size=tile_size,
+                isect_offsets=isect_offsets,
+                flatten_ids=flatten_ids,
+                backgrounds=backgrounds,
+            )
+        else:
+            render_colors, render_alphas = _rasterize_to_pixels(
                 means2d,
                 conics,
-                colors_chunk,
+                colors,
                 opacities,
                 width,
                 height,
                 tile_size,
                 isect_offsets,
                 flatten_ids,
-                backgrounds=backgrounds_chunk,
+                backgrounds=backgrounds,
                 batch_per_iter=batch_per_iter,
             )
-            render_colors.append(render_colors_)
-            render_alphas.append(render_alphas_)
-        render_colors = torch.cat(render_colors, dim=-1)
-        render_alphas = render_alphas[0]  # discard the rest
-    else:
-        render_colors, render_alphas = _rasterize_to_pixels(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            backgrounds=backgrounds,
-            batch_per_iter=batch_per_iter,
-        )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(

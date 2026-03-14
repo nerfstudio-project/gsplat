@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -678,7 +678,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
+    const at::Tensor flatten_ids,  // [n_isects]
+    const at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width] optional
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -694,7 +695,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     if (masks.has_value()) {
         CHECK_INPUT(masks.value());
     }
-    
+    if (sample_counts.has_value()) {
+        CHECK_INPUT(sample_counts.value());
+    }
+
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
     uint32_t C = viewmats0.size(-3);     // number of cameras
@@ -741,7 +745,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
             flatten_ids,                                                       \
             renders,                                                           \
             alphas,                                                            \
-            last_ids                                                           \
+            last_ids,                                                          \
+            sample_counts                                                      \
         );                                                                     \
         break;
 
