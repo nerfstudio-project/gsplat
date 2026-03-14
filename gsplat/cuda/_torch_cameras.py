@@ -433,25 +433,21 @@ class _BaseCameraModel(ABC):
         self,
         camera_ray: Tensor,
         margin_factor: float,
-    ) -> Tuple[Tensor, Tensor]:
-        ...
+    ) -> Tuple[Tensor, Tensor]: ...
 
     @abstractmethod
     def image_point_to_camera_ray(
         self,
         image_point: Tensor,
-    ) -> Tuple[Tensor, Tensor]:
-        ...
+    ) -> Tuple[Tensor, Tensor]: ...
 
     @property
     @abstractmethod
-    def focal_lengths(self) -> Tensor:
-        ...
+    def focal_lengths(self) -> Tensor: ...
 
     @property
     @abstractmethod
-    def principal_points(self) -> Tensor:
-        ...
+    def principal_points(self) -> Tensor: ...
 
     def image_point_to_world_ray_shutter_pose(
         self,
