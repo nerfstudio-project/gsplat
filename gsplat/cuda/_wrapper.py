@@ -53,6 +53,21 @@ def _make_lazy_cuda_cls(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
     from ._backend import _C
 
+    if _C is None:
+        # Extension not built or failed to load (e.g. BUILD_NO_CUDA=1).
+        # Return a placeholder class so that imports succeed; instantiation
+        # or use will raise a clear error.
+        class _UnavailableCudaCls:
+            __name__ = name
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                raise RuntimeError(
+                    "gsplat CUDA extension is not available (not built or failed to load). "
+                    f"Cannot instantiate '{name}'."
+                )
+
+        return _UnavailableCudaCls
+
     return getattr(torch.classes.gsplat, name)
 
 
