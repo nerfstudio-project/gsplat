@@ -1,13 +1,14 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,17 +31,17 @@
 namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
-    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
-    const at::Tensor depths,                     // [..., N] or [nnz]
-    const at::optional<at::Tensor> image_ids,    // [nnz]
-    const at::optional<at::Tensor> gaussian_ids, // [nnz]
-    const uint32_t I,
-    const uint32_t tile_size,
-    const uint32_t tile_width,
-    const uint32_t tile_height,
-    const bool sort,
-    const bool segmented
+    const at::Tensor &means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor &radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor &depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> &image_ids,    // [nnz]
+    const at::optional<at::Tensor> &gaussian_ids, // [nnz]
+    int64_t I,
+    int64_t tile_size,
+    int64_t tile_width,
+    int64_t tile_height,
+    bool sort,
+    bool segmented
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -166,10 +167,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
 }
 
 at::Tensor intersect_offset(
-    const at::Tensor isect_ids, // [n_isects]
-    const uint32_t I,
-    const uint32_t tile_width,
-    const uint32_t tile_height
+    const at::Tensor &isect_ids, // [n_isects]
+    int64_t I,
+    int64_t tile_width,
+    int64_t tile_height
 ) {
     DEVICE_GUARD(isect_ids);
     CHECK_INPUT(isect_ids);

@@ -1118,6 +1118,23 @@ struct OpenCVFisheyeCameraModel
 };
 
 
+struct FThetaCameraDistortionDeviceParams {
+    inline __device__ FThetaCameraDistortionDeviceParams(){}
+
+    inline __host__ FThetaCameraDistortionDeviceParams(const FThetaCameraDistortionParameters& params)
+    : reference_poly(params.reference_poly)
+    , pixeldist_to_angle_poly(params.pixeldist_to_angle_poly)
+    , angle_to_pixeldist_poly(params.angle_to_pixeldist_poly)
+    , max_angle(params.max_angle)
+    , linear_cde(params.linear_cde) {}
+
+    FThetaCameraDistortionParameters::PolynomialType reference_poly;
+    std::array<float, FThetaCameraDistortionParameters::PolynomialDegree> pixeldist_to_angle_poly; // backward polynomial
+    std::array<float, FThetaCameraDistortionParameters::PolynomialDegree> angle_to_pixeldist_poly; // forward polynomial
+    float max_angle;
+    std::array<float, 3> linear_cde;
+};
+
 template <size_t N_NEWTON_ITERATIONS = 3>
 struct FThetaCameraModel : BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>> {
     // FTheta camera model
@@ -1125,7 +1142,7 @@ public:
     using Base = BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>>;
 
     struct Parameters : Base::Parameters {
-        FThetaCameraDistortionParameters dist;
+        FThetaCameraDistortionDeviceParams dist;
         std::array<float, 2> principal_point;
     };
 

@@ -46,18 +46,16 @@ from gsplat.cuda._torch_cameras import (  # PyTorch reference
 from gsplat._helper import assert_mismatch_ratio, assert_close
 from gsplat.cuda._wrapper import (
     RollingShutterType,
-    _make_lazy_cuda_obj,
+    _make_lazy_cuda_cls,
     FThetaPolynomialType,
     FThetaCameraDistortionParameters,
+    create_camera_model,
 )
 from gsplat.cuda._math import (
     _quat_multiply,
     _safe_normalize,
     compute_inverse_polynomial,
 )
-
-BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
-FThetaCameraModelCUDA = _make_lazy_cuda_obj("FThetaCameraModel")
 
 SEED = 42
 
@@ -165,7 +163,7 @@ def parse_camera(
             "height": height,
             "camera_model": model_type,
             "principal_points": principal_points,
-            "rs_type": rs_type.to_cpp() if hasattr(rs_type, "to_cpp") else rs_type,
+            "rs_type": rs_type,
         }
     )
 
@@ -366,7 +364,7 @@ def parse_ftheta_camera(
         angle_to_pixeldist_poly=angle_to_pixeldist_poly,
         max_angle=float(max_angle),
         linear_cde=linear_cde,
-    ).to_cpp()
+    )
 
     return {"ftheta_coeffs": ftheta_coeffs}
 
@@ -499,7 +497,7 @@ def test_camera(camera_model, batch_dims, image_dims, rs_type):
     params = parse_camera(
         camera_model, batch_dims, width=width, height=height, rs_type=rs_type, seed=SEED
     )
-    return BaseCameraModelCUDA.create(**params)
+    return create_camera_model(**params)
 
 
 @pytest.fixture
