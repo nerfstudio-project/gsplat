@@ -30,6 +30,11 @@ import math
 if not torch.cuda.is_available():
     pytest.skip("CUDA required for camera model tests", allow_module_level=True)
 
+from gsplat.cuda._backend import _C
+
+if _C is None:
+    pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
+
 from gsplat._helper import expand_named_params
 from gsplat.cuda._torch_cameras import (  # PyTorch reference
     _BaseCameraModel,

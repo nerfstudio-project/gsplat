@@ -43,9 +43,14 @@ def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
     from ._backend import _C
 
+    if _C is None:
+        raise RuntimeError(
+            "gsplat CUDA extension is not available (not built or failed to load). "
+            f"Cannot access '{name}'."
+        )
     obj = _C
     for name_split in name.split("."):
-        obj = getattr(_C, name_split)
+        obj = getattr(obj, name_split)
     return obj
 
 
