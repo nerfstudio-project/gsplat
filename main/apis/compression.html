@@ -172,7 +172,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
         <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
@@ -302,7 +302,7 @@
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
             <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
@@ -310,7 +310,7 @@
           <section id="compression">
 <h1>Compression<a class="headerlink" href="#compression" title="Link to this heading">¶</a></h1>
 <p><cite>gsplat</cite> provides handy APIs for compressing and decompressing the Gaussian parameters,
-which can significantly reduce the storage / streaming cost. For example, using <a class="reference internal" href="#gsplat.PngCompression" title="gsplat.PngCompression"><code class="xref py py-class docutils literal notranslate"><span class="pre">PngCompression</span></code></a>,
+which can significantly reduce the storage / streaming cost. For example, using <code class="xref py py-class docutils literal notranslate"><span class="pre">PngCompression</span></code>,
 1 million Gaussians that are stored in 236 MB can be compressed to 16.5 MB, with only 0.5dB
 PSNR loss (29.18dB to 28.65dB).</p>
 <p>Similar to the <a class="reference internal" href="strategy.html"><span class="doc">Densification</span></a>, our compression APIs also has a specific expectation on
@@ -335,75 +335,6 @@ On top of these attributes, an arbitrary number of extra attributes are supporte
 </pre></div>
 </div>
 <p>Below is the API for the compression approaches we support in <cite>gsplat</cite>:</p>
-<dl class="py class">
-<dt class="sig sig-object py" id="gsplat.PngCompression">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">PngCompression</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">use_sort</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/gsplat/compression/png_compression.html#PngCompression"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.PngCompression" title="Link to this definition">¶</a></dt>
-<dd><p>Uses quantization and sorting to compress splats into PNG files and uses
-K-means clustering to compress the spherical harmonic coefficents.</p>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>This class requires the <a class="reference external" href="https://pypi.org/project/imageio/">imageio</a>,
-<a class="reference external" href="https://github.com/fraunhoferhhi/PLAS.git">plas</a>
-and <a class="reference external" href="https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install">torchpq</a> packages to be installed.</p>
-</div>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>This class might throw away a few lowest opacities splats if the number of
-splats is not a square number.</p>
-</div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>The splats parameters are expected to be pre-activation values. It expects
-the following fields in the splats dictionary: “means”, “scales”, “quats”,
-“opacities”, “sh0”, “shN”. More fields can be added to the dictionary, but
-they will only be compressed using NPZ compression.</p>
-</div>
-<p class="rubric">References</p>
-<ul class="simple">
-<li><p><a class="reference external" href="https://arxiv.org/abs/2312.13299">Compact 3D Scene Representation via Self-Organizing Gaussian Grids</a></p></li>
-<li><p><a class="reference external" href="https://aras-p.info/blog/2023/09/27/Making-Gaussian-Splats-more-smaller/">Making Gaussian Splats more smaller</a></p></li>
-</ul>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>use_sort</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><em>bool</em></a><em>, </em><em>optional</em>) – Whether to sort splats before compression. Defaults to True.</p></li>
-<li><p><strong>verbose</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><em>bool</em></a><em>, </em><em>optional</em>) – Whether to print verbose information. Default to True.</p></li>
-</ul>
-</dd>
-</dl>
-<dl class="py method">
-<dt class="sig sig-object py" id="gsplat.PngCompression.compress">
-<span class="sig-name descname"><span class="pre">compress</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">compress_dir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">splats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/compression/png_compression.html#PngCompression.compress"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.PngCompression.compress" title="Link to this definition">¶</a></dt>
-<dd><p>Run compression</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>compress_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – directory to save compressed files</p></li>
-<li><p><strong>splats</strong> (<em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em>, </em><em>Tensor</em><em>]</em>) – Gaussian splats to compress</p></li>
-</ul>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="gsplat.PngCompression.decompress">
-<span class="sig-name descname"><span class="pre">decompress</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">compress_dir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/compression/png_compression.html#PngCompression.decompress"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.PngCompression.decompress" title="Link to this definition">¶</a></dt>
-<dd><p>Run decompression</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>compress_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – directory that contains compressed files</p>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>decompressed Gaussian splats</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>Dict[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)">str</a>, Tensor]</p>
-</dd>
-</dl>
-</dd></dl>
-
-</dd></dl>
-
 </section>
 
         </article>
@@ -449,31 +380,8 @@ they will only be compressed using NPZ compression.</p>
         
       </footer>
     </div>
-    <aside class="toc-drawer">
+    <aside class="toc-drawer no-toc">
       
-      
-      <div class="toc-sticky toc-scroll">
-        <div class="toc-title-container">
-          <span class="toc-title">
-            On this page
-          </span>
-        </div>
-        <div class="toc-tree-container">
-          <div class="toc-tree">
-            <ul>
-<li><a class="reference internal" href="#">Compression</a><ul>
-<li><a class="reference internal" href="#gsplat.PngCompression"><code class="docutils literal notranslate"><span class="pre">PngCompression</span></code></a><ul>
-<li><a class="reference internal" href="#gsplat.PngCompression.compress"><code class="docutils literal notranslate"><span class="pre">PngCompression.compress()</span></code></a></li>
-<li><a class="reference internal" href="#gsplat.PngCompression.decompress"><code class="docutils literal notranslate"><span class="pre">PngCompression.decompress()</span></code></a></li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-
-          </div>
-        </div>
-      </div>
       
       
     </aside>

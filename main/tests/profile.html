@@ -310,7 +310,7 @@
           <section id="profiling">
 <span id="id1"></span><h1>Profiling<a class="headerlink" href="#profiling" title="Link to this heading">¶</a></h1>
 <p><cite>gsplat</cite> is developed with efficiency in mind, while also supports trade-offs between
-memory consumption and speed. The <a class="reference internal" href="../apis/rasterization.html#gsplat.rasterization" title="gsplat.rasterization"><code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code></a> function has a few arguments
+memory consumption and speed. The <code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code> function has a few arguments
 that would not affect the numerical results but could significantly impact the runtime and
 memory usage, including <strong>packed</strong> and <strong>sparse_grad</strong>:</p>
 <ul class="simple">
@@ -326,7 +326,7 @@ the intermidate tensors, the gradients will also be packed into a
 This could further reduce the memory usage when training a large scene as the gradients of
 the Gaussian attributes are usually sparse. Note that in most cases, sparse gradients should be used together
 with a sparse optimizer, such as <a class="reference external" href="https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html">torch.optim.SparseAdam</a>. And currently we only supports
-sparse gradients for part of the Gaussian attributes. See <a class="reference internal" href="../apis/rasterization.html#gsplat.rasterization" title="gsplat.rasterization"><code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code></a>
+sparse gradients for part of the Gaussian attributes. See <code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code>
 for more details.</p></li>
 </ul>
 <p>Here we provide careful profiling of the performance with the different rasterization backends, along with

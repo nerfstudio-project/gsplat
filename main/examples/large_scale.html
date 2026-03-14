@@ -314,7 +314,7 @@ For example here we mimic a large scene by replicating the Garden scene into a 9
 which results 30M Gaussians in total while <cite>gsplat</cite> still allows real-time rendering for it.</p>
 <p>The main magic that allows this is a very simple trick: we disregard the Gaussians that are
 far away from the camera, by applying a small threshold (e.g., 3 pixel) to the projected
-Gaussian radius which is configurable in our <a class="reference internal" href="../apis/rasterization.html#gsplat.rasterization" title="gsplat.rasterization"><code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code></a> API as <code class="code docutils literal notranslate"><span class="pre">radius_clip</span></code>.</p>
+Gaussian radius which is configurable in our <code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code> API as <code class="code docutils literal notranslate"><span class="pre">radius_clip</span></code>.</p>
 <p>With <cite>gsplat</cite> as CUDA Backend:</p>
 <div style="position:relative; padding-bottom:56.25%; height:0; width:100%">
     <iframe style="position:absolute; top:0; left:0; width:100%; height:100%" src="https://www.youtube.com/embed/rXyJwL7uJFQ?si=kQ10HcASlvhztTUA" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
