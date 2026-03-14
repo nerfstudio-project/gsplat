@@ -329,6 +329,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">gsplat._helper</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_shape</span>
 
 <span class="n">CameraModel</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span>
+<span class="n">ExternalDistortionModelMeta</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;bivariate-windshield&quot;</span><span class="p">]</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_lazy_cuda_func</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
@@ -416,6 +417,49 @@
         <span class="n">p</span><span class="o">.</span><span class="n">kappa</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">kappa</span>
         <span class="n">p</span><span class="o">.</span><span class="n">in_image_margin_factor</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">in_image_margin_factor</span>
         <span class="n">p</span><span class="o">.</span><span class="n">require_all_sigma_points_valid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">require_all_sigma_points_valid</span>
+        <span class="k">return</span> <span class="n">p</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">ExternalDistortionReferencePolynomial</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+    <span class="n">FORWARD</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">BACKWARD</span> <span class="o">=</span> <span class="mi">2</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ExternalDistortionReferencePolynomial.</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">BivariateWindshieldModelParameters</span><span class="p">:</span>
+    <span class="n">MAX_ORDER</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">MAX_COEFFS</span> <span class="o">=</span> <span class="mi">21</span>
+
+    <span class="n">reference_poly</span><span class="p">:</span> <span class="n">ExternalDistortionReferencePolynomial</span>
+    <span class="n">horizontal_poly</span><span class="p">:</span> <span class="n">Tensor</span>  <span class="c1"># [..., (N + 1) * (N + 2) / 2]</span>
+    <span class="n">vertical_poly</span><span class="p">:</span> <span class="n">Tensor</span>  <span class="c1"># [..., (N + 1) * (N + 2) / 2]</span>
+    <span class="n">horizontal_poly_inverse</span><span class="p">:</span> <span class="n">Tensor</span>  <span class="c1"># [..., (N + 1) * (N + 2) / 2]</span>
+    <span class="n">vertical_poly_inverse</span><span class="p">:</span> <span class="n">Tensor</span>  <span class="c1"># [..., (N + 1) * (N + 2) / 2]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">reference_poly</span><span class="p">:</span> <span class="n">ExternalDistortionReferencePolynomial</span><span class="p">,</span>
+        <span class="n">horizontal_poly</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+        <span class="n">vertical_poly</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+        <span class="n">horizontal_poly_inverse</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+        <span class="n">vertical_poly_inverse</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reference_poly</span> <span class="o">=</span> <span class="n">reference_poly</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">horizontal_poly</span> <span class="o">=</span> <span class="n">horizontal_poly</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">vertical_poly</span> <span class="o">=</span> <span class="n">vertical_poly</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">horizontal_poly_inverse</span> <span class="o">=</span> <span class="n">horizontal_poly_inverse</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">vertical_poly_inverse</span> <span class="o">=</span> <span class="n">vertical_poly_inverse</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">&quot;BivariateWindshieldModelParameters&quot;</span><span class="p">)()</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">reference_poly</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reference_poly</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">horizontal_poly</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">horizontal_poly</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">vertical_poly</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">vertical_poly</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">horizontal_poly_inverse</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">horizontal_poly_inverse</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">vertical_poly_inverse</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">vertical_poly_inverse</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
         <span class="k">return</span> <span class="n">p</span>
 
 
@@ -1079,6 +1123,7 @@
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
     <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
     <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">external_distortion_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BivariateWindshieldModelParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="c1"># rolling shutter</span>
     <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
@@ -1120,6 +1165,7 @@
         <span class="n">tangential_coeffs</span><span class="o">=</span><span class="n">tangential_coeffs</span><span class="p">,</span>
         <span class="n">thin_prism_coeffs</span><span class="o">=</span><span class="n">thin_prism_coeffs</span><span class="p">,</span>
         <span class="n">ftheta_coeffs</span><span class="o">=</span><span class="n">ftheta_coeffs</span><span class="p">,</span>
+        <span class="n">external_distortion_coeffs</span><span class="o">=</span><span class="n">external_distortion_coeffs</span><span class="p">,</span>
         <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
         <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
         <span class="n">return_sample_counts</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
@@ -1152,6 +1198,7 @@
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
     <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
     <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">external_distortion_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BivariateWindshieldModelParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="c1"># rolling shutter</span>
     <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
@@ -1319,6 +1366,7 @@
         <span class="n">tangential_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">thin_prism_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">ftheta_coeffs</span><span class="p">,</span>
+        <span class="n">external_distortion_coeffs</span><span class="p">,</span>
         <span class="c1"># rolling shutter</span>
         <span class="n">rolling_shutter</span><span class="p">,</span>
         <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
@@ -1683,6 +1731,7 @@
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
     <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
     <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">external_distortion_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BivariateWindshieldModelParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="c1"># rolling shutter</span>
     <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
@@ -1754,6 +1803,11 @@
             <span class="n">ftheta_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
             <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="o">.</span><span class="n">to_cpp_default</span><span class="p">()</span>
+        <span class="p">),</span>
+        <span class="p">(</span>
+            <span class="n">external_distortion_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">external_distortion_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="kc">None</span>
         <span class="p">),</span>
     <span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
@@ -1919,6 +1973,7 @@
         <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
         <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
         <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">external_distortion_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BivariateWindshieldModelParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="c1"># rolling shutter</span>
         <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
         <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
@@ -1937,6 +1992,11 @@
             <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="o">.</span><span class="n">to_cpp_default</span><span class="p">()</span>
         <span class="p">)</span>
 
+        <span class="n">external_distortion_coeffs</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">external_distortion_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">external_distortion_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="kc">None</span>
+        <span class="p">)</span>
         <span class="c1"># Extract batch_dims for sample_counts allocation</span>
         <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
         <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">)</span>
@@ -1984,6 +2044,7 @@
             <span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="p">,</span>
             <span class="n">ftheta_coeffs</span><span class="p">,</span>
+            <span class="n">external_distortion_coeffs</span><span class="p">,</span>
             <span class="n">isect_offsets</span><span class="p">,</span>
             <span class="n">flatten_ids</span><span class="p">,</span>
             <span class="n">use_hit_distance</span><span class="p">,</span>
@@ -2018,6 +2079,7 @@
         <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">camera_model_type</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span> <span class="o">=</span> <span class="n">tile_size</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="n">ftheta_coeffs</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">external_distortion_coeffs</span> <span class="o">=</span> <span class="n">external_distortion_coeffs</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">use_hit_distance</span> <span class="o">=</span> <span class="n">use_hit_distance</span>
 
         <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span><span class="p">,</span> <span class="n">sample_counts</span><span class="p">,</span> <span class="n">render_normals</span>
@@ -2060,6 +2122,7 @@
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span>
         <span class="n">tile_size</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span>
         <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ftheta_coeffs</span>
+        <span class="n">external_distortion_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">external_distortion_coeffs</span>
         <span class="n">use_hit_distance</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">use_hit_distance</span>
 
         <span class="p">(</span>
@@ -2091,6 +2154,7 @@
             <span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="p">,</span>
             <span class="n">ftheta_coeffs</span><span class="p">,</span>
+            <span class="n">external_distortion_coeffs</span><span class="p">,</span>
             <span class="n">isect_offsets</span><span class="p">,</span>
             <span class="n">flatten_ids</span><span class="p">,</span>
             <span class="n">use_hit_distance</span><span class="p">,</span>
@@ -2134,6 +2198,7 @@
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tangential_coeffs</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># thin_prism_coeffs</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># ftheta_coeffs</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># external_distortion_coeffs</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># rolling_shutter</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># viewmats_rs</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># return_sample_counts (flag, no gradient)</span>
