@@ -301,7 +301,8 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.cuda._torch_impl_2dgs</h1><div class="highlight"><pre>
-<span></span><span class="c1"># SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.</span>
+<span></span><span class="c1"># SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.</span>
+<span class="c1"># SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved.</span>
 <span class="c1"># SPDX-License-Identifier: Apache-2.0</span>
 <span class="c1">#</span>
 <span class="c1"># Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);</span>
@@ -322,7 +323,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.cuda._torch_impl</span><span class="w"> </span><span class="kn">import</span> <span class="n">_quat_scale_to_matrix</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.cuda._math</span><span class="w"> </span><span class="kn">import</span> <span class="n">_quat_scale_to_matrix</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_fully_fused_projection_2dgs</span><span class="p">(</span>
