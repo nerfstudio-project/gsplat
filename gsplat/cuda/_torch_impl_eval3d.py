@@ -224,6 +224,7 @@ def accumulate_eval3d(
     image_height: int,
     flatten_idx: Tensor,  # [M] - index in original flatten_ids
     rs_type: RollingShutterType = RollingShutterType.GLOBAL,  # Rolling shutter type
+    rays: Optional[Tensor] = None,  # [..., C, P, 6]
     viewmats_rs: Optional[Tensor] = None,  # [..., 4, 4] - optional for rolling shutter
     base_transmittance: Optional[
         Tensor
@@ -274,6 +275,7 @@ def accumulate_eval3d(
     #       colors/opacities are PER-IMAGE [I, N, ...] where I = B*C
     B = math.prod(means.shape[:-2])  # batch dims
     N = means.shape[-2]  # number of Gaussians
+    P = image_width * image_height
     channels = colors.shape[-1]
     device = means.device
 
@@ -295,33 +297,39 @@ def accumulate_eval3d(
         dim=-1,
     )  # [M, 2]
 
-    # Create focal_lengths and principal_points tensors out of Ks[image_ids]
-    # Ks[image_ids]: [M, 3, 3]
-    Ks_selected = Ks[image_ids]  # [M, 3, 3]
-    focal_lengths = Ks_selected[:, [0, 1], [0, 1]]  # [M, 2], fx and fy
-    principal_points = Ks_selected[:, [0, 1], [2, 2]]  # [M, 2], cx and cy
-    camera = _PerfectPinholeCameraModel(
-        focal_lengths, principal_points, image_width, image_height, rs_type
-    )
+    if rays is None:
+        # Create focal_lengths and principal_points tensors out of Ks[image_ids]
+        # Ks[image_ids]: [M, 3, 3]
+        Ks_selected = Ks[image_ids]  # [M, 3, 3]
+        focal_lengths = Ks_selected[:, [0, 1], [0, 1]]  # [M, 2], fx and fy
+        principal_points = Ks_selected[:, [0, 1], [2, 2]]  # [M, 2], cx and cy
+        camera = _PerfectPinholeCameraModel(
+            focal_lengths, principal_points, image_width, image_height, rs_type
+        )
 
-    pose_start = _viewmat_to_pose(viewmats[image_ids])
-    if viewmats_rs is None:
-        pose = pose_start
+        pose_start = _viewmat_to_pose(viewmats[image_ids])
+        if viewmats_rs is None:
+            pose = pose_start
+        else:
+            relative_time = camera.shutter_relative_frame_time(pixel_coords)  # [M, 1]
+            pose_end = _viewmat_to_pose(viewmats_rs[image_ids])
+            pose = _interpolate_shutter_pose(pose_start, pose_end, relative_time)
+
+        pose_q = pose[..., 3:]
+
+        # Extract rotation and camera world position from pose
+        R_cam_to_world = _quat_to_rotmat(_quat_inverse(pose_q))
+        cam_centers = _pose_camera_world_position(pose)
+
+        # 4. Generate rays from pixels
+        ray_o, ray_d = _generate_rays_from_pixels(
+            pixel_coords, cam_centers, R_cam_to_world, Ks[image_ids], means.dtype
+        )  # [M, 3, 1]
     else:
-        relative_time = camera.shutter_relative_frame_time(pixel_coords)  # [M, 1]
-        pose_end = _viewmat_to_pose(viewmats_rs[image_ids])
-        pose = _interpolate_shutter_pose(pose_start, pose_end, relative_time)
-
-    pose_q = pose[..., 3:]
-
-    # Extract rotation and camera world position from pose
-    R_cam_to_world = _quat_to_rotmat(_quat_inverse(pose_q))
-    cam_centers = _pose_camera_world_position(pose)
-
-    # 4. Generate rays from pixels
-    ray_o, ray_d = _generate_rays_from_pixels(
-        pixel_coords, cam_centers, R_cam_to_world, Ks[image_ids], means.dtype
-    )  # [M, 3, 1]
+        ray_indices = image_ids * image_height * image_width + pixel_ids
+        rays_flat = rays.reshape(I * P, 6)
+        ray_o = rays_flat[ray_indices, :3]
+        ray_d = rays_flat[ray_indices, 3:]
 
     # 5. Compute Gaussian transform to map Gaussians to world space
     iscl_rot = _compute_gaussian_transform(quats_flat, scales_flat)  # [B, N, 3, 3]
@@ -456,6 +464,7 @@ def _rasterize_to_pixels_eval3d(
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     batch_per_iter: int = 200,
     rs_type: RollingShutterType = RollingShutterType.GLOBAL,  # Rolling shutter type
+    rays: Optional[Tensor] = None,  # [..., C, H, W, 6]
     viewmats_rs: Optional[
         Tensor
     ] = None,  # [..., C, 4, 4] - optional for rolling shutter
@@ -536,6 +545,10 @@ def _rasterize_to_pixels_eval3d(
     isect_offsets_exp = isect_offsets.reshape(
         I, isect_offsets.shape[-2], isect_offsets.shape[-1]
     )
+    if rays is not None:
+        rays_exp = rays.reshape(I, image_height * image_width, 6)
+    else:
+        rays_exp = None
 
     # Decode flatten_ids and create properly ordered (gs_id, pix_id, img_id) lists for nerfacc
     # nerfacc requires: sorted by pixel_id first, then by depth within each pixel
@@ -705,6 +718,7 @@ def _rasterize_to_pixels_eval3d(
             image_height,
             batch_flatten_idx,
             rs_type,
+            rays_exp,
             viewmats_rs_exp,
             base_transmittance=transmittances,  # Pass current transmittance
             use_hit_distance=use_hit_distance,

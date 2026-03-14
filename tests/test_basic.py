@@ -37,11 +37,22 @@ from gsplat._helper import (
     assert_mismatch_ratio,
 )
 import gsplat
+
+from gsplat.cuda._backend import _C
+
+if _C is None:
+    pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
+
 from gsplat.cuda._wrapper import (
     CameraModel,
     RollingShutterType,
     UnscentedTransformParameters,
+    _make_lazy_cuda_obj,
 )
+from gsplat.cuda._math import _safe_normalize
+from gsplat.cuda._torch_cameras import _viewmat_to_pose
+
+BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
 
 device = torch.device("cuda:0")
 
@@ -838,13 +849,15 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 @pytest.mark.parametrize(
     "rs_type", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM]
 )
-@pytest.mark.parametrize("use_hit_distance", [True, False])
+@pytest.mark.parametrize("use_hit_distance", [True, False], ids=["hitdist", "depth"])
+@pytest.mark.parametrize("use_rays", [True, False], ids=["rays", "sensor"])
 def test_rasterize_to_pixels_eval3d(
     test_data,
     channels: int,
     batch_dims: Tuple[int, ...],
     rs_type: RollingShutterType,
     use_hit_distance: bool,
+    use_rays: bool,
 ):
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._wrapper import (
@@ -899,6 +912,46 @@ def test_rasterize_to_pixels_eval3d(
     else:
         viewmats_rs = None
 
+    if use_rays:
+        camera = BaseCameraModelCUDA.create(
+            width=width,
+            height=height,
+            camera_model="pinhole",
+            focal_lengths=Ks[..., [0, 1], [0, 1]].contiguous(),
+            principal_points=Ks[..., [0, 1], [2, 2]].contiguous(),
+            rs_type=rs_type.to_cpp(),
+        )
+
+        gridx, gridy = torch.meshgrid(
+            [
+                torch.arange(0, width, device=device, dtype=torch.float32),
+                torch.arange(0, height, device=device, dtype=torch.float32),
+            ],
+            indexing="ij",
+        )
+
+        batch_shape = Ks.shape[:-2]
+
+        grid = torch.stack([gridx, gridy], dim=-1)
+        grid = grid.expand(*batch_shape, *grid.shape).reshape(
+            *batch_shape, width * height, 2
+        )
+
+        pose_start = _viewmat_to_pose(viewmats)
+        if viewmats_rs is None:
+            pose_end = pose_start
+        else:
+            pose_end = _viewmat_to_pose(viewmats_rs)
+
+        rori, rdir, rvalid = camera.image_point_to_world_ray_shutter_pose(
+            grid, pose_start, pose_end
+        )
+        assert (rvalid == False).sum() == 0
+        rays = torch.cat([rori, rdir], -1)
+        rays.reshape(*batch_shape, height, width, 6)
+    else:
+        rays = None
+
     # Project Gaussians to 2D for tile intersections
     radii, means2d, depths, conics, compensations = fully_fused_projection_with_ut(
         means, quats, scales, opacities, viewmats, Ks, width, height
@@ -923,6 +976,8 @@ def test_rasterize_to_pixels_eval3d(
     colors.requires_grad = True
     opacities_broadcast.requires_grad = True
     backgrounds.requires_grad = True
+    if use_rays:
+        rays.requires_grad = True
 
     # forward - CUDA implementation
     (
@@ -948,6 +1003,7 @@ def test_rasterize_to_pixels_eval3d(
         rolling_shutter=rs_type,
         viewmats_rs=viewmats_rs,
         use_hit_distance=use_hit_distance,
+        rays=rays,
     )
 
     # forward - PyTorch reference implementation (with tiling optimization)
@@ -975,6 +1031,7 @@ def test_rasterize_to_pixels_eval3d(
         rs_type=rs_type,
         viewmats_rs=viewmats_rs,
         use_hit_distance=use_hit_distance,
+        rays=rays,
     )
 
     # Validate: last_ids and alpha must be consistent
@@ -1094,31 +1151,64 @@ def test_rasterize_to_pixels_eval3d(
     v_render_colors = torch.randn_like(render_colors)
     v_render_alphas = torch.randn_like(render_alphas)
 
-    (
-        v_means,
-        v_quats,
-        v_scales,
-        v_colors,
-        v_opacities,
-        v_backgrounds,
-    ) = torch.autograd.grad(
-        (render_colors * v_render_colors).sum()
-        + (render_alphas * v_render_alphas).sum(),
-        (means, quats, scales, colors, opacities_broadcast, backgrounds),
-    )
+    if use_rays:
+        (
+            v_means,
+            v_quats,
+            v_scales,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            v_rays,
+        ) = torch.autograd.grad(
+            (render_colors * v_render_colors).sum()
+            + (render_alphas * v_render_alphas).sum(),
+            (means, quats, scales, colors, opacities_broadcast, backgrounds, rays),
+            retain_graph=True,
+        )
 
-    (
-        _v_means,
-        _v_quats,
-        _v_scales,
-        _v_colors,
-        _v_opacities,
-        _v_backgrounds,
-    ) = torch.autograd.grad(
-        (_render_colors * v_render_colors).sum()
-        + (_render_alphas * v_render_alphas).sum(),
-        (means, quats, scales, colors, opacities_broadcast, backgrounds),
-    )
+        (
+            _v_means,
+            _v_quats,
+            _v_scales,
+            _v_colors,
+            _v_opacities,
+            _v_backgrounds,
+            _v_rays,
+        ) = torch.autograd.grad(
+            (_render_colors * v_render_colors).sum()
+            + (_render_alphas * v_render_alphas).sum(),
+            (means, quats, scales, colors, opacities_broadcast, backgrounds, rays),
+            retain_graph=True,
+        )
+    else:
+        (
+            v_means,
+            v_quats,
+            v_scales,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+        ) = torch.autograd.grad(
+            (render_colors * v_render_colors).sum()
+            + (render_alphas * v_render_alphas).sum(),
+            (means, quats, scales, colors, opacities_broadcast, backgrounds),
+            retain_graph=True,
+        )
+
+        (
+            _v_means,
+            _v_quats,
+            _v_scales,
+            _v_colors,
+            _v_opacities,
+            _v_backgrounds,
+        ) = torch.autograd.grad(
+            (_render_colors * v_render_colors).sum()
+            + (_render_alphas * v_render_alphas).sum(),
+            (means, quats, scales, colors, opacities_broadcast, backgrounds),
+            retain_graph=True,
+        )
 
     # Create visibility mask [N] for Gaussians
     # We want to consider only visible gaussians so that the invisible ones don't
@@ -1207,6 +1297,13 @@ def test_rasterize_to_pixels_eval3d(
         rtol=0,
         atol=1.6e-2,
     )
+
+    if use_rays:
+        rays_mask = get_inlier_abserror_mask(v_rays, _v_rays, quantile=0.95)
+        assert rays_mask.sum() > 0
+        torch.testing.assert_close(
+            v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=4e-2
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

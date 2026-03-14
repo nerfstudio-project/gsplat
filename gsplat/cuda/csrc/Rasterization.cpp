@@ -672,6 +672,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
+    const at::optional<at::Tensor> rays, // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
@@ -738,6 +739,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
             camera_model,                                                      \
             ut_params,                                                         \
             rs_type,                                                           \
+            rays,                                                              \
             radial_coeffs,                                                     \
             tangential_coeffs,                                                 \
             thin_prism_coeffs,                                                 \
@@ -766,7 +768,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
 };
 
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
 rasterize_to_pixels_from_world_3dgs_bwd(
     // Gaussian parameters
     const at::Tensor means,  // [..., N, 3]
@@ -788,6 +790,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
+    const at::optional<at::Tensor> rays,    // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
@@ -821,6 +824,9 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     if (masks.has_value()) {
         CHECK_INPUT(masks.value());
     }
+    if (rays.has_value()) {
+        CHECK_INPUT(rays.value());
+    }
 
     uint32_t channels = colors.size(-1);
 
@@ -829,7 +835,8 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     at::Tensor v_scales = at::zeros_like(scales);
     at::Tensor v_colors = at::zeros_like(colors);
     at::Tensor v_opacities = at::zeros_like(opacities);
-
+    at::optional<at::Tensor> v_rays = rays.has_value() ? at::optional<at::Tensor>(at::zeros_like(rays.value())) : at::optional<at::Tensor>();
+    
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
         launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel<N>(              \
@@ -849,6 +856,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
             camera_model,                                                     \
             ut_params,                                                        \
             rs_type,                                                       \
+            rays,                                                              \
             radial_coeffs,                                                    \
             tangential_coeffs,                                                \
             thin_prism_coeffs,                                               \
@@ -864,7 +872,8 @@ rasterize_to_pixels_from_world_3dgs_bwd(
             v_quats,                                                           \
             v_scales,                                                          \
             v_colors,                                                          \
-            v_opacities                                                        \
+            v_opacities,                                                       \
+            v_rays                                                             \
         );                                                                     \
         break;
 
@@ -879,7 +888,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
 #undef __LAUNCH_KERNEL__
 
     return std::make_tuple(
-        v_means, v_quats, v_scales, v_colors, v_opacities
+        v_means, v_quats, v_scales, v_colors, v_opacities, v_rays
     );
 }
 

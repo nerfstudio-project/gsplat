@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional, Tuple
 import torch
 from torch import Tensor
 from typing_extensions import Literal
+from gsplat._helper import assert_shape
 
 CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta"]
 
@@ -41,9 +42,14 @@ def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
     from ._backend import _C
 
+    if _C is None:
+        raise RuntimeError(
+            "gsplat CUDA extension is not available (not built or failed to load). "
+            f"Cannot access '{name}'."
+        )
     obj = _C
     for name_split in name.split("."):
-        obj = getattr(_C, name_split)
+        obj = getattr(obj, name_split)
     return obj
 
 
@@ -740,6 +746,7 @@ def rasterize_to_pixels_eval3d(
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    rays: Optional[Tensor] = None,  # [..., C, H, W, 6]
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -771,6 +778,7 @@ def rasterize_to_pixels_eval3d(
         opacities=opacities,
         viewmats=viewmats,
         Ks=Ks,
+        rays=rays,
         image_width=image_width,
         image_height=image_height,
         tile_size=tile_size,
@@ -809,6 +817,7 @@ def rasterize_to_pixels_eval3d_extra(
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    rays: Optional[Tensor] = None,  # [..., C, P, 6]
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -841,6 +850,7 @@ def rasterize_to_pixels_eval3d_extra(
     num_batch_dims = len(batch_dims)
     N = means.size(-2)
     C = viewmats.size(-3)
+    P = rays.shape[-2] if rays is not None else 0
     channels = colors.shape[-1]
     device = means.device
 
@@ -849,6 +859,11 @@ def rasterize_to_pixels_eval3d_extra(
     assert scales.shape == batch_dims + (N, 3), scales.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
+    if rays is not None:
+        assert_shape("rays", rays, batch_dims + (C, P, 6))
+        assert (
+            rays.dtype == torch.float32
+        ), f"rays must be torch.float32, got {rays.dtype}"
 
     assert colors.ndim in (num_batch_dims + 2, num_batch_dims + 3), colors.shape
     if colors.ndim == num_batch_dims + 2:
@@ -963,6 +978,7 @@ def rasterize_to_pixels_eval3d_extra(
         flatten_ids.contiguous(),
         camera_model,
         ut_params,
+        rays.contiguous() if rays is not None else None,
         # distortion
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
@@ -1558,6 +1574,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         flatten_ids: Tensor,  # [..., n_isects]
         camera_model: CameraModel = "pinhole",
         ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+        rays: Optional[Tensor] = None,  # [..., C, P, 6]
         # distortion
         radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
         tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -1612,6 +1629,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             camera_model_type,
             ut_params,
             rs_type,
+            rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
@@ -1633,6 +1651,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             viewmats,
             viewmats_rs,
             Ks,
+            rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
@@ -1673,6 +1692,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             viewmats,
             viewmats_rs,
             Ks,
+            rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
@@ -1690,9 +1710,14 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ftheta_coeffs = ctx.ftheta_coeffs
         use_hit_distance = ctx.use_hit_distance
 
-        (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
-            "rasterize_to_pixels_from_world_3dgs_bwd"
-        )(
+        (
+            v_means,
+            v_quats,
+            v_scales,
+            v_colors,
+            v_opacities,
+            v_rays,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_3dgs_bwd")(
             means,
             quats,
             scales,
@@ -1709,6 +1734,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             camera_model_type,
             ut_params,
             rs_type,
+            rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
@@ -1729,8 +1755,9 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         else:
             v_backgrounds = None
 
-        if ctx.needs_input_grad[7]:  # viewmats
-            raise NotImplementedError
+        # Check not needed anymore because we return v_rays directly
+        # if ctx.needs_input_grad[7]:  # viewmats
+        #    raise NotImplementedError
 
         return (
             v_means,
@@ -1749,6 +1776,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # flatten_ids
             None,  # camera_model
             None,  # ut_params
+            v_rays,  # rays
             None,  # radial_coeffs
             None,  # tangential_coeffs
             None,  # thin_prism_coeffs
