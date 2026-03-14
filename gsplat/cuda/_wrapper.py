@@ -24,9 +24,16 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 from gsplat._helper import assert_shape
+from gsplat.cuda._lidar import (
+    SpinningDirection,
+    LidarModelParameters,
+    RowOffsetStructuredSpinningLidarModelParameters,
+    RowOffsetStructuredSpinningLidarModelParametersExt as RowOffsetStructuredSpinningLidarModelParametersExtBase,
+    FOV as FOVBase,
+)
 
-CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta"]
 ExternalDistortionModelMeta = Literal["bivariate-windshield"]
+CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar"]
 
 
 def _make_lazy_cuda_func(name: str) -> Callable:
@@ -119,9 +126,29 @@ class ExternalDistortionReferencePolynomial(IntEnum):
     BACKWARD = 2
 
 
-BivariateWindshieldModelParameters = _make_lazy_cuda_cls(
-    "BivariateWindshieldModelParameters"
-)
+class BivariateWindshieldModelParameters:
+    """Thin wrapper around the CUDA BivariateWindshieldModelParameters class.
+
+    torch::Library bindings does not allow standalone constants. This
+    wrapper fetches MAX_ORDER and MAX_COEFFS from the C++ static getters
+    and exposes them as class-level attributes, preserving the existing
+    attribute-access calling convention.
+    """
+
+    _cuda_cls = None
+    MAX_ORDER: int = 5  # default, overriden by C++ value
+    MAX_COEFFS: int = 21  # default, overriden by C++ value
+
+    @classmethod
+    def _ensure_cuda_cls(cls):
+        if cls._cuda_cls is None:
+            cls._cuda_cls = _make_lazy_cuda_cls("BivariateWindshieldModelParameters")
+            cls.MAX_ORDER = cls._cuda_cls.get_max_order()
+            cls.MAX_COEFFS = cls._cuda_cls.get_max_coeffs()
+
+    def __new__(cls):
+        cls._ensure_cuda_cls()
+        return cls._cuda_cls()
 
 
 def has_camera_wrappers():
@@ -166,31 +193,84 @@ def has_reloc():
 
 
 def create_camera_model(
-    width: int,
-    height: int,
     camera_model: str,
-    principal_points: Tensor,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    principal_points: Optional[Tensor] = None,
     focal_lengths: Optional[Tensor] = None,
     radial_coeffs: Optional[Tensor] = None,
     tangential_coeffs: Optional[Tensor] = None,
     thin_prism_coeffs: Optional[Tensor] = None,
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     rs_type: RollingShutterType = RollingShutterType.GLOBAL,
+    lidar_coeffs: Optional["RowOffsetStructuredSpinningLidarModelParametersExt"] = None,
 ):
-    BaseCameraModelCUDA = _make_lazy_cuda_cls("BaseCameraModel")
+    if camera_model == "lidar":
+        assert (
+            lidar_coeffs is not None
+        ), "lidar_coeffs is required for lidar camera model"
+        RowOffsetStructuredSpinningLidarModelCUDA = _make_lazy_cuda_cls(
+            "RowOffsetStructuredSpinningLidarModel"
+        )
+        return RowOffsetStructuredSpinningLidarModelCUDA(lidar_coeffs.to_cpp())
+    else:
+        assert width is not None, "width is required for non-lidar camera models"
+        assert height is not None, "height is required for non-lidar camera models"
+        assert (
+            principal_points is not None
+        ), "principal_points is required for non-lidar camera models"
+        BaseCameraModelCUDA = _make_lazy_cuda_cls("BaseCameraModel")
+        return BaseCameraModelCUDA.create(
+            width,
+            height,
+            camera_model,
+            principal_points,
+            focal_lengths,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            ftheta_coeffs,
+            rs_type,
+        )
 
-    return BaseCameraModelCUDA.create(
-        width,
-        height,
-        camera_model,
-        principal_points,
-        focal_lengths,
-        radial_coeffs,
-        tangential_coeffs,
-        thin_prism_coeffs,
-        ftheta_coeffs,
-        rs_type,
-    )
+
+class FOV(FOVBase):
+    @classmethod
+    def from_base(cls, base: FOVBase) -> "FOV":
+        return cls(start=base.start, span=base.span, direction=base.direction)
+
+    def to_cpp(self):
+        FOVCUDA = _make_lazy_cuda_cls("FOV")
+        return FOVCUDA(start=self.start, span=self.span)
+
+
+class RowOffsetStructuredSpinningLidarModelParametersExt(
+    RowOffsetStructuredSpinningLidarModelParametersExtBase
+):
+    """Lidar camera parameters extended with acceleration structures"""
+
+    def to_cpp(self) -> Any:
+        """Convert to C++ custom class instance."""
+        LidarParamsCUDA = _make_lazy_cuda_cls(
+            "RowOffsetStructuredSpinningLidarModelParametersExt"
+        )
+        return LidarParamsCUDA(
+            row_elevations_rad=self.row_elevations_rad,
+            column_azimuths_rad=self.column_azimuths_rad,
+            row_azimuth_offsets_rad=self.row_azimuth_offsets_rad,
+            spinning_direction=self.spinning_direction.value,
+            spinning_frequency_hz=self.spinning_frequency_hz,
+            fov_vert_rad=FOV.from_base(self.fov_vert_rad).to_cpp(),
+            fov_horiz_rad=FOV.from_base(self.fov_horiz_rad).to_cpp(),
+            fov_eps_rad=self.fov_eps_rad,
+            angles_to_columns_map=self.angles_to_columns_map,
+            n_bins_azimuth=self.tiling.n_bins_azimuth,
+            n_bins_elevation=self.tiling.n_bins_elevation,
+            cdf_elevation=self.tiling.cdf_elevation,
+            cdf_dense_ray_mask=self.tiling.cdf_dense_ray_mask.contiguous(),
+            tiles_to_elements_map=self.tiling.tiles_to_elements_map,
+            tiles_pack_info=self.tiling.tiles_pack_info,
+        )
 
 
 def world_to_cam(
@@ -618,6 +698,79 @@ def isect_tiles(
 
 
 @torch.no_grad()
+def isect_tiles_lidar(
+    lidar: RowOffsetStructuredSpinningLidarModelParametersExt,
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    radii: Tensor,  # [..., N, 2] or [nnz, 2]
+    depths: Tensor,  # [..., N] or [nnz]
+    sort: bool = True,
+    segmented: bool = False,
+    packed: bool = False,
+    n_images: Optional[int] = None,
+    image_ids: Optional[Tensor] = None,
+    gaussian_ids: Optional[Tensor] = None,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """Maps projected Gaussians to intersecting tiles.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
+        radii: Maximum radii of the projected Gaussians. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
+        depths: Z-depth of the projected Gaussians. [..., N] if packed is False, [nnz] if packed is True.
+        sort: If True, the returned intersections will be sorted by the intersection ids. Default: True.
+        segmented: If True, segmented radix sort will be used to sort the intersections. Default: False.
+        packed: If True, the input tensors are packed. Default: False.
+        n_images: Number of images. Required if packed is True.
+        image_ids: The image indices of the projected Gaussians. Required if packed is True.
+        gaussian_ids: The column indices of the projected Gaussians. Required if packed is True.
+
+    Returns:
+        A tuple:
+
+        - **Tiles per Gaussian**. The number of tiles intersected by each Gaussian.
+          Int32 [..., N] if packed is False, Int32 [nnz] if packed is True.
+        - **Intersection ids**. Each id is an 64-bit integer with the following
+          information: image_id (Xc bits) | tile_id (Xt bits) | depth (32 bits).
+          Xc and Xt are the maximum number of bits required to represent the image and
+          tile ids, respectively. Int64 [n_isects]
+        - **Flatten ids**. The global flatten indices in [I * N] or [nnz] (packed). [n_isects]
+    """
+    if packed:
+        nnz = means2d.size(0)
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert radii.shape == (nnz, 2), radii.shape
+        assert depths.shape == (nnz,), depths.shape
+        assert image_ids is not None, "image_ids is required if packed is True"
+        assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
+        assert n_images is not None, "n_images is required if packed is True"
+        image_ids = image_ids.contiguous()
+        gaussian_ids = gaussian_ids.contiguous()
+        I = n_images
+
+    else:
+        image_dims = means2d.shape[:-2]
+        I = math.prod(image_dims)
+        N = means2d.shape[-2]
+        assert means2d.shape == (*image_dims, N, 2), means2d.shape
+        assert radii.shape == (*image_dims, N, 2), radii.shape
+        assert depths.shape == (*image_dims, N), depths.shape
+
+    tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func(
+        "intersect_tile_lidar"
+    )(
+        lidar.to_cpp(),
+        means2d.contiguous(),
+        radii.contiguous(),
+        depths.contiguous(),
+        image_ids,
+        gaussian_ids,
+        I,
+        sort,
+        segmented,
+    )
+    return tiles_per_gauss, isect_ids, flatten_ids
+
+
+@torch.no_grad()
 def isect_offset_encode(
     isect_ids: Tensor,
     n_images: int,
@@ -798,6 +951,7 @@ def rasterize_to_pixels_eval3d(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -842,6 +996,7 @@ def rasterize_to_pixels_eval3d(
         tangential_coeffs=tangential_coeffs,
         thin_prism_coeffs=thin_prism_coeffs,
         ftheta_coeffs=ftheta_coeffs,
+        lidar_coeffs=lidar_coeffs,
         external_distortion_coeffs=external_distortion_coeffs,
         rolling_shutter=rolling_shutter,
         viewmats_rs=viewmats_rs,
@@ -875,6 +1030,7 @@ def rasterize_to_pixels_eval3d_extra(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -1017,12 +1173,19 @@ def rasterize_to_pixels_eval3d_extra(
         padded_channels = 0
 
     tile_height, tile_width = isect_offsets.shape[-2:]
-    assert (
-        tile_height * tile_size >= image_height
-    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-    assert (
-        tile_width * tile_size >= image_width
-    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+    if camera_model == "lidar":
+        assert tile_width == lidar_coeffs.tiling.n_bins_elevation
+        assert tile_height == lidar_coeffs.tiling.n_bins_azimuth
+        # TODO: improve checks. Right now we don't have access to max_pts_per_tile used,
+        # hence this assert needs to be commented out.
+        # assert tile_width*tile_height*lidar_coeffs.tiling.max_pts_per_tile >= lidar_coeffs.n_rows*lidar_coeffs.n_columns
+    else:
+        assert (
+            tile_height * tile_size >= image_height
+        ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+        assert (
+            tile_width * tile_size >= image_width
+        ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
     (
         render_colors,
@@ -1053,6 +1216,7 @@ def rasterize_to_pixels_eval3d_extra(
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
         ftheta_coeffs,
+        lidar_coeffs,
         external_distortion_coeffs,
         # rolling shutter
         rolling_shutter,
@@ -1418,6 +1582,7 @@ def fully_fused_projection_with_ut(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -1463,6 +1628,11 @@ def fully_fused_projection_with_ut(
     if viewmats_rs is not None:
         assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
 
+    if lidar_coeffs is not None:
+        assert isinstance(
+            lidar_coeffs, RowOffsetStructuredSpinningLidarModelParametersExt
+        )
+
     camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
     ftheta_coeffs = (
         ftheta_coeffs
@@ -1495,6 +1665,7 @@ def fully_fused_projection_with_ut(
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
         ftheta_coeffs,
+        lidar_coeffs.to_cpp() if lidar_coeffs is not None else None,
         external_distortion_coeffs,
     )
     if not calc_compensations:
@@ -1660,6 +1831,9 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
         thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
         ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+        lidar_coeffs: Optional[
+            RowOffsetStructuredSpinningLidarModelParametersExt
+        ] = None,
         external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
         # rolling shutter
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -1679,6 +1853,8 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             if ftheta_coeffs is not None
             else FThetaCameraDistortionParameters()
         )
+
+        lidar_coeffs = lidar_coeffs.to_cpp() if lidar_coeffs is not None else None
 
         # Extract batch_dims for sample_counts allocation
         batch_dims = means.shape[:-2]
@@ -1727,6 +1903,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
+            lidar_coeffs,
             external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
@@ -1762,6 +1939,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.camera_model_type = camera_model_type
         ctx.tile_size = tile_size
         ctx.ftheta_coeffs = ftheta_coeffs
+        ctx.lidar_coeffs = lidar_coeffs
         ctx.external_distortion_coeffs = external_distortion_coeffs
         ctx.use_hit_distance = use_hit_distance
 
@@ -1805,6 +1983,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         tile_size = ctx.tile_size
         ftheta_coeffs = ctx.ftheta_coeffs
+        lidar_coeffs = ctx.lidar_coeffs
         external_distortion_coeffs = ctx.external_distortion_coeffs
         use_hit_distance = ctx.use_hit_distance
 
@@ -1837,6 +2016,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
+            lidar_coeffs,
             external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
@@ -1881,6 +2061,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # tangential_coeffs
             None,  # thin_prism_coeffs
             None,  # ftheta_coeffs
+            None,  # lidar_coeffs
             None,  # external_distortion_coeffs
             None,  # rolling_shutter
             None,  # viewmats_rs

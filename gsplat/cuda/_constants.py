@@ -1,4 +1,3 @@
-# SPDX-FileCopyrightText: Copyright 2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -22,3 +21,5 @@ ALPHA_THRESHOLD = 1.0 / 255.0
 # i.e. TRANSMITTANCE_THRESHOLD = (1 - MAX_ALPHA)^2
 MAX_ALPHA = 0.99
 TRANSMITTANCE_THRESHOLD = 1e-4
+
+MAX_KERNEL_DENSITY_CUTOFF = 0.0113

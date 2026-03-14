@@ -23,8 +23,10 @@ pytest <THIS_PY_FILE> -s
 """
 
 import math
+import struct
 import os
 from itertools import chain, product
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -60,6 +62,8 @@ from gsplat.cuda._wrapper import (
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
 from gsplat.cuda._constants import ALPHA_THRESHOLD
+from tests.test_cameras import parse_lidar_camera
+from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
 
 device = torch.device("cuda:0")
 
@@ -689,6 +693,7 @@ def test_fully_fused_projection_ut(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_isect(test_data, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
@@ -729,6 +734,1210 @@ def test_isect(test_data, batch_dims: Tuple[int, ...]):
     torch.testing.assert_close(isect_ids, _isect_ids)
     torch.testing.assert_close(flatten_ids, _gauss_ids)
     torch.testing.assert_close(isect_offsets, _isect_offsets)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+@pytest.mark.parametrize("lidar_model", ["pandar128", "at128"])
+def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
+    from gsplat.cuda._torch_impl_lidar import (
+        _isect_tiles_lidar,
+        ANGLE_TO_PIXEL_SCALING_FACTOR,
+    )
+    from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles_lidar
+
+    torch.manual_seed(42)
+
+    params = parse_lidar_camera(lidar_model, batch_dims, 0, 0, device=device)
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(**params)
+
+    C, N = 3, 1000  # cameras and gaussians
+
+    test_data = {
+        "means2d": torch.randn(C, N, 2, device=device)
+        * torch.tensor([math.pi, 2 * math.pi], device=device),
+        # TODO: assuming .x=elevation and .y=azimuth. This must be transposed.
+        "radii": torch.randn(C, N, 2, device=device).abs().clamp(max=1)
+        * torch.tensor([lidar.fov_vert_rad.span / 2, math.pi], device=device),
+        "depths": torch.rand(C, N, device=device),
+    }
+    test_data = expand(test_data, batch_dims)
+    means2d = test_data["means2d"] * ANGLE_TO_PIXEL_SCALING_FACTOR
+    radii = torch.ceil(test_data["radii"] * ANGLE_TO_PIXEL_SCALING_FACTOR).to(
+        torch.int32
+    )
+    depths = test_data["depths"]
+
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
+        lidar, means2d, radii, depths, sort=True
+    )
+
+    _tiles_per_gauss, _isect_ids, _flatten_ids = _isect_tiles_lidar(
+        lidar, means2d, radii, depths, sort=True
+    )
+
+    torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
+    torch.testing.assert_close(isect_ids, _isect_ids)
+    torch.testing.assert_close(flatten_ids, _flatten_ids)
+
+
+@pytest.fixture
+def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
+    from gsplat.cuda._lidar import LidarTiling
+
+    # The actual vfov span value is not relevant, as long as it's within elevation range.
+    vfov_span_deg = 90
+    spinning_direction = gsplat.SpinningDirection.COUNTER_CLOCKWISE
+
+    # Scale FOV to be multiple of a "pixel"
+    hfov_span_rad = (
+        math.ceil((hfov_span_deg / 180 * math.pi) * ANGLE_TO_PIXEL_SCALING_FACTOR)
+        / ANGLE_TO_PIXEL_SCALING_FACTOR
+    )
+    vfov_span_rad = (
+        math.ceil((vfov_span_deg / 180 * math.pi) * ANGLE_TO_PIXEL_SCALING_FACTOR)
+        / ANGLE_TO_PIXEL_SCALING_FACTOR
+    )
+
+    hfov_span_pix = hfov_span_rad * ANGLE_TO_PIXEL_SCALING_FACTOR
+
+    assert (hfov_span_deg < 360) == (hfov_span_rad < 2 * math.pi)
+
+    # If the dense tile's size to be a multiple of a pixel...
+    if n_dense_tiles_azimuth < 0:
+        n_dense_tiles_azimuth = math.ceil(hfov_span_pix / (-n_dense_tiles_azimuth))
+
+    # clockwise
+    row_elevations_rad = torch.tensor(
+        [vfov_span_rad / 2, 0.0, -vfov_span_rad / 2], dtype=torch.float32, device=device
+    )
+
+    # Keep base columns strictly within <2*pi span to satisfy lidar parameter assertions.
+    # Row offsets then expand the effective FoV to the requested hfov_span_rad.
+    offset_amp = min(0.2, hfov_span_rad * 0.2)
+    base_hfov_span_rad = max(1e-3, hfov_span_rad - 2.0 * offset_amp)
+
+    if spinning_direction == gsplat.SpinningDirection.CLOCKWISE:
+        column_azimuths_rad = torch.linspace(
+            # Angles go in decreasing order.
+            base_hfov_span_rad / 2,
+            -base_hfov_span_rad / 2,
+            5,
+            dtype=torch.float32,
+            device=device,
+        )
+    else:
+        column_azimuths_rad = torch.linspace(
+            # Angles go in increasing order.
+            -base_hfov_span_rad / 2,
+            base_hfov_span_rad / 2,
+            5,
+            dtype=torch.float32,
+            device=device,
+        )
+    row_azimuth_offsets_rad = torch.tensor(
+        [offset_amp, 0.0, -offset_amp], dtype=torch.float32, device=device
+    )
+
+    n_bins_elevation = 11
+    n_bins_azimuth = 21
+    # Use a non-identity CDF (multiple dense bins per coarse bin) so that
+    # the elevation CDF half-open range logic is exercised in every test.
+    cdf_resolution_elevation = 33
+    cdf_resolution_azimuth = n_dense_tiles_azimuth
+
+    # Build sparse mask from requested ray azimuth position(s).
+
+    # Define the ray location angle
+    if ray_location == "none":
+        rays_rel_az_pix = []
+    elif ray_location == "middle":
+        rays_rel_az_pix = [hfov_span_pix * 0.5]
+    elif ray_location == "min":
+        rays_rel_az_pix = [0.0]
+    elif ray_location == "max":
+        rays_rel_az_pix = [hfov_span_pix - 1.0]
+    elif ray_location == "both":
+        rays_rel_az_pix = [0.0, hfov_span_pix - 1.0]
+    else:
+        assert False, f"Invalid ray location: {ray_location=}"
+
+    dense_mask = torch.zeros(
+        (cdf_resolution_azimuth, cdf_resolution_elevation),
+        dtype=torch.int32,
+        device=device,
+    )
+    if len(rays_rel_az_pix) > 0:
+        all_az_rad = column_azimuths_rad[None, :] + row_azimuth_offsets_rad[:, None]
+        fov_min_rad = all_az_rad.min().item()
+        fov_max_rad = all_az_rad.max().item()
+
+        fov_span_az_pix = (fov_max_rad - fov_min_rad) * ANGLE_TO_PIXEL_SCALING_FACTOR
+
+        for ray_rel_az_pix in rays_rel_az_pix:
+            az_norm = ray_rel_az_pix / fov_span_az_pix
+            az_idx = int(math.floor(az_norm * cdf_resolution_azimuth))
+            az_idx = max(0, min(az_idx, cdf_resolution_azimuth - 1))
+
+            # Always use the middle elevation, as only azimuth requires
+            # special testing (periodic, non-periodic, etc).
+            middle_el_idx = dense_mask.shape[1] // 2
+
+            dense_mask[az_idx, middle_el_idx] = 1
+
+    # Create the cdf dense ray mask given the dense mask with number of rays in a dense cell.
+    cdf = torch.zeros(
+        (dense_mask.shape[0] + 1, dense_mask.shape[1] + 1),
+        dtype=torch.int32,
+        device=dense_mask.device,
+    )
+    cdf[1:, 1:] = dense_mask.to(torch.int32)
+    cdf_dense_ray_mask = cdf.cumsum(dim=0).cumsum(dim=1).to(torch.int32)
+
+    # Build elevation CDF: maps dense elevation index -> coarse elevation bin.
+    # Identity when cdf_resolution_elevation == n_bins_elevation;
+    # multiple dense bins per coarse bin otherwise.
+    cdf_elevation = torch.tensor(
+        [
+            i * n_bins_elevation // cdf_resolution_elevation
+            for i in range(cdf_resolution_elevation + 1)
+        ],
+        dtype=torch.int32,
+        device=device,
+    )
+    # The CDF must have plateaus (consecutive equal values) so that the
+    # elevation half-open range logic is actually exercised.
+    assert torch.any(cdf_elevation[1:] == cdf_elevation[:-1])
+
+    # These aren't used, but need to have the correct shape.
+    tiles_pack_info = torch.zeros(
+        (n_bins_azimuth * n_bins_elevation, 2), dtype=torch.int32, device=device
+    )
+    tiles_to_elements_map = torch.zeros((1, 2), dtype=torch.int32, device=device)
+
+    # Finally create the LidarTiling object
+    tiling = LidarTiling(
+        n_bins_azimuth=n_bins_azimuth,
+        n_bins_elevation=n_bins_elevation,
+        cdf_elevation=cdf_elevation,
+        cdf_dense_ray_mask=cdf_dense_ray_mask,
+        tiles_pack_info=tiles_pack_info,
+        tiles_to_elements_map=tiles_to_elements_map,
+    )
+
+    # And the lidar whole parameters
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        row_elevations_rad=row_elevations_rad,
+        column_azimuths_rad=column_azimuths_rad,
+        row_azimuth_offsets_rad=row_azimuth_offsets_rad,
+        spinning_direction=spinning_direction,
+        spinning_frequency_hz=10.0,
+        angles_to_columns_map=torch.zeros((3, 5), dtype=torch.int32, device=device),
+        tiling=tiling,
+    )
+
+    assert lidar.fov_horiz_rad.span * 180.0 / math.pi >= hfov_span_deg
+    return lidar
+
+
+@pytest.fixture
+def gaussian_param(lidar_param, gauss_start_pos, gauss_end_pos):
+    lidar = lidar_param
+
+    hfov_start_pix = lidar.fov_horiz_rad.start * ANGLE_TO_PIXEL_SCALING_FACTOR
+    hfov_span_pix = lidar.fov_horiz_rad.span * ANGLE_TO_PIXEL_SCALING_FACTOR
+    hfov_end_pix = hfov_start_pix + hfov_span_pix
+
+    full_circle_pix = 2 * math.pi * ANGLE_TO_PIXEL_SCALING_FACTOR
+
+    def get_hfov_angle_az_pix(boundary_name):
+        if "far_min_outside" in boundary_name:
+            return hfov_start_pix - hfov_span_pix
+        elif "far_max_outside" in boundary_name:
+            return hfov_end_pix + hfov_span_pix
+        elif "min_outside" in boundary_name:
+            return hfov_start_pix - 1
+        elif "min_inside" in boundary_name:
+            return hfov_start_pix
+        elif "low_inside" in boundary_name:
+            return hfov_start_pix + hfov_span_pix * 0.25
+        elif "high_inside" in boundary_name:
+            return hfov_start_pix + hfov_span_pix * 0.75
+        elif "max_inside" in boundary_name:
+            return hfov_end_pix - 1
+        elif "max_outside" in boundary_name:
+            return hfov_end_pix
+        else:
+            assert False, f"Invalid boundary: {boundary_name}"
+
+    gaussian_start_az_pix = get_hfov_angle_az_pix(gauss_start_pos)
+    gaussian_end_az_pix = get_hfov_angle_az_pix(gauss_end_pos)
+
+    periodic_azimuth = hfov_span_pix >= full_circle_pix
+    behind_sensor = not periodic_azimuth and gaussian_start_az_pix > gaussian_end_az_pix
+
+    # Calculate the raw radius (in floating point)
+    radius_az_pix = abs(gaussian_end_az_pix - gaussian_start_az_pix) / 2
+    if gaussian_start_az_pix > gaussian_end_az_pix:
+        radius_az_pix = full_circle_pix / 2 - radius_az_pix
+
+    assert ("exact" not in gauss_start_pos) or (
+        "exact" not in gauss_end_pos
+    ), "Both boundaries can't be exact"
+
+    # If either gaussian extremity is exactly positioned (i.e. pinned)
+    if "exact" in gauss_start_pos or "exact" in gauss_end_pos:
+        if "exact" in gauss_start_pos:
+            exact_boundary = gauss_start_pos
+            non_exact_boundary = gauss_end_pos
+        else:
+            exact_boundary = gauss_end_pos
+            non_exact_boundary = gauss_start_pos
+
+        # We round to the direction that won't change the classification of the non-exact boundary
+        round_up = non_exact_boundary in ("min_inside", "max_outside")
+        # When gaussian is behind the sensor, increasing the radius make its edges go inwards the hfov,
+        # so we need to round in the opposite direction.
+        if behind_sensor and exact_boundary == gauss_end_pos:
+            round_up = not round_up
+
+        if round_up:
+            radius_az_pix = math.ceil(radius_az_pix)
+        else:
+            radius_az_pix = math.floor(radius_az_pix)
+
+        # Make sure the radius ends up not being 0 due to rounding.
+        if radius_az_pix == 0:
+            radius_az_pix += 1
+
+        def calc_mean_az_pix(exact_edge: float, radius: float) -> float:
+            gauss_mean = exact_edge + radius
+            # Convert from float64 to float32 (that's what we use in torch)
+            gauss_mean_fp32 = struct.unpack("!f", struct.pack("!f", float(gauss_mean)))[
+                0
+            ]
+            # Estimate where the edge would land with the current gaussian mean
+            edge_estim = gauss_mean_fp32 - radius
+            # Calc the new gaussian mean so that the mean+radius lands exactly on the exact edge
+            return gauss_mean + (exact_edge - edge_estim)
+
+        if exact_boundary == gauss_start_pos:
+            mean_az_pix = calc_mean_az_pix(gaussian_start_az_pix, radius_az_pix)
+        else:
+            assert exact_boundary == gauss_end_pos
+            mean_az_pix = calc_mean_az_pix(gaussian_end_az_pix, -radius_az_pix)
+    else:
+        radius_az_pix = round(radius_az_pix)
+        mean_az_pix = gaussian_start_az_pix + radius_az_pix
+
+    assert not behind_sensor or (
+        mean_az_pix < hfov_start_pix or mean_az_pix >= hfov_end_pix
+    ), "If the gaussian is behind the sensor, its mean must be outside hfov"
+
+    return SimpleNamespace(
+        means2d=torch.tensor(
+            [[[0.0, mean_az_pix]]],
+            dtype=torch.float32,
+            device=device,
+        ),
+        radii=torch.tensor(
+            [[[1, radius_az_pix]]],
+            dtype=torch.int32,
+            device=device,
+        ),
+        depths=torch.tensor([[1.0]], dtype=torch.float32, device=device),
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize(
+    # Verifies that isect_tiles_lidar (CUDA) and _isect_tiles_lidar (Python ref)
+    # agree on the number of tiles intersected by a single Gaussian at the
+    # boundary of the horizontal FOV.
+    #
+    # Parameters:
+    #   hfov_span_deg:
+    #       - horizontal FOV span (180 = non-periodic, 360 = periodic azimuth).
+    #   gauss_start_pos / gauss_end_pos:
+    #       - where each edge of the Gaussian sits relative to the hfov, in the spinning direction.
+    #         When start > end, the Gaussian wraps through the back of the sensor.
+    #         Positions are:
+    #           min_outside  = just outside the low boundary
+    #           min_inside   = on the low boundary
+    #           low_inside   = well inside, lower quarter
+    #           high_inside  = well inside, upper quarter
+    #           max_inside   = on the high boundary
+    #           max_outside  = just outside the high boundary
+    #       Appending "_exact" pins that edge precisely on the boundary pixel (in fp32 precision).
+    #       Inexact positions might be nudged so that the computed gaussian radius remain an integer.
+    #       Nudging is done so that the classification of the inexact position doesn't change (when possible).
+    #   ray_location: where the single ray is placed in the CDF mask
+    #       ("none" / "min" / "max" / "middle").
+    #   n_dense_tiles_azimuth: number of dense azimuth tiles (-1 = 1 tile per pixel).
+    #   expected_tiles: how many tiles the Gaussian should intersect.
+    "hfov_span_deg,gauss_start_pos,gauss_end_pos,ray_location,n_dense_tiles_azimuth,expected_tiles",
+    [
+        # Special case for full cover returning all tiles.
+        # beg<=0 and end>=span triggers full_cover, which bypasses the ray
+        # check and returns all n_bins_azimuth tiles.
+        (
+            120,
+            "min_inside_exact",
+            "max_outside",
+            "none",
+            21,
+            21,
+        ),  # beg=0, end=span -> full_cover -> 21
+        (
+            120,
+            "min_outside",
+            "max_outside_exact",
+            "none",
+            21,
+            21,
+        ),  # beg<0, end=span -> full_cover -> 21
+        (
+            360,
+            "min_inside_exact",
+            "max_outside",
+            "none",
+            21,
+            21,
+        ),  # beg=0, end=span -> full_cover -> 21
+        (
+            360,
+            "min_outside",
+            "max_outside_exact",
+            "none",
+            21,
+            21,
+        ),  # beg<0, end=span -> full_cover -> 21
+        # Full cover with rays present: full_cover bypasses has_any_rays_in_tile,
+        # so the result must be 21 regardless of ray placement.
+        # Use min_inside_exact+max_outside: exact pinning at min ensures
+        # radius rounds up, making end > span and guaranteeing full_cover.
+        (
+            120,
+            "min_inside_exact",
+            "max_outside",
+            "min",
+            21,
+            21,
+        ),  # full_cover + ray@min -> still 21
+        (
+            120,
+            "min_inside_exact",
+            "max_outside",
+            "both",
+            21,
+            21,
+        ),  # full_cover + both rays -> still 21
+        (
+            360,
+            "min_inside_exact",
+            "max_outside",
+            "max",
+            21,
+            21,
+        ),  # full_cover + ray@max -> still 21
+        # Near-full cover: the exact pinning at max_outside rounds the radius down,
+        # so the start edge lands at ~hfov_start-0.02 instead of -1.
+        # The gaussian nearly spans the full FOV but just barely misses
+        # full_cover due to fp32 precision. The A/B split must not
+        # double-count the boundary tile.
+        (
+            360,
+            "min_outside",
+            "max_outside_exact",
+            "max",
+            21,
+            21,
+        ),  # A=[0,fc-~0.02), B=[fc-~0.02,fc); tile 20 only counted once -> 21
+        # Almost-full cover: end=span-1 fails the full_cover check
+        # (end < span), and with no rays the gaussian is culled.
+        # We use -1 to denote 1 tile per pixel.
+        #
+        # NOTE: With n_dense=-1 (1 dense cell per pixel), the float32
+        # computation ceil((span-1)/span * span) can overshoot to span
+        # for certain FOV values, falsely triggering the full_cover
+        # optimization in has_any_rays_in_tile and returning 21 instead
+        # of 0. This is a known float32 precision issue.
+        # This would only affect performance, nothing to worry about.
+        (
+            120,
+            "min_inside_exact",
+            "max_inside",
+            "none",
+            -1,
+            0,
+        ),  # end=span-1 < span -> not full_cover, no rays -> 0
+        (
+            120,
+            "min_outside",
+            "max_inside_exact",
+            "none",
+            -1,
+            0,
+        ),  # end=span-1 < span -> not full_cover, no rays -> 0
+        (
+            360,
+            "min_inside_exact",
+            "max_inside",
+            "none",
+            -1,
+            0,
+        ),  # end=span-1 < span -> not full_cover, no rays -> 0
+        (
+            360,
+            "min_outside",
+            "max_inside_exact",
+            "none",
+            -1,
+            0,
+        ),  # end=span-1 < span -> not full_cover, no rays -> 0
+        # Normal inside gaussians.
+        (
+            120,
+            "low_inside",
+            "high_inside",
+            "middle",
+            21,
+            11,
+        ),  # A covers [0.25,0.75)*span -> tiles [5,16); ray@cell10 hit -> 11
+        (
+            120,
+            "high_inside",
+            "low_inside",
+            "middle",
+            21,
+            0,
+        ),  # behind sensor: tips at min/max edges, ray@middle in gap -> 0
+        # 360deg normal inside: same geometry but periodic.
+        (
+            360,
+            "low_inside",
+            "high_inside",
+            "middle",
+            21,
+            11,
+        ),  # same as 120deg, normal middle coverage -> 11
+        # 360deg wrap-around: high->low wraps through the opposite side
+        # (not behind_sensor since periodic). Produces A=[0.75*span,fc)
+        # and B=[0,0.25*span) via overflow, covering both edges of the FOV.
+        (
+            360,
+            "high_inside",
+            "low_inside",
+            "middle",
+            21,
+            0,
+        ),  # ray@middle in gap between A and B -> 0
+        (
+            360,
+            "high_inside",
+            "low_inside",
+            "both",
+            21,
+            12,
+        ),  # A=6 tiles (hit@max), B=6 tiles (hit@min) -> 12
+        # Behind-sensor: gaussian wraps through the back of the sensor.
+        # The overflow creates A (max tip) and B (min tip) ranges.
+        #
+        # start_exact@max_inside, end@min_inside:
+        #   A=[span-1,span)=tile 20, B=[0,~0) via overflow=tile 0
+        (
+            120,
+            "max_inside_exact",
+            "min_inside",
+            "min",
+            21,
+            1,
+        ),  # ray@min in B(tile 0) -> 1
+        (
+            120,
+            "max_inside_exact",
+            "min_inside",
+            "max",
+            21,
+            1,
+        ),  # ray@max in A(tile 20) -> 1
+        (
+            120,
+            "max_inside_exact",
+            "min_inside",
+            "both",
+            21,
+            2,
+        ),  # ray@min in B + ray@max in A -> 2
+        # start@max_inside, end_exact@min_inside:
+        #   end exact@0 -> B=[0,0)=empty; A=[span-1,span)=tile 20
+        (
+            120,
+            "max_inside",
+            "min_inside_exact",
+            "min",
+            21,
+            0,
+        ),  # B empty; ray@min not in A -> 0
+        (
+            120,
+            "max_inside",
+            "min_inside_exact",
+            "max",
+            21,
+            1,
+        ),  # B empty; ray@max in A(tile 20) -> 1
+        (
+            120,
+            "max_inside",
+            "min_inside_exact",
+            "both",
+            21,
+            1,
+        ),  # B empty; only ray@max in A -> 1
+        # start_exact@max_outside: start at span boundary -> A=[span,span)=empty.
+        # Only B (overflow tip at min) can contribute.
+        (
+            120,
+            "max_outside_exact",
+            "min_inside",
+            "min",
+            21,
+            1,
+        ),  # A empty, B=tile 0; ray@min in B -> 1
+        (
+            120,
+            "max_outside_exact",
+            "min_inside",
+            "max",
+            21,
+            0,
+        ),  # A empty, B=tile 0; ray@max not in B -> 0
+        (
+            120,
+            "max_outside_exact",
+            "min_inside",
+            "both",
+            21,
+            1,
+        ),  # A empty, B=tile 0; only ray@min in B -> 1
+        # start@max_outside, end_exact@min_inside:
+        #   beg=span+1 -> A clamped empty; end exact@0 -> B=[0,0)=empty
+        (120, "max_outside", "min_inside_exact", "min", 21, 0),  # A/B both empty -> 0
+        (120, "max_outside", "min_inside_exact", "max", 21, 0),  # A/B both empty -> 0
+        (120, "max_outside", "min_inside_exact", "both", 21, 0),  # A/B both empty -> 0
+        # start_exact@max_inside, end@min_outside:
+        #   end outside -> beg=span-1, end=fc-1, no overflow.
+        #   A clamped to [span-1,span)=tile 20, B empty.
+        (
+            120,
+            "max_inside_exact",
+            "min_outside",
+            "min",
+            21,
+            0,
+        ),  # ray@min not in A(tile 20) -> 0
+        (
+            120,
+            "max_inside_exact",
+            "min_outside",
+            "max",
+            21,
+            1,
+        ),  # ray@max in A(tile 20) -> 1
+        (
+            120,
+            "max_inside_exact",
+            "min_outside",
+            "both",
+            21,
+            1,
+        ),  # B empty; only ray@max in A -> 1
+        (
+            120,
+            "max_inside",
+            "min_outside_exact",
+            "min",
+            21,
+            0,
+        ),  # A=tile 20; ray@min not in A -> 0
+        (
+            120,
+            "max_inside",
+            "min_outside_exact",
+            "max",
+            21,
+            1,
+        ),  # A=tile 20; ray@max in A -> 1
+        (
+            120,
+            "max_inside",
+            "min_outside_exact",
+            "both",
+            21,
+            1,
+        ),  # A=tile 20; only ray@max in A -> 1
+        # Both edges outside the FOV -> A/B clamp to empty.
+        (120, "max_outside_exact", "min_outside", "min", 21, 0),  # both outside -> 0
+        (120, "max_outside_exact", "min_outside", "max", 21, 0),  # both outside -> 0
+        (120, "max_outside_exact", "min_outside", "both", 21, 0),  # both outside -> 0
+        (120, "max_outside", "min_outside_exact", "min", 21, 0),  # both outside -> 0
+        (120, "max_outside", "min_outside_exact", "max", 21, 0),  # both outside -> 0
+        (120, "max_outside", "min_outside_exact", "both", 21, 0),  # both outside -> 0
+        # 1 non-periodic azimuth
+        # 1.1. Gaussian edge on min hfov boundary
+        # 1.1.1 ray on min boundary
+        (
+            120,
+            "min_outside_exact",
+            "min_inside",
+            "min",
+            21,
+            1,
+        ),  # underflow: A=[0,1)=cell 0, B clamped empty; ray@min in A -> 1
+        (
+            120,
+            "min_outside",
+            "min_outside_exact",
+            "min",
+            21,
+            0,
+        ),  # entirely outside FOV (near fc), clamped empty -> 0
+        (
+            120,
+            "min_inside_exact",
+            "min_inside",
+            "min",
+            21,
+            1,
+        ),  # A=[0,2)=cell 0; ray@min in A -> 1
+        (
+            120,
+            "min_outside",
+            "min_inside_exact",
+            "min",
+            21,
+            0,
+        ),  # mean outside, end exact@0 -> clamped empty -> 0
+        # 1.1.2 ray on max boundary
+        (
+            120,
+            "min_outside_exact",
+            "min_inside",
+            "max",
+            21,
+            0,
+        ),  # A=[0,1)=cell 0; ray@max(cell 20) not in A -> 0
+        (
+            120,
+            "min_outside",
+            "min_outside_exact",
+            "max",
+            21,
+            0,
+        ),  # entirely outside -> 0
+        (
+            120,
+            "min_inside_exact",
+            "min_inside",
+            "max",
+            21,
+            0,
+        ),  # A=[0,2)=cell 0; ray@max not in A -> 0
+        (120, "min_outside", "min_inside_exact", "max", 21, 0),  # clamped empty -> 0
+        # 1.1.3 ray on both boundaries (non-periodic B is empty, only min side matters)
+        (
+            120,
+            "min_outside_exact",
+            "min_inside",
+            "both",
+            21,
+            1,
+        ),  # A=cell 0; only ray@min hit -> 1
+        (
+            120,
+            "min_outside",
+            "min_outside_exact",
+            "both",
+            21,
+            0,
+        ),  # entirely outside -> 0
+        (
+            120,
+            "min_inside_exact",
+            "min_inside",
+            "both",
+            21,
+            1,
+        ),  # A=cell 0; only ray@min hit -> 1
+        (120, "min_outside", "min_inside_exact", "both", 21, 0),  # clamped empty -> 0
+        # 1.2. Gaussian edge on max hfov boundary
+        # 1.2.1 ray on min boundary
+        (
+            120,
+            "max_outside_exact",
+            "max_outside",
+            "min",
+            21,
+            0,
+        ),  # both at span, clamped to [span,span+2) -> empty -> 0
+        (
+            120,
+            "max_inside",
+            "max_outside_exact",
+            "min",
+            21,
+            0,
+        ),  # A=[span-2,span)=cell 20; ray@min not in A -> 0
+        (
+            120,
+            "max_inside_exact",
+            "max_outside",
+            "min",
+            21,
+            0,
+        ),  # A=[span-1,span)=cell 20; ray@min not in A -> 0
+        (
+            120,
+            "max_inside",
+            "max_inside_exact",
+            "min",
+            21,
+            0,
+        ),  # A near max=cell 20; ray@min not in A -> 0
+        # 1.2.2 ray on max boundary
+        (
+            120,
+            "max_outside_exact",
+            "max_outside",
+            "max",
+            21,
+            0,
+        ),  # entirely outside (clamped empty) -> 0
+        (
+            120,
+            "max_inside",
+            "max_outside_exact",
+            "max",
+            21,
+            1,
+        ),  # A=[span-2,span)=cell 20; ray@max in A -> 1
+        (
+            120,
+            "max_inside_exact",
+            "max_outside",
+            "max",
+            21,
+            1,
+        ),  # A=[span-1,span)=cell 20; ray@max in A -> 1
+        (
+            120,
+            "max_inside",
+            "max_inside_exact",
+            "max",
+            21,
+            1,
+        ),  # A near max=cell 20; ray@max in A -> 1
+        # 1.2.3 ray on both boundaries (non-periodic B is empty, only max side matters)
+        (
+            120,
+            "max_outside_exact",
+            "max_outside",
+            "both",
+            21,
+            0,
+        ),  # entirely outside -> 0
+        (
+            120,
+            "max_inside",
+            "max_outside_exact",
+            "both",
+            21,
+            1,
+        ),  # A=cell 20; only ray@max hit -> 1
+        (
+            120,
+            "max_inside_exact",
+            "max_outside",
+            "both",
+            21,
+            1,
+        ),  # A=cell 20; only ray@max hit -> 1
+        (
+            120,
+            "max_inside",
+            "max_inside_exact",
+            "both",
+            21,
+            1,
+        ),  # A=cell 20; only ray@max hit -> 1
+        # 2 periodic azimuth
+        # 2.1. Gaussian edge on min hfov boundary
+        # 2.1.1 ray on min hfov boundary
+        (
+            360,
+            "min_outside_exact",
+            "min_inside",
+            "min",
+            21,
+            1,
+        ),  # underflow: A=[0,1)=cell 0, B=[fc-1,fc)=cell 20; ray@min in A -> 1
+        (
+            360,
+            "min_outside",
+            "min_outside_exact",
+            "min",
+            21,
+            0,
+        ),  # A=[fc-2,fc)=cell 20; ray@min(cell 0) not in A -> 0
+        (
+            360,
+            "min_inside_exact",
+            "min_inside",
+            "min",
+            21,
+            1,
+        ),  # A=[0,2)=cell 0; ray@min in A -> 1
+        (
+            360,
+            "min_outside",
+            "min_inside_exact",
+            "min",
+            21,
+            0,
+        ),  # A near fc=cell 20; ray@min not in A -> 0
+        # 2.1.2 ray on max boundary
+        (
+            360,
+            "min_outside_exact",
+            "min_inside",
+            "max",
+            21,
+            1,
+        ),  # A=cell 0, B=cell 20; ray@max in B -> 1
+        (
+            360,
+            "min_outside",
+            "min_outside_exact",
+            "max",
+            21,
+            1,
+        ),  # A=[fc-2,fc)=cell 20; ray@max in A -> 1
+        (
+            360,
+            "min_inside_exact",
+            "min_inside",
+            "max",
+            21,
+            0,
+        ),  # A=[0,2)=cell 0; ray@max not in A -> 0
+        (
+            360,
+            "min_outside",
+            "min_inside_exact",
+            "max",
+            21,
+            1,
+        ),  # A near fc=cell 20; ray@max in A -> 1
+        # 2.1.3 ray on both boundaries
+        (
+            360,
+            "min_outside_exact",
+            "min_inside",
+            "both",
+            21,
+            2,
+        ),  # A=cell 0 (hit@min), B=cell 20 (hit@max) -> 2
+        (
+            360,
+            "min_outside",
+            "min_outside_exact",
+            "both",
+            21,
+            1,
+        ),  # A=cell 20; ray@max hit, ray@min miss -> 1
+        (
+            360,
+            "min_inside_exact",
+            "min_inside",
+            "both",
+            21,
+            1,
+        ),  # A=cell 0; ray@min hit, ray@max miss -> 1
+        (
+            360,
+            "min_outside",
+            "min_inside_exact",
+            "both",
+            21,
+            1,
+        ),  # A=cell 20; ray@max hit -> 1
+        # 2.2. Gaussian edge on max hfov boundary
+        (
+            360,
+            "max_outside_exact",
+            "max_outside",
+            "min",
+            21,
+            1,
+        ),  # wraps to A=[0,2)=cell 0; ray@min in A -> 1
+        (
+            360,
+            "max_outside_exact",
+            "min_inside",
+            "min",
+            21,
+            1,
+        ),  # same angles for 360: wraps to cell 0; ray@min in A -> 1
+        (
+            360,
+            "max_inside",
+            "max_outside_exact",
+            "min",
+            21,
+            0,
+        ),  # A=[fc-2,fc)=cell 20; ray@min not in A -> 0
+        (
+            360,
+            "max_inside",
+            "min_inside_exact",
+            "min",
+            21,
+            0,
+        ),  # same geometry as above -> 0
+        (
+            360,
+            "max_inside_exact",
+            "max_outside",
+            "min",
+            21,
+            1,
+        ),  # underflow: A=[0,1), B=[fc-1,fc); ray@min in A -> 1
+        (
+            360,
+            "max_inside_exact",
+            "min_inside",
+            "min",
+            21,
+            1,
+        ),  # same geometry as above -> 1
+        (
+            360,
+            "max_inside",
+            "max_inside_exact",
+            "min",
+            21,
+            0,
+        ),  # A=[fc-3,fc-1)=cells 19-20; ray@min not in A -> 0
+        (
+            360,
+            "max_inside",
+            "min_outside_exact",
+            "min",
+            21,
+            0,
+        ),  # same geometry as above -> 0
+        # 2.2.2 ray on max boundary
+        (
+            360,
+            "max_outside_exact",
+            "max_outside",
+            "max",
+            21,
+            0,
+        ),  # wraps to A=[0,2)=cell 0; ray@max not in A -> 0
+        (
+            360,
+            "max_inside",
+            "max_outside_exact",
+            "max",
+            21,
+            1,
+        ),  # A=[fc-2,fc)=cell 20; ray@max in A -> 1
+        (
+            360,
+            "max_inside_exact",
+            "max_outside",
+            "max",
+            21,
+            1,
+        ),  # A=cell 0, B=cell 20; ray@max in B -> 1
+        (
+            360,
+            "max_inside",
+            "max_inside_exact",
+            "max",
+            21,
+            1,
+        ),  # A=[fc-3,fc-1)=cells 19-20; ray@max(cell 20) in A -> 1
+        # 2.2.3 ray on both boundaries
+        (
+            360,
+            "max_inside_exact",
+            "max_outside",
+            "both",
+            21,
+            2,
+        ),  # A=cell 0 (hit@min), B=cell 20 (hit@max) -> 2
+        (
+            360,
+            "max_outside_exact",
+            "min_outside",
+            "both",
+            21,
+            0,
+        ),  # extent wraps >full_circle -> negative radius -> culled -> 0
+        (
+            360,
+            "max_outside",
+            "min_outside_exact",
+            "both",
+            21,
+            1,
+        ),  # radius rounds to 1, A covers cell 20; ray@max hit -> 1
+        # 3 Dense tile resolution different from tile resolution.
+        # n_dense=7 (coarser than n_bins=21) verifies the independent
+        # scaling of dense and tile grids doesn't cause off-by-one errors.
+        (
+            120,
+            "min_outside_exact",
+            "min_inside",
+            "min",
+            7,
+            1,
+        ),  # coarser dense: A dense=[0,1), ray@min hit -> 1
+        (
+            120,
+            "max_inside",
+            "max_outside_exact",
+            "max",
+            7,
+            1,
+        ),  # coarser dense: A dense=[6,7), ray@max hit -> 1
+        (
+            120,
+            "low_inside",
+            "high_inside",
+            "middle",
+            7,
+            11,
+        ),  # coarser dense doesn't change tile count -> 11
+        (
+            360,
+            "min_outside_exact",
+            "min_inside",
+            "min",
+            7,
+            1,
+        ),  # periodic with coarser dense -> 1
+        # 4 Large-extent gaussians (extent > fov_span/2).
+        # Regression test: the old code incorrectly filtered these because
+        # the dense tile index range for both gaussian edges ended up on the
+        # same side of the FOV, causing has_any_rays_in_tile to misclassify
+        # the gaussian as "entirely outside."
+        (
+            120,
+            "far_min_outside",
+            "far_max_outside",
+            "both",
+            21,
+            21,
+        ),  # extent=1.5*span; full_cover -> 21
+        (
+            120,
+            "far_min_outside",
+            "far_max_outside",
+            "none",
+            21,
+            21,
+        ),  # full_cover triggers conservative shortcut -> 21
+        (200, "far_min_outside", "far_max_outside", "both", 21, 21),  # full_cover -> 21
+        (
+            200,
+            "far_min_outside",
+            "far_max_outside",
+            "none",
+            21,
+            21,
+        ),  # full_cover triggers conservative shortcut -> 21
+        (
+            360,
+            "far_min_outside",
+            "far_max_outside",
+            "middle",
+            21,
+            21,
+        ),  # periodic, extent=1.5*span; region B covers full FOV -> 21
+        (
+            360,
+            "far_min_outside",
+            "far_max_outside",
+            "none",
+            21,
+            21,
+        ),  # periodic, region B triggers conservative full-cover shortcut -> 21
+    ],
+)
+def test_isect_lidar_corner_cases(
+    lidar_param,
+    gaussian_param,
+    expected_tiles: int,
+):
+    from gsplat.cuda._torch_impl_lidar import _isect_tiles_lidar
+    from gsplat.cuda._wrapper import isect_tiles_lidar
+    from gsplat.cuda._lidar import relative_angle
+
+    # Convenient aliases
+    lidar = lidar_param
+    gaussian = gaussian_param
+
+    # Call cuda implementation
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
+        lidar, gaussian.means2d, gaussian.radii, gaussian.depths, sort=False
+    )
+    # Call reference implementation
+    _tiles_per_gauss, _isect_ids, _flatten_ids = _isect_tiles_lidar(
+        lidar, gaussian.means2d, gaussian.radii, gaussian.depths, sort=False
+    )
+
+    # CUDA and PyTorch reference must agree for this corner-case setup.
+    torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
+    torch.testing.assert_close(isect_ids, _isect_ids)
+    torch.testing.assert_close(flatten_ids, _flatten_ids)
+
+    assert tiles_per_gauss.shape[0] == 1
+    observed_tiles = int(tiles_per_gauss.item())
+
+    hfov_start_pix = lidar.fov_horiz_rad.start * ANGLE_TO_PIXEL_SCALING_FACTOR
+
+    def abs_to_rel_az(abs_az_pix: float) -> float:
+        return relative_angle(
+            hfov_start_pix,
+            abs_az_pix,
+            lidar.spinning_direction,
+            scale=ANGLE_TO_PIXEL_SCALING_FACTOR,
+        )
+
+    hfov_span_pix = lidar.fov_horiz_rad.span * ANGLE_TO_PIXEL_SCALING_FACTOR
+    gauss_mean_pix = gaussian_param.means2d[0, 0, 1].item()
+    gauss_radius_pix = gaussian_param.radii[0, 0, 1].item()
+    gauss_mean_rel_pix = abs_to_rel_az(gauss_mean_pix)
+    gauss_min_rel_pix = abs_to_rel_az(gauss_mean_pix - gauss_radius_pix)
+    gauss_max_rel_pix = abs_to_rel_az(gauss_mean_pix + gauss_radius_pix)
+
+    assert (
+        observed_tiles == expected_tiles
+    ), f"Expected tiles={expected_tiles}, got tiles={observed_tiles} -> gaussian:[{gauss_min_rel_pix};{gauss_radius_pix}@{gauss_mean_rel_pix}:{gauss_max_rel_pix}), hfov-span:{hfov_span_pix}"
+
+    if expected_tiles > 0:
+        assert isect_ids.numel() == observed_tiles
+        assert flatten_ids.numel() == observed_tiles
+        assert torch.all(flatten_ids == 0)
+    else:
+        assert observed_tiles == 0
+        assert isect_ids.numel() == 0
+        assert flatten_ids.numel() == 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -845,6 +2054,220 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_opacities, _v_opacities, rtol=8e-3, atol=6e-3)
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
+
+
+def _quat_rotation_y(angle_rad: float, device: torch.device):
+    """Quaternion for rotation around Y axis (w, x, y, z)."""
+    half = angle_rad / 2.0
+    w = math.cos(half)
+    y = math.sin(half)
+    return torch.tensor([[w, 0.0, y, 0.0]], device=device, dtype=torch.float32)
+
+
+def _expected_hit_distance_canonical_ray_distance(
+    ray_o: torch.Tensor,
+    ray_d: torch.Tensor,
+    xyz: torch.Tensor,
+    quats: torch.Tensor,
+    scales: torch.Tensor,
+) -> float:
+    """Expected hit distance using nrend canonicalRayDistance: length(scale * grd * hit_t)."""
+    from gsplat.cuda._math import _quat_scale_to_preci_half
+    from gsplat.cuda._torch_impl_eval3d import _safe_normalize
+
+    # iscl_rot = M^T with M = R * S (inverse scale-rotation); batch size 1
+    M = _quat_scale_to_preci_half(quats, scales)
+    iscl_rot = M.transpose(-2, -1)
+    # ray_o, ray_d, xyz are [3]; broadcast for matmul [1,3,3] @ [1,3,1]
+    gro = (
+        torch.matmul(iscl_rot, (ray_o - xyz).unsqueeze(0).unsqueeze(-1))
+        .squeeze(-1)
+        .squeeze(0)
+    )
+    grd = (
+        torch.matmul(iscl_rot, ray_d.unsqueeze(0).unsqueeze(-1)).squeeze(-1).squeeze(0)
+    )
+    grd = _safe_normalize(grd)
+    hit_t = (grd * (-gro)).sum().item()
+    grds = scales.squeeze(0) * grd * hit_t
+    return torch.linalg.norm(grds).item()
+
+
+def _pixel_ray_dir_pinhole(
+    px: float,
+    py: float,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    device: torch.device,
+) -> torch.Tensor:
+    """Ray direction in world space for pinhole camera at origin (viewmat identity).
+    Returns unit vector: normalize(( (px-cx)/fx, (py-cy)/fy, 1 )).
+    """
+    dx = (px - cx) / fx
+    dy = (py - cy) / fy
+    d = torch.tensor([dx, dy, 1.0], device=device, dtype=torch.float32)
+    return d / torch.linalg.norm(d)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "means_list,quats_choice,scales_list,pixel_dx,pixel_dy",
+    [
+        # On-axis, mid distance (baseline); sample at center
+        ([[0.0, 0.0, 5.0]], "identity", (0.15, 0.15, 0.15), 0, 0),
+        # On-axis, near camera
+        ([[0.0, 0.0, 1.0]], "identity", (0.15, 0.15, 0.15), 0, 0),
+        # On-axis, far from camera (larger scale so gaussian visible at D=50)
+        ([[0.0, 0.0, 50.0]], "identity", (0.6, 0.6, 0.6), 0, 0),
+        # Anisotropic scaling (on-axis)
+        ([[0.0, 0.0, 5.0]], "identity", (0.2, 0.05, 0.15), 0, 0),
+        # Off-axis: gaussian not on principal ray; sample at center
+        ([[1.5, 0.5, 5.0]], "identity", (0.2, 0.2, 0.2), 0, 0),
+        # Rotated gaussian (45 deg around Y), isotropic scale
+        ([[0.0, 0.0, 5.0]], "rotated_y_45", (0.15, 0.15, 0.15), 0, 0),
+        # Rotated + anisotropic
+        ([[0.0, 0.0, 5.0]], "rotated_y_45", (0.2, 0.05, 0.15), 0, 0),
+        # Flat / disk-like
+        ([[0.0, 0.0, 5.0]], "identity", (0.08, 0.08, 0.25), 0, 0),
+        # Off-center rays: sample pixel offset from gaussian center so ray does NOT pass through center.
+        # Offset in pixels from gaussian center (means2d); keeps pixel inside splat.
+        ([[0.0, 0.0, 5.0]], "identity", (0.4, 0.4, 0.4), 3, 0),
+        ([[0.0, 0.0, 5.0]], "identity", (0.4, 0.4, 0.4), -2, 2),
+        ([[0.0, 0.0, 5.0]], "identity", (0.4, 0.4, 0.4), 0, -3),
+        ([[1.5, 0.0, 5.0]], "identity", (0.35, 0.35, 0.35), -2, 0),
+        ([[-1.0, 1.0, 6.0]], "identity", (0.35, 0.35, 0.35), 2, -1),
+    ],
+    ids=[
+        "on_axis_mid",
+        "on_axis_near",
+        "on_axis_far",
+        "on_axis_anisotropic",
+        "off_axis",
+        "rotated_isotropic",
+        "rotated_anisotropic",
+        "flat_disk",
+        "off_center_right",
+        "off_center_left_up",
+        "off_center_down",
+        "off_center_gauss_right_pixel_left",
+        "off_center_gauss_ul_pixel_lr",
+    ],
+)
+def test_rasterize_to_pixels_hit_distance_principal_axis(
+    means_list, quats_choice, scales_list, pixel_dx, pixel_dy
+):
+    """Check that hit distance (accumulated/alpha) matches nrend KBuffer canonicalRayDistance:
+    length(scale * grd * hit_t) with hit_t = dot(grd, -gro). Includes center and off-center
+    pixels. Failures indicate the rasterization hit-distance code should be analyzed and fixed.
+    """
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+    )
+
+    width = height = 32
+    tile_size = 16
+    N = 1
+    C = 1
+    I = C
+    fx = fy = float(width)
+    cx = width / 2.0
+    cy = height / 2.0
+
+    means = torch.tensor(means_list, device=device, dtype=torch.float32)
+    if quats_choice == "identity":
+        quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=torch.float32)
+    elif quats_choice == "rotated_y_45":
+        quats = _quat_rotation_y(math.pi / 4.0, device)
+    else:
+        raise ValueError(f"Unknown quats_choice: {quats_choice}")
+
+    scales = torch.tensor([list(scales_list)], device=device, dtype=torch.float32)
+    opacities = torch.tensor([1.0], device=device, dtype=torch.float32)
+
+    viewmats = torch.eye(4, device=device, dtype=torch.float32).unsqueeze(0)
+    Ks = torch.tensor(
+        [[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=torch.float32,
+    )
+
+    colors = torch.zeros(C, N, 3, device=device, dtype=torch.float32)
+    opacities_broadcast = opacities.unsqueeze(0)
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+
+    render_colors, render_alphas, _, _, _ = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_broadcast,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        use_hit_distance=True,
+        return_sample_counts=False,
+        return_normals=False,
+    )
+
+    # Sample pixel: center of gaussian projection, or offset from center (means2d + dx, dy) for off-center rays
+    cx_f = means2d[0, 0, 0].item()
+    cy_f = means2d[0, 0, 1].item()
+    if pixel_dx == 0 and pixel_dy == 0:
+        px_f = cx_f
+        py_f = cy_f
+    else:
+        px_f = cx_f + pixel_dx
+        py_f = cy_f + pixel_dy
+    px_int = int(round(px_f))
+    py_int = int(round(py_f))
+    px_int = max(0, min(width - 1, px_int))
+    py_int = max(0, min(height - 1, py_int))
+
+    accumulated_hit = render_colors[0, py_int, px_int, -1].item()
+    alpha = render_alphas[0, py_int, px_int, 0].item()
+
+    assert alpha > 0, (
+        f"Pixel ({px_int}, {py_int}) should hit the gaussian "
+        f"(sample px_f={px_f}, py_f={py_f}; means2d=({cx_f}, {cy_f}))"
+    )
+
+    ray_o = torch.zeros(3, device=device, dtype=torch.float32)
+    pixel_center_x = px_int + 0.5
+    pixel_center_y = py_int + 0.5
+    ray_d = _pixel_ray_dir_pinhole(
+        pixel_center_x, pixel_center_y, fx, fy, cx, cy, device
+    )
+    expected_hit = _expected_hit_distance_canonical_ray_distance(
+        ray_o, ray_d, means[0], quats, scales
+    )
+
+    observed_hit_distance = accumulated_hit / alpha
+
+    torch.testing.assert_close(
+        torch.tensor(observed_hit_distance, device=device),
+        torch.tensor(expected_hit, device=device),
+        rtol=2.5e-4,
+        atol=2e-3,
+    )
 
 
 # Since we have comprehensive camera model tests, we don't need to add
@@ -985,7 +2408,7 @@ def test_rasterize_to_pixels_eval3d(
         rays = None
 
     # Project Gaussians to 2D for tile intersections
-    radii, means2d, depths, conics, compensations = fully_fused_projection_with_ut(
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
         means, quats, scales, opacities, viewmats, Ks, width, height
     )
     opacities_broadcast = torch.broadcast_to(

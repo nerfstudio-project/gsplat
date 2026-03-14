@@ -58,6 +58,13 @@ from ._torch_cameras import (
     _interpolate_shutter_pose,
 )
 
+from ._torch_lidars import (
+    _RowOffsetStructuredSpinningLidarModel,
+)
+from ._lidar import (
+    RowOffsetStructuredSpinningLidarModelParametersExt,
+)
+
 
 def _compute_ut_weights(
     ut_params: UnscentedTransformParameters,
@@ -314,6 +321,7 @@ def _fully_fused_projection_with_ut(
     tangential_coeffs: Optional[Tensor] = None,
     thin_prism_coeffs: Optional[Tensor] = None,
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     global_z_order: bool = True,
@@ -389,7 +397,7 @@ def _fully_fused_projection_with_ut(
     assert Ks.dtype == torch.float32, f"Ks must be float32, got {Ks.dtype}"
 
     # Validate camera model support
-    if camera_model not in ["pinhole", "fisheye", "ftheta"]:
+    if camera_model not in ["pinhole", "fisheye", "ftheta", "lidar"]:
         raise ValueError(
             f"Camera model '{camera_model}' not supported in UT projection. "
             f"UT supports: pinhole, fisheye, ftheta. "
@@ -408,18 +416,22 @@ def _fully_fused_projection_with_ut(
     principal_points = Ks[..., :2, 2]  # [B, C, 2] - extract [cx, cy]
 
     # Create camera model
-    camera = _BaseCameraModel.create(
-        width=width,
-        height=height,
-        camera_model=camera_model,
-        principal_points=principal_points,
-        focal_lengths=focal_lengths,
-        radial_coeffs=radial_coeffs,
-        tangential_coeffs=tangential_coeffs,
-        thin_prism_coeffs=thin_prism_coeffs,
-        ftheta_coeffs=ftheta_coeffs,
-        rs_type=rolling_shutter,
-    )
+    if camera_model == "lidar":
+        camera = _RowOffsetStructuredSpinningLidarModel(lidar_coeffs)
+    else:
+        assert lidar_coeffs is None
+        camera = _BaseCameraModel.create(
+            width=width,
+            height=height,
+            camera_model=camera_model,
+            principal_points=principal_points,
+            focal_lengths=focal_lengths,
+            radial_coeffs=radial_coeffs,
+            tangential_coeffs=tangential_coeffs,
+            thin_prism_coeffs=thin_prism_coeffs,
+            ftheta_coeffs=ftheta_coeffs,
+            rs_type=rolling_shutter,
+        )
 
     # Create pose tensors for rolling shutter
     pose_start = _viewmat_to_pose(viewmats)  # [B, C, 7]
@@ -533,14 +545,18 @@ def _fully_fused_projection_with_ut(
     valid_gaussian = valid_gaussian & (torch.max(radius, dim=-1)[0] > radius_clip)
 
     # Image bounds culling: cull Gaussians outside image
-    # Check if bounding box overlaps with image: (center ± radius) overlaps [0, width/height)
-    image_bounds = torch.tensor(
-        [width, height], dtype=radius.dtype, device=radius.device
-    )
-    in_image = torch.all(
-        (mean_2d + radius > 0) & (mean_2d - radius < image_bounds), dim=-1
-    )
-    valid_gaussian = valid_gaussian & in_image
+    if camera_model == "lidar":
+        # Culling against fov was already done above.
+        pass
+    else:
+        # Check if bounding box overlaps with image: (center ± radius) overlaps [0, width/height)
+        image_bounds = torch.tensor(
+            [width, height], dtype=radius.dtype, device=radius.device
+        )
+        in_image = torch.all(
+            (mean_2d + radius > 0) & (mean_2d - radius < image_bounds), dim=-1
+        )
+        valid_gaussian = valid_gaussian & in_image
 
     # Set outputs for valid Gaussians only
     # For invalid Gaussians, radii should be 0 (default)
