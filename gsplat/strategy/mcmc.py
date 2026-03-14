@@ -46,21 +46,8 @@ class MCMCStrategy(Strategy):
         refine_every (int): Refine GSs every this steps. Default to 100.
         min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.
         verbose (bool): Whether to print verbose information. Default to False.
-
-    Examples:
-
-        >>> from gsplat import MCMCStrategy, rasterization
-        >>> params: Dict[str, torch.nn.Parameter] | torch.nn.ParameterDict = ...
-        >>> optimizers: Dict[str, torch.optim.Optimizer] = ...
-        >>> strategy = MCMCStrategy()
-        >>> strategy.check_sanity(params, optimizers)
-        >>> strategy_state = strategy.initialize_state()
-        >>> for step in range(1000):
-        ...     render_image, render_alpha, info = rasterization(...)
-        ...     loss = ...
-        ...     loss.backward()
-        ...     strategy.step_post_backward(params, optimizers, strategy_state, step, info, lr=1e-3)
-
+        preallocate (bool): Use pre-allocated buffers to eliminate memory usage in torch.cat. 
+            Default=False.
     """
 
     cap_max: int = 1_000_000
@@ -71,15 +58,26 @@ class MCMCStrategy(Strategy):
     refine_every: int = 100
     min_opacity: float = 0.005
     verbose: bool = False
+    preallocate: bool = False
 
-    def initialize_state(self) -> Dict[str, Any]:
-        """Initialize and return the running state for this strategy."""
+    def initialize_state(self, n_initial: int = 0) -> Dict[str, Any]:
+        """Initialize and return the running state for this strategy.
+
+        Args:
+            n_initial: umber of initial active Gaussians. 
+            Only used when preallocate=True. Default to 0.
+        """
         n_max = 51
         binoms = torch.zeros((n_max, n_max))
         for n in range(n_max):
             for k in range(n + 1):
                 binoms[n, k] = math.comb(n, k)
-        return {"binoms": binoms}
+        state = {"binoms": binoms}
+
+        if self.preallocate:
+            state["n_active"] = n_initial
+
+        return state
 
     def check_sanity(
         self,
@@ -143,53 +141,95 @@ class MCMCStrategy(Strategy):
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
+            n_relocated_gs = self._relocate_gs(params, optimizers, state, binoms)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
-            # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, binoms)
+            n_new_gs = self._add_new_gs(params, optimizers, state, binoms)
             if self.verbose:
+                # NEW: use n_active for reporting when preallocated
+                if self.preallocate:
+                    n_total = state["n_active"]
+                else:
+                    n_total = len(params["means"])
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
-                    f"Now having {len(params['means'])} GSs."
+                    f"Now having {n_total} GSs."
                 )
 
             torch.cuda.empty_cache()
 
-        # add noise to GSs (stop after noise_injection_stop_iter if set)
+        # add noise to GSs
         noise_stop = (
             self.noise_injection_stop_iter
             if self.noise_injection_stop_iter >= 0
             else float("inf")
         )
         if step < noise_stop:
-            inject_noise_to_position(
-                params=params,
-                optimizers=optimizers,
-                state={},
-                scaler=lr * self.noise_lr,
-            )
+            # Only inject noise to Gaussians that are active
+            if self.preallocate:
+                n_active = state["n_active"]
+                # Create a view of only active params
+                active_params = {
+                    k: torch.nn.Parameter(v[:n_active], requires_grad=v.requires_grad)
+                    for k, v in params.items()
+                }
+                inject_noise_to_position(
+                    params=active_params,
+                    optimizers=optimizers,
+                    state={},
+                    scaler=lr * self.noise_lr,
+                )
+            else:
+                inject_noise_to_position(
+                    params=params,
+                    optimizers=optimizers,
+                    state={},
+                    scaler=lr * self.noise_lr,
+                )
 
     @torch.no_grad()
     def _relocate_gs(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any], 
         binoms: Tensor,
     ) -> int:
-        opacities = torch.sigmoid(params["opacities"].flatten())
+        # Only Gaussians that are active
+        if self.preallocate:
+            n_active = state["n_active"]
+            opacities = torch.sigmoid(params["opacities"][:n_active].flatten())
+        else:
+            opacities = torch.sigmoid(params["opacities"].flatten())
+
         dead_mask = opacities <= self.min_opacity
         n_gs = dead_mask.sum().item()
         if n_gs > 0:
-            relocate(
-                params=params,
-                optimizers=optimizers,
-                state={},
-                mask=dead_mask,
-                binoms=binoms,
-                min_opacity=self.min_opacity,
-            )
+            if self.preallocate:
+                # Build full-buffer mask
+                full_mask = torch.zeros(
+                    len(params["opacities"]), dtype=torch.bool,
+                    device=params["opacities"].device,
+                )
+                full_mask[:n_active] = dead_mask
+                relocate(
+                    params=params,
+                    optimizers=optimizers,
+                    state={},
+                    mask=full_mask,
+                    binoms=binoms,
+                    min_opacity=self.min_opacity,
+                )
+            else:
+                relocate(
+                    params=params,
+                    optimizers=optimizers,
+                    state={},
+                    mask=dead_mask,
+                    binoms=binoms,
+                    min_opacity=self.min_opacity,
+                )
         return n_gs
 
     @torch.no_grad()
@@ -197,18 +237,34 @@ class MCMCStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
         binoms: Tensor,
     ) -> int:
-        current_n_points = len(params["means"])
+        # Use n_active instead of len(params["means"])
+        if self.preallocate:
+            current_n_points = state["n_active"]
+        else:
+            current_n_points = len(params["means"])
+
         n_target = min(self.cap_max, int(1.05 * current_n_points))
         n_gs = max(0, n_target - current_n_points)
+
+        # Clamp to available buffer space
+        if self.preallocate:
+            buffer_size = len(params["means"])
+            n_gs = min(n_gs, buffer_size - current_n_points)
+
         if n_gs > 0:
-            sample_add(
+            result = sample_add(
                 params=params,
                 optimizers=optimizers,
                 state={},
                 n=n_gs,
                 binoms=binoms,
                 min_opacity=self.min_opacity,
+                n_active=state.get("n_active", None) if self.preallocate else None,
             )
+            if self.preallocate and result is not None:
+                state["n_active"] = result
+
         return n_gs
