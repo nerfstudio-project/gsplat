@@ -25,7 +25,10 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
-#include <cub/cub.cuh>
+// Minimal CUB includes to avoid pulling in dispatch_histogram/merge_sort that use
+// __half operators disabled by PyTorch (__CUDA_NO_HALF_OPERATORS__) on Windows.
+#include <cub/block/block_reduce.cuh>
+#include <cub/block/block_scan.cuh>
 
 #include "Common.h"
 #include "Projection.h"

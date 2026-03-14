@@ -30,55 +30,8 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-2022]
         python-version: ['3.10']
-        torch-version: ['2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.4.0']
-        cuda-version: ['cu118', 'cu121', 'cu124']
-        exclude:
-          - python-version: 3.12
-            torch-version: 2.0.0
-          - python-version: 3.12
-            torch-version: 2.1.0
-          - torch-version: 2.0.0
-            cuda-version: 'cu113'
-          - torch-version: 2.0.0
-            cuda-version: 'cu116'
-          - torch-version: 2.0.0
-            cuda-version: 'cu121'
-          - torch-version: 2.0.0
-            cuda-version: 'cu124'
-          - torch-version: 2.1.0
-            cuda-version: 'cu113'
-          - torch-version: 2.1.0
-            cuda-version: 'cu116'
-          - torch-version: 2.1.0
-            cuda-version: 'cu117'
-          - torch-version: 2.1.0
-            cuda-version: 'cu124'
-          - torch-version: 2.2.0
-            cuda-version: 'cu113'
-          - torch-version: 2.2.0
-            cuda-version: 'cu116'
-          - torch-version: 2.2.0
-            cuda-version: 'cu117'
-          - torch-version: 2.2.0
-            cuda-version: 'cu124'
-          - torch-version: 2.3.0
-            cuda-version: 'cu113'
-          - torch-version: 2.3.0
-            cuda-version: 'cu116'
-          - torch-version: 2.3.0
-            cuda-version: 'cu117'
-          - torch-version: 2.3.0
-            cuda-version: 'cu124'
-          - torch-version: 2.4.0
-            cuda-version: 'cu113'
-          - torch-version: 2.4.0
-            cuda-version: 'cu116'
-          - torch-version: 2.4.0
-            cuda-version: 'cu117'
-          - os: windows-2022
-            cuda-version: 'cu121'
-          - os: windows-2022
-            cuda-version: 'cu118'
+        torch-version: ['2.4.0']
+        cuda-version: ['cu124']
 
     steps:
       - name: Checkout repository
@@ -135,7 +88,8 @@ jobs:
 
       - name: Upgrade pip
         run: |
-          pip install --upgrade setuptools
+          # https://github.com/pypa/setuptools/issues/5174, pkg_resources is removed in setuptools 82 but we need it for older torch versions
+          pip install --upgrade "setuptools<82"
           pip install ninja
         shell: bash
 
@@ -147,7 +101,7 @@ jobs:
 
       - name: Build wheel
         run: |
-          pip install wheel
+          pip install wheel rich
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
         shell: bash

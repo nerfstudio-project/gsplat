@@ -32,7 +32,6 @@ from typing_extensions import Literal, Tuple, assert_never
 from gsplat._helper import load_test_data
 import gsplat
 
-
 device = torch.device("cuda:0")
 
 
