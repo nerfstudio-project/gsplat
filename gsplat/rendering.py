@@ -58,6 +58,7 @@ RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "R
 
 RasterizeMode = Literal["classic", "antialiased"]
 
+
 # TODO: RenderMode should be an enum so that we can add these query methods to it.
 # The problem is that it'd break backward compatibllity due to some symbols used, e.g. RGB+D or RGB-d.
 def render_mode_has_color(mode: RenderMode) -> bool:
