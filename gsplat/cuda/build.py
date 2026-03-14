@@ -67,12 +67,10 @@ def get_build_parameters():
     extra_ldflags = []
 
     if sys.platform == "win32":
-        extra_cflags += ["/std:c++20", "-DWIN32_LEAN_AND_MEAN"]
-        extra_cuda_cflags += [
-            "-std=c++20",
-            "-allow-unsupported-compiler",
-            "-DWIN32_LEAN_AND_MEAN",
-        ]
+        # /Zc:preprocessor: required for __VA_OPT__ in MacroUtils.h (GSPLAT_FOR_EACH).
+        # Needed for both .cpp (cl) and .cu (nvcc host compiler).
+        extra_cflags += ["/std=c++20", "-DWIN32_LEAN_AND_MEAN", "/Zc:preprocessor"]
+        extra_cuda_cflags += ["-allow-unsupported-compiler", "-Xcompiler", "/Zc:preprocessor"]
     else:
         extra_cflags = ["-std=c++20"]
 
