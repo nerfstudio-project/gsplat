@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -954,6 +954,7 @@ projection_ut_3dgs_fused(
     const float radius_clip,
     const bool calc_compensations,
     const CameraModelType camera_model,
+    const bool global_z_order,
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
@@ -1029,6 +1030,7 @@ projection_ut_3dgs_fused(
         far_plane,
         radius_clip,
         camera_model,
+        global_z_order,
         // uncented transform
         ut_params,
         rs_type,

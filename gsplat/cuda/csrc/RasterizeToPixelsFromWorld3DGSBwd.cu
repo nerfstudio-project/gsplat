@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -71,6 +71,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    const bool use_hit_distance,
     // fwd outputs
     const scalar_t
         *__restrict__ render_alphas,      // [B, C, image_height, image_width, 1]
@@ -314,6 +315,15 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 if (power > 0.f || alpha < 1.f / 255.f) {
                     valid = false;
                 }
+
+                // Recompute hit_distance to match forward pass when use_hit_distance=True
+                if (use_hit_distance) {
+                    const float hit_t = glm::dot(grd_n, -gro);
+                    const vec3 grds = scale * (grd_n * hit_t);
+                    const float hit_dist = glm::length(grds);
+                    // Replace last channel in rgbs_batch with recomputed hit_distance
+                    rgbs_batch[t * CDIM + (CDIM - 1)] = hit_dist;
+                }
             }
 
             // if all threads are inactive in this warp, skip this loop
@@ -355,12 +365,42 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     v_alpha += -T_final * ra * accum;
                 }
 
+                // Add contribution from hit distance (if enabled)
+                vec3 v_grd_n_hit = vec3(0.f);
+                vec3 v_gro_hit = vec3(0.f);
+                if (use_hit_distance) {
+                    const float v_depth = v_rgb_local[CDIM - 1];  // gradient from depth channel (last channel)
+
+                    // From forward:
+                    const float hit_t = glm::dot(grd_n, -gro);
+                    const vec3 grds = scale * (grd_n * hit_t);
+                    const float hit_dist_len = glm::length(grds);
+
+                    // Backward through length(grds)
+                    vec3 v_grds = vec3(0.f);
+                    if (hit_dist_len > 1e-8f) {
+                        v_grds = (grds / hit_dist_len) * v_depth;
+                    }
+
+                    // Backward through grds = scale * grd_n * hit_t (element-wise multiply)
+                    // d/d(hit_t): scale * grd_n
+                    const float v_hit_t = glm::dot(scale * grd_n, v_grds);
+                    // d/d(grd_n): scale * hit_t (element-wise)
+                    v_grd_n_hit = (scale * hit_t) * v_grds;  // element-wise
+                    // d/d(scale): grd_n * hit_t (element-wise)
+                    v_scale_local += (grd_n * hit_t) * v_grds;  // element-wise
+
+                    // Backward through hit_t = dot(grd_n, -gro)
+                    v_grd_n_hit += -gro * v_hit_t;
+                    v_gro_hit = -grd_n * v_hit_t;
+                }
+
                 if (opac * vis <= 0.999f) {
                     const float v_vis = opac * v_alpha;
                     float v_gradDist = -0.5f * vis * v_vis;
                     vec3 v_gcrod = 2.0f * v_gradDist * gcrod;
-                    vec3 v_grd_n = - glm::cross(v_gcrod, gro);
-                    vec3 v_gro = glm::cross(v_gcrod, grd_n);
+                    vec3 v_grd_n = -glm::cross(v_gcrod, gro) + v_grd_n_hit;
+                    vec3 v_gro = glm::cross(v_gcrod, grd_n) + v_gro_hit;
                     vec3 v_grd = safe_normalize_bw(grd, v_grd_n);
                     mat3 v_Mt = glm::outerProduct(v_grd, ray_d) + 
                         glm::outerProduct(v_gro, o_minus_mu);
@@ -445,6 +485,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // intersections
     const at::Tensor tile_offsets,    // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,     // [n_isects]
+    const bool use_hit_distance,
     // forward outputs
     const at::Tensor render_alphas,   // [..., C, image_height, image_width, 1]
     const at::Tensor last_ids,        // [..., C, image_height, image_width]
@@ -539,6 +580,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             // intersections
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
+            use_hit_distance,
             render_alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
             v_render_colors.data_ptr<float>(),
@@ -579,6 +621,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const FThetaCameraDistortionParameters ftheta_coeffs,                 \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
+        const bool use_hit_distance,                                           \
         const at::Tensor render_alphas,                                        \
         const at::Tensor last_ids,                                             \
         const at::Tensor v_render_colors,                                      \

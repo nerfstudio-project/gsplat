@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +19,9 @@ from pathlib import Path
 from typing import Literal
 from typing import Tuple, Callable
 from nerfview import Viewer, RenderTabState
+
+from gsplat.rendering import RasterizeMode
+from gsplat.cuda._wrapper import CameraModel
 
 
 class GsplatRenderTabState(RenderTabState):
@@ -40,8 +44,8 @@ class GsplatRenderTabState(RenderTabState):
     colormap: Literal[
         "turbo", "viridis", "magma", "inferno", "cividis", "gray"
     ] = "turbo"
-    rasterize_mode: Literal["classic", "antialiased"] = "classic"
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
+    rasterize_mode: RasterizeMode = "classic"
+    camera_model: CameraModel = "pinhole"
 
 
 class GsplatViewer(Viewer):

@@ -428,6 +428,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         auto relative_frame_time = float{};
         auto t_rs = glm::fvec3{};
         auto q_rs = glm::fquat{};
+        bool valid = true;
 #pragma unroll
         for (auto j = 0; j < N_ROLLING_SHUTTER_ITERATIONS; ++j) {
             relative_frame_time =
@@ -443,9 +444,10 @@ template <class DerivedCameraModel> struct BaseCameraModel {
                 );
 
             image_points_rs_prev = image_point_rs;
+            valid = valid_rs;
         }
 
-        return {{image_points_rs_prev.x, image_points_rs_prev.y}, true};
+        return {{image_points_rs_prev.x, image_points_rs_prev.y}, valid};
     }
 };
 

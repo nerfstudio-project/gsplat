@@ -37,7 +37,11 @@ from gsplat._helper import (
     assert_mismatch_ratio,
 )
 import gsplat
-from gsplat.cuda._wrapper import RollingShutterType, UnscentedTransformParameters
+from gsplat.cuda._wrapper import (
+    CameraModel,
+    RollingShutterType,
+    UnscentedTransformParameters,
+)
 
 device = torch.device("cuda:0")
 
@@ -132,7 +136,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int,
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_proj(
     test_data,
-    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._torch_impl import (
@@ -195,7 +199,7 @@ def test_projection(
     test_data,
     fused: bool,
     calc_compensations: bool,
-    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._torch_impl import _fully_fused_projection
@@ -310,7 +314,7 @@ def test_fully_fused_projection_packed(
     fused: bool,
     sparse_grad: bool,
     calc_compensations: bool,
-    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
@@ -488,11 +492,13 @@ def test_fully_fused_projection_packed(
     "rolling_shutter",
     [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM],
 )
+@pytest.mark.parametrize("global_z_order", [True, False])
 def test_fully_fused_projection_ut(
     test_data,
     batch_dims: Tuple[int, ...],
     require_all_valid: bool,
     rolling_shutter: RollingShutterType,
+    global_z_order: bool,
 ):
     """Unified test for UT projection with CUDA vs PyTorch reference.
 
@@ -557,6 +563,7 @@ def test_fully_fused_projection_ut(
         "ut_params": ut_params,
         "rolling_shutter": rolling_shutter,
         "viewmats_rs": viewmats_rs,
+        "global_z_order": global_z_order,
     }
 
     # Run CUDA implementation
@@ -829,8 +836,13 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 @pytest.mark.parametrize(
     "rs_type", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM]
 )
+@pytest.mark.parametrize("use_hit_distance", [True, False])
 def test_rasterize_to_pixels_eval3d(
-    test_data, channels: int, batch_dims: Tuple[int, ...], rs_type: RollingShutterType
+    test_data,
+    channels: int,
+    batch_dims: Tuple[int, ...],
+    rs_type: RollingShutterType,
+    use_hit_distance: bool,
 ):
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._wrapper import (
@@ -935,6 +947,7 @@ def test_rasterize_to_pixels_eval3d(
         return_sample_counts=True,
         rolling_shutter=rs_type,
         viewmats_rs=viewmats_rs,
+        use_hit_distance=use_hit_distance,
     )
 
     # forward - PyTorch reference implementation (with tiling optimization)
@@ -961,6 +974,7 @@ def test_rasterize_to_pixels_eval3d(
         return_sample_counts=True,
         rs_type=rs_type,
         viewmats_rs=viewmats_rs,
+        use_hit_distance=use_hit_distance,
     )
 
     # Validate: last_ids and alpha must be consistent
@@ -1165,8 +1179,15 @@ def test_rasterize_to_pixels_eval3d(
         rtol=0,
         atol=5e-2,
     )
+    # Relax quat/opacity tolerances when use_hit_distance=True due to accumulated floating-point errors
+    # in hit distance calculation (normalize + dot product + length operations)
+    quat_atol = 6e-3 if use_hit_distance else 5e-4
+    opacity_atol = 1e-3 if use_hit_distance else 1.5e-4
     torch.testing.assert_close(
-        v_quats * quats_mask.float(), _v_quats * quats_mask.float(), rtol=0, atol=5e-4
+        v_quats * quats_mask.float(),
+        _v_quats * quats_mask.float(),
+        rtol=0,
+        atol=quat_atol,
     )
     torch.testing.assert_close(
         v_colors * colors_mask.float(),
@@ -1178,7 +1199,7 @@ def test_rasterize_to_pixels_eval3d(
         v_opacities * opacities_mask.float(),
         _v_opacities * opacities_mask.float(),
         rtol=0,
-        atol=1.5e-4,
+        atol=opacity_atol,
     )
     torch.testing.assert_close(
         v_backgrounds * backgrounds_mask.float(),

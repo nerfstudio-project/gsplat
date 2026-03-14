@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,7 +51,8 @@ from gsplat import export_splats
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
-from gsplat.rendering import rasterization
+from gsplat.rendering import rasterization, RasterizeMode
+from gsplat.cuda._wrapper import CameraModel
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
@@ -82,7 +84,7 @@ class Config:
     # Normalize the world space
     normalize_world_space: bool = True
     # Camera model
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
+    camera_model: CameraModel = "pinhole"
     # Load EXIF exposure metadata from images (if available)
     load_exposure: bool = True
 
@@ -575,8 +577,8 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
-        rasterize_mode: Optional[Literal["classic", "antialiased"]] = None,
-        camera_model: Optional[Literal["pinhole", "ortho", "fisheye"]] = None,
+        rasterize_mode: Optional[RasterizeMode] = None,
+        camera_model: Optional[CameraModel] = None,
         frame_idcs: Optional[Tensor] = None,
         camera_idcs: Optional[Tensor] = None,
         exposure: Optional[Tensor] = None,

@@ -24,6 +24,8 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 
+CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta"]
+
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
@@ -298,7 +300,7 @@ def proj(
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
 ) -> Tuple[Tensor, Tensor]:
     """Projection of Gaussians (perspective or orthographic).
 
@@ -346,7 +348,7 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     opacities: Optional[Tensor] = None,  # [..., N] or None
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
@@ -736,7 +738,7 @@ def rasterize_to_pixels_eval3d(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -746,6 +748,7 @@ def rasterize_to_pixels_eval3d(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    use_hit_distance: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -784,6 +787,7 @@ def rasterize_to_pixels_eval3d(
         rolling_shutter=rolling_shutter,
         viewmats_rs=viewmats_rs,
         return_sample_counts=False,
+        use_hit_distance=use_hit_distance,
     )
     return colors, alphas
 
@@ -803,7 +807,7 @@ def rasterize_to_pixels_eval3d_extra(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -814,6 +818,7 @@ def rasterize_to_pixels_eval3d_extra(
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     return_sample_counts: bool = False,
+    use_hit_distance: bool = False,
 ) -> Tuple[Tensor, Tensor, Tuple, Optional[Tuple]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
@@ -969,6 +974,7 @@ def rasterize_to_pixels_eval3d_extra(
         # Forward is always collecting the last_ids for the backward pass,
         # no need to tell it to do it.
         return_sample_counts,  # Pass flag to forward
+        use_hit_distance,
     )
 
     if padded_channels > 0:
@@ -1118,7 +1124,7 @@ class _Proj(torch.autograd.Function):
         Ks: Tensor,  # [..., C, 3, 3]
         width: int,
         height: int,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+        camera_model: CameraModel = "pinhole",
     ) -> Tuple[Tensor, Tensor]:
         assert (
             camera_model != "ftheta"
@@ -1187,7 +1193,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         calc_compensations: bool,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+        camera_model: CameraModel = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
@@ -1315,7 +1321,7 @@ def fully_fused_projection_with_ut(
     far_plane: float = 1e10,
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -1325,6 +1331,7 @@ def fully_fused_projection_with_ut(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    global_z_order: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D using Unscented Transform (UT).
 
@@ -1333,6 +1340,13 @@ def fully_fused_projection_with_ut(
 
     .. warning::
         This function is not differentiable to any input.
+
+    Args:
+        global_z_order: Defines how Gaussians are sorted for depth ordering. If True (default),
+            Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted
+            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically
+            faster and sufficient for most cases, while Euclidean distance can be useful for scenes
+            with wide field-of-view or non-standard camera models. Default: True.
     """
     batch_dims = means.shape[:-2]
     N = means.shape[-2]
@@ -1375,6 +1389,7 @@ def fully_fused_projection_with_ut(
         radius_clip,
         calc_compensations,
         camera_model_type,
+        global_z_order,
         ut_params.to_cpp(),
         rolling_shutter.to_cpp(),
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
@@ -1541,7 +1556,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
         flatten_ids: Tensor,  # [..., n_isects]
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+        camera_model: CameraModel = "pinhole",
         ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
         # distortion
         radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -1552,6 +1567,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
         viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
         return_sample_counts: bool = False,
+        use_hit_distance: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor]]:
         ut_params = ut_params.to_cpp()
         rs_type = rolling_shutter.to_cpp()
@@ -1602,6 +1618,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             ftheta_coeffs,
             isect_offsets,
             flatten_ids,
+            use_hit_distance,
             sample_counts,
         )
 
@@ -1631,6 +1648,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.camera_model_type = camera_model_type
         ctx.tile_size = tile_size
         ctx.ftheta_coeffs = ftheta_coeffs
+        ctx.use_hit_distance = use_hit_distance
 
         return render_colors, render_alphas, last_ids, sample_counts
 
@@ -1670,6 +1688,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         tile_size = ctx.tile_size
         ftheta_coeffs = ctx.ftheta_coeffs
+        use_hit_distance = ctx.use_hit_distance
 
         (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_bwd"
@@ -1696,6 +1715,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             ftheta_coeffs,
             isect_offsets,
             flatten_ids,
+            use_hit_distance,
             render_alphas,
             last_ids,
             v_render_colors.contiguous(),
@@ -1736,6 +1756,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # rolling_shutter
             None,  # viewmats_rs
             None,  # return_sample_counts (flag, no gradient)
+            None,  # use_hit_distance
         )
 
 
@@ -1759,7 +1780,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         radius_clip: float,
         sparse_grad: bool,
         calc_compensations: bool,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+        camera_model: CameraModel = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         assert (

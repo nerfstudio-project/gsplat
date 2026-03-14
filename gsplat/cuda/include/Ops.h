@@ -502,6 +502,7 @@ projection_ut_3dgs_fused(
     const float radius_clip,
     const bool calc_compensations,
     const CameraModelType camera_model,
+    const bool global_z_order,
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
@@ -541,6 +542,7 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool use_hit_distance,
     const at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width]
 );
 
@@ -574,6 +576,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     // intersections
     const at::Tensor tile_offsets,    // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,     // [n_isects]
+    const bool use_hit_distance,
     // forward outputs
     const at::Tensor render_alphas,   // [..., C, image_height, image_width, 1]
     const at::Tensor last_ids,        // [..., C, image_height, image_width]

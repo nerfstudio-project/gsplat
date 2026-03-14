@@ -25,6 +25,7 @@ from typing_extensions import Literal
 
 from .cuda._wrapper import (
     RollingShutterType,
+    CameraModel,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
     UnscentedTransformParameters,
@@ -45,6 +46,12 @@ from .distributed import (
     all_to_all_tensor_list,
 )
 from .utils import depth_to_normal, get_projection_matrix
+
+# Gaussian depth modes (D/ED): use projection depth (controlled by global_z_order)
+# Hit distance modes (d/Ed): compute along-ray distance in rasterization
+RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"]
+
+RasterizeMode = Literal["classic", "antialiased"]
 
 
 def _compute_view_dirs_packed(
@@ -140,17 +147,18 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: RenderMode = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
-    rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    rasterize_mode: RasterizeMode = "classic",
     channel_chunk: int = 32,
     distributed: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     segmented: bool = False,
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
     with_eval3d: bool = False,
+    global_z_order: bool = True,
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -195,11 +203,20 @@ def rasterization(
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
-        The supported modes are "RGB", "D", "ED", "RGB+D", and "RGB+ED". "RGB" renders the
-        colored image that respects the `colors` argument. "D" renders the accumulated z-depth
-        :math:`\\sum_i w_i z_i`. "ED" renders the expected z-depth
-        :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. "RGB+D" and "RGB+ED" render both
-        the colored image and the depth, in which the depth is the last channel of the output.
+
+        **Gaussian Depth Modes** (use projection depth, controlled by `global_z_order`):
+        - "D": Accumulated Gaussian depth :math:`\\sum_i w_i z_i`
+        - "ED": Expected Gaussian depth :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`
+        - "RGB+D": RGB + accumulated Gaussian depth
+        - "RGB+ED": RGB + expected Gaussian depth
+
+        **Hit Distance Modes** (compute along-ray distance in rasterization):
+        - "d": Accumulated hit distance :math:`\\sum_i w_i d_i`
+        - "Ed": Expected hit distance :math:`\\frac{\\sum_i w_i d_i}{\\sum_i w_i}`
+        - "RGB-d": RGB + accumulated hit distance
+        - "RGB-Ed": RGB + expected hit distance
+
+        "RGB" renders only the colored image. For combined modes, depth is the last channel.
 
     .. note::
         **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
@@ -278,9 +295,11 @@ def rasterization(
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
         backgrounds: The background colors. [..., C, D]. Default is None.
-        render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
-            and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
-            "ED" renders the expected depth. Default is "RGB".
+        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED",
+            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image.
+            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance
+            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)
+            are normalized by opacity. Default is "RGB".
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
@@ -305,6 +324,10 @@ def rasterization(
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
             of 2D image space. Default is False.
+        global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for
+            sorting Gaussians during rasterization. When True, Gaussians are sorted by their
+            z-coordinate in camera space. When False, they are sorted by their Euclidean
+            distance from the camera origin. Default is True.
         radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.
             For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape
             should be [..., C, 4].
@@ -379,7 +402,18 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in [
+        "RGB",
+        "d",
+        "Ed",
+        "D",
+        "ED",
+        "RGB-d",
+        "RGB-Ed",
+        "RGB+D",
+        "RGB+ED",
+    ], render_mode
+    assert global_z_order or with_ut, "global_z_order can be false only if with_ut=True"
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -451,6 +485,15 @@ def rasterization(
         assert packed is False, "Packed mode is not supported with UT."
         assert sparse_grad is False, "Sparse grad is not supported with UT."
 
+    # Validate hit distance modes require eval3d
+    hit_distance_modes = {"d", "Ed", "RGB-d", "RGB-Ed"}
+    if render_mode in hit_distance_modes and not with_eval3d:
+        raise ValueError(
+            f"Hit distance mode '{render_mode}' requires with_eval3d=True. "
+            f"Classic mode only supports Gaussian depth modes ('D', 'ED', 'RGB+D', 'RGB+ED'). "
+            f"Either set with_eval3d=True or use a Gaussian depth render_mode."
+        )
+
     # Implement the multi-GPU strategy proposed in
     # `On Scaling Up 3D Gaussian Splatting Training <https://arxiv.org/abs/2406.18533>`.
     #
@@ -501,6 +544,7 @@ def rasterization(
             ftheta_coeffs=ftheta_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
+            global_z_order=global_z_order,
         )
 
     else:
@@ -717,9 +761,18 @@ def rasterization(
             opacities = reshape_view(C, opacities, N_world)
             colors = reshape_view(C, colors, N_world)
 
+    # Determine if we need hit distance (computed in rasterization) or Gaussian depth (from projection)
+    # (hit_distance_modes already defined at validation stage)
+    use_hit_distance = render_mode in hit_distance_modes
+
     # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
+    if render_mode in ["RGB+D", "RGB+ED", "RGB-d", "RGB-Ed"]:
+        if use_hit_distance:
+            # Hit distance modes: use zeros as placeholder (kernel will overwrite with hit distance)
+            colors = torch.cat((colors, torch.zeros_like(depths[..., None])), dim=-1)
+        else:
+            # Gaussian depth modes: use projection depth
+            colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
                 [
@@ -728,8 +781,13 @@ def rasterization(
                 ],
                 dim=-1,
             )
-    elif render_mode in ["D", "ED"]:
-        colors = depths[..., None]
+    elif render_mode in ["D", "ED", "d", "Ed"]:
+        if use_hit_distance:
+            # Hit distance modes: zeros as placeholder (kernel will overwrite)
+            colors = torch.zeros_like(depths[..., None])
+        else:
+            # Gaussian depth modes: use projection depth
+            colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
     else:  # RGB
@@ -805,6 +863,7 @@ def rasterization(
                     ftheta_coeffs=ftheta_coeffs,
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
+                    use_hit_distance=use_hit_distance,
                 )
             else:
                 render_colors_, render_alphas_ = rasterize_to_pixels(
@@ -848,6 +907,7 @@ def rasterization(
                 ftheta_coeffs=ftheta_coeffs,
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
+                use_hit_distance=use_hit_distance,
             )
         else:
             render_colors, render_alphas = rasterize_to_pixels(
@@ -864,7 +924,8 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
             )
-    if render_mode in ["ED", "RGB+ED"]:
+    # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
+    if render_mode in ["Ed", "ED", "RGB-Ed", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
             [
@@ -893,8 +954,8 @@ def _rasterization(
     sh_degree: Optional[int] = None,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
-    rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    render_mode: RenderMode = "RGB",
+    rasterize_mode: RasterizeMode = "classic",
     channel_chunk: int = 32,
     batch_per_iter: int = 100,
     with_eval3d: bool = False,
@@ -936,7 +997,17 @@ def _rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in [
+        "RGB",
+        "d",
+        "Ed",
+        "D",
+        "ED",
+        "RGB-d",
+        "RGB-Ed",
+        "RGB+D",
+        "RGB+ED",
+    ], render_mode
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
@@ -1453,7 +1524,7 @@ def rasterization_2dgs(
     packed: bool = False,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: RenderMode = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     distloss: bool = False,
@@ -1492,9 +1563,11 @@ def rasterization_2dgs(
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
         backgrounds: The background colors. [C, D]. Default is None.
-        render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
-            and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
-            "ED" renders the expected depth. Default is "RGB".
+        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED",
+            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image.
+            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance
+            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)
+            are normalized by opacity. Default is "RGB".
         sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
@@ -1575,14 +1648,28 @@ def rasterization_2dgs(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in [
+        "RGB",
+        "d",
+        "Ed",
+        "D",
+        "ED",
+        "RGB-d",
+        "RGB-Ed",
+        "RGB+D",
+        "RGB+ED",
+    ], render_mode
     if distloss:
         assert render_mode in [
+            "d",
+            "Ed",
             "D",
             "ED",
+            "RGB-d",
+            "RGB-Ed",
             "RGB+D",
             "RGB+ED",
-        ], f"distloss requires depth rendering, render_mode should be D, ED, RGB+D, RGB+ED, but got {render_mode}"
+        ], f"distloss requires depth rendering, render_mode should be d, Ed, D, ED, RGB-d, RGB-Ed, RGB+D, or RGB+ED, but got {render_mode}"
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]

@@ -21,6 +21,7 @@ from .compression import PngCompression
 from .cuda._torch_impl import accumulate
 from .cuda._torch_impl_2dgs import accumulate_2dgs
 from .cuda._wrapper import (
+    CameraModel,
     RollingShutterType,
     fully_fused_projection,
     fully_fused_projection_2dgs,
@@ -45,6 +46,8 @@ from .cuda._wrapper import (
 from .exporter import export_splats
 from .optimizers import SelectiveAdam
 from .rendering import (
+    RasterizeMode,
+    RenderMode,
     rasterization,
     rasterization_2dgs,
     rasterization_2dgs_inria_wrapper,
@@ -60,6 +63,9 @@ all = [
     "DefaultStrategy",
     "MCMCStrategy",
     "Strategy",
+    "CameraModel",
+    "RasterizeMode",
+    "RenderMode",
     "rasterization",
     "rasterization_2dgs",
     "rasterization_inria_wrapper",
