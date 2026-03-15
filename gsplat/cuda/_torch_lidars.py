@@ -53,8 +53,11 @@ class _StructuredLidarModel(_LidarModel, _BaseCameraModel):
         # TODO: passing shutter type because the base expects it, but Lidar doesn't use it.
         # This is a clear sign of design smell, the camera/sensor class hierarchy needs a revamp
         # to properly support lidar sensors.
-        # TODO: we're transposing rows and columns like nrend does.
-        # This needs to be reverted once we validate that gsplat is a drop-in replacement for nrend.
+        # TODO: we're transposing rows and columns here by mapping
+        # n_rows->width and n_columns->height, because _BaseCameraModel expects
+        # image_point = [x, y], while lidar here uses image_point = [row,
+        # column]. This needs to be reverted once lidar stops reusing the
+        # camera image-point API.
         _BaseCameraModel.__init__(self, width=params.n_rows, height=params.n_columns)
 
 class _SpinningLidarModel(_LidarModel):
@@ -181,7 +184,10 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         row = angles.elevation * self.ANGLE_TO_PIXEL_SCALING_FACTOR
 
         # NOTE: here the image point is (elevation, azimuth)
-        # TODO: this is following nrend/vren, but it should be the other way around.
+        # TODO: this is transposing the camera image-point convention:
+        # lidar returns image_point = [row, column] = [elevation, azimuth],
+        # while the camera API expects [x, y] = [column, row]. This needs to be
+        # the other way around once lidar stops reusing the camera image-point API.
         image_point = torch.stack([row, column], dim=-1)
 
         # Validation: compute relative angles for FOV checking
@@ -217,7 +223,7 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         row = image_point[..., 0]
         column = image_point[..., 1]
 
-        # Convert from scaled angle space to angles (NREND approach)
+        # Convert from scaled angle space to angles ([row, column] = [elevation, azimuth])
         kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
         angles = SphericalUnitCoord(
             elevation = row * kToAngle,
