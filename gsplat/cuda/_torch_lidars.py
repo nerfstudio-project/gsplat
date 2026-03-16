@@ -222,7 +222,8 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         row = image_point[..., 0]
         column = image_point[..., 1]
 
-        # Convert from scaled angle space to angles ([row, column] = [elevation, azimuth])
+        # Convert from scaled angle space to angles
+        # NOTE: the current pipeline uses image_point = [x, y] = [row, column] = [elevation, azimuth].
         kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
         angles = SphericalUnitCoord(
             elevation = row * kToAngle,
