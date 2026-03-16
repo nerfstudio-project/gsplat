@@ -12,9 +12,6 @@
 
 namespace gsplat {
 /**
- * @brief Reshapes a tensor to match a specified shape template.
- *
-/**
  * @brief Normalizes the shape of an input tensor according to a specified shape template.
  *
  * This function adjusts the dimensions of the provided tensor to match the number of dimensions
