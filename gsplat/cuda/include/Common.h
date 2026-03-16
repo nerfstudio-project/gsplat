@@ -82,6 +82,10 @@ enum CameraModelType {
 
 #define MAX_KERNEL_DENSITY_CUTOFF 0.0113
 
+// Floor for (1 - alpha) when computing 1/(1-alpha) in backward rasterization.
+// Prevents gradient explosion when alpha approaches 1.0.
+#define MIN_ONE_MINUS_ALPHA 1e-6f
+
 #ifdef __CUDACC__
 #   define GSPLAT_NOINLINE __noinline__
 #else

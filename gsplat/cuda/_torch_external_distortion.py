@@ -66,8 +66,8 @@ def ref_distort_camera_ray(
     if ray_length < 1e-6:
         return ray
 
-    phi = math.asin(ray[0] / ray_length)
-    theta = math.asin(ray[1] / ray_length)
+    phi = math.asin(max(-1.0, min(1.0, ray[0] / ray_length)))
+    theta = math.asin(max(-1.0, min(1.0, ray[1] / ray_length)))
 
     x = math.sin(ref_eval_bivariate_poly(horizontal_poly, h_order, phi, theta))
     y = math.sin(ref_eval_bivariate_poly(vertical_poly, v_order, phi, theta))

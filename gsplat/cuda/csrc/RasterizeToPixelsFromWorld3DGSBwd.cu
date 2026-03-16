@@ -431,7 +431,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             vec3 normal = {0.f, 0.f, 0.f};  // pre-declare for use in v_alpha and later
             if (valid) {
                 // compute the current T for this gaussian
-                float ra = 1.0f / (1.0f - alpha);
+                float ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
                 T *= ra;
                 // update v_rgb for this gaussian
                 const float fac = alpha * T;

@@ -524,6 +524,87 @@ class TestDistortCameraRaysCUDA:
                 result_single[0], result_batch[i], atol=1e-7, rtol=1e-7
             )
 
+    def test_boundary_rays_asin_clamp(self):
+        """Boundary rays where ray[i]/ray_length == 1.0 must not produce NaN.
+
+        Under --use_fast_math, the ratio can exceed 1.0 by an ULP, making
+        asin return NaN.  The clamp in ExternalDistortion.cuh and the Python
+        ref prevents this.  Cross-validates CUDA against Python reference.
+        """
+        h = make_identity_horizontal_poly()
+        v = make_identity_vertical_poly()
+
+        boundary_rays = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 1e-30],
+            [0.0, 1.0, 1e-30],
+            [-1.0, 0.0, 1e-30],
+            [0.0, -1.0, 1e-30],
+        ]
+
+        cuda_result = self._distort_cuda(boundary_rays, h, v)
+        assert torch.isfinite(
+            cuda_result
+        ).all(), "NaN/Inf in CUDA distort_camera_rays for boundary rays"
+
+        for i, ray in enumerate(boundary_rays):
+            ref = ref_distort_camera_ray(tuple(ray), h, v, 1, 1)
+            for j in range(3):
+                assert math.isfinite(
+                    ref[j]
+                ), f"NaN/Inf in Python ref for ray {ray}, component {j}"
+                assert cuda_result[i, j].item() == pytest.approx(
+                    ref[j], abs=1e-5
+                ), f"Mismatch at ray {i}, component {j}"
+
+    def test_asin_clamp_with_imprecise_sqrt(self):
+        """Python ref asin clamp must prevent ValueError when sqrt is imprecise.
+
+        Under --use_fast_math, CUDA's sqrt can return a value slightly smaller
+        than the true result, making ray[i]/ray_length exceed 1.0.  We
+        monkey-patch math.sqrt to simulate this (can't patch GPU code).
+        """
+        import unittest.mock
+
+        h = make_identity_horizontal_poly()
+        v = make_identity_vertical_poly()
+
+        boundary_rays = [
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (1.0, 0.0, 1e-30),
+            (0.0, 1.0, 1e-30),
+            (-1.0, 0.0, 1e-30),
+            (0.0, -1.0, 1e-30),
+        ]
+
+        original_sqrt = math.sqrt
+
+        def fast_math_sqrt(x):
+            """Simulate --use_fast_math: sqrt returns value slightly too small."""
+            return original_sqrt(x) * (1.0 - 1e-7)
+
+        # Precondition: patched sqrt makes ratio > 1.0 for boundary rays
+        ray_length = fast_math_sqrt(sum(c**2 for c in boundary_rays[0]))
+        ratio = boundary_rays[0][0] / ray_length
+        assert (
+            ratio > 1.0
+        ), f"Precondition failed: patched sqrt should make ratio > 1.0, got {ratio}"
+        with pytest.raises(ValueError):
+            math.asin(ratio)
+
+        # All boundary rays must produce finite output despite ratio > 1.0
+        with unittest.mock.patch(
+            "gsplat.cuda._torch_external_distortion.math.sqrt", fast_math_sqrt
+        ):
+            for ray in boundary_rays:
+                result = ref_distort_camera_ray(ray, h, v, 1, 1)
+                for j, val in enumerate(result):
+                    assert math.isfinite(
+                        val
+                    ), f"NaN/Inf in component {j} for ray {ray}: got {val}"
+
 
 # ===========================================================================
 # 5. Camera model integration tests via BaseCameraModel.create()
