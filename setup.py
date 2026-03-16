@@ -69,6 +69,7 @@ setup(
         "numpy",
         "jaxtyping",
         "rich>=12",
+        "scipy",
         "torch",
         "typing_extensions; python_version<'3.8'",
     ],
