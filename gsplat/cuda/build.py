@@ -69,10 +69,12 @@ def get_build_parameters():
     extra_ldflags = []
 
     if sys.platform == "win32":
-        extra_cflags += ["/std:c++20", "-DWIN32_LEAN_AND_MEAN"]
+        extra_cflags += ["/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN"]
         extra_cuda_cflags += [
             "-std=c++20",
             "-allow-unsupported-compiler",
+            "-Xcompiler",
+            "/Zc:preprocessor",
             "-DWIN32_LEAN_AND_MEAN",
         ]
     else:
