@@ -2071,7 +2071,7 @@ def _expected_hit_distance_canonical_ray_distance(
     quats: torch.Tensor,
     scales: torch.Tensor,
 ) -> float:
-    """Expected hit distance using nrend canonicalRayDistance: length(scale * grd * hit_t)."""
+    """Expected hit distance using the formula: length(scale * grd * hit_t)."""
     from gsplat.cuda._math import _quat_scale_to_preci_half
     from gsplat.cuda._torch_impl_eval3d import _safe_normalize
 
@@ -2159,7 +2159,7 @@ def _pixel_ray_dir_pinhole(
 def test_rasterize_to_pixels_hit_distance_principal_axis(
     means_list, quats_choice, scales_list, pixel_dx, pixel_dy
 ):
-    """Check that hit distance (accumulated/alpha) matches nrend KBuffer canonicalRayDistance:
+    """Check that hit distance (accumulated/alpha) matches the hit-distance formula:
     length(scale * grd * hit_t) with hit_t = dot(grd, -gro). Includes center and off-center
     pixels. Failures indicate the rasterization hit-distance code should be analyzed and fixed.
     """

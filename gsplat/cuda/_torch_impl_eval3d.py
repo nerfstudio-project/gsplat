@@ -351,7 +351,7 @@ def accumulate_eval3d(
     gauss_colors = colors[image_ids, gaussian_ids]
 
     # 6b. Compute normals if requested
-    # Normal computation follows nRend: canonical normal (0,0,1) transformed by rotation
+    # Normal computation uses the normal (0,0,1) transformed by rotation
     gauss_normals = None
     if return_normals:
         quats_per_gauss = quats_flat[batch_ids, gaussian_ids]  # [M, 4]
@@ -362,7 +362,6 @@ def accumulate_eval3d(
         gauss_normals = R[:, :, 2]  # [M, 3]
 
         # Direction resolution: flip if facing away from ray
-        # (same as nRend: if dot(normal, ray_direction) > 0, flip)
         ray_d_normalized = _safe_normalize(ray_d)  # [M, 3]
         dot_product = torch.sum(
             gauss_normals * ray_d_normalized, dim=-1, keepdim=True

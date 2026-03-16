@@ -411,7 +411,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 const vec3 unnormalized_normal = normal_batch[t];
                 
                 // Direction resolution: flip if facing away from ray
-                // (same as nRend: if dot(normal, ray_direction) > 0, flip)
                 const bool flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
                 const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
                 

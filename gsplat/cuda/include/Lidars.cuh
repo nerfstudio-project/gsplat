@@ -76,7 +76,11 @@ struct RowOffsetStructuredSpinningLidarModel : BaseCameraModel<RowOffsetStructur
     {
         __device__
         explicit Parameters(RowOffsetStructuredSpinningLidarModelParametersExtDevice lidar_params)
-            // TODO: We're mapping n_rows->width and n_columns->height to conform with nrend, but this should be reverted
+            // TODO: We're mapping n_rows->width and n_columns->height because
+            // the current pipeline uses image_point = [x, y] = [row, column]
+            // = [elevation, azimuth]. This should be reverted once the pipeline
+            // switches to the standard [x, y] = [column, row] = [azimuth,
+            // elevation].
             : Base::Parameters{
                 {static_cast<unsigned int>(lidar_params.n_rows), static_cast<unsigned int>(lidar_params.n_columns)},
                 ShutterType::ROLLING_LEFT_TO_RIGHT
@@ -116,7 +120,9 @@ public:
         assert(lidar.angles_to_columns_map != nullptr);
 
         // Convert image point (in scaled pixel space) back to angles
-        // TODO: transposing here to make it compatible with nrend/vren, this needs to be reverted later.
+        // TODO: transposing here because the current pipeline uses image_point =
+        // [x, y] = [elevation, azimuth], this needs to be reverted
+        // once the pipeline switches to the standard [x, y] = [azimuth, elevation].
         constexpr float kToAngle = 1.f / lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
         const float elevation = image_point.x * kToAngle;
         const float azimuth = image_point.y * kToAngle;
@@ -166,7 +172,9 @@ public:
         const float azimuth = std::atan2(ray_normalized.y, ray_normalized.x);
 
         // Image point: [row, column] (in scaled angle space)
-        // TODO: Must undo this swap once the current code is confirmed to be 1:1 with nrend.
+        // TODO: the current pipeline uses image_point = [x, y] = [row, column]
+        // = [elevation, azimuth]. Must undo this swap once the pipeline switches
+        // to the standard [x, y] = [column, row] = [azimuth, elevation].
         const float row = elevation * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
         const float column = azimuth * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
         const glm::fvec2 image_point = glm::fvec2{row, column};
@@ -192,7 +200,10 @@ public:
     {
         const RowOffsetStructuredSpinningLidarModelParametersExtDevice &lidar = parameters.lidar;
 
-        // TODO: transposing to be compatible with nrend, but this must be reverted later.
+        // TODO: transposing because the current pipeline uses image_point =
+        // [x, y] = [row, column] = [elevation, azimuth], but this must be reverted
+        // once the pipeline switches to the standard [x, y] = [column, row] =
+        // [azimuth, elevation].
         const float row = image_point.x;
         const float col = image_point.y;
 
