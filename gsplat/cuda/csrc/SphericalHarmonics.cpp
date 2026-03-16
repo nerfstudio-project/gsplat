@@ -72,7 +72,6 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
     TORCH_CHECK(v_colors.size(-1) == 3, "v_colors must have last dimension 3");
     TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
     TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
-    const uint32_t N = dirs.numel() / 3;
 
     at::Tensor v_coeffs = at::zeros_like(coeffs);
     at::Tensor v_dirs;
@@ -80,9 +79,6 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
         v_dirs = at::zeros_like(dirs);
     }
 
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-    uint32_t n_elements = N;
-    uint32_t shmem_size = 0;
     launch_spherical_harmonics_bwd_kernel(
         degrees_to_use,
         dirs,
