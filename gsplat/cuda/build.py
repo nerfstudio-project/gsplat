@@ -133,7 +133,7 @@ def get_build_parameters():
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
     extra_cuda_cflags += ["-diag-suppress", "20012,186"]
     if not os.name == "nt":
-        extra_cflags += ["-Wno-sign-compare", "-Wno-attributes"]
+        extra_cflags += ["-Wno-attributes"]
         # #pragma unroll is standard CUDA idiom but unknown to gcc
         extra_cflags += ["-Wno-unknown-pragmas"]
 

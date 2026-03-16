@@ -54,7 +54,7 @@ torch::Tensor normalize_shape(torch::Tensor tensor, std::string_view tensor_name
         // Reshape by prepending 1's if too few dimensions
         if(tensor.dim() < expected_ndims)
         {
-            tensor = tensor.expand({((Is < expected_ndims - tensor.dim()) ? 1 : -1)...});
+            tensor = tensor.expand({((static_cast<int>(Is) < expected_ndims - static_cast<int>(tensor.dim())) ? 1 : -1)...});
         }
 
         // Flatten leftmost dimensions if too many, or use as-is
