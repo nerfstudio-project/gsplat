@@ -2839,3 +2839,514 @@ def test_sh(test_data, sh_degree: int, batch_dims: Tuple[int, ...]):
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
+
+
+# ============================================================================
+# NaN/wrong-value safety tests for the 3DGUT code path
+# ============================================================================
+
+
+def _render_alpha(data, quats, scales, means2d, radii, depths):
+    """Render the scene and return the per-pixel alpha tensor."""
+    from gsplat.cuda._wrapper import (
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+    )
+
+    N = data["means"].shape[0]
+    C = data["viewmats"].shape[0]
+    W, H = data["width"], data["height"]
+
+    tile_size = 16
+    tw = math.ceil(W / tile_size)
+    th = math.ceil(H / tile_size)
+    _, iids, fids = isect_tiles(means2d, radii, depths, tile_size, tw, th)
+    ioff = isect_offset_encode(iids, C, tw, th).reshape(C, th, tw)
+    colors = torch.ones(C, N, 3, device=device)
+    opac_bc = data["opacities"].unsqueeze(0).expand(C, N)
+    _, ra, _, _, _ = rasterize_to_pixels_eval3d_extra(
+        data["means"],
+        quats,
+        scales,
+        colors,
+        opac_bc,
+        data["viewmats"],
+        data["Ks"],
+        W,
+        H,
+        tile_size,
+        ioff,
+        fids,
+    )
+    return ra
+
+
+@pytest.fixture
+def nan_test_data():
+    """Small synthetic dataset for NaN-safety tests.
+
+    Gaussians are placed directly in front of the camera, guaranteed
+    visible with the default projection parameters.  Opacity is set low
+    (0.1) so that any bug producing MAX_ALPHA (0.99) is provably wrong:
+    a single Gaussian with opacity p can produce at most alpha=p per pixel.
+    """
+    torch.manual_seed(42)
+    N = 8
+    C = 1
+
+    # Center all Gaussians at z=3 (well inside near/far planes) and near the
+    # optical axis so they definitely project into the image.
+    means = torch.zeros(N, 3, device=device)
+    means[:, 2] = 3.0
+
+    quats = _safe_normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.ones(N, 3, device=device) * 0.2
+    # Low opacity: a single Gaussian can produce at most alpha=0.1 per pixel.
+    # Under the bug, fminf(MAX_ALPHA, 0.1 * NaN) = 0.99, which is impossible.
+    opacities = torch.full((N,), 0.1, device=device)
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0).expand(C, 4, 4).contiguous()
+    Ks = (
+        torch.tensor(
+            [
+                [200.0, 0.0, 32.0],
+                [0.0, 200.0, 24.0],
+                [0.0, 0.0, 1.0],
+            ],
+            device=device,
+        )
+        .unsqueeze(0)
+        .expand(C, 3, 3)
+        .contiguous()
+    )
+
+    return {
+        "means": means,
+        "quats": quats,
+        "scales": scales,
+        "opacities": opacities,
+        "viewmats": viewmats,
+        "Ks": Ks,
+        "width": 64,
+        "height": 48,
+    }
+
+
+# --------------------------------------------------------------------------
+# UT parameter validation
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_ut_params_invalid_kappa_rejected():
+    """kappa < -D makes sqrt(D + lambda) produce NaN.  The constructor must reject it."""
+    with pytest.raises(RuntimeError, match=r"alpha.*kappa"):
+        UnscentedTransformParameters(alpha=0.1, kappa=-4.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_ut_params_valid_accepted():
+    """Default and typical UT parameters must be accepted without error."""
+    UnscentedTransformParameters()  # defaults
+    UnscentedTransformParameters(alpha=1.0, beta=0.0, kappa=0.0)
+    UnscentedTransformParameters(alpha=0.5, kappa=2.0)
+
+
+# --------------------------------------------------------------------------
+# Zero-quaternion Gaussians culled in projection
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_projection_ut_zero_quaternion(nan_test_data):
+    """A zero-quaternion Gaussian must be culled (radii=0).
+
+    Without the fix, under --use_fast_math, glm::normalize(0) returns (0,0,0,0)
+    instead of NaN.  glm::mat3_cast then produces an identity rotation, so the
+    Gaussian passes projection with nonzero radii.  In the rasterization kernel,
+    quat_to_rotmat(0) produces NaN rotation → NaN power → exp(NaN) = NaN →
+    fminf(MAX_ALPHA, opacity * NaN) = MAX_ALPHA.  A single Gaussian with
+    opacity=0.1 renders alpha=0.99 — an impossible value.
+    """
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+
+    data = nan_test_data
+    N = data["means"].shape[0]
+    W, H = data["width"], data["height"]
+    OPACITY = data["opacities"][0].item()
+
+    # Precondition: Gaussian 0 is visible with its valid quaternion
+    radii_ref, _, _, _, _ = fully_fused_projection_with_ut(
+        data["means"],
+        data["quats"],
+        data["scales"],
+        data["opacities"],
+        data["viewmats"],
+        data["Ks"],
+        W,
+        H,
+    )
+    assert (
+        radii_ref[..., 0, :] > 0
+    ).all(), "Gaussian 0 must be visible with valid quat"
+
+    # Inject zero quaternion at index 0
+    quats = data["quats"].clone()
+    quats[0] = 0.0
+
+    proj_params = dict(
+        means=data["means"],
+        quats=quats,
+        scales=data["scales"],
+        opacities=data["opacities"],
+        viewmats=data["viewmats"],
+        Ks=data["Ks"],
+        width=W,
+        height=H,
+    )
+
+    # CUDA implementation
+    radii_gpu, means2d_gpu, depths_gpu, conics_gpu, _ = fully_fused_projection_with_ut(
+        **proj_params
+    )
+    # Python reference implementation
+    radii_ref, means2d_ref, depths_ref, conics_ref, _ = _fully_fused_projection_with_ut(
+        **proj_params
+    )
+
+    # Both must cull the zero-quat Gaussian (both x and y radii)
+    assert (
+        radii_gpu[..., 0, :] == 0
+    ).all(), f"CUDA: zero-quat Gaussian should have radii=0, got {radii_gpu[..., 0, :].tolist()}"
+    assert (
+        radii_ref[..., 0, :] == 0
+    ).all(), f"Ref: zero-quat Gaussian should have radii=0, got {radii_ref[..., 0, :].tolist()}"
+
+    # Both must agree on which Gaussians are visible
+    sel_gpu = (radii_gpu > 0).all(dim=-1)
+    sel_ref = (radii_ref > 0).all(dim=-1)
+    assert_mismatch_ratio(sel_gpu, sel_ref, max=1e-3)
+    sel = sel_gpu & sel_ref
+
+    # Valid Gaussians must match between CUDA and Python ref
+    if sel.any():
+        torch.testing.assert_close(
+            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+        )
+        torch.testing.assert_close(
+            depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
+        )
+        torch.testing.assert_close(
+            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+        )
+
+    # End-to-end: render and verify no pixel exceeds the opacity bound.
+    # With N Gaussians each at opacity p, each contributes at most alpha=p per pixel.
+    # After N, max render_alpha = 1 - (1-p)^N.
+    max_possible_alpha = 1.0 - (1.0 - OPACITY) ** N
+    ra = _render_alpha(data, quats, data["scales"], means2d_gpu, radii_gpu, depths_gpu)
+    assert ra.max().item() <= max_possible_alpha + 1e-3, (
+        f"render_alpha {ra.max().item():.4f} exceeds theoretical max "
+        f"{max_possible_alpha:.4f} for opacity={OPACITY} with {N} Gaussians"
+    )
+
+
+# --------------------------------------------------------------------------
+# Zero-scale (single axis) Gaussians culled in projection
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_projection_ut_zero_scale_single_axis(nan_test_data):
+    """A Gaussian with a single zero-scale axis must be culled (radii=0).
+
+    Without the fix, a single-axis zero scale still produces a valid-looking
+    2D covariance from the UT, so it passes projection with nonzero radii.
+    In rasterization, 1/scale[i] = inf → precision matrix diverges →
+    under --use_fast_math, fminf(MAX_ALPHA, opacity * NaN) = MAX_ALPHA.
+    A single Gaussian with opacity=0.1 renders alpha=0.99 — impossible.
+    """
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+
+    data = nan_test_data
+    N = data["means"].shape[0]
+    W, H = data["width"], data["height"]
+    OPACITY = data["opacities"][0].item()
+
+    # Precondition: Gaussian 0 is visible with valid scales
+    radii_ref, _, _, _, _ = fully_fused_projection_with_ut(
+        data["means"],
+        data["quats"],
+        data["scales"],
+        data["opacities"],
+        data["viewmats"],
+        data["Ks"],
+        W,
+        H,
+    )
+    assert (
+        radii_ref[..., 0, :] > 0
+    ).all(), "Gaussian 0 must be visible with valid scales"
+
+    # Zero a single axis
+    scales = data["scales"].clone()
+    scales[0, 0] = 0.0
+
+    proj_params = dict(
+        means=data["means"],
+        quats=data["quats"],
+        scales=scales,
+        opacities=data["opacities"],
+        viewmats=data["viewmats"],
+        Ks=data["Ks"],
+        width=W,
+        height=H,
+    )
+
+    # CUDA implementation
+    radii_gpu, means2d_gpu, depths_gpu, conics_gpu, _ = fully_fused_projection_with_ut(
+        **proj_params
+    )
+    # Python reference implementation
+    radii_ref, means2d_ref, depths_ref, conics_ref, _ = _fully_fused_projection_with_ut(
+        **proj_params
+    )
+
+    # Both must cull the degenerate Gaussian (both x and y radii)
+    assert (
+        radii_gpu[..., 0, :] == 0
+    ).all(), f"CUDA: single-axis zero-scale should have radii=0, got {radii_gpu[..., 0, :].tolist()}"
+    assert (
+        radii_ref[..., 0, :] == 0
+    ).all(), f"Ref: single-axis zero-scale should have radii=0, got {radii_ref[..., 0, :].tolist()}"
+
+    # Both must agree on which Gaussians are visible
+    sel_gpu = (radii_gpu > 0).all(dim=-1)
+    sel_ref = (radii_ref > 0).all(dim=-1)
+    assert_mismatch_ratio(sel_gpu, sel_ref, max=1e-3)
+    sel = sel_gpu & sel_ref
+
+    # Valid Gaussians must match between CUDA and Python ref
+    if sel.any():
+        torch.testing.assert_close(
+            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+        )
+        torch.testing.assert_close(
+            depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
+        )
+        torch.testing.assert_close(
+            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+        )
+
+    # End-to-end: render and verify no pixel exceeds the opacity bound.
+    max_possible_alpha = 1.0 - (1.0 - OPACITY) ** N
+    ra = _render_alpha(data, data["quats"], scales, means2d_gpu, radii_gpu, depths_gpu)
+    assert ra.max().item() <= max_possible_alpha + 1e-3, (
+        f"render_alpha {ra.max().item():.4f} exceeds theoretical max "
+        f"{max_possible_alpha:.4f} for opacity={OPACITY} with {N} Gaussians"
+    )
+
+
+# --------------------------------------------------------------------------
+# Dgenerate Gaussians must not corrupt rasterization
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data):
+    """End-to-end: degenerate Gaussians (zero quat, zero scale) must be
+    culled in projection so they never reach the rasterization kernel.
+
+    Without the fix, under --use_fast_math, fminf(MAX_ALPHA, NaN) = MAX_ALPHA,
+    so every overlapping pixel gets an opaque splat.  With opacity=0.1 and N=8
+    Gaussians, the theoretical maximum render_alpha is 1-(1-0.1)^8 ≈ 0.57.
+    The bug produces render_alpha=0.99, exceeding this bound.
+
+    Compares CUDA rasterization against reference to verify they agree on the
+    rendered image when degenerate Gaussians are present.
+    """
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+    )
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+
+    data = nan_test_data
+    N = data["means"].shape[0]
+    C = data["viewmats"].shape[0]
+    W, H = data["width"], data["height"]
+    OPACITY = data["opacities"][0].item()
+    max_possible_alpha = 1.0 - (1.0 - OPACITY) ** N
+
+    colors = torch.rand(C, N, 3, device=device)
+
+    # Inject degenerate Gaussians
+    quats_bad = data["quats"].clone()
+    scales_bad = data["scales"].clone()
+    quats_bad[0] = 0.0  # zero quaternion
+    scales_bad[1, 0] = 0.0  # single-axis zero scale
+
+    # Projection (shared between CUDA and ref rasterization)
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        data["means"],
+        quats_bad,
+        scales_bad,
+        data["opacities"],
+        data["viewmats"],
+        data["Ks"],
+        W,
+        H,
+    )
+
+    # Both degenerate Gaussians must be culled (both x and y radii)
+    assert (radii[..., 0, :] == 0).all(), "Zero-quat Gaussian should be culled"
+    assert (radii[..., 1, :] == 0).all(), "Zero-scale Gaussian should be culled"
+
+    # Replace degenerate values with safe dummies for rasterization.
+    # The degenerate Gaussians are already culled (radii=0) so they won't
+    # enter the tile intersection list.  But the Python reference rasterization
+    # iterates over all Gaussians and asserts positive scales.
+    quats_safe = quats_bad.clone()
+    scales_safe = scales_bad.clone()
+    quats_safe[0] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
+    scales_safe[1, 0] = 1.0
+
+    # Tile intersection
+    tile_size = 16
+    tw = math.ceil(W / tile_size)
+    th = math.ceil(H / tile_size)
+    _tpg, iids, fids = isect_tiles(means2d, radii, depths, tile_size, tw, th)
+    ioff = isect_offset_encode(iids, C, tw, th).reshape(C, th, tw)
+    opac_bc = data["opacities"].unsqueeze(0).expand(C, N)
+
+    # CUDA rasterization
+    rc_gpu, ra_gpu, _, _, _ = rasterize_to_pixels_eval3d_extra(
+        data["means"],
+        quats_safe,
+        scales_safe,
+        colors,
+        opac_bc,
+        data["viewmats"],
+        data["Ks"],
+        W,
+        H,
+        tile_size,
+        ioff,
+        fids,
+    )
+
+    # Python reference rasterization
+    ref_outputs = _rasterize_to_pixels_eval3d(
+        data["means"],
+        quats_safe,
+        scales_safe,
+        colors,
+        opac_bc,
+        data["viewmats"],
+        data["Ks"],
+        W,
+        H,
+        tile_size=tile_size,
+        isect_offsets=ioff,
+        flatten_ids=fids,
+    )
+    rc_ref, ra_ref = ref_outputs[0], ref_outputs[1]
+
+    # Both must be finite
+    assert torch.isfinite(rc_gpu).all(), "NaN/inf in CUDA render_colors"
+    assert torch.isfinite(ra_gpu).all(), "NaN/inf in CUDA render_alphas"
+    assert torch.isfinite(rc_ref).all(), "NaN/inf in ref render_colors"
+    assert torch.isfinite(ra_ref).all(), "NaN/inf in ref render_alphas"
+
+    # CUDA and reference must agree
+    torch.testing.assert_close(rc_gpu, rc_ref, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(ra_gpu, ra_ref, rtol=1e-3, atol=1e-3)
+
+    # Render alpha must not exceed theoretical max
+    assert ra_gpu.max().item() <= max_possible_alpha + 1e-3, (
+        f"CUDA render_alpha {ra_gpu.max().item():.4f} exceeds theoretical max "
+        f"{max_possible_alpha:.4f} for opacity={OPACITY} with {N} Gaussians"
+    )
+    assert ra_ref.max().item() <= max_possible_alpha + 1e-3, (
+        f"Ref render_alpha {ra_ref.max().item():.4f} exceeds theoretical max "
+        f"{max_possible_alpha:.4f} for opacity={OPACITY} with {N} Gaussians"
+    )
+
+
+# --------------------------------------------------------------------------
+# Python reference — NaN from torch.sqrt(negative cov diag) in UT projection
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_projection_ut_python_ref_no_nan(nan_test_data):
+    """CUDA and Python ref must agree on degenerate inputs, with no NaN.
+
+    Under default UT params (alpha=0.1), the center covariance weight is ≈ -96.
+    Without the fix, torch.sqrt(cov_diag) on a negative diagonal produces NaN,
+    and torch.linalg.inv on a singular covariance produces NaN/inf.
+    """
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+
+    data = nan_test_data
+    quats = data["quats"].clone()
+    scales = data["scales"].clone()
+    quats[0] = 0.0  # zero quaternion
+    scales[1] = 0.0  # all-zero scale
+
+    ut_params = UnscentedTransformParameters(alpha=0.1, beta=2.0, kappa=0.0)
+
+    proj_params = dict(
+        means=data["means"],
+        quats=quats,
+        scales=scales,
+        opacities=data["opacities"],
+        viewmats=data["viewmats"],
+        Ks=data["Ks"],
+        width=data["width"],
+        height=data["height"],
+        ut_params=ut_params,
+    )
+
+    radii_gpu, means2d_gpu, depths_gpu, conics_gpu, _ = fully_fused_projection_with_ut(
+        **proj_params
+    )
+    radii_ref, means2d_ref, depths_ref, conics_ref, _ = _fully_fused_projection_with_ut(
+        **proj_params
+    )
+
+    # Both must agree on culling degenerate Gaussians
+    sel_gpu = (radii_gpu > 0).all(dim=-1)
+    sel_ref = (radii_ref > 0).all(dim=-1)
+    assert_mismatch_ratio(sel_gpu, sel_ref, max=1e-3)
+    sel = sel_gpu & sel_ref
+
+    # Valid Gaussians must have finite outputs in both implementations
+    if sel.any():
+        assert torch.isfinite(means2d_gpu[sel]).all(), "NaN in CUDA means2d"
+        assert torch.isfinite(conics_gpu[sel]).all(), "NaN in CUDA conics"
+        assert torch.isfinite(means2d_ref[sel]).all(), "NaN in ref means2d"
+        assert torch.isfinite(conics_ref[sel]).all(), "NaN in ref conics"
+
+        # CUDA and ref must agree on valid Gaussian outputs
+        torch.testing.assert_close(
+            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+        )
+        torch.testing.assert_close(
+            depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
+        )
+        torch.testing.assert_close(
+            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+        )

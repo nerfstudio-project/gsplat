@@ -92,7 +92,26 @@ __global__ void projection_ut_3dgs_fused_kernel(
         quats[bid * N * 4 + gid * 4 + 1],
         quats[bid * N * 4 + gid * 4 + 2],
         quats[bid * N * 4 + gid * 4 + 3]};  // w,x,y,z quaternion
-    quat = glm::normalize(quat);
+    // A zero-length quaternion has no defined orientation — the Gaussian is
+    // degenerate. Skip it to avoid NaN from glm::normalize dividing by zero.
+    // Under --use_fast_math, 0/0 silently gives 0 instead of NaN, causing
+    // glm::mat3_cast to produce an identity rotation (wrong, not NaN).
+    float quat_norm2 = glm::dot(quat, quat);
+    if (is_near_zero(quat_norm2)) {
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
+        return;
+    }
+
+    // A Gaussian with near-zero scale along any axis has a divergent precision
+    // matrix (1/scale → inf). The 3DGUT rasterization kernel evaluates
+    // Gaussians in 3D using the precision matrix, so such Gaussians must not
+    // enter the intersection list.  Cull them here.
+    if (is_near_zero(scale[0]) || is_near_zero(scale[1]) || is_near_zero(scale[2])) {
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
+        return;
+    }
 
     // shift pointers to the current camera. note that glm is colume-major.
     const vec2 focal_length = {Ks[bid * C * 9 + cid * 9 + 0], Ks[bid * C * 9 + cid * 9 + 4]};
@@ -115,6 +134,9 @@ __global__ void projection_ut_3dgs_fused_kernel(
         radii[idx * 2 + 1] = 0;
         return;
     }
+
+    // Make sure the rotation quaternion is normalized
+    quat *= rsqrtf(quat_norm2);
 
     // projection using uncented transform
     ImageGaussianReturn image_gaussian_return;
@@ -203,6 +225,18 @@ __global__ void projection_ut_3dgs_fused_kernel(
     float compensation;
     float det = add_blur(eps2d, covar2d, compensation);
     if (det <= 0.f) {
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
+        return;
+    }
+
+    // The UT center covariance weight can be very negative (e.g. ≈ -96 with
+    // default alpha=0.1).  This means the UT covariance estimate is not
+    // guaranteed positive-semidefinite — a diagonal entry can be negative even
+    // when the determinant is positive.  Cull these: the UT has failed to
+    // produce a valid 2D covariance for this Gaussian/camera combination, and
+    // sqrtf(negative diagonal) below would produce NaN.
+    if (covar2d[0][0] < 0.f || covar2d[1][1] < 0.f) {
         radii[idx * 2] = 0;
         radii[idx * 2 + 1] = 0;
         return;

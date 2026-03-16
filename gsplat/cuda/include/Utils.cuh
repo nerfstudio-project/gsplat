@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,10 +22,24 @@
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#include <cuda/std/limits>
+#include <cuda/std/type_traits>
 
 namespace gsplat {
 
 namespace cg = cooperative_groups;
+
+// Check whether a floating-point value is effectively zero, using the
+// machine epsilon for the given type.
+template <typename T>
+__host__ __device__ constexpr bool is_near_zero(T x)
+{
+    static_assert(
+        cuda::std::is_floating_point_v<T>,
+        "is_near_zero requires a floating-point type"
+    );
+    return abs(x) < cuda::std::numeric_limits<T>::epsilon();
+}
 
 ///////////////////////////////
 // Coordinate Transformations
@@ -221,6 +236,9 @@ inline __device__ void quat_scale_to_covar_preci(
         *covar = M * glm::transpose(M);
     }
     if (preci != nullptr) {
+        // Scale must be non-zero; the projection kernel culls degenerate
+        // Gaussians (scale < epsilon) so they never reach this path.
+        assert(scale[0] != 0.f && scale[1] != 0.f && scale[2] != 0.f);
         // P = R * S^-1 * S^-1 * Rt
         mat3 S = mat3(
             1.0f / scale[0],
@@ -289,6 +307,9 @@ inline __device__ void quat_scale_to_preci_vjp(
     vec4 &v_quat,
     vec3 &v_scale
 ) {
+    // Scale must be non-zero; the projection kernel culls degenerate
+    // Gaussians (scale < epsilon) so they never reach this path.
+    assert(scale[0] != 0.f && scale[1] != 0.f && scale[2] != 0.f);
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     float sx = 1.0f / scale[0], sy = 1.0f / scale[1], sz = 1.0f / scale[2];
 
@@ -334,6 +355,9 @@ inline __device__ void quat_scale_to_covar_preci_half(
         *covar_half = R * S;
     }
     if (preci_half != nullptr) {
+        // Scale must be non-zero; the projection kernel culls degenerate
+        // Gaussians (scale < epsilon) so they never reach this path.
+        assert(scale[0] != 0.f && scale[1] != 0.f && scale[2] != 0.f);
         // P = R * S^-1
         mat3 S = mat3(
             1.0f / scale[0],
@@ -362,6 +386,9 @@ inline __device__ void quat_scale_to_preci_half_vjp(
     vec4 &v_quat,
     vec3 &v_scale
 ) {
+    // Scale must be non-zero; the projection kernel culls degenerate
+    // Gaussians (scale < epsilon) so they never reach this path.
+    assert(scale[0] != 0.f && scale[1] != 0.f && scale[2] != 0.f);
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     float sx = 1.0f / scale[0], sy = 1.0f / scale[1], sz = 1.0f / scale[2];
 

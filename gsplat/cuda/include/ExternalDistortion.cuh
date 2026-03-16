@@ -118,8 +118,11 @@ struct BivariateWindshieldModel {
         const float ray_length = glm::length(ray);
         if (ray_length < 1e-6f) return ray;
 
-        const float phi = std::asin(ray.x / ray_length);
-        const float theta = std::asin(ray.y / ray_length);
+        // Clamp to [-1, 1] before asin: mathematically |ray.x / ray_length| <= 1,
+        // but --use_fast_math can introduce rounding that pushes the ratio past
+        // 1.0 by an ULP, which makes asin return NaN.
+        const float phi = std::asin(std::clamp(ray.x / ray_length, -1.f, 1.f));
+        const float theta = std::asin(std::clamp(ray.y / ray_length, -1.f, 1.f));
 
         const float x = std::sin(eval_bivariate_poly(horizontal_poly, horizontal_order, phi, theta));
         const float y = std::sin(eval_bivariate_poly(vertical_poly, vertical_order, phi, theta));

@@ -342,6 +342,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
             scale_batch[tr] = scales[isect_bid * N + isect_gid];
             quat_batch[tr] = quats[isect_bid * N + isect_gid];
+            // Projection kernel culls degenerate Gaussians (zero quaternion,
+            // zero scale) by setting radii = 0, preventing them from entering
+            // the intersection list. Assert the preconditions here.
+            assert(glm::dot(quat_batch[tr], quat_batch[tr]) > 0.f);
+            assert(scale_batch[tr][0] > 0.f && scale_batch[tr][1] > 0.f && scale_batch[tr][2] > 0.f);
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 rgbs_batch[tr * CDIM + k] = colors[isect_id * CDIM + k];

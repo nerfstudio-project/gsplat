@@ -58,7 +58,16 @@ struct UnscentedTransformParameters : public torch::CustomClassHolder {
     )
         : alpha(alpha), beta(beta), kappa(kappa),
           in_image_margin_factor(in_image_margin_factor),
-          require_all_sigma_points_valid(require_all_sigma_points_valid) {}
+          require_all_sigma_points_valid(require_all_sigma_points_valid)
+    {
+        // The UT requires D + lambda = alpha^2 * (D + kappa) > 0 to produce
+        // meaningful sigma point spread.  A non-positive value would make
+        // sqrt(D + lambda) produce NaN and the weight denominators diverge.
+        constexpr float D = 3.0f;
+        TORCH_CHECK(alpha * alpha * (D + kappa) > 0.0f,
+            "UT parameters invalid: alpha^2 * (D + kappa) must be > 0 "
+            "(got alpha=", alpha, ", kappa=", kappa, ")");
+    }
 
     float alpha;
     float beta;
