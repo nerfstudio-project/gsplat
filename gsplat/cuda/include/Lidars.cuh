@@ -21,7 +21,7 @@
 
 namespace gsplat
 {
-    class RowOffsetStructuredSpinningLidarModelParametersExt;
+    struct RowOffsetStructuredSpinningLidarModelParametersExt;
 }
 
 // Lidar camera parameters struct (device-side)

@@ -28,7 +28,7 @@
 namespace gsplat::extdist
 {
 
-class BivariateWindshieldModelDeviceParams;
+struct BivariateWindshieldModelDeviceParams;
 
 // NOTE: Some of the device functions herein are marked GSPLAT_NOINLINE to prevent compilation
 // combinatorial explosion. e.g. eval_bivariate_poly and distort_camera_ray in ProjectionUT3DGSFused.cu:
