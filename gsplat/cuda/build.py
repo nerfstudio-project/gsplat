@@ -65,17 +65,27 @@ def get_build_parameters():
     extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
-    extra_cflags += ["-g","-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
+    if DEBUG:
+        extra_cflags += ["-g", "-O0"]
+        extra_cuda_cflags += ["-lineinfo"]
+        if sys.platform != "win32":  # MSVC equivalent (/W4 /WX) is untested
+            extra_cflags += ["-Wall"]
+            extra_cuda_cflags += [
+                # nvcc intercepts bare -Werror as its own --Werror flag, so
+                # pass it via -Xcompiler instead of --forward-unknown-opts.
+                "-Xcompiler=-Werror",
+                "--Werror", "all-warnings",
+            ]
+    else:
+        extra_cflags += ["-O3", "-DNDEBUG"]
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
-
-    extra_cuda_cflags += ["-lineinfo"] if DEBUG else []
 
     # Silencing of warnings
     extra_cflags += ["-Wno-attributes"]
+    # #pragma unroll is standard CUDA idiom but unknown to gcc
+    extra_cflags += ["-Wno-unknown-pragmas"]
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
     extra_cuda_cflags += ["-diag-suppress", "20012,186"]
-    if not os.name == "nt":
-        extra_cflags += ["-Wno-sign-compare"]
 
     # Whether to build the camera wrappers or not (for tests)
     if BUILD_CAMERA_WRAPPERS:
@@ -116,6 +126,10 @@ def get_build_parameters():
         print("Compiling without OpenMP...")
 
     extra_cuda_cflags += extra_cflags
+
+    # Add -Werror after the copy so it reaches gcc but not nvcc (see DEBUG block above).
+    if DEBUG and sys.platform != "win32":
+        extra_cflags += ["-Werror"]
 
     if NUM_CHANNELS is not None:
         # nvcc has a bug where you need to escape the commas in macro values defined with -D.
