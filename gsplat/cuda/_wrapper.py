@@ -18,6 +18,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import IntEnum
+from abc import ABC
 from typing import Any, Callable, Optional, Tuple
 
 import torch
@@ -121,12 +122,21 @@ FThetaCameraDistortionParameters = _make_lazy_cuda_cls(
 )
 
 
+class ExternalDistortionModelParameters(ABC):
+    """Base class for external distortion model parameters.
+
+    All concrete external distortion models (e.g. BivariateWindshieldModelParameters)
+    should inherit from this class so that the rendering API can accept any
+    distortion model through a single type-erased parameter.
+    """
+
+
 class ExternalDistortionReferencePolynomial(IntEnum):
     FORWARD = 1
     BACKWARD = 2
 
 
-class BivariateWindshieldModelParameters:
+class BivariateWindshieldModelParameters(ExternalDistortionModelParameters):
     """Thin wrapper around the CUDA BivariateWindshieldModelParameters class.
 
     torch::Library bindings does not allow standalone constants. This
