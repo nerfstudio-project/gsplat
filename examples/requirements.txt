@@ -11,6 +11,7 @@ viser
 git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787
 imageio[ffmpeg]
 numpy<2.0.0
+scipy
 scikit-learn
 tqdm
 torchmetrics[image]
