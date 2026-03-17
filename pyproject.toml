@@ -21,6 +21,7 @@ requires = [
     "torch",
     "numpy",
     "rich",
+    "scipy",
 ]
 build-backend = "setuptools.build_meta"
 
