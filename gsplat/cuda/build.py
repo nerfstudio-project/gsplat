@@ -23,7 +23,19 @@ import torch
 import platform
 import json
 from types import SimpleNamespace
-import torch.utils.cpp_extension as jit
+
+try:
+    import torch.utils.cpp_extension as jit
+except ImportError as e:
+    if "pkg_resources" in str(e):
+        raise ImportError(
+            "torch.utils.cpp_extension failed to import because 'pkg_resources' "
+            "is no longer available in setuptools >= 82. "
+            "Fix: pip install 'setuptools<82'\n"
+            "This is a known issue with PyTorch < 2.9. "
+            "Alternatively, upgrade to PyTorch >= 2.9."
+        ) from e
+    raise
 from contextlib import nullcontext, contextmanager
 from rich.console import Console
 
