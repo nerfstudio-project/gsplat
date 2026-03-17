@@ -69,7 +69,9 @@ class Config:
     # Render trajectory path
     render_traj_path: str = "interp"
 
-    # Path to the Mip-NeRF 360 dataset
+    # Dataset backend: "colmap" or "ncore"
+    data_type: str = "colmap"
+    # Path to the Mip-NeRF 360 dataset (colmap) or NCore v4 meta-JSON file (ncore)
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
     data_factor: int = 4
@@ -87,6 +89,24 @@ class Config:
     camera_model: CameraModel = "pinhole"
     # Load EXIF exposure metadata from images (if available)
     load_exposure: bool = True
+
+    # --- NCore-specific options (only used when data_type="ncore") ---
+    # Camera sensor IDs to load (auto-detected from sequence if empty)
+    ncore_camera_ids: List[str] = field(default_factory=list)
+    # Lidar sensor IDs to load (auto-detected from sequence if empty)
+    ncore_lidar_ids: List[str] = field(default_factory=list)
+    # Temporal seek offset in seconds
+    ncore_seek_offset_sec: Optional[float] = None
+    # Clip duration in seconds (None = full sequence)
+    ncore_duration_sec: Optional[float] = None
+    # Force global-shutter mode (use mean pose instead of per-pixel rolling shutter)
+    ncore_force_global_shutter: bool = False
+    # Maximum number of lidar init points
+    ncore_max_lidar_points: int = 500_000
+    # NCore component group names
+    ncore_poses_component_group: str = "default"
+    ncore_intrinsics_component_group: str = "default"
+    ncore_masks_component_group: str = "default"
 
     # Port for the viewer server
     port: int = 8080
@@ -270,8 +290,12 @@ def create_splats_with_optimizers(
     elif init_type == "random":
         points = init_extent * scene_scale * (torch.rand((init_num_pts, 3)) * 2 - 1)
         rgbs = torch.rand((init_num_pts, 3))
+    elif init_type == "lidar":
+        # Use pre-loaded lidar point cloud from NCoreParser
+        points = torch.from_numpy(parser.points).float()
+        rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
     else:
-        raise ValueError("Please specify a correct init_type: sfm or random")
+        raise ValueError("Please specify a correct init_type: sfm, random, or lidar")
 
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
@@ -365,20 +389,39 @@ class Runner:
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
 
         # Load data: Training data should contain initial points and colors.
-        self.parser = Parser(
-            data_dir=cfg.data_dir,
-            factor=cfg.data_factor,
-            normalize=cfg.normalize_world_space,
-            test_every=cfg.test_every,
-            load_exposure=cfg.load_exposure,
-        )
-        self.trainset = Dataset(
-            self.parser,
-            split="train",
-            patch_size=cfg.patch_size,
-            load_depths=cfg.depth_loss,
-        )
-        self.valset = Dataset(self.parser, split="val")
+        if cfg.data_type == "ncore":
+            from datasets.ncore import NCoreDataset, NCoreParser
+
+            self.parser = NCoreParser(
+                meta_json_path=cfg.data_dir,
+                factor=1.0 / cfg.data_factor if cfg.data_factor > 1 else 1.0,
+                test_every=cfg.test_every,
+                camera_ids=cfg.ncore_camera_ids or None,
+                lidar_ids=cfg.ncore_lidar_ids or None,
+                seek_offset_sec=cfg.ncore_seek_offset_sec,
+                duration_sec=cfg.ncore_duration_sec,
+                max_lidar_points=cfg.ncore_max_lidar_points,
+                poses_component_group=cfg.ncore_poses_component_group,
+                intrinsics_component_group=cfg.ncore_intrinsics_component_group,
+                masks_component_group=cfg.ncore_masks_component_group,
+            )
+            self.trainset = NCoreDataset(self.parser, split="train")
+            self.valset = NCoreDataset(self.parser, split="val")
+        else:
+            self.parser = Parser(
+                data_dir=cfg.data_dir,
+                factor=cfg.data_factor,
+                normalize=cfg.normalize_world_space,
+                test_every=cfg.test_every,
+                load_exposure=cfg.load_exposure,
+            )
+            self.trainset = Dataset(
+                self.parser,
+                split="train",
+                patch_size=cfg.patch_size,
+                load_depths=cfg.depth_loss,
+            )
+            self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
@@ -403,9 +446,14 @@ class Runner:
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
+        # Default NCore sequences to lidar-based initialization
+        init_type = cfg.init_type
+        if cfg.data_type == "ncore" and init_type == "sfm":
+            init_type = "lidar"
+
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
-            init_type=cfg.init_type,
+            init_type=init_type,
             init_num_pts=cfg.init_num_pts,
             init_extent=cfg.init_extent,
             init_opacity=cfg.init_opa,
@@ -1170,7 +1218,11 @@ class Runner:
         device = self.device
 
         camtoworlds_all = self.parser.camtoworlds[5:-5]
-        if cfg.render_traj_path == "interp":
+        if cfg.data_type == "ncore":
+            # For NCore driving sequences, render the raw captured trajectory as-is
+            # (path interpolation methods are designed for static scenes with SfM poses)
+            camtoworlds_all = camtoworlds_all[:, :3, :]  # [N, 3, 4]
+        elif cfg.render_traj_path == "interp":
             camtoworlds_all = generate_interpolated_path(
                 camtoworlds_all, 1
             )  # [N, 3, 4]
