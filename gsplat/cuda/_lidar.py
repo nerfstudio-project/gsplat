@@ -23,7 +23,6 @@ from typing import Optional
 
 import numpy as np
 import torch
-from scipy import spatial as scipy_spatial
 from typing_extensions import override
 
 
@@ -679,6 +678,8 @@ def compute_angles_to_columns_map(
     # TODO: this is quite slow and should be moved to CUDA.
     #       We can get away with it for now because we're caching the results,
     #       and usually this function would be called only once per lidar model needed.
+    from scipy import spatial as scipy_spatial  # requires pip install gsplat[lidar]
+
     kdtree = scipy_spatial.cKDTree(
         sensor_rays.sensor_rays.contiguous().cpu().numpy()
     )  # ty:ignore[unresolved-attribute]
