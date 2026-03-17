@@ -48,11 +48,6 @@ jobs:
           # the MSVC STL requires CUDA 12.8+
           - os: windows-2022
             cuda-version: 'cu126'
-          # CUDA 13.0 does not ship a complete Windows installer,
-          # it does not have NVIDIA driver and crt/cudart.
-          # TODO: Fix Windows build to include CUDA 13.0 for Windows
-          - os: windows-2022
-            cuda-version: 'cu130'
 
     steps:
       - name: Checkout repository
@@ -115,7 +110,7 @@ jobs:
       - name: Build wheel
         env:
           # Step-level env so Windows Python sees CUDA_HOME (bash export does not propagate to python.exe)
-          CUDA_HOME: ${{ runner.os == 'Windows' && (matrix.cuda-version == 'cu129' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9' || matrix.cuda-version == 'cu128' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8' || 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6') || '' }}
+          CUDA_HOME: ${{ runner.os == 'Windows' && (matrix.cuda-version == 'cu130' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0' || matrix.cuda-version == 'cu129' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9' || matrix.cuda-version == 'cu128' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8' || 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6') || '' }}
         run: |
           pip install wheel rich
           if [ "$RUNNER_OS" = "Windows" ]; then
