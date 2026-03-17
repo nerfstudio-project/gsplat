@@ -1,5 +1,5 @@
 import math
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, cast
 
 import torch
 import torch.distributed
@@ -16,6 +16,7 @@ from .cuda._wrapper import (
     RowOffsetStructuredSpinningLidarModelParametersExt,
     UnscentedTransformParameters,
     ExternalDistortionModelMeta,
+    ExternalDistortionModelParameters,
     ExternalDistortionReferencePolynomial,
     BivariateWindshieldModelParameters,
     fully_fused_projection,
@@ -261,7 +262,7 @@ def rasterization(
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
-    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
+    external_distortion_coeffs: Optional[ExternalDistortionModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -495,6 +496,10 @@ def rasterization(
 
     """
     meta = {}
+
+    external_distortion_coeffs = cast(
+        Optional[BivariateWindshieldModelParameters], external_distortion_coeffs
+    )
 
     if lidar_coeffs is not None:
         width = lidar_coeffs.n_rows
