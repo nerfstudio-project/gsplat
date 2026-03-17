@@ -961,8 +961,10 @@ __global__ void construct_lidar_cameras_kernel(
 }
 
 PyRowOffsetStructuredSpinningLidarModel::PyRowOffsetStructuredSpinningLidarModel(RowOffsetStructuredSpinningLidarModelParametersExt params)
-    // TODO: We're mapping n_rows->width and n_columns->height to conform with nrend, but this should be reverted
-    // once we validate that gsplat is 1:1 replacement of nrend.
+    // TODO: We're mapping n_rows->width and n_columns->height because the
+    // current pipeline uses image_point = [x, y] = [row, column] = [elevation,
+    // azimuth]. This should be reverted once the pipeline switches to the
+    // standard [x, y] = [column, row] = [azimuth, elevation].
     : PyBaseCameraModel(1, params.n_rows(), params.n_columns(),
                       // Spinning lidars always have rolling shutter; the actual per-sigma-point
                       // timing is handled by shutter_relative_frame_time() in the lidar model.

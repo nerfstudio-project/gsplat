@@ -66,8 +66,11 @@ class _StructuredLidarModel(_LidarModel, _BaseCameraModel):
         # TODO: passing shutter type because the base expects it, but Lidar doesn't use it.
         # This is a clear sign of design smell, the camera/sensor class hierarchy needs a revamp
         # to properly support lidar sensors.
-        # TODO: we're transposing rows and columns like nrend does.
-        # This needs to be reverted once we validate that gsplat is a drop-in replacement for nrend.
+        # TODO: we're transposing rows and columns by mapping n_rows->width and
+        # n_columns->height because the current pipeline uses image_point =
+        # [x, y] = [row, column] = [elevation, azimuth]. This needs to be
+        # reverted once the pipeline switches to the standard
+        # [x, y] = [column, row] = [azimuth, elevation].
         _BaseCameraModel.__init__(self, width=params.n_rows, height=params.n_columns)
 
 
@@ -240,7 +243,9 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         row = angles.elevation * self.ANGLE_TO_PIXEL_SCALING_FACTOR
 
         # NOTE: here the image point is (elevation, azimuth)
-        # TODO: this is following nrend/vren, but it should be the other way around.
+        # TODO: the current pipeline has image_point following [x, y] = [row,
+        # column] = [elevation, azimuth], but it should be [x, y] = [column,
+        # row] = [azimuth, elevation].
         image_point = torch.stack([row, column], dim=-1)
 
         # Validation: compute relative angles for FOV checking
@@ -275,7 +280,8 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         row = image_point[..., 0]
         column = image_point[..., 1]
 
-        # Convert from scaled angle space to angles (NREND approach)
+        # Convert from scaled angle space to angles
+        # NOTE: the current pipeline uses image_point = [x, y] = [row, column] = [elevation, azimuth].
         kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
         angles = SphericalUnitCoord(elevation=row * kToAngle, azimuth=column * kToAngle)
 
