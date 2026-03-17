@@ -133,6 +133,8 @@ jobs:
           ls -lah
           pip install *.whl
           python -c "import gsplat; print('gsplat:', gsplat.__version__)"
+          pip install "$(ls *.whl)[lidar]"
+          python -c "import gsplat; print('gsplat:', gsplat.__version__); from scipy.spatial import cKDTree; print('scipy OK')"
           cd ..
         shell: bash
 

@@ -83,11 +83,14 @@ setup(
         "numpy",
         "jaxtyping",
         "rich>=12",
-        "scipy",
         "torch",
         "typing_extensions; python_version<'3.8'",
     ],
     extras_require={
+        # lidar dependencies. Install them by `pip install gsplat[lidar]`
+        "lidar": [
+            "scipy",
+        ],
         # dev dependencies. Install them by `pip install gsplat[dev]`
         "dev": [
             "black[jupyter]==22.3.0",
