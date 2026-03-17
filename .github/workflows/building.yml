@@ -117,7 +117,7 @@ jobs:
           # Step-level env so Windows Python sees CUDA_HOME (bash export does not propagate to python.exe)
           CUDA_HOME: ${{ runner.os == 'Windows' && (matrix.cuda-version == 'cu129' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9' || matrix.cuda-version == 'cu128' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8' || 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6') || '' }}
         run: |
-          pip install wheel rich
+          pip install wheel
           if [ "$RUNNER_OS" = "Windows" ]; then
             export PATH="${CUDA_HOME}/bin:${PATH}"
             export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;9.0"

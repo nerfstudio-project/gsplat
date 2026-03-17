@@ -37,7 +37,13 @@ except ImportError as e:
         ) from e
     raise
 from contextlib import nullcontext, contextmanager
-from rich.console import Console
+
+try:
+    from rich.console import Console
+
+    _console = Console()
+except ImportError:
+    _console = None
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 DEBUG = os.getenv("DEBUG", "0") == "1"
@@ -220,9 +226,14 @@ def build_and_load_gsplat():
                 saved_build_params = SimpleNamespace(**json.load(f))
             build_params_changed = saved_build_params != build_params
     except Exception as e:
-        Console().print(
-            f"[bold yellow]gsplat: rebuilding due to error loading saved build parameters: {e}"
-        )
+        if _console is not None:
+            _console.print(
+                f"[bold yellow]gsplat: rebuilding due to error loading saved build parameters: {e}"
+            )
+        else:
+            print(
+                f"gsplat: rebuilding due to error loading saved build parameters: {e}"
+            )
 
     # If parameters have changed,
     if build_params_changed:
@@ -230,17 +241,24 @@ def build_and_load_gsplat():
         shutil.rmtree(build_dir)
         # Print out what triggered the rebuild (for debugging...)
         if saved_build_params is not None:
-            Console().print(
-                f"[bold yellow]gsplat: rebuilding due to build parameter change"
-            )
+            if _console is not None:
+                _console.print(
+                    f"[bold yellow]gsplat: rebuilding due to build parameter change"
+                )
+            else:
+                print("gsplat: rebuilding due to build parameter change")
             saved_dict = saved_build_params.__dict__
             current_dict = build_params.__dict__
             for k in sorted(set(saved_dict) | set(current_dict)):
                 saved_val = saved_dict.get(k, "<missing>")
                 current_val = current_dict.get(k, "<missing>")
                 if saved_val != current_val:
-                    Console().print(f"[white] old {k}: {saved_val}")
-                    Console().print(f"[white] new {k}: {current_val}")
+                    if _console is not None:
+                        _console.print(f"[white] old {k}: {saved_val}")
+                        _console.print(f"[white] new {k}: {current_val}")
+                    else:
+                        print(f"  old {k}: {saved_val}")
+                        print(f"  new {k}: {current_val}")
 
     # Make sure the build directory exists.
     if build_dir:
@@ -253,16 +271,24 @@ def build_and_load_gsplat():
     @contextmanager
     def status_context():
         tic = time.time()
-        with Console().status(
-            f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={MAX_JOBS if MAX_JOBS else 'max'} (This may take a few minutes the first time)",
-            spinner="bouncingBall",
-        ):
+        msg = f"gsplat: Setting up CUDA with MAX_JOBS={MAX_JOBS if MAX_JOBS else 'max'} (This may take a few minutes the first time)"
+        if _console is not None:
+            ctx = _console.status(f"[bold yellow]{msg}", spinner="bouncingBall")
+        else:
+            print(msg)
+            ctx = nullcontext()
+        with ctx:
             yield
 
         toc = time.time()
-        Console().print(
-            f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
-        )
+        if _console is not None:
+            _console.print(
+                f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
+            )
+        else:
+            print(
+                f"gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds."
+            )
 
     # If the build exists, we assume the extension has been built
     # and we can load it.
