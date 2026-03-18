@@ -302,3 +302,493 @@ class TestScaleRegLoss:
         scale_reg_loss(x).backward()
         # d/dx exp(x).mean() at x=0: exp(0) = 1.0
         assert torch.isclose(x.grad, torch.tensor([[1.0]]))
+
+
+# ---------------------------------------------------------------------------
+# Standard loss wrappers
+# ---------------------------------------------------------------------------
+
+from gsplat.losses import (
+    LinearLambdaScheduler,
+    bce_clipped,
+    bce_loss,
+    bce_with_logits_loss,
+    cross_entropy_loss,
+    depth_inverse_mse,
+    huber_loss,
+    identity_distance,
+    log_l1,
+    normal_cosine_loss,
+    relu_sum,
+    smooth_l1_loss,
+    total_variation_temporal,
+    weights_reg,
+)
+
+
+class TestHuberLoss:
+    def test_identical(self):
+        x = torch.rand(4, 3)
+        assert (huber_loss(x, x) == 0).all()
+
+    def test_shape(self):
+        x, y = torch.rand(2, 5), torch.rand(2, 5)
+        assert huber_loss(x, y).shape == x.shape
+
+    def test_reference_value(self):
+        # For |error| <= delta: 0.5 * error^2. error=0.5, delta=1 -> 0.125
+        pred = torch.tensor([1.5])
+        target = torch.tensor([1.0])
+        assert torch.isclose(huber_loss(pred, target), torch.tensor(0.125))
+
+    def test_large_error_reference(self):
+        # For |error| > delta: delta * (|error| - 0.5*delta). error=2, delta=1 -> 1.5
+        pred = torch.tensor([3.0])
+        target = torch.tensor([1.0])
+        assert torch.isclose(huber_loss(pred, target), torch.tensor(1.5))
+
+    def test_gradient_values(self):
+        # In quadratic region: grad = error. pred=1.3, target=1.0, error=0.3
+        pred = torch.tensor([1.3], requires_grad=True)
+        target = torch.tensor([1.0])
+        huber_loss(pred, target).sum().backward()
+        assert torch.isclose(pred.grad, torch.tensor([0.3]), atol=1e-6)
+
+
+class TestSmoothL1Loss:
+    def test_identical(self):
+        x = torch.rand(4, 3)
+        assert (smooth_l1_loss(x, x) == 0).all()
+
+    def test_shape(self):
+        x, y = torch.rand(2, 5), torch.rand(2, 5)
+        assert smooth_l1_loss(x, y).shape == x.shape
+
+    def test_matches_pytorch(self):
+        pred = torch.tensor([0.2, 0.8, 2.5])
+        target = torch.tensor([0.0, 1.0, 0.0])
+        assert torch.allclose(
+            smooth_l1_loss(pred, target),
+            F.smooth_l1_loss(pred, target, reduction="none"),
+        )
+
+    def test_gradient_nonzero(self):
+        x = torch.rand(4, 3, requires_grad=True)
+        smooth_l1_loss(x, torch.rand(4, 3)).sum().backward()
+        assert x.grad.abs().sum() > 0
+
+
+class TestBCELoss:
+    def test_matches_pytorch(self):
+        pred = torch.tensor([0.2, 0.7, 0.9])
+        target = torch.tensor([0.0, 1.0, 1.0])
+        expected = F.binary_cross_entropy(pred, target, reduction="none")
+        assert torch.allclose(bce_loss(pred, target), expected)
+
+    def test_shape(self):
+        x = torch.rand(4, 3)
+        assert bce_loss(x, torch.rand(4, 3)).shape == x.shape
+
+    def test_known_value(self):
+        # BCE(0.5, 1.0) = -log(0.5) = log(2) ≈ 0.6931
+        loss = bce_loss(torch.tensor([0.5]), torch.tensor([1.0]))
+        assert torch.isclose(loss, torch.tensor([math.log(2)]), atol=1e-4)
+
+    def test_gradient_nonzero(self):
+        x = torch.rand(4, 3, requires_grad=True)
+        bce_loss(x, torch.rand(4, 3)).sum().backward()
+        assert x.grad.abs().sum() > 0
+
+
+class TestBCEWithLogitsLoss:
+    def test_shape(self):
+        x = torch.randn(4, 3)
+        assert bce_with_logits_loss(x, torch.rand(4, 3)).shape == x.shape
+
+    def test_matches_pytorch(self):
+        logits = torch.randn(10)
+        targets = torch.rand(10)
+        expected = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        assert torch.allclose(bce_with_logits_loss(logits, targets), expected)
+
+    def test_known_value(self):
+        # logit=0 -> sigmoid=0.5 -> BCE(0.5,1) = log(2) ≈ 0.6931
+        loss = bce_with_logits_loss(torch.tensor([0.0]), torch.tensor([1.0]))
+        assert torch.isclose(loss, torch.tensor([math.log(2)]), atol=1e-4)
+
+    def test_gradient_nonzero(self):
+        x = torch.randn(4, 3, requires_grad=True)
+        bce_with_logits_loss(x, torch.rand(4, 3)).sum().backward()
+        assert x.grad.abs().sum() > 0
+
+
+class TestCrossEntropyLoss:
+    def test_shape(self):
+        logits = torch.randn(8, 5)
+        targets = torch.randint(0, 5, (8,))
+        assert cross_entropy_loss(logits, targets).shape == (8,)
+
+    def test_matches_pytorch(self):
+        logits = torch.randn(4, 3)
+        targets = torch.tensor([0, 1, 2, 1])
+        expected = F.cross_entropy(logits, targets, reduction="none")
+        assert torch.allclose(cross_entropy_loss(logits, targets), expected)
+
+    def test_known_value(self):
+        # Uniform logits [0,0,0] with target=0: -log(1/3) = log(3) ≈ 1.0986
+        logits = torch.zeros(1, 3)
+        loss = cross_entropy_loss(logits, torch.tensor([0]))
+        assert torch.isclose(loss, torch.tensor([math.log(3)]), atol=1e-4)
+
+    def test_gradient_nonzero(self):
+        logits = torch.randn(4, 3, requires_grad=True)
+        cross_entropy_loss(logits, torch.tensor([0, 1, 2, 1])).sum().backward()
+        assert logits.grad.abs().sum() > 0
+
+
+# ---------------------------------------------------------------------------
+# BCE clipped
+# ---------------------------------------------------------------------------
+
+
+class TestBCEClipped:
+    def test_shape(self):
+        x = torch.rand(4, 3)
+        assert bce_clipped(x, torch.rand(4, 3)).shape == x.shape
+
+    def test_boundary_no_inf_nan(self):
+        pred = torch.tensor([0.0, 0.5, 1.0])
+        target = torch.tensor([0.0, 0.5, 1.0])
+        loss = bce_clipped(pred, target)
+        assert torch.isfinite(loss).all()
+
+    def test_matches_bce_interior(self):
+        pred = torch.tensor([0.3, 0.7])
+        target = torch.tensor([0.0, 1.0])
+        clipped = bce_clipped(pred, target, eps=0.001)
+        standard = F.binary_cross_entropy(pred, target, reduction="none")
+        assert torch.allclose(clipped, standard, atol=1e-4)
+
+    def test_clipping_effect(self):
+        # At pred=0.0 with eps=0.1, clipped to 0.1: BCE(0.1, 0.0) = -log(0.9) ≈ 0.1054
+        loss = bce_clipped(torch.tensor([0.0]), torch.tensor([0.0]), eps=0.1)
+        expected = -math.log(0.9)
+        assert torch.isclose(loss, torch.tensor([expected]), atol=1e-4)
+
+    def test_gradient_nonzero(self):
+        x = torch.rand(4, 3, requires_grad=True)
+        bce_clipped(x, torch.rand(4, 3)).sum().backward()
+        assert x.grad.abs().sum() > 0
+
+
+# ---------------------------------------------------------------------------
+# Depth inverse MSE
+# ---------------------------------------------------------------------------
+
+
+class TestDepthInverseMSE:
+    def test_identical(self):
+        d = torch.rand(4, 3).clamp(min=0.1)
+        assert torch.allclose(depth_inverse_mse(d, d), torch.zeros_like(d), atol=1e-10)
+
+    def test_shape(self):
+        x = torch.rand(2, 5).clamp(min=0.1)
+        y = torch.rand(2, 5).clamp(min=0.1)
+        assert depth_inverse_mse(x, y).shape == x.shape
+
+    def test_inverse_scaling(self):
+        # Closer depths have larger inverse-space error for same absolute diff
+        pred = torch.tensor([1.0, 10.0])
+        target = torch.tensor([2.0, 11.0])
+        loss = depth_inverse_mse(pred, target)
+        assert loss[0] > loss[1]
+
+    def test_known_value(self):
+        # pred=2 -> 1/2=0.5, target=4 -> 1/4=0.25, (0.5-0.25)^2 = 0.0625
+        pred = torch.tensor([2.0])
+        target = torch.tensor([4.0])
+        assert torch.isclose(depth_inverse_mse(pred, target), torch.tensor([0.0625]))
+
+    def test_gradient_nonzero(self):
+        x = torch.rand(4, 3).clamp(min=0.1).requires_grad_(True)
+        depth_inverse_mse(x, torch.rand(4, 3).clamp(min=0.1)).sum().backward()
+        assert x.grad.abs().sum() > 0
+
+
+# ---------------------------------------------------------------------------
+# Log L1
+# ---------------------------------------------------------------------------
+
+
+class TestLogL1:
+    def test_identical(self):
+        x = torch.rand(4, 3)
+        assert torch.allclose(log_l1(x, x), torch.zeros_like(x))
+
+    def test_shape(self):
+        x, y = torch.rand(2, 5), torch.rand(2, 5)
+        assert log_l1(x, y).shape == x.shape
+
+    def test_monotonic(self):
+        target = torch.zeros(3)
+        pred = torch.tensor([0.1, 0.5, 1.0])
+        loss = log_l1(pred, target)
+        assert (loss[1:] > loss[:-1]).all()
+
+    def test_known_value(self):
+        # log(1 + |1 - 0|) = log(2) ≈ 0.6931
+        loss = log_l1(torch.tensor([1.0]), torch.tensor([0.0]))
+        assert torch.isclose(loss, torch.tensor([math.log(2)]))
+
+    def test_gradient_value(self):
+        # d/dx log(1+|x|) at x=1: 1/(1+1) * sign(1) = 0.5
+        x = torch.tensor([1.0], requires_grad=True)
+        log_l1(x, torch.tensor([0.0])).backward()
+        assert torch.isclose(x.grad, torch.tensor([0.5]))
+
+
+# ---------------------------------------------------------------------------
+# Normal cosine
+# ---------------------------------------------------------------------------
+
+
+class TestNormalCosineLoss:
+    def test_identical(self):
+        n = F.normalize(torch.randn(10, 3), dim=-1)
+        loss = normal_cosine_loss(n, n)
+        assert torch.allclose(loss, torch.zeros(10), atol=1e-6)
+
+    def test_opposing(self):
+        n = F.normalize(torch.randn(5, 3), dim=-1)
+        loss = normal_cosine_loss(n, -n)
+        assert torch.allclose(loss, torch.full((5,), 2.0), atol=1e-5)
+
+    def test_orthogonal_reference(self):
+        # Orthogonal normals: cos=0, loss=1
+        n1 = torch.tensor([[1.0, 0.0, 0.0]])
+        n2 = torch.tensor([[0.0, 1.0, 0.0]])
+        assert torch.isclose(normal_cosine_loss(n1, n2), torch.tensor([1.0]))
+
+    def test_shape(self):
+        n1 = F.normalize(torch.randn(4, 8, 3), dim=-1)
+        n2 = F.normalize(torch.randn(4, 8, 3), dim=-1)
+        assert normal_cosine_loss(n1, n2).shape == (4, 8)
+
+    def test_gradient_nonzero(self):
+        n1 = F.normalize(torch.randn(4, 3), dim=-1).requires_grad_(True)
+        n2 = F.normalize(torch.randn(4, 3), dim=-1)
+        normal_cosine_loss(n1, n2).sum().backward()
+        assert n1.grad.abs().sum() > 0
+
+
+# ---------------------------------------------------------------------------
+# ReLU sum
+# ---------------------------------------------------------------------------
+
+
+class TestReluSum:
+    def test_below_threshold(self):
+        x = torch.tensor([0.1, 0.2, 0.3])
+        assert relu_sum(x, eps=0.5).item() == 0.0
+
+    def test_above_threshold(self):
+        x = torch.tensor([1.0, 2.0, 3.0])
+        loss = relu_sum(x, eps=1.5)
+        # relu([1-1.5, 2-1.5, 3-1.5]) = [0, 0.5, 1.5], sum = 2.0
+        assert torch.isclose(loss, torch.tensor(2.0))
+
+    def test_scalar_output(self):
+        assert relu_sum(torch.rand(10, 3), eps=0.5).shape == ()
+
+    def test_gradient_selective(self):
+        # Only elements above eps should have nonzero gradient
+        x = torch.tensor([0.1, 0.5, 0.9], requires_grad=True)
+        relu_sum(x, eps=0.4).backward()
+        assert x.grad[0].item() == 0.0  # below eps
+        assert x.grad[1].item() == 1.0  # above eps
+        assert x.grad[2].item() == 1.0  # above eps
+
+
+# ---------------------------------------------------------------------------
+# Weights reg
+# ---------------------------------------------------------------------------
+
+
+class TestWeightsReg:
+    def test_zero_weights(self):
+        w = [torch.zeros(3, 5), torch.zeros(2, 5)]
+        assert weights_reg(w).item() == 0.0
+
+    def test_known_value(self):
+        # ones(2,3): each row sum of squares = 3, mean([3,3]) = 3.0
+        w = [torch.ones(2, 3)]
+        assert torch.isclose(weights_reg(w), torch.tensor(3.0))
+
+    def test_scalar_output(self):
+        w = [torch.rand(4, 5), torch.rand(3, 5)]
+        assert weights_reg(w).shape == ()
+
+    def test_gradient_nonzero(self):
+        w = [torch.rand(4, 5, requires_grad=True)]
+        weights_reg(w).backward()
+        assert w[0].grad.abs().sum() > 0
+
+
+# ---------------------------------------------------------------------------
+# Identity distance
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityDistance:
+    def test_identity_grid(self):
+        eye = torch.eye(3, 4).flatten().unsqueeze(0)  # (1, 12)
+        assert torch.isclose(identity_distance(eye), torch.tensor([0.0]), atol=1e-6)
+
+    def test_non_identity(self):
+        grid = torch.zeros(1, 12)
+        dist = identity_distance(grid)
+        assert dist.item() > 0.0
+
+    def test_zero_grid_reference(self):
+        # Zero matrix vs identity 3x4: Frobenius norm of I_{3x4} = sqrt(3)
+        grid = torch.zeros(1, 12)
+        dist = identity_distance(grid)
+        assert torch.isclose(dist, torch.tensor([math.sqrt(3.0)]), atol=1e-5)
+
+    def test_spatial_dims(self):
+        grid = torch.rand(2, 12, 4, 4)
+        dist = identity_distance(grid)
+        assert dist.shape == (2, 4, 4)
+
+    def test_custom_dims(self):
+        grid = torch.eye(2, 3).flatten().unsqueeze(0)  # (1, 6)
+        dist = identity_distance(grid, num_rows=2, num_cols=3)
+        assert torch.isclose(dist, torch.tensor([0.0]), atol=1e-6)
+
+    def test_gradient_nonzero(self):
+        grid = torch.rand(2, 12, requires_grad=True)
+        identity_distance(grid).sum().backward()
+        assert grid.grad.abs().sum() > 0
+
+
+# ---------------------------------------------------------------------------
+# Total variation temporal
+# ---------------------------------------------------------------------------
+
+
+class TestTotalVariationTemporal:
+    def test_constant(self):
+        x = torch.ones(4, 3, 2, 2, 2)
+        mask = torch.ones(3)
+        tv = total_variation_temporal(x, mask)
+        assert torch.allclose(tv, torch.zeros(3))
+
+    def test_single_frame(self):
+        x = torch.rand(1, 3, 2, 2, 2)
+        mask = torch.ones(1)
+        tv = total_variation_temporal(x, mask)
+        assert torch.isclose(tv.sum(), torch.tensor(0.0))
+
+    def test_mask_zeroes(self):
+        x = torch.rand(3, 3, 2, 2, 2)
+        mask = torch.tensor([0.0, 1.0])
+        tv = total_variation_temporal(x, mask)
+        assert tv[0].item() == 0.0
+        assert tv[1].item() >= 0.0
+
+    def test_known_value(self):
+        # Two frames: [0,0,...] and [1,1,...]. diff^2 = 1 everywhere, mean = 1.0
+        x = torch.zeros(2, 1, 1, 1, 1)
+        x[1] = 1.0
+        mask = torch.ones(1)
+        tv = total_variation_temporal(x, mask)
+        assert torch.isclose(tv, torch.tensor([1.0]))
+
+    def test_shape(self):
+        x = torch.rand(5, 3, 2, 4, 4)
+        mask = torch.ones(4)
+        assert total_variation_temporal(x, mask).shape == (4,)
+
+    def test_gradient_nonzero(self):
+        x = torch.rand(3, 3, 2, 2, 2, requires_grad=True)
+        mask = torch.ones(2)
+        total_variation_temporal(x, mask).sum().backward()
+        assert x.grad.abs().sum() > 0
+
+
+# ---------------------------------------------------------------------------
+# Linear lambda scheduler
+# ---------------------------------------------------------------------------
+
+
+class TestLinearLambdaScheduler:
+    def test_before_start(self):
+        s = LinearLambdaScheduler(start=100, end=200, lambda_init=1.0, lambda_end=0.0)
+        assert s(epoch=0, global_step=50) == 1.0
+
+    def test_at_start(self):
+        s = LinearLambdaScheduler(start=100, end=200, lambda_init=1.0, lambda_end=0.0)
+        assert s(epoch=0, global_step=100) == 1.0
+
+    def test_at_end(self):
+        s = LinearLambdaScheduler(start=100, end=200, lambda_init=1.0, lambda_end=0.0)
+        assert s(epoch=0, global_step=200) == 0.0
+
+    def test_midpoint(self):
+        s = LinearLambdaScheduler(start=0, end=100, lambda_init=1.0, lambda_end=0.0)
+        val = s(epoch=0, global_step=50)
+        assert abs(val - 0.5) < 1e-6
+
+    def test_quarter_point(self):
+        s = LinearLambdaScheduler(start=0, end=100, lambda_init=1.0, lambda_end=0.0)
+        assert abs(s(epoch=0, global_step=25) - 0.75) < 1e-6
+
+    def test_after_end(self):
+        s = LinearLambdaScheduler(start=0, end=100, lambda_init=1.0, lambda_end=0.0)
+        assert s(epoch=0, global_step=200) == 0.0
+
+    def test_epoch_mode(self):
+        s = LinearLambdaScheduler(
+            start=0,
+            end=10,
+            lambda_init=2.0,
+            lambda_end=0.0,
+            update_interval="epoch",
+        )
+        val = s(epoch=5, global_step=99999)
+        assert abs(val - 1.0) < 1e-6
+
+    def test_update_frequency(self):
+        s = LinearLambdaScheduler(
+            start=0,
+            end=100,
+            lambda_init=1.0,
+            lambda_end=0.0,
+            update_frequency=10,
+        )
+        v1 = s(epoch=0, global_step=5)
+        v2 = s(epoch=0, global_step=15)
+        assert v1 > v2
+
+    def test_increasing_schedule(self):
+        s = LinearLambdaScheduler(start=0, end=100, lambda_init=0.0, lambda_end=1.0)
+        assert s(epoch=0, global_step=0) == 0.0
+        assert abs(s(epoch=0, global_step=50) - 0.5) < 1e-6
+        assert s(epoch=0, global_step=100) == 1.0
+
+    def test_invalid_update_frequency(self):
+        with pytest.raises(ValueError, match="update_frequency must be > 0"):
+            LinearLambdaScheduler(start=0, end=100, lambda_init=1.0, update_frequency=0)
+
+    def test_invalid_end_before_start(self):
+        with pytest.raises(ValueError, match="end must be > start"):
+            LinearLambdaScheduler(start=100, end=50, lambda_init=1.0)
+
+    def test_invalid_end_equals_start(self):
+        with pytest.raises(ValueError, match="end must be > start"):
+            LinearLambdaScheduler(start=100, end=100, lambda_init=1.0)
+
+    def test_invalid_total_stages_zero(self):
+        # end - start = 1, update_frequency = 10, total_stages = 0
+        with pytest.raises(ValueError, match="total_stages must be > 0"):
+            LinearLambdaScheduler(start=0, end=1, lambda_init=1.0, update_frequency=10)
