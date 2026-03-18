@@ -13,7 +13,12 @@ import pytest
 import torch
 
 from tests.test_cameras import parse_lidar_camera
-from gsplat.rendering import RenderMode
+from gsplat.rendering import (
+    RenderMode,
+    render_mode_has_color,
+    render_mode_has_depth_channel,
+    render_mode_has_hit_distance,
+)
 import gsplat
 from gsplat.cuda._constants import ALPHA_THRESHOLD
 
@@ -27,7 +32,10 @@ device = torch.device("cuda:0")
         pytest.param(*params, marks=[
             # test based on with_eval3d (5)  and with_ut (6)
             pytest.mark.skipif((params[5]==True or params[6]==True) and not gsplat.has_3dgut(), reason="3DGUT support isn't built in"),
-            pytest.mark.skipif((params[5]==False or params[6]==False) and not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+            pytest.mark.skipif((params[5]==False or params[6]==False) and not gsplat.has_3dgs(), reason="3DGS support isn't built in"),
+            # sh_degree (1) and per_view_color (0) require colors, which requires a color render_mode (2)
+            pytest.mark.skipif(params[1] is not None and not render_mode_has_color(params[2]), reason="sh_degree requires colors, invalid with depth-only render_mode"),
+            pytest.mark.skipif(params[0]==True and not render_mode_has_color(params[2]), reason="per_view_color requires colors, invalid with depth-only render_mode"),
         ])
         for params in
             # Standard tests: all combinations with with_eval3d=False
@@ -64,7 +72,7 @@ device = torch.device("cuda:0")
                 product(
                     [False],                 # per_view_color
                     [None],                  # sh_degree
-                    ["RGB-d"],               # render_mode (hit distance + RGB)
+                    ["RGB-d", "d"],          # render_mode
                     [False],                 # packed (must be False)
                     [()],                    # batch_dims
                     [True],                  # with_eval3d
@@ -114,7 +122,11 @@ def test_rasterization(
     quats = torch.randn(batch_dims + (N, 4), device=device)
     scales = torch.rand(batch_dims + (N, 3), device=device)
     opacities = torch.rand(batch_dims + (N,), device=device)
-    if per_view_color:
+    # Depth-only modes with no SH and no per_view_color pass colors=None.
+    # (per_view_color and sh_degree combos are already filtered by skipif above.)
+    if not render_mode_has_color(render_mode):
+        colors = None
+    elif per_view_color:
         if sh_degree is None:
             colors = torch.rand(batch_dims + (C, N, 3), device=device)
         else:
@@ -190,12 +202,12 @@ def test_rasterization(
         distributed=distributed,
     )
 
-    if render_mode in ("D", "d", "Ed"):
-        assert renders.shape == (*batch_dims, C, height, width, 1)
-    elif render_mode == "RGB":
-        assert renders.shape == (*batch_dims, C, height, width, 3)
-    elif render_mode in ("RGB+D", "RGB-d", "RGB-Ed"):
-        assert renders.shape == (*batch_dims, C, height, width, 4)
+    expected_channels = 0
+    if render_mode_has_color(render_mode):
+        expected_channels += 3
+    if render_mode_has_depth_channel(render_mode):
+        expected_channels += 1
+    assert renders.shape == (*batch_dims, C, height, width, expected_channels)
 
     _renders, _alphas, _meta = _rasterization(
         means=means,
@@ -219,15 +231,14 @@ def test_rasterization(
 
     rtol = 1e-4
     atol = 1e-4
-    is_hit_distance = render_mode in ("d", "RGB-d", "Ed", "RGB-Ed")
 
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
     if extra_signals is not None:
         torch.testing.assert_close(meta["render_extra_signals"], _meta["render_extra_signals"], rtol=rtol, atol=atol)
 
-    if is_hit_distance:
+    if render_mode_has_hit_distance(render_mode):
         # For combined RGB+depth modes, verify RGB channels match.
-        if render_mode in ("RGB-d", "RGB-Ed"):
+        if render_mode_has_color(render_mode):
             torch.testing.assert_close(renders[..., :3], _renders[..., :3], rtol=rtol, atol=atol)
 
         # Verify hit distance is non-zero where pixels are visible.
