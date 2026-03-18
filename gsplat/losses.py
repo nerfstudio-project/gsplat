@@ -241,3 +241,268 @@ def scale_reg_loss(log_scales: Tensor) -> Tensor:
         Scalar mean scale.
     """
     return torch.exp(log_scales).mean()
+
+
+# ---------------------------------------------------------------------------
+# Additional standard losses
+# ---------------------------------------------------------------------------
+
+
+def huber_loss(pred: Tensor, target: Tensor, delta: float = 1.0) -> Tensor:
+    """Element-wise Huber loss.
+
+    Args:
+        pred: Predicted values of any shape.
+        target: Target values, same shape as *pred*.
+        delta: Threshold for switching between L1 and L2 (default ``1.0``).
+
+    Returns:
+        Per-element Huber loss, same shape as *pred*.
+    """
+    return F.huber_loss(pred, target, reduction="none", delta=delta)
+
+
+def smooth_l1_loss(pred: Tensor, target: Tensor, beta: float = 1.0) -> Tensor:
+    """Element-wise Smooth L1 loss.
+
+    Args:
+        pred: Predicted values of any shape.
+        target: Target values, same shape as *pred*.
+        beta: Threshold for switching between L1 and L2 (default ``1.0``).
+
+    Returns:
+        Per-element Smooth L1 loss, same shape as *pred*.
+    """
+    return F.smooth_l1_loss(pred, target, reduction="none", beta=beta)
+
+
+def bce_loss(pred: Tensor, target: Tensor) -> Tensor:
+    """Element-wise Binary Cross-Entropy loss.
+
+    Inputs must be probabilities in ``[0, 1]``.
+
+    Args:
+        pred: Predicted probabilities, any shape.
+        target: Target probabilities, same shape as *pred*.
+
+    Returns:
+        Per-element BCE loss, same shape as *pred*.
+    """
+    return F.binary_cross_entropy(pred, target, reduction="none")
+
+
+def bce_with_logits_loss(pred: Tensor, target: Tensor) -> Tensor:
+    """Element-wise Binary Cross-Entropy with logits.
+
+    Inputs are raw logits (sigmoid is applied internally).
+
+    Args:
+        pred: Predicted logits, any shape.
+        target: Target probabilities in ``[0, 1]``, same shape as *pred*.
+
+    Returns:
+        Per-element BCE loss, same shape as *pred*.
+    """
+    return F.binary_cross_entropy_with_logits(pred, target, reduction="none")
+
+
+def cross_entropy_loss(pred: Tensor, target: Tensor) -> Tensor:
+    """Per-sample Cross-Entropy loss.
+
+    Args:
+        pred: Predicted logits of shape ``(N, C)`` where *C* is the number of classes.
+        target: Target class indices of shape ``(N,)`` with values in ``[0, C)``.
+
+    Returns:
+        Per-sample loss of shape ``(N,)``.
+    """
+    return F.cross_entropy(pred, target, reduction="none")
+
+
+def bce_clipped(input: Tensor, target: Tensor, eps: float = 0.001) -> Tensor:
+    """Binary cross-entropy with input clipping.
+
+    Clips *input* to ``(eps, 1 - eps)`` before computing BCE.  Disables
+    autocast for numerical safety.
+
+    Args:
+        input: Predicted probabilities, any shape.
+        target: Target probabilities, same shape as *input*.
+        eps: Clipping margin (default ``0.001``).
+
+    Returns:
+        Per-element BCE loss, same shape as *input*.
+    """
+    with torch.amp.autocast(device_type="cuda", enabled=False):
+        return F.binary_cross_entropy(
+            input.float().clip(eps, 1 - eps), target.float(), reduction="none"
+        )
+
+
+def depth_inverse_mse(pred: Tensor, target: Tensor, eps: float = 1e-6) -> Tensor:
+    """MSE loss in inverse (reciprocal) depth space.
+
+    Args:
+        pred: Predicted depth values, any shape.
+        target: Target depth values, same shape as *pred*.
+        eps: Clamping minimum to avoid division by zero (default ``1e-6``).
+
+    Returns:
+        Per-element inverse-depth MSE, same shape as *pred*.
+    """
+    return (pred.clamp(min=eps).reciprocal() - target.clamp(min=eps).reciprocal()).pow(
+        2
+    )
+
+
+def log_l1(pred: Tensor, target: Tensor) -> Tensor:
+    """Logarithmic L1 loss: ``log(1 + |pred - target|)``.
+
+    Args:
+        pred: Predicted values, any shape.
+        target: Target values, same shape as *pred*.
+
+    Returns:
+        Per-element log-L1 loss, same shape as *pred*.
+    """
+    return torch.log(1.0 + (pred - target).abs())
+
+
+def normal_cosine_loss(pred_normal: Tensor, gt_normal: Tensor) -> Tensor:
+    """Cosine distance loss for surface normals: ``1 - cos(pred, gt)``.
+
+    Both inputs must be normalized 3D vectors.
+
+    Args:
+        pred_normal: Predicted normals of shape ``(..., 3)``.
+        gt_normal: Ground-truth normals of shape ``(..., 3)``.
+
+    Returns:
+        Per-element cosine distance of shape ``(...)``.
+    """
+    assert pred_normal.shape == gt_normal.shape
+    assert pred_normal.shape[-1] == 3
+    return 1.0 - torch.sum(pred_normal * gt_normal, dim=-1)
+
+
+def relu_sum(value: Tensor, eps: float) -> Tensor:
+    """ReLU-thresholded sum: ``relu(value - eps).sum()``.
+
+    Args:
+        value: Input tensor, any shape.
+        eps: Threshold below which values are zeroed.
+
+    Returns:
+        Scalar sum of thresholded values.
+    """
+    return F.relu(value - eps).sum()
+
+
+def weights_reg(weights_list: list[Tensor], dim: int = 1) -> Tensor:
+    """Weight regularization: mean of squared weight norms.
+
+    Args:
+        weights_list: List of weight tensors.
+        dim: Dimension along which to sum squares (default ``1``).
+
+    Returns:
+        Scalar regularization loss.
+    """
+    return torch.mean(torch.cat([(w**2).sum(dim) for w in weights_list]))
+
+
+def identity_distance(grid: Tensor, num_rows: int = 3, num_cols: int = 4) -> Tensor:
+    """Frobenius distance of an affine grid from the identity transform.
+
+    Reshapes the channel dimension of *grid* into a ``(num_rows, num_cols)``
+    matrix per spatial location and computes the Frobenius norm of the
+    difference from the identity.
+
+    Args:
+        grid: Tensor of shape ``(B, C, ...)`` where ``C = num_rows * num_cols``.
+        num_rows: Rows of the affine matrix (default ``3``).
+        num_cols: Columns of the affine matrix (default ``4``).
+
+    Returns:
+        Per-batch Frobenius distance of shape ``(B, ...)``.
+    """
+    reshaped = grid.view(grid.shape[0], num_rows, num_cols, *grid.shape[2:])
+    identity = torch.eye(num_rows, num_cols, device=grid.device)
+    identity = identity.view(1, num_rows, num_cols, *([1] * len(grid.shape[2:])))
+    diff = reshaped - identity
+    return torch.norm(diff, p="fro", dim=(1, 2))
+
+
+def total_variation_temporal(x: Tensor, loss_mask: Tensor) -> Tensor:
+    """Total variation loss along the temporal (batch) dimension.
+
+    Computes squared differences between consecutive frames along ``dim=0``,
+    weighted by *loss_mask*.
+
+    Args:
+        x: Input tensor of shape ``(B, C, D, H, W)``.
+        loss_mask: Mask of shape ``(B-1,)`` or broadcastable to the temporal
+            differences.
+
+    Returns:
+        Per-frame TV values of shape ``(B-1,)``, or scalar ``0`` if ``B <= 1``.
+    """
+    if x.shape[0] <= 1:
+        return torch.zeros(1, device=x.device)
+    tv_t = x.diff(dim=0).square().mean(dim=(1, 2, 3, 4))
+    return tv_t * loss_mask
+
+
+# ---------------------------------------------------------------------------
+# Lambda scheduling
+# ---------------------------------------------------------------------------
+
+
+class LinearLambdaScheduler:
+    """Linear interpolation scheduler for loss weights.
+
+    Linearly interpolates the loss weight from *lambda_init* to *lambda_end*
+    over the range ``[start, end]`` in steps (or epochs).
+
+    Args:
+        start: Step/epoch at which interpolation begins.
+        end: Step/epoch at which interpolation ends.
+        lambda_init: Initial lambda value.
+        lambda_end: Final lambda value (default ``0.0``).
+        update_interval: ``"step"`` or ``"epoch"`` (default ``"step"``).
+        update_frequency: How often to update within the interval (default ``1``).
+    """
+
+    def __init__(
+        self,
+        start: int,
+        end: int,
+        lambda_init: float,
+        lambda_end: float = 0.0,
+        update_interval: str = "step",
+        update_frequency: int = 1,
+    ) -> None:
+        if update_frequency <= 0:
+            raise ValueError(f"update_frequency must be > 0, got {update_frequency}")
+        if end <= start:
+            raise ValueError(f"end must be > start, got start={start}, end={end}")
+        total_stages = (end - start) // update_frequency
+        if total_stages <= 0:
+            raise ValueError(
+                f"total_stages must be > 0 (start={start}, end={end}, "
+                f"update_frequency={update_frequency} yields "
+                f"total_stages={total_stages})"
+            )
+        self.start = start
+        self.end = end
+        self.lambda_init = lambda_init
+        self.lambda_end = lambda_end
+        self.update_interval = update_interval
+        self.update_frequency = update_frequency
+        self.total_stages = total_stages
+
+    def __call__(self, epoch: int, global_step: int) -> float:
+        counter = global_step if self.update_interval == "step" else epoch
+        cur_stage = (counter - self.start) // self.update_frequency
+        ratio = min(1.0, max(0.0, cur_stage / self.total_stages))
+        return (1 - ratio) * self.lambda_init + ratio * self.lambda_end
