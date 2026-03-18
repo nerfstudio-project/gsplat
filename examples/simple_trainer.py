@@ -484,12 +484,31 @@ class Runner:
                 scene_scale=self.scene_scale
             )
         elif isinstance(self.cfg.strategy, MCMCStrategy):
-            # We pass the initial active count when preallocating
             if cfg.strategy.preallocate:
                 n_initial = len(self.parser.points) // world_size
                 self.strategy_state = self.cfg.strategy.initialize_state(
                     n_initial=n_initial
                 )
+                # Build active-slice params (views into the pre-allocated buffers)
+                # and rewire each optimizer to track the active slice instead of the
+                # full cap_max-sized tensor so that optimizer.step() only touches
+                # the n_initial live Gaussians at startup.
+                active_params = {
+                    name: torch.nn.Parameter(
+                        self.splats[name].data[:n_initial],
+                        requires_grad=self.splats[name].requires_grad,
+                    )
+                    for name in self.splats.keys()
+                }
+                for name, opt in self.optimizers.items():
+                    if name not in active_params:
+                        continue
+                    full_param = self.splats[name]
+                    for group in opt.param_groups:
+                        for i, p in enumerate(group["params"]):
+                            if p is full_param:
+                                group["params"][i] = active_params[name]
+                self.strategy_state["active_params"] = active_params
             else:
                 self.strategy_state = self.cfg.strategy.initialize_state()
         else:
@@ -614,14 +633,12 @@ class Runner:
 
     @property
     def n_gaussians(self) -> int:
-        """
-        Return the number of active Gaussians
-        """
+        """Return the number of active Gaussians."""
         if (
             isinstance(self.cfg.strategy, MCMCStrategy)
             and self.cfg.strategy.preallocate
         ):
-            return self.strategy_state["n_active"]
+            return len(self.strategy_state["active_params"]["means"])
         return len(self.splats["means"])
 
     def freeze_gaussians(self):
@@ -653,33 +670,32 @@ class Runner:
         exposure: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
-        # We need to know the active range of the gaussians
-        n_active = None
+        # When preallocating, active_params is already sized to n_active — no slicing needed.
         if (
             isinstance(self.cfg.strategy, MCMCStrategy)
             and self.cfg.strategy.preallocate
         ):
-            n_active = self.strategy_state["n_active"]
+            p = self.strategy_state["active_params"]
+        else:
+            p = self.splats
 
-        s = slice(None) if n_active is None else slice(0, n_active)
-
-        means = self.splats["means"][s]  # [N, 3]
-        quats = self.splats["quats"][s]  # [N, 4]
-        scales = torch.exp(self.splats["scales"][s])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"][s])  # [N,]
+        means = p["means"]  # [N, 3]
+        quats = p["quats"]  # [N, 4]
+        scales = torch.exp(p["scales"])  # [N, 3]
+        opacities = torch.sigmoid(p["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
-                features=self.splats["features"][s],
+                features=p["features"],
                 embed_ids=image_ids,
                 dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
                 sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
             )
-            colors = colors + self.splats["colors"][s]
+            colors = colors + p["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([self.splats["sh0"][s], self.splats["shN"][s]], 1)  # [N, K, 3]
+            colors = torch.cat([p["sh0"], p["shN"]], 1)  # [N, K, 3]
 
         if rasterize_mode is None:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -985,13 +1001,29 @@ class Runner:
 
             # save checkpoint before updating the model
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
-                mem = torch.cuda.max_memory_allocated() / 1024**3
+                mem_allocated = torch.cuda.memory_allocated() / 1024**3
+                mem_reserved = torch.cuda.memory_reserved() / 1024**3
+                mem_max = torch.cuda.max_memory_allocated() / 1024**3
+                
+                prealloc_mode = "enabled" if (isinstance(cfg.strategy, MCMCStrategy) and cfg.strategy.preallocate) else "disabled"
+                
                 stats = {
-                    "mem": mem,
-                    "ellipse_time": time.time() - global_tic,
+                    "mem_allocated_GB": round(mem_allocated, 4),
+                    "mem_reserved_GB": round(mem_reserved, 4),
+                    "mem_peak_GB": round(mem_max, 4),
+                    "ellipse_time": round(time.time() - global_tic, 2),
                     "num_GS": self.n_gaussians,
+                    "preallocation": prealloc_mode,
                 }
-                print("Step: ", step, stats)
+                print(f"\n{'='*60}")
+                print(f"Step {step} - Memory Report ({prealloc_mode.upper()})")
+                print(f"{'='*60}")
+                print(f"  Current Allocated: {mem_allocated:.4f} GB")
+                print(f"  Reserved by CUDA:  {mem_reserved:.4f} GB")
+                print(f"  Peak Allocated:    {mem_max:.4f} GB")
+                print(f"  Gaussians:         {self.n_gaussians:,}")
+                print(f"  Training Time:     {time.time() - global_tic:.2f}s")
+                print(f"{'='*60}\n")
                 with open(
                     f"{self.stats_dir}/train_step{step:04d}_rank{self.world_rank}.json",
                     "w",

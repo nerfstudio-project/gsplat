@@ -21,7 +21,7 @@ import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add
+from .ops import grow_active_params, inject_noise_to_position, relocate, sample_add
 
 
 @dataclass
@@ -166,27 +166,12 @@ class MCMCStrategy(Strategy):
             else float("inf")
         )
         if step < noise_stop:
-            # Only inject noise to Gaussians that are active
-            if self.preallocate:
-                n_active = state["n_active"]
-                # Create a view of only active params
-                active_params = {
-                    k: torch.nn.Parameter(v[:n_active], requires_grad=v.requires_grad)
-                    for k, v in params.items()
-                }
-                inject_noise_to_position(
-                    params=active_params,
-                    optimizers=optimizers,
-                    state={},
-                    scaler=lr * self.noise_lr,
-                )
-            else:
-                inject_noise_to_position(
-                    params=params,
-                    optimizers=optimizers,
-                    state={},
-                    scaler=lr * self.noise_lr,
-                )
+            inject_noise_to_position(
+                params=state["active_params"] if self.preallocate else params,
+                optimizers=optimizers,
+                state={},
+                scaler=lr * self.noise_lr,
+            )
 
     @torch.no_grad()
     def _relocate_gs(
@@ -196,40 +181,19 @@ class MCMCStrategy(Strategy):
         state: Dict[str, Any], 
         binoms: Tensor,
     ) -> int:
-        # Only Gaussians that are active
-        if self.preallocate:
-            n_active = state["n_active"]
-            opacities = torch.sigmoid(params["opacities"][:n_active].flatten())
-        else:
-            opacities = torch.sigmoid(params["opacities"].flatten())
-
+        p = state["active_params"] if self.preallocate else params
+        opacities = torch.sigmoid(p["opacities"].flatten())
         dead_mask = opacities <= self.min_opacity
         n_gs = dead_mask.sum().item()
         if n_gs > 0:
-            if self.preallocate:
-                # Build full-buffer mask
-                full_mask = torch.zeros(
-                    len(params["opacities"]), dtype=torch.bool,
-                    device=params["opacities"].device,
-                )
-                full_mask[:n_active] = dead_mask
-                relocate(
-                    params=params,
-                    optimizers=optimizers,
-                    state={},
-                    mask=full_mask,
-                    binoms=binoms,
-                    min_opacity=self.min_opacity,
-                )
-            else:
-                relocate(
-                    params=params,
-                    optimizers=optimizers,
-                    state={},
-                    mask=dead_mask,
-                    binoms=binoms,
-                    min_opacity=self.min_opacity,
-                )
+            relocate(
+                params=p,
+                optimizers=optimizers,
+                state={},
+                mask=dead_mask,
+                binoms=binoms,
+                min_opacity=self.min_opacity,
+            )
         return n_gs
 
     @torch.no_grad()
@@ -266,5 +230,8 @@ class MCMCStrategy(Strategy):
             )
             if self.preallocate and result is not None:
                 state["n_active"] = result
+                grow_active_params(
+                    params, state["active_params"], optimizers, result
+                )
 
         return n_gs

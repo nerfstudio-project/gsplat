@@ -397,6 +397,45 @@ def sample_add(
 
     return n_active + n
 
+
+@torch.no_grad()
+def grow_active_params(
+    splats: torch.nn.ParameterDict,
+    active_params: Dict[str, torch.nn.Parameter],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    new_n_active: int,
+) -> None:
+    """Grow active-slice Parameters from their current size to new_n_active.
+
+    Each active_params[name] is a narrow view into splats[name].data.
+    After this call, active_params[name] covers splats[name].data[:new_n_active]
+    and optimizer momentum tensors are zero-padded for the new rows.
+    """
+    for name, old_param in list(active_params.items()):
+        old_n = old_param.shape[0]
+        new_param = torch.nn.Parameter(
+            splats[name].data[:new_n_active], requires_grad=old_param.requires_grad
+        )
+        if name in optimizers:
+            optimizer = optimizers[name]
+            if old_param in optimizer.state:
+                old_state = optimizer.state.pop(old_param)
+                new_state: Dict = {}
+                for k, v in old_state.items():
+                    if isinstance(v, Tensor) and v.dim() > 0 and v.shape[0] == old_n:
+                        new_v = v.new_zeros(new_n_active, *v.shape[1:])
+                        new_v[:old_n].copy_(v)
+                        new_state[k] = new_v
+                    else:
+                        new_state[k] = v
+                optimizer.state[new_param] = new_state
+            for group in optimizer.param_groups:
+                for i, p in enumerate(group["params"]):
+                    if p is old_param:
+                        group["params"][i] = new_param
+        active_params[name] = new_param
+
+
 @torch.no_grad()
 def inject_noise_to_position(
     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
