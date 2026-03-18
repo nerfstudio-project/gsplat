@@ -47,16 +47,11 @@ if $force_overwrite && ! $push_image; then
     die "--force only makes sense if accompanied by --push"
 fi
 
-check_if_installed yq "docker buildx"
+check_if_installed "docker buildx"
 
 load_config "$REPOROOT/config.yaml"
 
 IMAGE_URL="$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
-
-# Pull the remote image if it exists,
-# this way we could reuse the cached layers if they
-# didn't change.
-docker pull --quiet "$IMAGE_URL" 2>/dev/null || true
 
 # Avoid overwriting the remote image if it exists and we're not forcing push.
 if $push_image && ! $force_overwrite && docker manifest inspect "$IMAGE_URL" >/dev/null 2>&1; then

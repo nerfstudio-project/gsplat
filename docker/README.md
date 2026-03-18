@@ -44,9 +44,12 @@ The `build_image.sh` script builds the Docker image from the Dockerfile.
 
 ### Prerequisites
 
-The script requires the following tools to be installed:
-- `yq`: YAML processor for reading config.yaml
-- `docker`: Docker engine with buildx support
+The script was tested on the following OSs:
+- Ubuntu 24.04
+
+The script requires the following packages to be installed:
+- `docker.io`: Docker engine
+- `docker-buildx`: Docker BuildX support
 - `nvidia-container-runtime`: NVIDIA GPU support for containers
 
 The script will automatically check for these dependencies

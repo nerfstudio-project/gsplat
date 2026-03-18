@@ -48,35 +48,145 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
 EOS
 
 # Sets up python's virtual environment
-ENV PATH="~/.venv/bin:$PATH"
+ENV PYTHON_VENV_PATH=/usr/local/venv
+ENV PATH="$PYTHON_VENV_PATH/bin:$PATH"
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    python3 -m venv ~/.venv
+    python3 -m venv "$PYTHON_VENV_PATH"
 EOS
 
 # Installs all GSplat dependencies (including dev dependencies) -----------
 FROM python as gsplat-deps
 
-COPY --link --from=gsplatrepo setup.py deps/
-COPY --link --from=gsplatrepo gsplat/version.py deps/gsplat/
+# Dependency validation: ensure Dockerfile deps stay in sync with source files.
+# Aborts the build if the Dockerfile package lists diverge from
+# setup.py (base/dev) or examples/requirements.txt (examples).
+COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
+COPY --link --from=gsplatrepo setup.py /opt/dep-check/setup.py
+COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
+
+# Main library dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
+    packages=(
+        # Library deps
+        "ninja==1.13.0"
+        "numpy==2.2.6"
+        "jaxtyping==0.3.4"
+        "rich==14.3.3"
+        "torch==2.9.1"
+        "typing_extensions; python_version<'3.8'"
+    )
 
-    pushd deps
+    check_gsplat_deps.sh -f /opt/dep-check/setup.py:install -- "${packages[@]}"
+
+    pip install "${packages[@]}"
+
+    # Save list so the examples stage can reference it
+    printf '%s\n' "${packages[@]}" > /opt/dep-check/base_packages.txt
+
+    # To save space, we can remove the python cache files
+    rm -rf $PYTHONPYCACHEPREFIX/*
+EOS
+
+# Test/dev dependencies
+RUN --mount=type=tmpfs,target=/tmp \
+<<EOS
+    # Dev/test deps
+    packages=(
+        "black[jupyter]==22.3.0"
+        "isort==5.10.1"
+        "pylint==2.13.4"
+        "pytest==7.1.3"
+        "pytest-env==0.8.1"
+        "pytest-xdist==2.5.0"
+        "typeguard==4.5.1"
+        "pyyaml==6.0.1"
+        "build==1.3.0"
+        "twine==1.6.0"
+        "cupy==13.6.0"
+        "nerfacc==0.5.3"
+        "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
+        "imageio[ffmpeg]==2.37.2"
+        "torchpq==0.3.0.6"
+    )
+
+    check_gsplat_deps.sh -f /opt/dep-check/setup.py:dev -- "${packages[@]}"
 
     # Tests need cupy, let install faster (and smaller) by targeting a specific compute and rely on CUDA JIT.
     CUPY_NUM_BUILD_JOBS=$(nproc) \
     CUPY_NUM_NVCC_THREADS=$(nproc) \
     CUPY_NVCC_GENERATE_CODE=arch=compute_80,code=compute_80 \
-    BUILD_NO_CUDA=1 \
-      pip install -e .[dev]
+        pip install "${packages[@]}"
 
-    popd
+    # Save list so the examples stage can reference it
+    printf '%s\n' "${packages[@]}" > /opt/dep-check/dev_packages.txt
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
+EOS
 
-    rm -rf deps
+# Examples dependencies
+RUN --mount=type=tmpfs,target=/tmp \
+<<EOS
+    # Load base + dev package lists saved by previous stages
+    mapfile -t base_pkgs < /opt/dep-check/base_packages.txt
+    mapfile -t dev_pkgs < /opt/dep-check/dev_packages.txt
+
+    # fused-ssim only builds for a pre-defined set of architectures.
+    # In order to override it, and support, say, Blackwell, we need a more
+    # recent commit that allows overriding this set.
+    # Existing architectures:
+    # sm_75: Turing/GeForce tu10x
+    # sm_80: Ampere/Tesla ga100
+    # sm_89: Ada/GeForce ad102
+    # New architectures
+    # sm_90: Hopper/Tesla gh100
+    # sm_120: Blackwell/GeForce gb20x
+    # sm_121: Blackwell/Tesla gb20x, gb21x
+    fused_ssim="git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
+
+    # Examples
+    packages=(
+        "torchvision==0.24.1"
+        "git+https://github.com/brandonyzhao/pycolmap@a2a5671b0f6ab641957dd4c5a78cabcf220c28ee"
+        "viser==1.0.24"
+        "git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787"
+        "scikit-learn==1.8.0"
+        "torchmetrics[image]==1.8.2"
+        "tyro==1.0.8"
+        "piexif==1.1.3"
+        "tensorboard==2.20.0"
+        "tensorly==0.9.0"
+        "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
+        "splines==0.3.3"
+        "ppisp @ git+https://github.com/nv-tlabs/ppisp@v1.0.0"
+        "opencv-python-headless==4.10.0.84"
+        "tqdm==4.67.3"
+        "matplotlib==3.10.8"
+        "Pillow==12.1.1"
+    )
+
+    check_gsplat_deps.sh \
+        -f /opt/dep-check/setup.py:install \
+        -f /opt/dep-check/setup.py:dev \
+        -f /opt/dep-check/examples/requirements.txt \
+        -- "${base_pkgs[@]}" "${dev_pkgs[@]}" "$fused_ssim" "${packages[@]}"
+
+    # Build fused_ssim first (needs special env var)
+    CUDA_ARCHITECTURES='75;80;89;90;120;121' \
+        pip install --no-build-isolation "$fused_ssim"
+
+    # Needs --no-build-isolation or else fused-ssim can't be installed as
+    # it needs torch in its setup.py.
+    pip install --no-build-isolation "${packages[@]}"
+
+    # Save combined list for entrypoint runtime check
+    printf '%s\n' "${base_pkgs[@]}" "${dev_pkgs[@]}" \
+        "$fused_ssim" "${packages[@]}" > /opt/dep-check/all_packages.txt
+
+    # To save space, we can remove the python cache files
+    rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
 
 # Main image ============================================================
@@ -85,8 +195,10 @@ EOS
 
 FROM python as main
 
-COPY --link --from=gsplat-deps /root/.venv/ /root/.venv/
+COPY --link --from=gsplat-deps "$PYTHON_VENV_PATH/" "$PYTHON_VENV_PATH/"
+COPY --link --from=gsplat-deps /opt/dep-check/ /opt/dep-check/
 COPY --link --from=ccache ccache /usr/local/bin/ccache
+COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 
 # Now install everything else we need from apt
 RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
@@ -97,26 +209,33 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
 
     packages=(
         # For JIT-build
-        ninja-build
+        ninja-build curl unzip
         # generally needed
-        vim less
+        vim less sudo
+        # For the entrypoint script
+        gosu
+        # SSH server for persistent dev container access
+        openssh-server
     )
     apt-get install "${packages[@]}"
 EOS
 
-# Set up ccache
 ENV CCACHE_CONFIGPATH=/etc/ccache.conf
 ENV PATH=/usr/local/bin:$PATH
-RUN <<EOS
-    cat <<'EOF' >> /root/.profile
 
-if [[ $CI_BUILDS_DIR ]]; then
-    export CCACHE_DIR=$CI_BUILDS_DIR/.ci-keep/ccache
-else
-    export CCACHE_DIR=/var/cache/ccache
-fi
-EOF
-    mkdir -p /var/cache/ccache
+COPY --link profile.d/00-persistent-cache.sh /etc/profile.d/
+COPY --link sshd_config.d/gsplat.conf /etc/ssh/sshd_config.d/
+
+# Leave some small changes last
+RUN <<EOS
+    # Make apt cache persistent
+    mkdir -p /var/cache/apt/lib
+    rm -rf /var/lib/apt
+    ln -sf /var/cache/apt/lib /var/lib/apt
+    # World-writable so any host UID mapped into the container can use the
+    # shared persistent cache (ccache, CUDA JIT, pip).  Acceptable in a
+    # local dev-only image; do NOT use in production/shared environments.
+    chmod 777 /var/cache
 
     ccache --max-size=20G
 
@@ -128,31 +247,51 @@ EOF
     # We can't use a symlink like we did with the host compilers or else
     # cuda sdk path detection done by setuptools won't work.
     mv /usr/local/cuda/bin/nvcc{,-real}
+
+    # Some of the profile scripts set up the config, we need
+    # to do it for root
+    for file in /etc/profile.d/*.sh; do
+        source "$file"
+    done
+
+    # Allow sudoers do use python venv automatically
+    echo "Defaults secure_path=\"$PYTHON_VENV_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"" > /etc/sudoers.d/10-secure-path
+
+    # SSH server prerequisites
+    ssh-keygen -A
+    mkdir -p /run/sshd
+
+    # Remove all non-system users/groups (UID/GID >= 1000, except nobody/nogroup)
+    # so the entrypoint can create the host user without conflicts
+    nogroup_gid="$(getent group nogroup | cut -d: -f3)"
+    awk -F: -v ng="$nogroup_gid" '$3 >= 1000 && $1 != "nobody" && $4 != ng { print $1 }' /etc/passwd \
+        | xargs -r -n1 userdel 2>/dev/null || true
+    awk -F: '$3 >= 1000 && $1 != "nogroup" { print $1 }' /etc/group \
+        | xargs -r -n1 groupdel 2>/dev/null || true
+
+    # Persist env vars needed for dev work into SSH sessions via /etc/environment
+    # (PAM reads this file for all login sessions, including SSH)
+    for var in PYTHONPATH PATH PYTHON_VENV_PATH CCACHE_CONFIGPATH; do
+        eval "val=\${$var:-}"
+        if [ -n "$val" ]; then
+            printf '%s="%s"\n' "$var" "$val" >> /etc/environment
+        fi
+    done
 EOS
+
 COPY --link cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
-
-# Local cache volume, they're not meant to be in the CI cache
-RUN <<EOS
-    mkdir -p /var/cache/{root,apt/lib}
-    ln -sf /var/cache/root /root/.cache
-    rm -rf /var/lib/apt
-    ln -sf /var/cache/apt/lib /var/lib/apt
-EOS
-
-# Set up the cuda JIT cache path
-RUN <<EOS
-    cat <<'EOF' >> /root/.profile
-
-if [[ $CI_BUILDS_DIR ]]; then
-    export CUDA_CACHE_PATH=$CI_BUILDS_DIR/.ci-keep/cuda
-else
-    export CUDA_CACHE_PATH=/var/cache/cuda
-fi
-EOF
-    mkdir -p /var/cache/cuda
-EOS
+COPY --chmod=755 entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["bash", "--login"]
 
 # Our local, persistent cache volume
 VOLUME /var/cache
 
-WORKDIR /root/gsplat
+# Viser is exposed via this port
+# Used in examples.
+EXPOSE 8080/tcp
+
+# SSH server for persistent dev container access
+EXPOSE 22/tcp
+
+WORKDIR /root
