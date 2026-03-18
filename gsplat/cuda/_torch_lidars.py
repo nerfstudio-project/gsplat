@@ -43,6 +43,7 @@ from ._math import (
 
 from ._torch_cameras import _BaseCameraModel
 
+
 # TODO: The hierarchy should be rooted at new class SensorModel.
 class _LidarModel:
     def __init__(self, params: LidarModelParameters) -> None:

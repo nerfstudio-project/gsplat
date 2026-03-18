@@ -2,21 +2,23 @@ import numpy as np
 import os
 import sqlite3
 
-
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # convert SQLite BLOBs to/from numpy arrays
+
 
 def array_to_blob(arr):
     return np.getbuffer(arr)
+
 
 def blob_to_array(blob, dtype, shape=(-1,)):
     return np.frombuffer(blob, dtype).reshape(*shape)
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # convert to/from image pair ids
 
 MAX_IMAGE_ID = 2**31 - 1
+
 
 def get_pair_id(image_id1, image_id2):
     if image_id1 > image_id2:
@@ -29,7 +31,7 @@ def get_image_ids_from_pair_id(pair_id):
     return (pair_id - image_id2) / MAX_IMAGE_ID, image_id2
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # create table commands
 
 CREATE_CAMERAS_TABLE = """CREATE TABLE IF NOT EXISTS cameras (
@@ -84,47 +86,73 @@ CREATE_MATCHES_TABLE = """CREATE TABLE IF NOT EXISTS matches (
     cols INTEGER NOT NULL,
     data BLOB)"""
 
-CREATE_NAME_INDEX = \
-    "CREATE UNIQUE INDEX IF NOT EXISTS index_name ON images(name)"
+CREATE_NAME_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS index_name ON images(name)"
 
-CREATE_ALL = "; ".join([CREATE_CAMERAS_TABLE, CREATE_DESCRIPTORS_TABLE,
-    CREATE_IMAGES_TABLE, CREATE_INLIER_MATCHES_TABLE, CREATE_KEYPOINTS_TABLE,
-    CREATE_MATCHES_TABLE, CREATE_NAME_INDEX])
+CREATE_ALL = "; ".join(
+    [
+        CREATE_CAMERAS_TABLE,
+        CREATE_DESCRIPTORS_TABLE,
+        CREATE_IMAGES_TABLE,
+        CREATE_INLIER_MATCHES_TABLE,
+        CREATE_KEYPOINTS_TABLE,
+        CREATE_MATCHES_TABLE,
+        CREATE_NAME_INDEX,
+    ]
+)
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # functional interface for adding objects
 
-def add_camera(db, model, width, height, params, prior_focal_length=False,
-               camera_id=None):
+
+def add_camera(
+    db, model, width, height, params, prior_focal_length=False, camera_id=None
+):
     # TODO: Parameter count checks
     params = np.asarray(params, np.float64)
-    db.execute("INSERT INTO cameras VALUES (?, ?, ?, ?, ?, ?)",
-        (camera_id, model, width, height, array_to_blob(params),
-         prior_focal_length))
+    db.execute(
+        "INSERT INTO cameras VALUES (?, ?, ?, ?, ?, ?)",
+        (camera_id, model, width, height, array_to_blob(params), prior_focal_length),
+    )
 
 
 def add_descriptors(db, image_id, descriptors):
     descriptors = np.ascontiguousarray(descriptors, np.uint8)
-    db.execute("INSERT INTO descriptors VALUES (?, ?, ?, ?)",
-        (image_id,) + descriptors.shape + (array_to_blob(descriptors),))
+    db.execute(
+        "INSERT INTO descriptors VALUES (?, ?, ?, ?)",
+        (image_id,) + descriptors.shape + (array_to_blob(descriptors),),
+    )
 
 
-def add_image(db, name, camera_id, prior_q=np.zeros(4), prior_t=np.zeros(3),
-        image_id=None):
-    db.execute("INSERT INTO images VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (image_id, name, camera_id, prior_q[0], prior_q[1], prior_q[2],
-         prior_q[3], prior_t[0], prior_t[1], prior_t[2]))
+def add_image(
+    db, name, camera_id, prior_q=np.zeros(4), prior_t=np.zeros(3), image_id=None
+):
+    db.execute(
+        "INSERT INTO images VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            image_id,
+            name,
+            camera_id,
+            prior_q[0],
+            prior_q[1],
+            prior_q[2],
+            prior_q[3],
+            prior_t[0],
+            prior_t[1],
+            prior_t[2],
+        ),
+    )
 
 
 # config: defaults to fundamental matrix
-def add_inlier_matches(db, image_id1, image_id2, matches, config=2, F=None,
-                       E=None, H=None):
-    assert(len(matches.shape) == 2)
-    assert(matches.shape[1] == 2)
+def add_inlier_matches(
+    db, image_id1, image_id2, matches, config=2, F=None, E=None, H=None
+):
+    assert len(matches.shape) == 2
+    assert matches.shape[1] == 2
 
     if image_id1 > image_id2:
-        matches = matches[:,::-1]
+        matches = matches[:, ::-1]
 
     if F is not None:
         F = np.asarray(F, np.float64)
@@ -135,62 +163,65 @@ def add_inlier_matches(db, image_id1, image_id2, matches, config=2, F=None,
 
     pair_id = get_pair_id(image_id1, image_id2)
     matches = np.asarray(matches, np.uint32)
-    db.execute("INSERT INTO inlier_matches VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (pair_id,) + matches.shape + (array_to_blob(matches), config, F, E, H))
+    db.execute(
+        "INSERT INTO inlier_matches VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (pair_id,) + matches.shape + (array_to_blob(matches), config, F, E, H),
+    )
 
 
 def add_keypoints(db, image_id, keypoints):
-    assert(len(keypoints.shape) == 2)
-    assert(keypoints.shape[1] in [2, 4, 6])
+    assert len(keypoints.shape) == 2
+    assert keypoints.shape[1] in [2, 4, 6]
 
     keypoints = np.asarray(keypoints, np.float32)
-    db.execute("INSERT INTO keypoints VALUES (?, ?, ?, ?)",
-        (image_id,) + keypoints.shape + (array_to_blob(keypoints),))
+    db.execute(
+        "INSERT INTO keypoints VALUES (?, ?, ?, ?)",
+        (image_id,) + keypoints.shape + (array_to_blob(keypoints),),
+    )
 
 
 # config: defaults to fundamental matrix
 def add_matches(db, image_id1, image_id2, matches):
-    assert(len(matches.shape) == 2)
-    assert(matches.shape[1] == 2)
+    assert len(matches.shape) == 2
+    assert matches.shape[1] == 2
 
     if image_id1 > image_id2:
-        matches = matches[:,::-1]
+        matches = matches[:, ::-1]
 
     pair_id = get_pair_id(image_id1, image_id2)
     matches = np.asarray(matches, np.uint32)
-    db.execute("INSERT INTO matches VALUES (?, ?, ?, ?)",
-        (pair_id,) + matches.shape + (array_to_blob(matches),))
+    db.execute(
+        "INSERT INTO matches VALUES (?, ?, ?, ?)",
+        (pair_id,) + matches.shape + (array_to_blob(matches),),
+    )
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # simple functional interface
+
 
 class COLMAPDatabase(sqlite3.Connection):
     @staticmethod
     def connect(database_path):
         return sqlite3.connect(database_path, factory=COLMAPDatabase)
 
-
     def __init__(self, *args, **kwargs):
         super(COLMAPDatabase, self).__init__(*args, **kwargs)
 
         self.initialize_tables = lambda: self.executescript(CREATE_ALL)
 
-        self.initialize_cameras = \
-            lambda: self.executescript(CREATE_CAMERAS_TABLE)
-        self.initialize_descriptors = \
-            lambda: self.executescript(CREATE_DESCRIPTORS_TABLE)
-        self.initialize_images = \
-            lambda: self.executescript(CREATE_IMAGES_TABLE)
-        self.initialize_inlier_matches = \
-            lambda: self.executescript(CREATE_INLIER_MATCHES_TABLE)
-        self.initialize_keypoints = \
-            lambda: self.executescript(CREATE_KEYPOINTS_TABLE)
-        self.initialize_matches = \
-            lambda: self.executescript(CREATE_MATCHES_TABLE)
+        self.initialize_cameras = lambda: self.executescript(CREATE_CAMERAS_TABLE)
+        self.initialize_descriptors = lambda: self.executescript(
+            CREATE_DESCRIPTORS_TABLE
+        )
+        self.initialize_images = lambda: self.executescript(CREATE_IMAGES_TABLE)
+        self.initialize_inlier_matches = lambda: self.executescript(
+            CREATE_INLIER_MATCHES_TABLE
+        )
+        self.initialize_keypoints = lambda: self.executescript(CREATE_KEYPOINTS_TABLE)
+        self.initialize_matches = lambda: self.executescript(CREATE_MATCHES_TABLE)
 
         self.create_name_index = lambda: self.executescript(CREATE_NAME_INDEX)
-
 
     add_camera = add_camera
     add_descriptors = add_descriptors
@@ -200,7 +231,8 @@ class COLMAPDatabase(sqlite3.Connection):
     add_matches = add_matches
 
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
 
 def main(args):
     import os
@@ -217,17 +249,15 @@ def main(args):
 
     db.initialize_tables()
 
-
     #
     # create dummy cameras
     #
 
-    model1, w1, h1, params1 = 0, 1024, 768, np.array((1024., 512., 384.))
-    model2, w2, h2, params2 = 2, 1024, 768, np.array((1024., 512., 384., 0.1))
+    model1, w1, h1, params1 = 0, 1024, 768, np.array((1024.0, 512.0, 384.0))
+    model2, w2, h2, params2 = 2, 1024, 768, np.array((1024.0, 512.0, 384.0, 0.1))
 
     db.add_camera(model1, w1, h1, params1)
     db.add_camera(model2, w2, h2, params2)
-
 
     #
     # create dummy images
@@ -238,7 +268,6 @@ def main(args):
     db.add_image("image3.png", 2)
     db.add_image("image4.png", 2)
 
-
     #
     # create dummy keypoints; note that COLMAP supports 2D keypoints (x, y),
     # 4D keypoints (x, y, theta, scale), and 6D affine keypoints
@@ -246,16 +275,15 @@ def main(args):
     #
 
     N = 1000
-    kp1 = np.random.rand(N, 2) * (1024., 768.)
-    kp2 = np.random.rand(N, 2) * (1024., 768.)
-    kp3 = np.random.rand(N, 2) * (1024., 768.)
-    kp4 = np.random.rand(N, 2) * (1024., 768.)
+    kp1 = np.random.rand(N, 2) * (1024.0, 768.0)
+    kp2 = np.random.rand(N, 2) * (1024.0, 768.0)
+    kp3 = np.random.rand(N, 2) * (1024.0, 768.0)
+    kp4 = np.random.rand(N, 2) * (1024.0, 768.0)
 
     db.add_keypoints(1, kp1)
     db.add_keypoints(2, kp2)
     db.add_keypoints(3, kp3)
     db.add_keypoints(4, kp4)
-
 
     #
     # create dummy matches
@@ -269,7 +297,6 @@ def main(args):
     db.add_matches(1, 2, m12)
     db.add_matches(2, 3, m23)
     db.add_matches(3, 4, m34)
-
 
     #
     # check cameras
@@ -287,21 +314,19 @@ def main(args):
     assert model == model2 and width == w2 and height == h2
     assert np.allclose(params, params2)
 
-
     #
     # check keypoints
     #
 
     kps = dict(
         (image_id, blob_to_array(data, np.float32, (-1, 2)))
-        for image_id, data in db.execute(
-            "SELECT image_id, data FROM keypoints"))
+        for image_id, data in db.execute("SELECT image_id, data FROM keypoints")
+    )
 
     assert np.allclose(kps[1], kp1)
     assert np.allclose(kps[2], kp2)
     assert np.allclose(kps[3], kp3)
     assert np.allclose(kps[4], kp4)
-
 
     #
     # check matches
@@ -310,14 +335,14 @@ def main(args):
     pair_ids = [get_pair_id(*pair) for pair in [(1, 2), (2, 3), (3, 4)]]
 
     matches = dict(
-        (get_image_ids_from_pair_id(pair_id),
-            blob_to_array(data, np.uint32, (-1, 2)))
-        for pair_id, data in db.execute("SELECT pair_id, data FROM matches"))
+        (get_image_ids_from_pair_id(pair_id), blob_to_array(data, np.uint32, (-1, 2)))
+        for pair_id, data in db.execute("SELECT pair_id, data FROM matches")
+    )
 
     assert np.all(matches[(1, 2)] == m12)
     assert np.all(matches[(2, 3)] == m23)
     assert np.all(matches[(3, 4)] == m34)
-    
+
     #
     # clean up
     #
@@ -325,13 +350,15 @@ def main(args):
     db.close()
     os.remove(args.database_path)
 
-#-------------------------------------------------------------------------------
+
+# -------------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
 
     parser.add_argument("--database_path", type=str, default="database.db")
 

@@ -944,7 +944,10 @@ def compute_tiling(
     params = SimpleNamespace()
     params.n_bins_elevation = n_bins_elevation
 
-    (params.n_bins_azimuth, params.cdf_elevation,) = compute_histogram_equalization(
+    (
+        params.n_bins_azimuth,
+        params.cdf_elevation,
+    ) = compute_histogram_equalization(
         lidar_params,
         n_bins_elevation=n_bins_elevation,
         max_pts_per_tile=max_pts_per_tile,
