@@ -61,11 +61,27 @@ bash benchmarks/basic.sh
 ## Examples
 
 We provide a set of examples to get you started! Below you can find the details about
-the examples (requires to install some exta dependencies via `pip install -r examples/requirements.txt`)
+the examples (requires to install some exta dependencies via `pip install -r examples/requirements.txt --no-build-isolation`)
 
 - [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
 - [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
 - [Render a large scene in real-time.](https://docs.gsplat.studio/main/examples/large_scale.html)
+
+### NCore v4 Dataset
+
+To train on an [NCore v4](https://docs.nvidia.com/ncore/) capture, point `--data-dir` at the sequence meta-JSON file and set `--data-type ncore`:
+
+```bash
+cd examples
+python simple_trainer.py default \
+    --data-type ncore \
+    --data-dir /path/to/sequence.json \
+    --data-factor 1 \
+    --result-dir results/my_scene \
+    --init-type lidar
+```
+
+> **Note**: `nvidia-ncore` must be installed as part of `examples/requirements.txt`. Training with `--data-factor` values other than `1` requires that all camera resolutions are divisible by the factor.
 
 
 ## Development and Contribution
