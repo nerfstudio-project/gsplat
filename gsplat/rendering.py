@@ -580,15 +580,17 @@ def rasterization(
         return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
 
     def check_features(features: Tensor, sh_degree: Optional[int], name: str) -> bool:
+        channels = features.shape[-1]
+
         if sh_degree is None:
             # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
             assert (
                 features.dim() == num_batch_dims + 2
-                and features.shape[:-1] == batch_dims + (N,)
+                and features.shape[:-1] == (*batch_dims, N)
             ) or (
                 features.dim() == num_batch_dims + 3
-                and features.shape[:-1] == batch_dims + (C, N)
-            ), features.shape
+                and features.shape[:-1] == (*batch_dims, C, N)
+            ), f"{name}'s shape {features.shape=} must be either {(*batch_dims, N, channels)} or {(*batch_dims, C, N, channels)}"
             if distributed:
                 assert (
                     features.dim() == num_batch_dims + 2
@@ -599,12 +601,13 @@ def rasterization(
             assert (
                 features.dim() == num_batch_dims + 3
                 and features.shape[:-2] == batch_dims + (N,)
-                and features.shape[-1] == 3
+                and channels == 3
             ) or (
                 features.dim() == num_batch_dims + 4
                 and features.shape[:-2] == batch_dims + (C, N)
-                and features.shape[-1] == 3
-            ), features.shape
+                and channels == 3
+            ), f"{name}'s shape {features.shape=} must be either {(*batch_dims, N, 3)} or {(*batch_dims, C, N, 3)}"
+
             assert (sh_degree + 1) ** 2 <= features.shape[-2], features.shape
             if distributed:
                 assert (
