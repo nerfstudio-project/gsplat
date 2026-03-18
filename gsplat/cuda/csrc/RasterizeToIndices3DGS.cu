@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -160,14 +160,14 @@ __global__ void rasterize_to_indices_3dgs_kernel(
             const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                         conic.z * delta.y * delta.y) +
                                 conic.y * delta.x * delta.y;
-            float alpha = min(0.999f, opac * __expf(-sigma));
+            float alpha = min(MAX_ALPHA, opac * __expf(-sigma));
 
             if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                 continue;
             }
 
             next_trans = trans * (1.0f - alpha);
-            if (next_trans <= 1e-4) { // this pixel is done: exclusive
+            if (next_trans <= TRANSMITTANCE_THRESHOLD) { // this pixel is done: exclusive
                 done = true;
                 break;
             }

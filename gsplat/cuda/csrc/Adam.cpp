@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -35,15 +35,15 @@
 namespace gsplat {
 
 void adam(
-    at::Tensor &param,                    // [N, ...]
-    const at::Tensor &param_grad,         // [N, ...]
-    at::Tensor &exp_avg,                  // [N, ...]
-    at::Tensor &exp_avg_sq,               // [N, ...]
-    const at::optional<at::Tensor> valid, // [N]
-    const float lr,
-    const float b1,
-    const float b2,
-    const float eps
+    at::Tensor &param,                     // [N, ...]
+    const at::Tensor &param_grad,          // [N, ...]
+    at::Tensor &exp_avg,                   // [N, ...]
+    at::Tensor &exp_avg_sq,                // [N, ...]
+    const at::optional<at::Tensor> &valid, // [N]
+    double lr,
+    double b1,
+    double b2,
+    double eps
 ) {
     DEVICE_GUARD(param);
     CHECK_INPUT(param);

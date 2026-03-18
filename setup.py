@@ -39,13 +39,27 @@ def get_ext():
 
 def get_extensions():
     from torch.utils.cpp_extension import CUDAExtension
-    from gsplat.cuda.build import get_build_parameters
 
-    params = get_build_parameters()
+    # Use the same build parameters as the JIT build. However, directly
+    # importing the gsplat.cuda.build module would trigger a circular
+    # dependency where gsplat is imported before it is built. To avoid
+    # this, we sidestep the traditional Python import mechanism and construct
+    # the module directly from build.py.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "gsplat_cuda_build", os.path.join("gsplat", "cuda", "build.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    params = module.get_build_parameters()
+
+    setup_dir = os.path.dirname(os.path.abspath(__file__))
+    sources = [os.path.relpath(s, setup_dir) for s in params.sources]
 
     extension = CUDAExtension(
         "gsplat.csrc",
-        sources=params.sources,
+        sources=sources,
         include_dirs=params.extra_include_paths,
         extra_compile_args={
             "cxx": params.extra_cflags,
@@ -73,6 +87,10 @@ setup(
         "typing_extensions; python_version<'3.8'",
     ],
     extras_require={
+        # lidar dependencies. Install them by `pip install gsplat[lidar]`
+        "lidar": [
+            "scipy",
+        ],
         # dev dependencies. Install them by `pip install gsplat[dev]`
         "dev": [
             "black[jupyter]==22.3.0",

@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +19,7 @@
 #pragma once
 
 #include <cstdint>
+#include "Ops.h"
 
 namespace at {
 class Tensor;
@@ -36,6 +38,21 @@ void launch_intersect_tile_kernel(
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
+    const at::optional<at::Tensor> cum_tiles_per_gauss, // [..., N] or [nnz]
+    // outputs
+    at::optional<at::Tensor> tiles_per_gauss, // [..., N] or [nnz]
+    at::optional<at::Tensor> isect_ids,       // [n_isects]
+    at::optional<at::Tensor> flatten_ids      // [n_isects]
+);
+void launch_intersect_tile_lidar_kernel(
+    // inputs
+    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt> &lidar,
+    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,    // [nnz]
+    const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const uint32_t I,
     const at::optional<at::Tensor> cum_tiles_per_gauss, // [..., N] or [nnz]
     // outputs
     at::optional<at::Tensor> tiles_per_gauss, // [..., N] or [nnz]

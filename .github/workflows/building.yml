@@ -20,7 +20,7 @@ jobs:
         with:
           name: pypi_packages
           path: dist/*.tar.gz
- 
+
   build_wheels:
     runs-on: ${{ matrix.os }}
     environment: production
@@ -30,62 +30,31 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-2022]
         python-version: ['3.10']
-        torch-version: ['2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.4.0']
-        cuda-version: ['cu118', 'cu121', 'cu124']
+        # Last 3 minor PyTorch versions aligned with pytorch.org
+        torch-version: ['2.8.0', '2.9.1', '2.10.0']
+        # CUDA versions aligned with PyTorch build matrix
+        cuda-version: ['cu126', 'cu128', 'cu129', 'cu130']
         exclude:
-          - python-version: 3.12
-            torch-version: 2.0.0
-          - python-version: 3.12
-            torch-version: 2.1.0
-          - torch-version: 2.0.0
-            cuda-version: 'cu113'
-          - torch-version: 2.0.0
-            cuda-version: 'cu116'
-          - torch-version: 2.0.0
-            cuda-version: 'cu121'
-          - torch-version: 2.0.0
-            cuda-version: 'cu124'
-          - torch-version: 2.1.0
-            cuda-version: 'cu113'
-          - torch-version: 2.1.0
-            cuda-version: 'cu116'
-          - torch-version: 2.1.0
-            cuda-version: 'cu117'
-          - torch-version: 2.1.0
-            cuda-version: 'cu124'
-          - torch-version: 2.2.0
-            cuda-version: 'cu113'
-          - torch-version: 2.2.0
-            cuda-version: 'cu116'
-          - torch-version: 2.2.0
-            cuda-version: 'cu117'
-          - torch-version: 2.2.0
-            cuda-version: 'cu124'
-          - torch-version: 2.3.0
-            cuda-version: 'cu113'
-          - torch-version: 2.3.0
-            cuda-version: 'cu116'
-          - torch-version: 2.3.0
-            cuda-version: 'cu117'
-          - torch-version: 2.3.0
-            cuda-version: 'cu124'
-          - torch-version: 2.4.0
-            cuda-version: 'cu113'
-          - torch-version: 2.4.0
-            cuda-version: 'cu116'
-          - torch-version: 2.4.0
-            cuda-version: 'cu117'
+          # PyTorch 2.8.0 does not ship cu130 wheels
+          - torch-version: '2.8.0'
+            cuda-version: 'cu130'
+          # PyTorch 2.9.1 does not ship cu129 wheels
+          - torch-version: '2.9.1'
+            cuda-version: 'cu129'
+          # PyTorch 2.10.0 does not ship cu129 wheels
+          - torch-version: '2.10.0'
+            cuda-version: 'cu129'
+          # CUDA 12.6 is incompatible with MSVC >= 14.44 (VS 2022);
+          # the MSVC STL requires CUDA 12.8+
           - os: windows-2022
-            cuda-version: 'cu121'
-          - os: windows-2022
-            cuda-version: 'cu118'
+            cuda-version: 'cu126'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-  
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -115,14 +84,6 @@ jobs:
           python -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
         shell: bash
 
-      - name: Patch PyTorch static constexpr on Windows
-        if: ${{ runner.os == 'Windows' }}
-        run: |
-          Torch_DIR=`python -c 'import os; import torch; print(os.path.dirname(torch.__file__))'`
-          sed -i '31,38c\
-          TORCH_API void lazy_init_num_threads();' ${Torch_DIR}/include/ATen/Parallel.h
-        shell: bash
-
       - name: Set version
         if: ${{ runner.os != 'macOS' }}
         run: |
@@ -135,7 +96,8 @@ jobs:
 
       - name: Upgrade pip
         run: |
-          pip install --upgrade setuptools
+          # https://github.com/pypa/setuptools/issues/5174, pkg_resources is removed in setuptools 82 but we need it for older torch versions
+          pip install --upgrade "setuptools<82"
           pip install ninja
         shell: bash
 
@@ -146,9 +108,17 @@ jobs:
         shell: bash
 
       - name: Build wheel
+        env:
+          # Step-level env so Windows Python sees CUDA_HOME (bash export does not propagate to python.exe)
+          CUDA_HOME: ${{ runner.os == 'Windows' && (matrix.cuda-version == 'cu130' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0' || matrix.cuda-version == 'cu129' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9' || matrix.cuda-version == 'cu128' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8' || 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6') || '' }}
         run: |
           pip install wheel
-          source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export PATH="${CUDA_HOME}/bin:${PATH}"
+            export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;9.0"
+          else
+            source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+          fi
           MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
         shell: bash
 
@@ -158,6 +128,8 @@ jobs:
           ls -lah
           pip install *.whl
           python -c "import gsplat; print('gsplat:', gsplat.__version__)"
+          pip install "$(ls *.whl)[lidar]"
+          python -c "import gsplat; print('gsplat:', gsplat.__version__); from scipy.spatial import cKDTree; print('scipy OK')"
           cd ..
         shell: bash
 

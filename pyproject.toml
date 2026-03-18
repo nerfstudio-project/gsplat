@@ -19,6 +19,8 @@ requires = [
     "wheel",
     "ninja",
     "torch",
+    "numpy",
+    "rich",
 ]
 build-backend = "setuptools.build_meta"
 
