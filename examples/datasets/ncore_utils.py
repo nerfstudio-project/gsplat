@@ -13,10 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Coordinate-frame and interval helpers for NCore dataset loading.
-
-Ported from 3dgrut-internal/threedgrut/datasets/ncoreUtils.py.
-"""
+"""Coordinate-frame and interval helpers for NCore dataset loading."""
 
 from typing import List, Tuple
 

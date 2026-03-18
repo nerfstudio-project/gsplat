@@ -254,7 +254,14 @@ class NCoreParser:
             sensor = camera_sensors[camera_id]
             model_params = sensor.model_parameters
             if factor != 1.0:
-                model_params = model_params.transform(image_domain_scale=factor)
+                try:
+                    model_params = model_params.transform(image_domain_scale=factor)
+                except (AssertionError, ValueError):
+                    print(
+                        f"[NCoreParser] Warning: factor={factor} produces non-integer "
+                        f"resolution for {camera_id}; using factor=1.0 (full resolution). "
+                        "Pass --data-factor 1 to suppress this warning."
+                    )
 
             camera_model = ncore.sensors.CameraModel.from_parameters(
                 model_params, device="cpu", dtype=torch.float32

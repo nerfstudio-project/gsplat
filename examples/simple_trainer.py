@@ -66,7 +66,7 @@ class Config:
     ckpt: Optional[List[str]] = None
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
-    # Render trajectory path
+    # Render trajectory path: "interp", "ellipse", "spiral", or "raw" (use captured poses as-is)
     render_traj_path: str = "interp"
 
     # Dataset backend: "colmap" or "ncore"
@@ -446,14 +446,9 @@ class Runner:
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
-        # Default NCore sequences to lidar-based initialization
-        init_type = cfg.init_type
-        if cfg.data_type == "ncore" and init_type == "sfm":
-            init_type = "lidar"
-
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
-            init_type=init_type,
+            init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
             init_extent=cfg.init_extent,
             init_opacity=cfg.init_opa,
@@ -1218,9 +1213,8 @@ class Runner:
         device = self.device
 
         camtoworlds_all = self.parser.camtoworlds[5:-5]
-        if cfg.data_type == "ncore":
-            # For NCore driving sequences, render the raw captured trajectory as-is
-            # (path interpolation methods are designed for static scenes with SfM poses)
+        if cfg.render_traj_path == "raw":
+            # Use captured poses as-is
             camtoworlds_all = camtoworlds_all[:, :3, :]  # [N, 3, 4]
         elif cfg.render_traj_path == "interp":
             camtoworlds_all = generate_interpolated_path(
