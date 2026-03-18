@@ -43,6 +43,17 @@ from .rendering import (
     rasterization_2dgs_inria_wrapper,
     rasterization_inria_wrapper,
 )
+from .losses import (
+    create_ssim_window,
+    depth_l1_loss,
+    l1_loss,
+    mse_loss,
+    opacity_reg_loss,
+    scale_reg_loss,
+    ssim_loss,
+    torch_ssim_loss,
+    total_variation_loss,
+)
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
 from .cuda._lidar import (
