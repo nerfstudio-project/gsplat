@@ -23,6 +23,7 @@ from ._math import (
 from ._wrapper import CameraModel, RollingShutterType
 from ._constants import MAX_ALPHA
 
+
 def _persp_proj(
     means: Tensor,  # [..., C, N, 3]
     covars: Tensor,  # [..., C, N, 3, 3]

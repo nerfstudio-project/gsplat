@@ -10,6 +10,7 @@ import torch
 import gc
 import os
 
+
 @pytest.fixture(autouse=True)
 def setup_test_environment():
     """
@@ -40,4 +41,3 @@ def setup_test_environment():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()
-

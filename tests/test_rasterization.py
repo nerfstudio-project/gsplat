@@ -24,54 +24,68 @@ device = torch.device("cuda:0")
 @pytest.mark.parametrize(
     "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info",
     [
-        pytest.param(*params, marks=[
-            # test based on with_eval3d (5)  and with_ut (6)
-            pytest.mark.skipif((params[5]==True or params[6]==True) and not gsplat.has_3dgut(), reason="3DGUT support isn't built in"),
-            pytest.mark.skipif((params[5]==False or params[6]==False) and not gsplat.has_3dgs(), reason="3DGS support isn't built in")
-        ])
+        pytest.param(
+            *params,
+            marks=[
+                # test based on with_eval3d (5)  and with_ut (6)
+                pytest.mark.skipif(
+                    (params[5] == True or params[6] == True) and not gsplat.has_3dgut(),
+                    reason="3DGUT support isn't built in",
+                ),
+                pytest.mark.skipif(
+                    (params[5] == False or params[6] == False)
+                    and not gsplat.has_3dgs(),
+                    reason="3DGS support isn't built in",
+                ),
+            ],
+        )
         for params in
-            # Standard tests: all combinations with with_eval3d=False
-            chain(
-                product(
-                    [True, False],           # per_view_color
-                    [None, 3],               # sh_degree
-                    ["RGB", "RGB+D", "D"],   # render_mode
-                    [True, False],           # packed
-                    [(), (2,), (1, 2)],      # batch_dims
-                    [False],                 # with_eval3d
-                    [False],                 # with_ut
-                    ["pinhole"],             # camera_model
-                    [None],                  # extra_signals_info
-                ),
-                # 3DGUT
-                product(
-                    [True, False],           # per_view_color
-                    [None, 3],               # sh_degree
-                    ["RGB"],                 # render_mode (only RGB)
-                    [False],                 # packed (must be False)
-                    [(), (2,)],              # batch_dims (reduced subset)
-                    [True],                  # with_eval3d
-                    [True],                  # with_ut
-                    ["pinhole","lidar"],     # camera_model
-                    [None,(None,20),(3,3)],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
-                ),
-                # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
-                # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
-                # signals case is the critical one — it produces 24 channels
-                # (3 RGB + 20 extra + 1 depth) which gets padded to CDIM=32.
-                product(
-                    [False],                 # per_view_color
-                    [None],                  # sh_degree
-                    ["RGB-d"],               # render_mode (hit distance + RGB)
-                    [False],                 # packed (must be False)
-                    [()],                    # batch_dims
-                    [True],                  # with_eval3d
-                    [True],                  # with_ut
-                    ["pinhole"],             # camera_model
-                    [None,(None,20)],        # extra_signals_info — (None,20) triggers padding
-                ),
-            )
-    ]
+        # Standard tests: all combinations with with_eval3d=False
+        chain(
+            product(
+                [True, False],  # per_view_color
+                [None, 3],  # sh_degree
+                ["RGB", "RGB+D", "D"],  # render_mode
+                [True, False],  # packed
+                [(), (2,), (1, 2)],  # batch_dims
+                [False],  # with_eval3d
+                [False],  # with_ut
+                ["pinhole"],  # camera_model
+                [None],  # extra_signals_info
+            ),
+            # 3DGUT
+            product(
+                [True, False],  # per_view_color
+                [None, 3],  # sh_degree
+                ["RGB"],  # render_mode (only RGB)
+                [False],  # packed (must be False)
+                [(), (2,)],  # batch_dims (reduced subset)
+                [True],  # with_eval3d
+                [True],  # with_ut
+                ["pinhole", "lidar"],  # camera_model
+                [
+                    None,
+                    (None, 20),
+                    (3, 3),
+                ],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
+            ),
+            # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
+            # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
+            # signals case is the critical one — it produces 24 channels
+            # (3 RGB + 20 extra + 1 depth) which gets padded to CDIM=32.
+            product(
+                [False],  # per_view_color
+                [None],  # sh_degree
+                ["RGB-d"],  # render_mode (hit distance + RGB)
+                [False],  # packed (must be False)
+                [()],  # batch_dims
+                [True],  # with_eval3d
+                [True],  # with_ut
+                ["pinhole"],  # camera_model
+                [None, (None, 20)],  # extra_signals_info — (None,20) triggers padding
+            ),
+        )
+    ],
 )
 def test_rasterization(
     per_view_color: bool,
@@ -117,17 +131,25 @@ def test_rasterization(
 
         if per_view_color:
             if extra_signals_sh_degree is None:
-                extra_signals = torch.rand(batch_dims + (C, N, extra_signals_size), device=device)
+                extra_signals = torch.rand(
+                    batch_dims + (C, N, extra_signals_size), device=device
+                )
             else:
                 extra_signals = torch.rand(
-                    batch_dims + (C, N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size), device=device
+                    batch_dims
+                    + (C, N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size),
+                    device=device,
                 )
         else:
             if extra_signals_sh_degree is None:
-                extra_signals = torch.rand(batch_dims + (N, extra_signals_size), device=device)
+                extra_signals = torch.rand(
+                    batch_dims + (N, extra_signals_size), device=device
+                )
             else:
                 extra_signals = torch.rand(
-                    batch_dims + (N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size), device=device
+                    batch_dims
+                    + (N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size),
+                    device=device,
                 )
 
     if camera_model == "lidar":
@@ -201,12 +223,19 @@ def test_rasterization(
 
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
     if extra_signals is not None:
-        torch.testing.assert_close(meta["render_extra_signals"], _meta["render_extra_signals"], rtol=rtol, atol=atol)
+        torch.testing.assert_close(
+            meta["render_extra_signals"],
+            _meta["render_extra_signals"],
+            rtol=rtol,
+            atol=atol,
+        )
 
     if is_hit_distance:
         # For combined RGB+depth modes, verify RGB channels match.
         if render_mode in ("RGB-d", "RGB-Ed"):
-            torch.testing.assert_close(renders[..., :3], _renders[..., :3], rtol=rtol, atol=atol)
+            torch.testing.assert_close(
+                renders[..., :3], _renders[..., :3], rtol=rtol, atol=atol
+            )
 
         # Verify hit distance is non-zero where pixels are visible.
         mask = alphas[..., 0] > ALPHA_THRESHOLD
@@ -218,4 +247,3 @@ def test_rasterization(
             )
     else:
         torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
-

@@ -59,7 +59,7 @@ from .version import __version__
 from .cuda._lidar import (
     compute_angles_to_columns_map as compute_lidar_angles_to_columns_map,
     SpinningDirection,
-    compute_tiling as compute_lidar_tiling
+    compute_tiling as compute_lidar_tiling,
 )
 
 all = [

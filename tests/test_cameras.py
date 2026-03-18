@@ -39,7 +39,11 @@ from gsplat import (
     RowOffsetStructuredSpinningLidarModelParameters,
     RowOffsetStructuredSpinningLidarModelParametersExt,
 )
-from gsplat.cuda._math import _quat_multiply, _safe_normalize, compute_inverse_polynomial
+from gsplat.cuda._math import (
+    _quat_multiply,
+    _safe_normalize,
+    compute_inverse_polynomial,
+)
 
 SEED = 42
 
@@ -66,13 +70,12 @@ ROLLING_SHUTTER_TYPES = [
     ("global", RollingShutterType.GLOBAL),
 ]
 
-DEFAULT_ROLLING_SHUTTER_TYPE = [
-    ("global", RollingShutterType.ROLLING_LEFT_TO_RIGHT)
-]
+DEFAULT_ROLLING_SHUTTER_TYPE = [("global", RollingShutterType.ROLLING_LEFT_TO_RIGHT)]
 
 # ==================================================
 # Routines to parse camera model definition strings
 # ==================================================
+
 
 def _compute_focal_length(size: int, fov: torch.Tensor) -> torch.Tensor:
     """Compute focal length from image size and field of view.
@@ -87,8 +90,15 @@ def _compute_focal_length(size: int, fov: torch.Tensor) -> torch.Tensor:
     return size / (2.0 * torch.tan(fov / 2.0))
 
 
-def parse_camera(camera_def: str, batch_dims: tuple, width: int, height: int, rs_type: RollingShutterType,
-                 device: torch.device = torch.device('cuda'), seed: int = 42):
+def parse_camera(
+    camera_def: str,
+    batch_dims: tuple,
+    width: int,
+    height: int,
+    rs_type: RollingShutterType,
+    device: torch.device = torch.device("cuda"),
+    seed: int = 42,
+):
     """
     Parse camera model definition string and generate test parameters.
 
@@ -106,7 +116,7 @@ def parse_camera(camera_def: str, batch_dims: tuple, width: int, height: int, rs
     """
 
     # Parse "model[params]" format
-    match = re.match(r'(\w+)(?:\[([^\]]+)\])?', camera_def)
+    match = re.match(r"(\w+)(?:\[([^\]]+)\])?", camera_def)
     if not match:
         raise ValueError(f"Invalid camera model string: {camera_def}")
 
@@ -136,20 +146,27 @@ def parse_camera(camera_def: str, batch_dims: tuple, width: int, height: int, rs
     if model_type == "lidar":
         # Wrap lidar-specific params into a RowOffsetStructuredSpinningLidarModelParametersExt object
         return {
-            'camera_model': model_type,
-            'lidar_coeffs': RowOffsetStructuredSpinningLidarModelParametersExt(**params),
+            "camera_model": model_type,
+            "lidar_coeffs": RowOffsetStructuredSpinningLidarModelParametersExt(
+                **params
+            ),
         }
     else:
         resolution = torch.tensor([width, height], dtype=torch.float32).cuda()
-        principal_points = (torch.randn(*batch_dims, 2, dtype=torch.float32, device=device)*0.05 + 0.5)*resolution
-        params['principal_points'] = principal_points
-        params['rs_type'] = rs_type.to_cpp() if hasattr(rs_type, 'to_cpp') else rs_type
-        params['width'] = width
-        params['height'] = height
-        params['camera_model'] = model_type
+        principal_points = (
+            torch.randn(*batch_dims, 2, dtype=torch.float32, device=device) * 0.05 + 0.5
+        ) * resolution
+        params["principal_points"] = principal_points
+        params["rs_type"] = rs_type.to_cpp() if hasattr(rs_type, "to_cpp") else rs_type
+        params["width"] = width
+        params["height"] = height
+        params["camera_model"] = model_type
         return params
 
-def parse_perfect_pinhole_camera(param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device):
+
+def parse_perfect_pinhole_camera(
+    param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device
+):
     """Parse parameters for perfect pinhole camera (no distortion)."""
 
     # Generate focal_lengths with normal FOV (40-90 degrees)
@@ -161,9 +178,12 @@ def parse_perfect_pinhole_camera(param_str: str, batch_dims: tuple, width: int, 
     focal_length_y = focal_length_x * asymmetry
     focal_lengths = torch.stack([focal_length_x, focal_length_y], dim=-1)
 
-    return {'focal_lengths': focal_lengths}
+    return {"focal_lengths": focal_lengths}
 
-def parse_opencv_pinhole_camera(param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device):
+
+def parse_opencv_pinhole_camera(
+    param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device
+):
     """Parse parameters for OpenCV pinhole camera with distortion."""
 
     # Generate focal_lengths with normal FOV (40-90 degrees)
@@ -176,23 +196,31 @@ def parse_opencv_pinhole_camera(param_str: str, batch_dims: tuple, width: int, h
     focal_length_y = focal_length_x * asymmetry
     focal_lengths = torch.stack([focal_length_x, focal_length_y], dim=-1)
 
-    params = {'focal_lengths': focal_lengths}
+    params = {"focal_lengths": focal_lengths}
 
     # Parse distortion parameters from param_str
-    if k_match := re.search(r'k(\d+)', param_str):
+    if k_match := re.search(r"k(\d+)", param_str):
         n_radial = int(k_match.group(1))
-        params['radial_coeffs'] = torch.randn(*batch_dims, n_radial, dtype=torch.float32).cuda() * 0.01
+        params["radial_coeffs"] = (
+            torch.randn(*batch_dims, n_radial, dtype=torch.float32).cuda() * 0.01
+        )
 
-    if 'tangential' in param_str:
-        params['tangential_coeffs'] = torch.randn(*batch_dims, 2, dtype=torch.float32).cuda() * 0.001
+    if "tangential" in param_str:
+        params["tangential_coeffs"] = (
+            torch.randn(*batch_dims, 2, dtype=torch.float32).cuda() * 0.001
+        )
 
-    if 'thin_prism' in param_str:
-        params['thin_prism_coeffs'] = torch.randn(*batch_dims, 4, dtype=torch.float32).cuda() * 0.001
+    if "thin_prism" in param_str:
+        params["thin_prism_coeffs"] = (
+            torch.randn(*batch_dims, 4, dtype=torch.float32).cuda() * 0.001
+        )
 
     return params
 
 
-def parse_opencv_fisheye_camera(param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device):
+def parse_opencv_fisheye_camera(
+    param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device
+):
     """Parse parameters for OpenCV fisheye camera."""
     import re
 
@@ -208,18 +236,22 @@ def parse_opencv_fisheye_camera(param_str: str, batch_dims: tuple, width: int, h
 
     # Parse radial distortion count (default k4)
     n_radial = 4
-    if k_match := re.search(r'k(\d+)', param_str):
+    if k_match := re.search(r"k(\d+)", param_str):
         n_radial = int(k_match.group(1))
 
-    radial_coeffs = torch.randn(*batch_dims, n_radial, dtype=torch.float32).cuda() * 0.01
+    radial_coeffs = (
+        torch.randn(*batch_dims, n_radial, dtype=torch.float32).cuda() * 0.01
+    )
 
     return {
-        'focal_lengths': focal_lengths,
-        'radial_coeffs': radial_coeffs,
+        "focal_lengths": focal_lengths,
+        "radial_coeffs": radial_coeffs,
     }
 
 
-def parse_ftheta_camera(param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device):
+def parse_ftheta_camera(
+    param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device
+):
     """Parse parameters for FTheta camera model."""
 
     # Generate focal_lengths with wide FOV (90-180 degrees)
@@ -231,12 +263,12 @@ def parse_ftheta_camera(param_str: str, batch_dims: tuple, width: int, height: i
 
     # Determine which polynomial is the reference
     reference_poly = None
-    if 'a2p' in param_str:
+    if "a2p" in param_str:
         reference_poly = FThetaPolynomialType.ANGLE_TO_PIXELDIST
     else:
         reference_poly = FThetaPolynomialType.PIXELDIST_TO_ANGLE
 
-    if 'pinhole' in param_str:
+    if "pinhole" in param_str:
         pixeldist_to_angle_poly = [0, 1.0 / focal_length, 0, 0, 0, 0]
         angle_to_pixeldist_poly = [0, focal_length, 0, 0, 0, 0]
         linear_cde = [1, 0, 0]
@@ -262,13 +294,13 @@ def parse_ftheta_camera(param_str: str, batch_dims: tuple, width: int, height: i
             # At delta ≈ focal_length, each term should contribute a small fraction of linear term
 
             # 0.05% of linear term
-            k2_distortion = (torch.rand(1)-0.5)*2 * 0.0005/focal_length**2
+            k2_distortion = (torch.rand(1) - 0.5) * 2 * 0.0005 / focal_length**2
             # 0.1% of linear term
-            k3_distortion = (torch.rand(1)-0.5)*2 * 0.001/focal_length**3
+            k3_distortion = (torch.rand(1) - 0.5) * 2 * 0.001 / focal_length**3
             # 0.05% of linear term
-            k4_distortion = (torch.rand(1)-0.5)*2 * 0.0005/focal_length**4
+            k4_distortion = (torch.rand(1) - 0.5) * 2 * 0.0005 / focal_length**4
             # 0.01% of linear term
-            k5_distortion = (torch.rand(1)-0.5)*2 * 0.0001/focal_length**5
+            k5_distortion = (torch.rand(1) - 0.5) * 2 * 0.0001 / focal_length**5
 
             # Sample only delta values that map to valid angles [0, max_angle]
             # Use a conservative range to ensure polynomial stays well-behaved
@@ -285,31 +317,31 @@ def parse_ftheta_camera(param_str: str, batch_dims: tuple, width: int, height: i
             k1_linear = focal_length
 
             # 0.01% of linear term
-            k2_distortion = (torch.rand(1)-0.5)*2 * 0.01*focal_length
+            k2_distortion = (torch.rand(1) - 0.5) * 2 * 0.01 * focal_length
             # 0.03% of linear term
-            k3_distortion = (torch.rand(1)-0.5)*2 * 0.03*focal_length
+            k3_distortion = (torch.rand(1) - 0.5) * 2 * 0.03 * focal_length
             # 0.005% of linear term
-            k4_distortion = (torch.rand(1)-0.5)*2 * 0.005*focal_length
+            k4_distortion = (torch.rand(1) - 0.5) * 2 * 0.005 * focal_length
             # 0.001% of linear term
-            k5_distortion = (torch.rand(1)-0.5)*2 * 0.001*focal_length
+            k5_distortion = (torch.rand(1) - 0.5) * 2 * 0.001 * focal_length
 
             input_range_for_inversion = (0.0, max_angle.item())  # Sample angles
 
         # Generate reference polynomial with distortion (all terms non-zero except k0)
         reference_poly_coeffs = [
-            0.0,                   # k0: must be zero (passes through origin)
-            k1_linear.item(),      # k1: linear term
+            0.0,  # k0: must be zero (passes through origin)
+            k1_linear.item(),  # k1: linear term
             k2_distortion.item(),  # k2: quadratic distortion
             k3_distortion.item(),  # k3: cubic distortion
             k4_distortion.item(),  # k4: quartic distortion
-            k5_distortion.item()   # k5: quintic distortion
+            k5_distortion.item(),  # k5: quintic distortion
         ]
 
         # Compute inverse polynomial
         inverse_poly_coeffs = compute_inverse_polynomial(
             reference_poly_coeffs,
             input_range=input_range_for_inversion,
-            num_samples=10000
+            num_samples=10000,
         )
 
         # Assign to correct variables based on reference type
@@ -325,16 +357,20 @@ def parse_ftheta_camera(param_str: str, batch_dims: tuple, width: int, height: i
         pixeldist_to_angle_poly=pixeldist_to_angle_poly,
         angle_to_pixeldist_poly=angle_to_pixeldist_poly,
         max_angle=float(max_angle),
-        linear_cde=linear_cde
+        linear_cde=linear_cde,
     )
 
-    return {'ftheta_coeffs': ftheta_coeffs}
+    return {"ftheta_coeffs": ftheta_coeffs}
+
 
 # ==================================================
 # Fixtures used
 # ==================================================
 
-def parse_lidar_camera(param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device):
+
+def parse_lidar_camera(
+    param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device
+):
     """Parse parameters for lidar camera model."""
 
     params = SimpleNamespace()
@@ -370,36 +406,51 @@ def parse_lidar_camera(param_str: str, batch_dims: tuple, width: int, height: in
     azimuth_base_span = abs(azimuth_base_end - azimuth_base_start)
 
     # Generate random row elevations within FOV (sorted descending for typical lidar)
-    params.row_elevations_rad = torch.linspace(
-        elevation_start,
-        elevation_end,
-        n_rows,
-        dtype=torch.float32,
-        device=device
-    # Add small noise, but make sure it's not larger than the spacing between each row.
-    ) + (torch.rand(n_rows, dtype=torch.float32, device=device) - 0.5) * (elevation_span/(n_rows-1))*0.01
+    params.row_elevations_rad = (
+        torch.linspace(
+            elevation_start,
+            elevation_end,
+            n_rows,
+            dtype=torch.float32,
+            device=device
+            # Add small noise, but make sure it's not larger than the spacing between each row.
+        )
+        + (torch.rand(n_rows, dtype=torch.float32, device=device) - 0.5)
+        * (elevation_span / (n_rows - 1))
+        * 0.01
+    )
 
-    params.column_azimuths_rad = torch.linspace(
-        azimuth_base_start,
-        azimuth_base_end,
-        n_columns,
-        dtype=torch.float32,
-        device=device
-    ) + (torch.rand(n_columns, dtype=torch.float32, device=device) - 0.5) * (azimuth_base_span/(n_columns-1))*0.01
+    params.column_azimuths_rad = (
+        torch.linspace(
+            azimuth_base_start,
+            azimuth_base_end,
+            n_columns,
+            dtype=torch.float32,
+            device=device,
+        )
+        + (torch.rand(n_columns, dtype=torch.float32, device=device) - 0.5)
+        * (azimuth_base_span / (n_columns - 1))
+        * 0.01
+    )
 
     # Generate small random azimuth offsets per row
-    params.row_azimuth_offsets_rad = (torch.rand(n_rows, dtype=torch.float32, device=device) - 0.5) * 0.2
+    params.row_azimuth_offsets_rad = (
+        torch.rand(n_rows, dtype=torch.float32, device=device) - 0.5
+    ) * 0.2
 
     lidar_params = RowOffsetStructuredSpinningLidarModelParameters(**vars(params))
 
     params.angles_to_columns_map = compute_lidar_angles_to_columns_map(lidar_params)
-    params.tiling = compute_lidar_tiling(lidar_params,
-                                         n_bins_elevation=16,
-                                         max_pts_per_tile=16*16,
-                                         resolution_elevation=1600,
-                                         densification_factor_azimuth=8)
+    params.tiling = compute_lidar_tiling(
+        lidar_params,
+        n_bins_elevation=16,
+        max_pts_per_tile=16 * 16,
+        resolution_elevation=1600,
+        densification_factor_azimuth=8,
+    )
 
     return vars(params)
+
 
 @pytest.fixture
 def camera_rays(batch_dims, image_dims, ref_camera):
@@ -410,7 +461,11 @@ def camera_rays(batch_dims, image_dims, ref_camera):
     shape = list(batch_dims) + [n_points]
     device = ref_camera.focal_lengths.device
 
-    rays = (torch.rand(*shape, 3, device=device)*2-1)*2*ref_camera.focal_lengths[..., None, 1:2]
+    rays = (
+        (torch.rand(*shape, 3, device=device) * 2 - 1)
+        * 2
+        * ref_camera.focal_lengths[..., None, 1:2]
+    )
 
     rays = torch.nn.functional.normalize(rays, dim=-1)
     return rays
@@ -429,27 +484,41 @@ def image_points(batch_dims, image_dims, ref_camera):
     if isinstance(ref_camera, _RowOffsetStructuredSpinningLidarModel):
         # Generate points in scaled angle space
         # For lidar: image_point = angle * ANGLE_TO_PIXEL_SCALING_FACTOR
-        device = 'cuda'
+        device = "cuda"
 
         params = ref_camera.params
         if params.spinning_direction == SpinningDirection.CLOCKWISE:
             # Clockwise: azimuth decreases
-            azimuth = params.fov_horiz_rad.start - params.fov_horiz_rad.span*torch.rand(*shape, device=device)
+            azimuth = (
+                params.fov_horiz_rad.start
+                - params.fov_horiz_rad.span * torch.rand(*shape, device=device)
+            )
         else:
             # Counter-clockwise: azimuth increases
-            azimuth = params.fov_horiz_rad.start + params.fov_horiz_rad.span*torch.rand(*shape, device=device)
+            azimuth = (
+                params.fov_horiz_rad.start
+                + params.fov_horiz_rad.span * torch.rand(*shape, device=device)
+            )
 
         # Elevation decreases, always clockwise
-        elevation = params.fov_vert_rad.start - params.fov_vert_rad.span*torch.rand(*shape, device=device)
+        elevation = params.fov_vert_rad.start - params.fov_vert_rad.span * torch.rand(
+            *shape, device=device
+        )
 
         # Scale to image point space
-        column = azimuth * _RowOffsetStructuredSpinningLidarModel.ANGLE_TO_PIXEL_SCALING_FACTOR
-        row = elevation * _RowOffsetStructuredSpinningLidarModel.ANGLE_TO_PIXEL_SCALING_FACTOR
+        column = (
+            azimuth
+            * _RowOffsetStructuredSpinningLidarModel.ANGLE_TO_PIXEL_SCALING_FACTOR
+        )
+        row = (
+            elevation
+            * _RowOffsetStructuredSpinningLidarModel.ANGLE_TO_PIXEL_SCALING_FACTOR
+        )
 
         points = torch.stack([row, column], dim=-1)
     else:
         # Regular cameras use pixel coordinates
-        points = torch.rand(*shape, 2) * torch.tensor([height-1, width-1])
+        points = torch.rand(*shape, 2) * torch.tensor([height - 1, width - 1])
         points = points.cuda()
 
     return points
@@ -457,25 +526,27 @@ def image_points(batch_dims, image_dims, ref_camera):
 
 @pytest.fixture
 def world_points(batch_dims, image_dims, ref_camera):
-    """Generate random world points distributed uniformily in a box
-    """
+    """Generate random world points distributed uniformily in a box"""
     n_points = image_dims[0] * image_dims[1]
     shape = list(batch_dims) + [n_points]
     device = ref_camera.focal_lengths.device
 
     torch.manual_seed(SEED)
 
-    world_pts = (torch.rand(*shape, 3, device=device)*2-1)
-    world_pts *= torch.cat([
-        ref_camera.focal_lengths[..., None, :]*2,
-        torch.ones(*batch_dims, 1, 1, device=device)
-    ],dim=-1)
+    world_pts = torch.rand(*shape, 3, device=device) * 2 - 1
+    world_pts *= torch.cat(
+        [
+            ref_camera.focal_lengths[..., None, :] * 2,
+            torch.ones(*batch_dims, 1, 1, device=device),
+        ],
+        dim=-1,
+    )
     return world_pts
 
 
 @pytest.fixture
 def pose_start(batch_dims, ref_camera, rs_type):
-    """Generate random start pose for rolling shutter testing. """
+    """Generate random start pose for rolling shutter testing."""
     torch.manual_seed(SEED)
 
     shape = list(batch_dims)
@@ -483,7 +554,7 @@ def pose_start(batch_dims, ref_camera, rs_type):
     device = ref_camera.focal_lengths.device
 
     # Pose format: [tx, ty, tz, qw, qx, qy, qz]
-    pose = torch.randn(*shape, 7, device=device)*0.01
+    pose = torch.randn(*shape, 7, device=device) * 0.01
     pose[..., :3] *= ref_camera.focal_lengths[..., 0:1]
     # Normalize quaternion
     pose[..., 3:] = _safe_normalize(pose[..., 3:])
@@ -506,17 +577,23 @@ def pose_end(batch_dims, pose_start, rs_type, ref_camera):
 
     # Random angular velocity: 1-10°/s
     angular_axis = torch.randn(*shape, 3, device=device)
-    angular_axis = angular_axis / torch.linalg.vector_norm(angular_axis, dim=-1, keepdim=True)
+    angular_axis = angular_axis / torch.linalg.vector_norm(
+        angular_axis, dim=-1, keepdim=True
+    )
 
     # Rotation angle during rolling shutter readout, 2 degrees max
     # Translation delta: max 10% focal length
     # TODO: these should be dependent on the camera's focal length and image dimensions!
-    angle_delta  = (torch.rand(*shape, 1, device=device)-0.5)*2*torch.pi/180
-    translation_delta = (torch.randn(*shape, 3, device=device)-0.5)*ref_camera.focal_lengths[..., 1:2]*0.1
+    angle_delta = (torch.rand(*shape, 1, device=device) - 0.5) * 2 * torch.pi / 180
+    translation_delta = (
+        (torch.randn(*shape, 3, device=device) - 0.5)
+        * ref_camera.focal_lengths[..., 1:2]
+        * 0.1
+    )
 
     # Convert axis-angle to quaternion: q = [cos(θ/2), sin(θ/2) * axis]
-    qw_delta = torch.cos(angle_delta/2)
-    qxyz_delta = torch.sin(angle_delta/2) * angular_axis
+    qw_delta = torch.cos(angle_delta / 2)
+    qxyz_delta = torch.sin(angle_delta / 2) * angular_axis
     q_delta = torch.cat([qw_delta, qxyz_delta], dim=-1)
 
     # Compose rotations using quaternion multiplication: q_end = q_delta * q_start
@@ -537,7 +614,9 @@ def pose_end(batch_dims, pose_start, rs_type, ref_camera):
 def test_camera(camera_model, batch_dims, image_dims, rs_type):
     """Create C++ camera (primary implementation)"""
     height, width = image_dims
-    params = parse_camera(camera_model, batch_dims, width=width, height=height, rs_type=rs_type, seed=SEED)
+    params = parse_camera(
+        camera_model, batch_dims, width=width, height=height, rs_type=rs_type, seed=SEED
+    )
 
     return create_camera_model(**params)
 
@@ -546,7 +625,9 @@ def test_camera(camera_model, batch_dims, image_dims, rs_type):
 def ref_camera(camera_model, batch_dims, image_dims, rs_type):
     """Create PyTorch reference camera"""
     height, width = image_dims
-    params = parse_camera(camera_model, batch_dims, width=width, height=height, rs_type=rs_type, seed=SEED)
+    params = parse_camera(
+        camera_model, batch_dims, width=width, height=height, rs_type=rs_type, seed=SEED
+    )
 
     return _BaseCameraModel.create(**params)
 
@@ -563,25 +644,36 @@ def camera(request, test_camera, ref_camera):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-@pytest.mark.parametrize("camera_model,batch_dims",
-                         [
-                             pytest.param(*params)
-                             for params in
-                                chain(
-                                    # For non-lidar cameras
-                                    product(
-                                        [lidar_model for lidar_model in CAMERA_MODELS if "lidar" not in lidar_model], # camera_model
-                                        [(), (2,), (2, 3)], # batch_dims
-                                    ),
-                                    # Lidar cameras
-                                    product(
-                                        [lidar_model for lidar_model in CAMERA_MODELS if "lidar" in lidar_model], # camera_model
-                                        [()], # no batch dims (lidar currently doesn't support batched cameras
-                                    )
-                                )
-                        ])
+@pytest.mark.parametrize(
+    "camera_model,batch_dims",
+    [
+        pytest.param(*params)
+        for params in chain(
+            # For non-lidar cameras
+            product(
+                [
+                    lidar_model
+                    for lidar_model in CAMERA_MODELS
+                    if "lidar" not in lidar_model
+                ],  # camera_model
+                [(), (2,), (2, 3)],  # batch_dims
+            ),
+            # Lidar cameras
+            product(
+                [
+                    lidar_model
+                    for lidar_model in CAMERA_MODELS
+                    if "lidar" in lidar_model
+                ],  # camera_model
+                [()],  # no batch dims (lidar currently doesn't support batched cameras
+            ),
+        )
+    ],
+)
 @pytest.mark.parametrize("image_dims", [(127, 256)])
-@pytest.mark.parametrize("rs_type", expand_named_params(DEFAULT_ROLLING_SHUTTER_TYPE)) # this is ignored for lidars
+@pytest.mark.parametrize(
+    "rs_type", expand_named_params(DEFAULT_ROLLING_SHUTTER_TYPE)
+)  # this is ignored for lidars
 class TestCameraModels:
     """
     Validate C++ camera models against PyTorch reference.
@@ -599,7 +691,9 @@ class TestCameraModels:
         if isinstance(ref_camera, _OpenCVFisheyeCameraModel):
             # fisheye: observed atol=4.96e-05, rtol=1.45e-03
             atol, rtol = 6e-05, 1.8e-03
-        elif isinstance(ref_camera, (_OpenCVPinholeCameraModel, _PerfectPinholeCameraModel)):
+        elif isinstance(
+            ref_camera, (_OpenCVPinholeCameraModel, _PerfectPinholeCameraModel)
+        ):
             # OpenCV pinhole & perfect pinhole: observed atol=3.05e-05, rtol=2.47e-03
             atol, rtol = 3.7e-05, 3e-03
         elif isinstance(ref_camera, _FThetaCameraModel):
@@ -613,7 +707,9 @@ class TestCameraModels:
 
         # Validity mismatch tolerance by camera type (ordered by decreasing tolerance)
         # Values set ~20% above observed maximums for tight margin
-        if isinstance(ref_camera, (_OpenCVPinholeCameraModel, _OpenCVFisheyeCameraModel)):
+        if isinstance(
+            ref_camera, (_OpenCVPinholeCameraModel, _OpenCVFisheyeCameraModel)
+        ):
             # OpenCV models: typically very low
             validity_tol = 1e-03  # 0.1% for distortion models
         elif isinstance(ref_camera, _FThetaCameraModel):
@@ -671,7 +767,9 @@ class TestCameraModels:
             validity_tol = 3e-02  # Fallback
         assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
 
-    def test_shutter_relative_frame_time(self, camera_model, batch_dims, image_points, test_camera, ref_camera):
+    def test_shutter_relative_frame_time(
+        self, camera_model, batch_dims, image_points, test_camera, ref_camera
+    ):
         test_times = test_camera.shutter_relative_frame_time(image_points)
         ref_times = ref_camera.shutter_relative_frame_time(image_points)
 
@@ -695,10 +793,24 @@ class TestCameraModels:
 @pytest.mark.parametrize("image_dims", [(127, 257)])
 @pytest.mark.parametrize("rs_type", expand_named_params(ROLLING_SHUTTER_TYPES))
 class TestCameraModelsShutterPose:
-    def test_image_point_to_world_ray_shutter_pose(self, image_points, pose_start, pose_end, test_camera, ref_camera):
+    def test_image_point_to_world_ray_shutter_pose(
+        self, image_points, pose_start, pose_end, test_camera, ref_camera
+    ):
         """Test image_point_to_world_ray_shutter_pose method"""
-        test_rays_org, test_rays_dir, test_valid = test_camera.image_point_to_world_ray_shutter_pose(image_points, pose_start, pose_end)
-        ref_rays_org, ref_rays_dir, ref_valid = ref_camera.image_point_to_world_ray_shutter_pose(image_points, pose_start, pose_end)
+        (
+            test_rays_org,
+            test_rays_dir,
+            test_valid,
+        ) = test_camera.image_point_to_world_ray_shutter_pose(
+            image_points, pose_start, pose_end
+        )
+        (
+            ref_rays_org,
+            ref_rays_dir,
+            ref_valid,
+        ) = ref_camera.image_point_to_world_ray_shutter_pose(
+            image_points, pose_start, pose_end
+        )
 
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
@@ -707,8 +819,12 @@ class TestCameraModelsShutterPose:
         # Values set ~20% above observed maximums for tight margin
         # rays_org: observed atol=3.34e-06, rtol=2.70e-06
         # rays_dir: observed atol=7.75e-07, rtol varies (high due to small components)
-        assert_close(test_rays_org[all_valid], ref_rays_org[all_valid], atol=4e-06, rtol=3.5e-06)
-        assert_close(test_rays_dir[all_valid], ref_rays_dir[all_valid], atol=1e-06, rtol=1e-03)
+        assert_close(
+            test_rays_org[all_valid], ref_rays_org[all_valid], atol=4e-06, rtol=3.5e-06
+        )
+        assert_close(
+            test_rays_dir[all_valid], ref_rays_dir[all_valid], atol=1e-06, rtol=1e-03
+        )
 
         # Tolerance for validity mismatches in shutter pose calculations
         # Higher for OpenCV models with distortion
@@ -720,10 +836,16 @@ class TestCameraModelsShutterPose:
             validity_tol = 1e-05  # 0.001% for perfect pinhole
         assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
 
-    def test_world_point_to_image_point_shutter_pose(self, world_points, pose_start, pose_end, test_camera, ref_camera):
+    def test_world_point_to_image_point_shutter_pose(
+        self, world_points, pose_start, pose_end, test_camera, ref_camera
+    ):
         """Test world_point_to_image_point_shutter_pose method"""
-        test_img, test_valid = test_camera.world_point_to_image_point_shutter_pose(world_points, pose_start, pose_end, 0)
-        ref_img, ref_valid = ref_camera.world_point_to_image_point_shutter_pose(world_points, pose_start, pose_end, 0)
+        test_img, test_valid = test_camera.world_point_to_image_point_shutter_pose(
+            world_points, pose_start, pose_end, 0
+        )
+        ref_img, ref_valid = ref_camera.world_point_to_image_point_shutter_pose(
+            world_points, pose_start, pose_end, 0
+        )
 
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"

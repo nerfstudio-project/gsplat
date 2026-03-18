@@ -816,9 +816,7 @@ class Runner:
 
             # loss
             l1loss = l1_loss(colors, pixels).mean()
-            ssimloss = ssim_loss(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2)
-            )
+            ssimloss = ssim_loss(colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2))
             loss = torch.lerp(l1loss, ssimloss, cfg.ssim_lambda)
             if cfg.depth_loss:
                 # query depths from depth map
