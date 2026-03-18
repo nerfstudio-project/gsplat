@@ -373,13 +373,17 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             mat3 Mt;
             vec3 o_minus_mu, gro, grd, grd_n, gcrod;
             float grayDist, power;
+            // Per-pixel hit distance — stored in a register, NOT in shared memory
+            // rgbs_batch, because hit_distance depends on ray_o/ray_d (per-pixel)
+            // while rgbs_batch is per-Gaussian (shared across all pixels in the tile).
+            float local_hit_dist = 0.f;
             if (valid) {
                 const vec4 xyz_opac = xyz_opacity_batch[t];
                 opac = xyz_opac[3];
                 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
                 scale = scale_batch[t];
                 quat = quat_batch[t];
-                
+
                 R = quat_to_rotmat(quat);
                 S = mat3(
                     1.0f / scale[0],
@@ -407,13 +411,10 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     valid = false;
                 }
 
-                // Recompute hit_distance to match forward pass when use_hit_distance=True
                 if (use_hit_distance) {
                     const float hit_t = glm::dot(grd_n, -gro);
                     const vec3 grds = scale * (grd_n * hit_t);
-                    const float hit_dist = glm::length(grds);
-                    // Replace last channel in rgbs_batch with recomputed hit_distance
-                    rgbs_batch[t * CDIM + (CDIM - 1)] = hit_dist;
+                    local_hit_dist = glm::length(grds);
                 }
             }
 
@@ -459,7 +460,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 float v_alpha = 0.f;
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    v_alpha += (rgbs_batch[t * CDIM + k] * T - buffer[k] * ra) *
+                    // For the last channel with use_hit_distance, use the per-pixel
+                    // local_hit_dist instead of per-Gaussian rgbs_batch (which is
+                    // shared memory and would race across pixels in the tile).
+                    const float rgb_k = (use_hit_distance && k == CDIM - 1)
+                        ? local_hit_dist
+                        : rgbs_batch[t * CDIM + k];
+                    v_alpha += (rgb_k * T - buffer[k] * ra) *
                                v_render_c[k];
                 }
 
@@ -560,7 +567,10 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    buffer[k] += rgbs_batch[t * CDIM + k] * fac;
+                    const float rgb_k = (use_hit_distance && k == CDIM - 1)
+                        ? local_hit_dist
+                        : rgbs_batch[t * CDIM + k];
+                    buffer[k] += rgb_k * fac;
                 }
                 
                 // Update normal buffer (for product rule in next iterations)
