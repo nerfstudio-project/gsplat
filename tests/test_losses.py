@@ -792,3 +792,199 @@ class TestLinearLambdaScheduler:
         # end - start = 1, update_frequency = 10, total_stages = 0
         with pytest.raises(ValueError, match="total_stages must be > 0"):
             LinearLambdaScheduler(start=0, end=1, lambda_init=1.0, update_frequency=10)
+
+
+# ---------------------------------------------------------------------------
+# Reduction functions
+# ---------------------------------------------------------------------------
+
+from gsplat.losses import reduce_mean, reduce_quantile, reduce_sum
+
+
+class TestReduceMean:
+    def test_simple_mean(self):
+        x = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        assert torch.isclose(reduce_mean(x), torch.tensor(2.5))
+
+    def test_known_value(self):
+        x = torch.tensor([10.0, 20.0])
+        assert torch.isclose(reduce_mean(x), torch.tensor(15.0))
+
+    def test_masked_mean(self):
+        x = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        mask = torch.tensor([True, False, True, False])
+        # masked values: [1, 3], weighted sum = 4, mask sum = 2, result = 2.0
+        assert torch.isclose(reduce_mean(x, mask), torch.tensor(2.0))
+
+    def test_mask_all_zeros(self):
+        x = torch.tensor([1.0, 2.0, 3.0])
+        mask = torch.zeros(3, dtype=torch.int32)
+        # Denominator clamped to 1, so result = 0/1 = 0
+        assert torch.isclose(reduce_mean(x, mask), torch.tensor(0.0))
+
+    def test_mask_partial(self):
+        x = torch.tensor([5.0, 10.0, 15.0])
+        mask = torch.tensor([False, True, True])
+        # (0 + 10 + 15) / 2 = 12.5
+        assert torch.isclose(reduce_mean(x, mask), torch.tensor(12.5))
+
+    def test_mask_int(self):
+        x = torch.tensor([1.0, 2.0, 3.0])
+        mask = torch.tensor([1, 0, 1], dtype=torch.int64)
+        assert torch.isclose(reduce_mean(x, mask), torch.tensor(2.0))
+
+    def test_scalar_output(self):
+        x = torch.rand(4, 3)
+        assert reduce_mean(x).shape == ()
+
+    def test_gradient_through_mask(self):
+        x = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
+        mask = torch.tensor([True, False, True])
+        reduce_mean(x, mask).backward()
+        # Grad for masked elements should be 1/mask_sum = 0.5
+        # Grad for unmasked should be 0
+        assert torch.isclose(x.grad[0], torch.tensor(0.5))
+        assert torch.isclose(x.grad[1], torch.tensor(0.0))
+        assert torch.isclose(x.grad[2], torch.tensor(0.5))
+
+
+class TestReduceQuantile:
+    def test_full_quantile(self):
+        x = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        # quantile=1.0 keeps all values, mean = 2.5
+        assert torch.isclose(reduce_quantile(x, quantile=1.0), torch.tensor(2.5))
+
+    def test_half_quantile(self):
+        x = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        # quantile=0.5 keeps bottom 2: [1, 2], mean = 1.5
+        assert torch.isclose(reduce_quantile(x, quantile=0.5), torch.tensor(1.5))
+
+    def test_quarter_quantile(self):
+        x = torch.tensor([10.0, 20.0, 30.0, 40.0])
+        # quantile=0.25 keeps bottom 1: [10], mean = 10
+        assert torch.isclose(reduce_quantile(x, quantile=0.25), torch.tensor(10.0))
+
+    def test_filters_outliers(self):
+        x = torch.tensor([1.0, 1.0, 1.0, 100.0])
+        # quantile=0.75 keeps bottom 3: [1, 1, 1], mean = 1.0
+        result = reduce_quantile(x, quantile=0.75)
+        assert torch.isclose(result, torch.tensor(1.0))
+
+    def test_scalar_output(self):
+        x = torch.rand(10, 5)
+        assert reduce_quantile(x, quantile=0.5).shape == ()
+
+    def test_very_small_quantile_returns_zero(self):
+        x = torch.tensor([1.0, 2.0])
+        # quantile so small that k=0
+        result = reduce_quantile(x, quantile=0.01)
+        assert torch.isclose(result, torch.tensor(0.0))
+
+    def test_multidimensional(self):
+        x = torch.tensor([[1.0, 4.0], [2.0, 3.0]])
+        # Flattened: [1,4,2,3], sorted: [1,2,3,4], bottom 50%: [1,2], mean=1.5
+        assert torch.isclose(reduce_quantile(x, quantile=0.5), torch.tensor(1.5))
+
+
+class TestReduceSum:
+    def test_known_value(self):
+        x = torch.tensor([1.0, 2.0, 3.0])
+        assert torch.isclose(reduce_sum(x), torch.tensor(6.0))
+
+    def test_matches_torch_sum(self):
+        x = torch.rand(4, 3)
+        assert torch.isclose(reduce_sum(x), x.sum())
+
+    def test_scalar_output(self):
+        x = torch.rand(5, 7)
+        assert reduce_sum(x).shape == ()
+
+    def test_gradient_values(self):
+        x = torch.tensor([2.0, 3.0, 5.0], requires_grad=True)
+        reduce_sum(x).backward()
+        # Gradient of sum is all ones
+        assert torch.allclose(x.grad, torch.ones(3))
+
+    def test_negative_values(self):
+        x = torch.tensor([-1.0, 2.0, -3.0])
+        assert torch.isclose(reduce_sum(x), torch.tensor(-2.0))
+
+    def test_empty_tensor(self):
+        x = torch.tensor([])
+        assert torch.isclose(reduce_sum(x), torch.tensor(0.0))
+
+
+# ---------------------------------------------------------------------------
+# Edge cases for reduction functions
+# ---------------------------------------------------------------------------
+
+
+class TestReduceEdgeCases:
+    def test_mean_empty_returns_nan(self):
+        # Without mask, empty tensor mean is NaN (standard PyTorch behavior).
+        # Caller can check value.numel() == 0 on CPU to handle this.
+        result = reduce_mean(torch.tensor([]))
+        assert torch.isnan(result)
+
+    def test_mean_empty_with_mask_returns_zero(self):
+        # With mask, empty tensor returns 0.0 (denominator clamped to 1).
+        # This is ambiguous: 0.0 could also mean the true mean is zero.
+        # The ambiguity avoids a CPU-GPU sync to check mask emptiness.
+        result = reduce_mean(torch.tensor([]), torch.tensor([], dtype=torch.bool))
+        assert not torch.isnan(result)
+        assert torch.isclose(result, torch.tensor(0.0))
+
+    def test_mean_all_zero_mask_returns_zero(self):
+        # All-zero mask on non-zero values still returns 0.0 (ambiguous
+        # with a true mean of zero, by design to avoid CPU-GPU sync).
+        result = reduce_mean(
+            torch.tensor([1.0, 2.0, 3.0]), torch.zeros(3, dtype=torch.int32)
+        )
+        assert torch.isclose(result, torch.tensor(0.0))
+
+    def test_mean_mismatched_mask_raises(self):
+        with pytest.raises(RuntimeError):
+            reduce_mean(
+                torch.tensor([1.0, 2.0, 3.0]),
+                torch.tensor([True, False]),
+            )
+
+    def test_mean_float_mask_raises(self):
+        # Float masks are rejected to avoid incorrect clamping behavior
+        # when mask sum is between 0 and 1.
+        with pytest.raises(AssertionError, match="must be bool or integer"):
+            reduce_mean(torch.tensor([1.0, 2.0]), torch.tensor([1.0, 0.0]))
+
+    def test_mean_float_mask_half_raises(self):
+        with pytest.raises(AssertionError, match="must be bool or integer"):
+            reduce_mean(
+                torch.tensor([1.0, 2.0]),
+                torch.tensor([0.5, 0.5]),
+            )
+
+    def test_quantile_empty_returns_zero(self):
+        # Empty tensor: k = int(0 * 0.5) = 0, returns zero
+        result = reduce_quantile(torch.tensor([]), quantile=0.5)
+        assert torch.isclose(result, torch.tensor(0.0))
+
+    def test_quantile_single_element_half(self):
+        # Single element with quantile=0.5: k = int(1 * 0.5) = 0, returns zero
+        result = reduce_quantile(torch.tensor([5.0]), quantile=0.5)
+        assert torch.isclose(result, torch.tensor(0.0))
+
+    def test_quantile_single_element_full(self):
+        # Single element with quantile=1.0: k = 1, returns the value
+        result = reduce_quantile(torch.tensor([5.0]), quantile=1.0)
+        assert torch.isclose(result, torch.tensor(5.0))
+
+    def test_quantile_zero_raises(self):
+        with pytest.raises(AssertionError, match="quantile must be in"):
+            reduce_quantile(torch.tensor([1.0]), quantile=0.0)
+
+    def test_quantile_above_one_raises(self):
+        with pytest.raises(AssertionError, match="quantile must be in"):
+            reduce_quantile(torch.tensor([1.0]), quantile=1.5)
+
+    def test_sum_empty_returns_zero(self):
+        result = reduce_sum(torch.tensor([]))
+        assert torch.isclose(result, torch.tensor(0.0))
