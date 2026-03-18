@@ -427,7 +427,7 @@ add_blur(const float eps2d, mat2 &covar, float &compensation) {
     covar[0][0] += eps2d;
     covar[1][1] += eps2d;
     float det_blur = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
-    compensation = sqrt(max(0.f, det_orig / det_blur));
+    compensation = sqrt(max(MIN_COMPENSATION * MIN_COMPENSATION, det_orig / det_blur));
     return det_blur;
 }
 

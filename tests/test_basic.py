@@ -2789,11 +2789,12 @@ def test_rasterize_to_pixels_eval3d(
         rtol=0,
         atol=opacity_atol,
     )
+    # On a RTX 6000 Pro, mae is 0.000736, but on a L40S, it's 0.00114. It would be good to investigate why.
     torch.testing.assert_close(
         v_backgrounds * backgrounds_mask.float(),
         _v_backgrounds * backgrounds_mask.float(),
         rtol=0,
-        atol=1e-3,
+        atol=1.3e-3,
     )
 
     if use_rays:

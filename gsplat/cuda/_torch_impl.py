@@ -23,9 +23,20 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal, assert_never
 
-from ._wrapper import CameraModel
-
-from ._constants import MAX_ALPHA
+from ._math import (
+    _safe_normalize,
+    _rotmat_to_quat,
+    _quat_inverse,
+    _quat_rotate,
+    _quat_to_rotmat,
+    _quat_multiply,
+    _quat_slerp,
+    _quat_scale_to_preci_half,
+    _quat_scale_to_matrix,
+    _quat_scale_to_covar_preci,
+)
+from ._wrapper import CameraModel, RollingShutterType
+from ._constants import MAX_ALPHA, MIN_COMPENSATION
 
 
 def _persp_proj(
@@ -292,7 +303,9 @@ def _fully_fused_projection(
     det = det.clamp(min=1e-10)
 
     if calc_compensations:
-        compensations = torch.sqrt(torch.clamp(det_orig / det, min=0.0))
+        compensations = torch.sqrt(
+            torch.clamp(det_orig / det, min=MIN_COMPENSATION * MIN_COMPENSATION)
+        )
     else:
         compensations = None
 
