@@ -23,6 +23,23 @@ import imageio.v2 as imageio
 import numpy as np
 import torch
 from PIL import Image
+
+# The pinned pycolmap commit uses np.uint64(-1) at class-definition time,
+# which raises OverflowError on numpy >= 2.0. Patch the installed source
+# file before importing so transitive deps (scipy, etc.) are unaffected.
+if int(np.__version__.split(".")[0]) >= 2:
+    import importlib.util as _ilu
+
+    _spec = _ilu.find_spec("pycolmap")
+    if _spec and _spec.submodule_search_locations:
+        _sm_path = os.path.join(
+            next(iter(_spec.submodule_search_locations)), "scene_manager.py"
+        )
+        with open(_sm_path) as _f:
+            _src = _f.read()
+        if "np.uint64(-1)" in _src:
+            with open(_sm_path, "w") as _f:
+                _f.write(_src.replace("np.uint64(-1)", "np.iinfo(np.uint64).max"))
 from pycolmap import SceneManager
 from tqdm import tqdm
 from typing_extensions import assert_never

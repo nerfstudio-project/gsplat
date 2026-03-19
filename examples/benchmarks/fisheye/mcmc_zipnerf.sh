@@ -1,3 +1,8 @@
+#!/bin/sh
+
+SDIR=$(cd -- "$(dirname "$0")" && pwd -P)
+
+EXAMPLES_DIR=$SDIR/../..
 SCENE_DIR="data/zipnerf"
 SCENE_LIST="berlin london nyc alameda"
 DATA_FACTOR=4
@@ -11,7 +16,7 @@ do
     echo "Running $SCENE"
 
     # train without eval
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
+    CUDA_VISIBLE_DEVICES=0 python $EXAMPLES_DIR/simple_trainer.py mcmc --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
         --strategy.cap-max $CAP_MAX \
         --opacity_reg 0.001 \
         --init_scale 0.5 \
@@ -23,7 +28,7 @@ do
 
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
     do
-        CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+        CUDA_VISIBLE_DEVICES=0 python $EXAMPLES_DIR/simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
             --strategy.cap-max $CAP_MAX \
             --opacity_reg 0.001 \
             --init_scale 0.5 \

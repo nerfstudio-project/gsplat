@@ -23,5 +23,11 @@ load_config()
     local cfgname=$1
     shift
 
-    source <(yq -r '.variables | to_entries[] | "\(.key)=\"\(.value)\""' "$cfgname")
+    source <(awk '/^variables:/{f=1;next} f&&/^[^ ]/{exit} f&&/^ /{
+        gsub(/^ +/,"")
+        key=$0; sub(/: .*/,"",key)
+        val=$0; sub(/[^:]*: */,"",val)
+        gsub(/^"|"$/,"",val)
+        print key "=\"" val "\""
+    }' "$cfgname")
 }

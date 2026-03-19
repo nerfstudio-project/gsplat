@@ -39,6 +39,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from gsplat._helper import assert_shape
+from ._constants import MIN_COMPENSATION
 
 from ._wrapper import (
     CameraModel,
@@ -293,7 +294,9 @@ def _add_blur(
 
     cov_2d = cov_2d + eps2d * torch.eye(2, dtype=cov_2d.dtype, device=cov_2d.device)
     det_blur = torch.linalg.det(cov_2d)
-    compensation = torch.sqrt(torch.clamp(det_orig / det_blur, min=0.0))  # [B, C, N]
+    compensation = torch.sqrt(
+        torch.clamp(det_orig / det_blur, min=MIN_COMPENSATION * MIN_COMPENSATION)
+    )  # [B, C, N]
 
     assert_shape("det_blur", det_blur, B + (C, N))
     assert_shape("cov_2d", cov_2d, B + (C, N, 2, 2))
