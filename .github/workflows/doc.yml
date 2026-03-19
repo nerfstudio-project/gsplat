@@ -29,10 +29,11 @@ jobs:
           pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
           BUILD_NO_CUDA=1 pip install .
       
-      # Get version.
+      # Get version (read from source to avoid importing gsplat; BUILD_NO_CUDA=1
+      # install does not build the extension, so full import would fail).
       - name: Get version + subdirectory
         run: |
-          VERSION=$(python -c "from gsplat import __version__; print(__version__)")
+          VERSION=$(python -c "exec(open('gsplat/version.py').read()); print(__version__)")
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "DOCS_SUBDIR=versions/$VERSION" >> $GITHUB_ENV
 

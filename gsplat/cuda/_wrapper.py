@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import math
 import warnings
 from dataclasses import dataclass
@@ -45,16 +61,45 @@ def _make_lazy_cuda_cls(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
     from ._backend import _C
 
-    return getattr(torch.classes.gsplat, name)
+    if _C is None:
+        return _unavailable_cuda_cls(name)
+
+    try:
+        return getattr(torch.classes.gsplat, name)
+    except RuntimeError as e:
+        # Class not registered (e.g. extension built without it or partial load).
+        if "does not exist" in str(e) or "torch::class_" in str(e):
+            return _unavailable_cuda_cls(name)
+        raise
+
+
+def _unavailable_cuda_cls(name: str) -> Any:
+    """Placeholder class when the CUDA extension is not available."""
+
+    class _UnavailableCudaCls:
+        __name__ = name
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError(
+                "gsplat CUDA extension is not available (not built or failed to load). "
+                f"Cannot instantiate '{name}'."
+            )
+
+    return _UnavailableCudaCls
 
 
 def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
     from ._backend import _C
 
+    if _C is None:
+        raise RuntimeError(
+            "gsplat CUDA extension is not available (not built or failed to load). "
+            f"Cannot access '{name}'."
+        )
     obj = _C
     for name_split in name.split("."):
-        obj = getattr(_C, name_split)
+        obj = getattr(obj, name_split)
     return obj
 
 
@@ -911,7 +956,7 @@ def rasterize_to_pixels_eval3d(
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: CameraModel = "pinhole",
-    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    ut_params: Optional[UnscentedTransformParameters] = None,
     rays: Optional[Tensor] = None,  # [..., C, H, W, 6]
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -938,6 +983,8 @@ def rasterize_to_pixels_eval3d(
         - **Rendered colors**. [..., C, image_height, image_width, channels]
         - **Rendered alphas**. [..., C, image_height, image_width, 1]
     """
+    if ut_params is None:
+        ut_params = UnscentedTransformParameters()
 
     colors, alphas, *_ = rasterize_to_pixels_eval3d_extra(
         means=means,
@@ -988,7 +1035,7 @@ def rasterize_to_pixels_eval3d_extra(
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: CameraModel = "pinhole",
-    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    ut_params: Optional[UnscentedTransformParameters] = None,
     rays: Optional[Tensor] = None,  # [..., C, P, 6]
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -1025,6 +1072,9 @@ def rasterize_to_pixels_eval3d_extra(
         - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.
         - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.
     """
+    if ut_params is None:
+        ut_params = UnscentedTransformParameters()
+
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
     N = means.size(-2)
@@ -1538,7 +1588,7 @@ def fully_fused_projection_with_ut(
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
     camera_model: CameraModel = "pinhole",
-    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    ut_params: Optional[UnscentedTransformParameters] = None,
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -1566,6 +1616,9 @@ def fully_fused_projection_with_ut(
             faster and sufficient for most cases, while Euclidean distance can be useful for scenes
             with wide field-of-view or non-standard camera models. Default: True.
     """
+    if ut_params is None:
+        ut_params = UnscentedTransformParameters()
+
     batch_dims = means.shape[:-2]
     N = means.shape[-2]
     C = viewmats.shape[-3]
@@ -1783,7 +1836,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
         flatten_ids: Tensor,  # [..., n_isects]
         camera_model: CameraModel = "pinhole",
-        ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+        ut_params: Optional[UnscentedTransformParameters] = None,
         rays: Optional[Tensor] = None,  # [..., C, P, 6]
         # distortion
         radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -1801,6 +1854,9 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         use_hit_distance: bool = False,
         return_normals: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
+        if ut_params is None:
+            ut_params = UnscentedTransformParameters()
+
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
@@ -1809,6 +1865,8 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             if ftheta_coeffs is not None
             else FThetaCameraDistortionParameters()
         )
+
+        lidar_coeffs = lidar_coeffs.to_cpp() if lidar_coeffs is not None else None
 
         # Extract batch_dims for sample_counts allocation
         batch_dims = means.shape[:-2]
@@ -1857,7 +1915,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
-            lidar_coeffs.to_cpp() if lidar_coeffs is not None else None,
+            lidar_coeffs,
             external_distortion_coeffs,
             isect_offsets,
             flatten_ids,

@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import math
 from typing import Dict, Optional, Tuple, cast
 
@@ -211,10 +227,10 @@ def compute_directions(
     batch_dims: tuple,
     means: Tensor,
     viewmats: Tensor,
-    indptr: Tensor,
     batch_ids: Optional[Tensor] = None,
     camera_ids: Optional[Tensor] = None,
     gaussian_ids: Optional[Tensor] = None,
+    indptr: Optional[Tensor] = None,  # [B*C+1]
     *,
     viewmats_rs: Optional[Tensor] = None,
 ) -> Tensor:
@@ -229,7 +245,6 @@ def compute_directions(
         dirs = means[..., None, :, :] - campos[..., None, :]
     else:
         B = math.prod(batch_dims)
-        N = means.shape[-2]
         C = campos.shape[-2]
         dirs = _compute_view_dirs_packed(
             means,
@@ -803,10 +818,10 @@ def rasterization(
             batch_dims,
             means,
             viewmats,
-            indptr,
             batch_ids,
             camera_ids,
             gaussian_ids,
+            indptr,
             viewmats_rs=viewmats_rs,
         )
 
@@ -887,7 +902,7 @@ def rasterization(
             (radii,) = all_to_all_tensor_list(
                 world_size, [radii], cnts, output_splits=collected_splits
             )
-            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+            means2d, depths, conics, opacities, colors = all_to_all_tensor_list(
                 world_size,
                 [means2d, depths, conics, opacities, colors],
                 cnts,
@@ -915,7 +930,7 @@ def rasterization(
             gaussian_ids = gaussian_ids + offsets
 
             # all to all communication across all ranks.
-            (camera_ids, gaussian_ids) = all_to_all_tensor_list(
+            camera_ids, gaussian_ids = all_to_all_tensor_list(
                 world_size,
                 [camera_ids, gaussian_ids],
                 cnts,
@@ -939,7 +954,7 @@ def rasterization(
             )
             radii = reshape_view(C, radii, N_world)
 
-            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+            means2d, depths, conics, opacities, colors = all_to_all_tensor_list(
                 world_size,
                 [
                     means2d.flatten(0, 1),

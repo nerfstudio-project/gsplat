@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """PyTorch reference implementation for Unscented Transform (UT) projection.
 
 This module contains the reference implementation of fully_fused_projection_with_ut
@@ -300,7 +316,7 @@ def _fully_fused_projection_with_ut(
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
     camera_model: CameraModel = "pinhole",
-    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    ut_params: Optional[UnscentedTransformParameters] = None,
     radial_coeffs: Optional[Tensor] = None,
     tangential_coeffs: Optional[Tensor] = None,
     thin_prism_coeffs: Optional[Tensor] = None,
@@ -355,6 +371,9 @@ def _fully_fused_projection_with_ut(
         conics: Inverse covariances (conics) [..., C, N, 3] (xx, xy, yy)
         compensations: Opacity compensation factors [..., C, N] (or None)
     """
+    if ut_params is None:
+        ut_params = UnscentedTransformParameters()
+
     # Validate inputs
     B = means.shape[:-2]
     N = means.shape[-2]

@@ -72,17 +72,18 @@ the examples (requires to install some exta dependencies via `pip install -r exa
 
 This repository was born from the curiosity of people on the Nerfstudio team trying to understand a new rendering technique. We welcome contributions of any kind and are open to feedback, bug-reports, and improvements to help expand the capabilities of this software.
 
-This project is developed by the following wonderful contributors (unordered):
+This project is developed by the contributors coming from following institutes (unordered):
 
-- [Angjoo Kanazawa](https://people.eecs.berkeley.edu/~kanazawa/) (UC Berkeley): Mentor of the project.
-- [Matthew Tancik](https://www.matthewtancik.com/about-me) (Luma AI): Mentor of the project.
-- [Vickie Ye](https://people.eecs.berkeley.edu/~vye/) (UC Berkeley): Project lead. v0.1 lead.
-- [Matias Turkulainen](https://maturk.github.io/) (Aalto University): Core developer.
-- [Ruilong Li](https://www.liruilong.cn/) (UC Berkeley): Core developer. v1.0 lead.
-- [Justin Kerr](https://kerrj.github.io/) (UC Berkeley): Core developer.
-- [Brent Yi](https://github.com/brentyi) (UC Berkeley): Core developer.
-- [Zhuoyang Pan](https://panzhy.com/) (ShanghaiTech University): Core developer.
-- [Jianbo Ye](http://www.jianboye.org/) (Amazon): Core developer.
+- UC Berkeley
+- NVIDIA
+- ShanghaiTech University
+- Amazon
+- Meta
+- IIIT
+- LumaAI
+- SpectacularAI
+- Aalto University
+- CMU
 
 We also have a white paper with about the project with benchmarking and mathematical supplement with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
 
