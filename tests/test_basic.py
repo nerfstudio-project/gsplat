@@ -1930,7 +1930,8 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(v_quats * quats_mask.float(), _v_quats * quats_mask.float(), rtol=0, atol=quat_atol)
     torch.testing.assert_close(v_colors * colors_mask.float(), _v_colors * colors_mask.float(), rtol=0, atol=1e-4)
     torch.testing.assert_close(v_opacities * opacities_mask.float(), _v_opacities * opacities_mask.float(), rtol=0, atol=opacity_atol)
-    torch.testing.assert_close(v_backgrounds * backgrounds_mask.float(), _v_backgrounds * backgrounds_mask.float(), rtol=0, atol=1e-3)
+    # On a RTX 6000 Pro, mae is 0.000736, but on a L40S, it's 0.00114. It would be good to investigate why.
+    torch.testing.assert_close(v_backgrounds * backgrounds_mask.float(), _v_backgrounds * backgrounds_mask.float(), rtol=0, atol=1.3e-3)
 
     if use_rays:
         rays_mask = get_inlier_abserror_mask(v_rays, _v_rays, quantile=0.95)

@@ -21,7 +21,7 @@ from ._math import (
     _quat_scale_to_covar_preci,
 )
 from ._wrapper import CameraModel, RollingShutterType
-from ._constants import MAX_ALPHA
+from ._constants import MAX_ALPHA, MIN_COMPENSATION
 
 def _persp_proj(
     means: Tensor,  # [..., C, N, 3]
@@ -287,7 +287,7 @@ def _fully_fused_projection(
     det = det.clamp(min=1e-10)
 
     if calc_compensations:
-        compensations = torch.sqrt(torch.clamp(det_orig / det, min=0.0))
+        compensations = torch.sqrt(torch.clamp(det_orig / det, min=MIN_COMPENSATION * MIN_COMPENSATION))
     else:
         compensations = None
 
