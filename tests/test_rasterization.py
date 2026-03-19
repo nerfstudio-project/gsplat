@@ -22,7 +22,7 @@ device = torch.device("cuda:0")
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
-    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info",
+    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed",
     [
         pytest.param(*params, marks=[
             # test based on with_eval3d (5)  and with_ut (6)
@@ -42,6 +42,7 @@ device = torch.device("cuda:0")
                     [False],                 # with_ut
                     ["pinhole"],             # camera_model
                     [None],                  # extra_signals_info
+                    [False],                 # distributed
                 ),
                 # 3DGUT
                 product(
@@ -54,6 +55,7 @@ device = torch.device("cuda:0")
                     [True],                  # with_ut
                     ["pinhole","lidar"],     # camera_model
                     [None,(None,20),(3,3)],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
+                    [False],                 # distributed
                 ),
                 # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
                 # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
@@ -69,6 +71,21 @@ device = torch.device("cuda:0")
                     [True],                  # with_ut
                     ["pinhole"],             # camera_model
                     [None,(None,20)],        # extra_signals_info — (None,20) triggers padding
+                    [False],                 # distributed
+                ),
+                # Distributed rendering (single-rank): exercises the all-gather /
+                # scatter code path.  Constraints: batch_dims=(), no per_view_color.
+                product(
+                    [False],                 # per_view_color (distributed forbids per-view)
+                    [None, 3],               # sh_degree
+                    ["RGB", "RGB+D", "D"],   # render_mode
+                    [True, False],           # packed
+                    [()],                    # batch_dims (distributed requires ())
+                    [False],                 # with_eval3d
+                    [False],                 # with_ut
+                    ["pinhole"],             # camera_model
+                    [None],                  # extra_signals_info
+                    [True],                  # distributed
                 ),
             )
     ]
@@ -83,7 +100,11 @@ def test_rasterization(
     with_ut: bool,
     camera_model: str,
     extra_signals_info: Optional[tuple],
+    distributed: bool,
+    dist_init,
 ):
+    if distributed and not torch.distributed.is_initialized():
+        pytest.skip("distributed process group not initialized")
     from gsplat.rendering import _rasterization, rasterization
 
     torch.manual_seed(42)
@@ -166,6 +187,7 @@ def test_rasterization(
         lidar_coeffs=lidar,
         extra_signals=extra_signals,
         extra_signals_sh_degree=extra_signals_sh_degree,
+        distributed=distributed,
     )
 
     if render_mode in ("D", "d", "Ed"):

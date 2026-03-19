@@ -7,6 +7,7 @@ in this directory and subdirectories.
 
 import pytest
 import torch
+import torch.distributed
 import gc
 import os
 
@@ -40,4 +41,31 @@ def setup_test_environment():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()
+
+
+@pytest.fixture(scope="session")
+def dist_init():
+    """Initialize a single-process distributed group for testing distributed code paths.
+
+    With world_size=1 the all-gather / all-to-all ops become identity operations,
+    but the code path inside ``rasterization(distributed=True)`` is still exercised.
+    """
+    if not torch.cuda.is_available():
+        yield
+        return
+
+    if not torch.distributed.is_initialized():
+        os.environ.setdefault("MASTER_ADDR", "localhost")
+        os.environ.setdefault("MASTER_PORT", "29500")
+        torch.distributed.init_process_group(
+            backend="nccl", world_size=1, rank=0
+        )
+        # Warm up the communicator required by batch_isend_irecv.
+        _ = [None]
+        torch.distributed.all_gather_object(_, 0)
+
+    yield
+
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
 
