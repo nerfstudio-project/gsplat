@@ -1923,21 +1923,19 @@ def test_rasterize_to_pixels_eval3d(
     assert backgrounds_mask.sum() > 0
 
     # Compare backward gradients, excluding the ones that fall above the quantile threshold.
-    torch.testing.assert_close(v_means * means_mask.float(), _v_means * means_mask.float(), rtol=0, atol=4e-2)
-    torch.testing.assert_close(v_scales * scales_mask.float(), _v_scales * scales_mask.float(), rtol=0, atol=5e-2)
-    # Relax quat/opacity tolerances when use_hit_distance=True due to accumulated floating-point errors
-    # in hit distance calculation (normalize + dot product + length operations)
+    torch.testing.assert_close(v_means * means_mask.float(), _v_means * means_mask.float(), rtol=0, atol=1e-3)
+    torch.testing.assert_close(v_scales * scales_mask.float(), _v_scales * scales_mask.float(), rtol=0, atol=1e-3)
     quat_atol = 6e-3 if use_hit_distance else 5e-4
     opacity_atol = 1e-3 if use_hit_distance else 1.5e-4
     torch.testing.assert_close(v_quats * quats_mask.float(), _v_quats * quats_mask.float(), rtol=0, atol=quat_atol)
     torch.testing.assert_close(v_colors * colors_mask.float(), _v_colors * colors_mask.float(), rtol=0, atol=1e-4)
     torch.testing.assert_close(v_opacities * opacities_mask.float(), _v_opacities * opacities_mask.float(), rtol=0, atol=opacity_atol)
-    torch.testing.assert_close(v_backgrounds * backgrounds_mask.float(), _v_backgrounds * backgrounds_mask.float(), rtol=0, atol=1.6e-2)
+    torch.testing.assert_close(v_backgrounds * backgrounds_mask.float(), _v_backgrounds * backgrounds_mask.float(), rtol=0, atol=1e-3)
 
     if use_rays:
         rays_mask = get_inlier_abserror_mask(v_rays, _v_rays, quantile=0.95)
         assert rays_mask.sum() > 0
-        torch.testing.assert_close(v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=4e-2)
+        torch.testing.assert_close(v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=5e-3)
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
