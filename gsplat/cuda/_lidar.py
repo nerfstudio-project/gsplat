@@ -126,9 +126,11 @@ class SphericalUnitCoord:
             elevation=self.elevation.reshape(*args), azimuth=self.azimuth.reshape(*args)
         )
 
-    def __getitem__(self, key) -> "SphericalUnitCoord":
+    def __getitem__(self, *args) -> "SphericalUnitCoord":
+        # Using __getitem__(*args) instead of [*args] to support older Python versions (3.10)
         return SphericalUnitCoord(
-            elevation=self.elevation[key], azimuth=self.azimuth[key]
+            elevation=self.elevation.__getitem__(*args),
+            azimuth=self.azimuth.__getitem__(*args),
         )
 
     def _binop(self, other, op) -> "SphericalUnitCoord":
