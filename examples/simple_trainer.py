@@ -876,9 +876,21 @@ class Runner:
             )
 
             # loss
-            l1loss = F.l1_loss(colors, pixels)
+            if masks is not None:
+                # Exclude masked pixels (e.g. ego vehicle) from L1.
+                # For SSIM (patch-based), zero out both sides at masked locations
+                # so masked patches don't pull colors toward an arbitrary value.
+                l1loss = F.l1_loss(colors[masks], pixels[masks])
+                colors_ssim = colors * masks[..., None]
+                pixels_ssim = pixels * masks[..., None]
+            else:
+                l1loss = F.l1_loss(colors, pixels)
+                colors_ssim = colors
+                pixels_ssim = pixels
             ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+                colors_ssim.permute(0, 3, 1, 2),
+                pixels_ssim.permute(0, 3, 1, 2),
+                padding="valid",
             )
             loss = torch.lerp(l1loss, ssimloss, cfg.ssim_lambda)
             if cfg.depth_loss:
