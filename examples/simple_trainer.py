@@ -284,16 +284,12 @@ def create_splats_with_optimizers(
     world_rank: int = 0,
     world_size: int = 1,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
-    if init_type == "sfm":
+    if init_type == "sfm" or init_type == "lidar":
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
     elif init_type == "random":
         points = init_extent * scene_scale * (torch.rand((init_num_pts, 3)) * 2 - 1)
         rgbs = torch.rand((init_num_pts, 3))
-    elif init_type == "lidar":
-        # Use pre-loaded lidar point cloud from NCoreParser
-        points = torch.from_numpy(parser.points).float()
-        rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
     else:
         raise ValueError("Please specify a correct init_type: sfm, random, or lidar")
 
@@ -407,6 +403,11 @@ class Runner:
             )
             self.trainset = NCoreDataset(self.parser, split="train")
             self.valset = NCoreDataset(self.parser, split="val")
+            # Build a per-camera ftheta_coeffs list (None for pinhole cameras).
+            self.ftheta_coeffs_list = [
+                self.parser.ftheta_coeffs_dict.get(cam_id)
+                for cam_id in self.parser.camera_ids
+            ]
         else:
             self.parser = Parser(
                 data_dir=cfg.data_dir,
@@ -651,6 +652,13 @@ class Runner:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         if camera_model is None:
             camera_model = self.cfg.camera_model
+        ftheta_coeffs = None
+        if (
+            camera_idcs is not None
+            and hasattr(self, "ftheta_coeffs_list")
+            and self.ftheta_coeffs_list is not None
+        ):
+            ftheta_coeffs = self.ftheta_coeffs_list[camera_idcs.item()]
         render_colors, render_alphas, info = rasterization(
             means=means,
             quats=quats,
@@ -670,9 +678,10 @@ class Runner:
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
-            camera_model=self.cfg.camera_model,
+            camera_model=camera_model,
             with_ut=self.cfg.with_ut,
             with_eval3d=self.cfg.with_eval3d,
+            ftheta_coeffs=ftheta_coeffs,
             **kwargs,
         )
         if masks is not None:

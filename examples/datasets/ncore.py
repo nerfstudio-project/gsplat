@@ -27,6 +27,8 @@ import ncore.data
 import ncore.data.v4
 import ncore.sensors
 
+from gsplat.rendering import FThetaCameraDistortionParameters, FThetaPolynomialType
+
 from .ncore_utils import FrameConversion, HalfClosedInterval
 
 
@@ -249,6 +251,7 @@ class NCoreParser:
         self.imsize_dict: Dict[str, Tuple[int, int]] = {}
         self.mask_dict: Dict[str, Optional[np.ndarray]] = {}
         self.camera_models: Dict[str, Any] = {}
+        self.ftheta_coeffs_dict: Dict[str, Optional[FThetaCameraDistortionParameters]] = {}
 
         for camera_id in self.camera_ids:
             sensor = camera_sensors[camera_id]
@@ -271,11 +274,28 @@ class NCoreParser:
             width = int(camera_model.resolution[0].item())
             height = int(camera_model.resolution[1].item())
             self.imsize_dict[camera_id] = (width, height)
-            print(f"[NCoreParser] {camera_id}: {width}x{height}")
 
-            self.Ks_dict[camera_id] = _build_pinhole_K(
-                model_params, width, height, camera_id
-            )
+            if isinstance(camera_model, ncore.sensors.FThetaCameraModel):
+                # map ncore's FTheta camera model to gsplat's
+                cx = float(camera_model.principal_point[0].item())
+                cy = float(camera_model.principal_point[1].item())
+                self.Ks_dict[camera_id] = np.array([[1.0, 0.0, cx], [0.0, 1.0, cy], [0.0, 0.0, 1.0]], dtype=np.float32)
+                ref_poly = FThetaPolynomialType[model_params.reference_poly.name]
+                self.ftheta_coeffs_dict[camera_id] = FThetaCameraDistortionParameters(
+                    reference_poly=ref_poly,
+                    pixeldist_to_angle_poly=tuple(float(x) for x in model_params.pixeldist_to_angle_poly),
+                    angle_to_pixeldist_poly=tuple(float(x) for x in model_params.angle_to_pixeldist_poly),
+                    max_angle=float(model_params.max_angle),
+                    linear_cde=tuple(float(x) for x in model_params.linear_cde),
+                )
+                print(f"[NCoreParser] {camera_id}: {width}x{height} (ftheta)")
+            else:
+                self.Ks_dict[camera_id] = _build_pinhole_K(
+                    model_params, width, height, camera_id
+                )
+                self.ftheta_coeffs_dict[camera_id] = None
+                print(f"[NCoreParser] {camera_id}: {width}x{height}")
+
             self.mask_dict[camera_id] = _load_ego_mask(sensor, n_dilation)
 
         return camera_sensors
