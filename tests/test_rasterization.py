@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for the functions in the CUDA extension.
 
 Usage:
@@ -11,6 +27,7 @@ from typing import Optional, Tuple
 
 import pytest
 import torch
+import gsplat
 
 from tests.test_cameras import parse_lidar_camera
 from gsplat.rendering import (
@@ -19,7 +36,6 @@ from gsplat.rendering import (
     render_mode_has_depth_channel,
     render_mode_has_hit_distance,
 )
-import gsplat
 from gsplat.cuda._constants import ALPHA_THRESHOLD
 
 device = torch.device("cuda:0")
@@ -29,74 +45,94 @@ device = torch.device("cuda:0")
 @pytest.mark.parametrize(
     "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed",
     [
-        pytest.param(*params, marks=[
-            # test based on with_eval3d (5)  and with_ut (6)
-            pytest.mark.skipif((params[5]==True or params[6]==True) and not gsplat.has_3dgut(), reason="3DGUT support isn't built in"),
-            pytest.mark.skipif((params[5]==False or params[6]==False) and not gsplat.has_3dgs(), reason="3DGS support isn't built in"),
-            # sh_degree (1) and per_view_color (0) require colors, which requires a color render_mode (2)
-            pytest.mark.skipif(params[1] is not None and not render_mode_has_color(params[2]), reason="sh_degree requires colors, invalid with depth-only render_mode"),
-            pytest.mark.skipif(params[0]==True and not render_mode_has_color(params[2]), reason="per_view_color requires colors, invalid with depth-only render_mode"),
-        ])
+        pytest.param(
+            *params,
+            marks=[
+                # test based on with_eval3d (5)  and with_ut (6)
+                pytest.mark.skipif(
+                    (params[5] == True or params[6] == True) and not gsplat.has_3dgut(),
+                    reason="3DGUT support isn't built in",
+                ),
+                pytest.mark.skipif(
+                    (params[5] == False or params[6] == False)
+                    and not gsplat.has_3dgs(),
+                    reason="3DGS support isn't built in",
+                ),
+                # sh_degree (1) and per_view_color (0) require colors, which requires a color render_mode (2)
+                pytest.mark.skipif(
+                    params[1] is not None and not render_mode_has_color(params[2]),
+                    reason="sh_degree requires colors, invalid with depth-only render_mode",
+                ),
+                pytest.mark.skipif(
+                    params[0] == True and not render_mode_has_color(params[2]),
+                    reason="per_view_color requires colors, invalid with depth-only render_mode",
+                ),
+            ],
+        )
         for params in
-            # Standard tests: all combinations with with_eval3d=False
-            chain(
-                product(
-                    [True, False],           # per_view_color
-                    [None, 3],               # sh_degree
-                    ["RGB", "RGB+D", "D"],   # render_mode
-                    [True, False],           # packed
-                    [(), (2,), (1, 2)],      # batch_dims
-                    [False],                 # with_eval3d
-                    [False],                 # with_ut
-                    ["pinhole"],             # camera_model
-                    [None],                  # extra_signals_info
-                    [False],                 # distributed
-                ),
-                # 3DGUT
-                product(
-                    [True, False],           # per_view_color
-                    [None, 3],               # sh_degree
-                    ["RGB"],                 # render_mode (only RGB)
-                    [False],                 # packed (must be False)
-                    [(), (2,)],              # batch_dims (reduced subset)
-                    [True],                  # with_eval3d
-                    [True],                  # with_ut
-                    ["pinhole","lidar"],     # camera_model
-                    [None,(None,20),(3,3)],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
-                    [False],                 # distributed
-                ),
-                # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
-                # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
-                # signals case is the critical one — it produces 24 channels
-                # (3 RGB + 20 extra + 1 depth) which gets padded to CDIM=32.
-                product(
-                    [False],                 # per_view_color
-                    [None],                  # sh_degree
-                    ["RGB-d", "d"],          # render_mode
-                    [False],                 # packed (must be False)
-                    [()],                    # batch_dims
-                    [True],                  # with_eval3d
-                    [True],                  # with_ut
-                    ["pinhole"],             # camera_model
-                    [None,(None,20)],        # extra_signals_info — (None,20) triggers padding
-                    [False],                 # distributed
-                ),
-                # Distributed rendering (single-rank): exercises the all-gather /
-                # scatter code path.  Constraints: batch_dims=(), no per_view_color.
-                product(
-                    [False],                 # per_view_color (distributed forbids per-view)
-                    [None, 3],               # sh_degree
-                    ["RGB", "RGB+D", "D"],   # render_mode
-                    [True, False],           # packed
-                    [()],                    # batch_dims (distributed requires ())
-                    [False],                 # with_eval3d
-                    [False],                 # with_ut
-                    ["pinhole"],             # camera_model
-                    [None],                  # extra_signals_info
-                    [True],                  # distributed
-                ),
-            )
-    ]
+        # Standard tests: all combinations with with_eval3d=False
+        chain(
+            product(
+                [True, False],  # per_view_color
+                [None, 3],  # sh_degree
+                ["RGB", "RGB+D", "D"],  # render_mode
+                [True, False],  # packed
+                [(), (2,), (1, 2)],  # batch_dims
+                [False],  # with_eval3d
+                [False],  # with_ut
+                ["pinhole"],  # camera_model
+                [None],  # extra_signals_info
+                [False],  # distributed
+            ),
+            # 3DGUT
+            product(
+                [True, False],  # per_view_color
+                [None, 3],  # sh_degree
+                ["RGB"],  # render_mode (only RGB)
+                [False],  # packed (must be False)
+                [(), (2,)],  # batch_dims (reduced subset)
+                [True],  # with_eval3d
+                [True],  # with_ut
+                ["pinhole", "lidar"],  # camera_model
+                [
+                    None,
+                    (None, 20),
+                    (3, 3),
+                ],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
+                [False],  # distributed
+            ),
+            # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
+            # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
+            # signals case is the critical one — it produces 24 channels
+            # (3 RGB + 20 extra + 1 depth) which gets padded to CDIM=32.
+            product(
+                [False],  # per_view_color
+                [None],  # sh_degree
+                ["RGB-d", "d"],  # render_mode
+                [False],  # packed (must be False)
+                [()],  # batch_dims
+                [True],  # with_eval3d
+                [True],  # with_ut
+                ["pinhole"],  # camera_model
+                [None, (None, 20)],  # extra_signals_info — (None,20) triggers padding
+                [False],  # distributed
+            ),
+            # Distributed rendering (single-rank): exercises the all-gather /
+            # scatter code path.  Constraints: batch_dims=(), no per_view_color.
+            product(
+                [False],  # per_view_color (distributed forbids per-view)
+                [None, 3],  # sh_degree
+                ["RGB", "RGB+D", "D"],  # render_mode
+                [True, False],  # packed
+                [()],  # batch_dims (distributed requires ())
+                [False],  # with_eval3d
+                [False],  # with_ut
+                ["pinhole"],  # camera_model
+                [None],  # extra_signals_info
+                [True],  # distributed
+            ),
+        )
+    ],
 )
 def test_rasterization(
     per_view_color: bool,
@@ -150,17 +186,25 @@ def test_rasterization(
 
         if per_view_color:
             if extra_signals_sh_degree is None:
-                extra_signals = torch.rand(batch_dims + (C, N, extra_signals_size), device=device)
+                extra_signals = torch.rand(
+                    batch_dims + (C, N, extra_signals_size), device=device
+                )
             else:
                 extra_signals = torch.rand(
-                    batch_dims + (C, N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size), device=device
+                    batch_dims
+                    + (C, N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size),
+                    device=device,
                 )
         else:
             if extra_signals_sh_degree is None:
-                extra_signals = torch.rand(batch_dims + (N, extra_signals_size), device=device)
+                extra_signals = torch.rand(
+                    batch_dims + (N, extra_signals_size), device=device
+                )
             else:
                 extra_signals = torch.rand(
-                    batch_dims + (N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size), device=device
+                    batch_dims
+                    + (N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size),
+                    device=device,
                 )
 
     if camera_model == "lidar":
@@ -234,12 +278,19 @@ def test_rasterization(
 
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
     if extra_signals is not None:
-        torch.testing.assert_close(meta["render_extra_signals"], _meta["render_extra_signals"], rtol=rtol, atol=atol)
+        torch.testing.assert_close(
+            meta["render_extra_signals"],
+            _meta["render_extra_signals"],
+            rtol=rtol,
+            atol=atol,
+        )
 
     if render_mode_has_hit_distance(render_mode):
         # For combined RGB+depth modes, verify RGB channels match.
         if render_mode_has_color(render_mode):
-            torch.testing.assert_close(renders[..., :3], _renders[..., :3], rtol=rtol, atol=atol)
+            torch.testing.assert_close(
+                renders[..., :3], _renders[..., :3], rtol=rtol, atol=atol
+            )
 
         # Verify hit distance is non-zero where pixels are visible.
         mask = alphas[..., 0] > ALPHA_THRESHOLD
@@ -251,4 +302,3 @@ def test_rasterization(
             )
     else:
         torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
-

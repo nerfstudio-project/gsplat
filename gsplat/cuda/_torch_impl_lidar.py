@@ -1,3 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 import torch
 from torch import Tensor
 from dataclasses import dataclass
@@ -9,15 +23,18 @@ import struct
 
 ANGLE_TO_PIXEL_SCALING_FACTOR: int = 1024
 
+
 @dataclass
 class LidarSampleTileIdReturn:
     idx: SphericalUnitCoord
     idxdense: SphericalUnitCoord
 
 
-def lidar_sample_tileid(lidar: RowOffsetStructuredSpinningLidarModelParametersExt,
-                        rel_pix: SphericalUnitCoord,
-                        round_fn) -> LidarSampleTileIdReturn:
+def lidar_sample_tileid(
+    lidar: RowOffsetStructuredSpinningLidarModelParametersExt,
+    rel_pix: SphericalUnitCoord,
+    round_fn,
+) -> LidarSampleTileIdReturn:
     assert round_fn is torch.floor or round_fn is torch.ceil
 
     kToPixel = ANGLE_TO_PIXEL_SCALING_FACTOR
@@ -25,15 +42,22 @@ def lidar_sample_tileid(lidar: RowOffsetStructuredSpinningLidarModelParametersEx
     fov_span_pix_az = kToPixel * lidar.fov_horiz_rad.span
     fov_span_pix_el = kToPixel * lidar.fov_vert_rad.span
 
-    norm_az = rel_pix.azimuth/fov_span_pix_az
-    norm_el = rel_pix.elevation/fov_span_pix_el
+    norm_az = rel_pix.azimuth / fov_span_pix_az
+    norm_el = rel_pix.elevation / fov_span_pix_el
 
     idxdense = SphericalUnitCoord(
-        azimuth = round_fn(norm_az*lidar.tiling.cdf_resolution_azimuth).to(dtype=torch.int32),
-        elevation = round_fn(norm_el*lidar.tiling.cdf_resolution_elevation).to(dtype=torch.int32)
+        azimuth=round_fn(norm_az * lidar.tiling.cdf_resolution_azimuth).to(
+            dtype=torch.int32
+        ),
+        elevation=round_fn(norm_el * lidar.tiling.cdf_resolution_elevation).to(
+            dtype=torch.int32
+        ),
     )
 
-    assert torch.all((0 <= idxdense.elevation) & (idxdense.elevation <= lidar.tiling.cdf_resolution_elevation))
+    assert torch.all(
+        (0 <= idxdense.elevation)
+        & (idxdense.elevation <= lidar.tiling.cdf_resolution_elevation)
+    )
     assert torch.all(idxdense.elevation < lidar.tiling.cdf_elevation.shape[0])
 
     dense_el = idxdense.elevation
@@ -55,18 +79,21 @@ def lidar_sample_tileid(lidar: RowOffsetStructuredSpinningLidarModelParametersEx
         tile_el = lidar.tiling.cdf_elevation[dense_el]
 
     idx = SphericalUnitCoord(
-        azimuth = round_fn(norm_az*lidar.tiling.n_bins_azimuth).to(dtype=torch.int32),
-        elevation = tile_el,
+        azimuth=round_fn(norm_az * lidar.tiling.n_bins_azimuth).to(dtype=torch.int32),
+        elevation=tile_el,
     )
 
     return LidarSampleTileIdReturn(
-        idx = idx,
-        idxdense = idxdense,
+        idx=idx,
+        idxdense=idxdense,
     )
 
 
-def has_any_rays_in_tile(lidar: RowOffsetStructuredSpinningLidarModelParametersExt,
-                         beg: SphericalUnitCoord, end: SphericalUnitCoord) -> Tensor:
+def has_any_rays_in_tile(
+    lidar: RowOffsetStructuredSpinningLidarModelParametersExt,
+    beg: SphericalUnitCoord,
+    end: SphericalUnitCoord,
+) -> Tensor:
     """Check whether any rays fall within the dense tile range [beg, end).
     The full-cover case (beg=0, end=N) forces has_rays=True as a conservative
     optimization implemented in CUDA to avoid I/O.
@@ -85,9 +112,9 @@ def has_any_rays_in_tile(lidar: RowOffsetStructuredSpinningLidarModelParametersE
 
     num_rays = (
         raycdf[end.azimuth, end.elevation]
-      - raycdf[beg.azimuth, end.elevation]
-      - raycdf[end.azimuth, beg.elevation]
-      + raycdf[beg.azimuth, beg.elevation]
+        - raycdf[beg.azimuth, end.elevation]
+        - raycdf[end.azimuth, beg.elevation]
+        + raycdf[beg.azimuth, beg.elevation]
     )
 
     has_rays = (num_rays > 0) | ((beg.azimuth <= 0) & (end.azimuth >= raycdf_size_az))
@@ -111,35 +138,42 @@ def _isect_tiles_lidar(
     """
 
     image_dims = means2d.shape[:-2]
-    N = means2d.shape[-2] # Total number of gaussians
+    N = means2d.shape[-2]  # Total number of gaussians
     assert means2d.shape == (*image_dims, N, 2), means2d.shape
     assert radii.shape == (*image_dims, N, 2), radii.shape
     assert depths.shape == (*image_dims, N), depths.shape
     assert depths.dtype == torch.float32
     assert lidar.tiling.n_bins_azimuth > 0, lidar.tiling.n_bins_azimuth
     assert lidar.tiling.n_bins_elevation > 0, lidar.tiling.n_bins_elevation
-    assert lidar.tiling.cdf_dense_ray_mask.dtype == torch.int32, lidar.tiling.cdf_dense_ray_mask.dtype
-    assert lidar.tiling.cdf_dense_ray_mask.device == means2d.device, (lidar.tiling.cdf_dense_ray_mask.device, means2d.device)
+    assert (
+        lidar.tiling.cdf_dense_ray_mask.dtype == torch.int32
+    ), lidar.tiling.cdf_dense_ray_mask.dtype
+    assert lidar.tiling.cdf_dense_ray_mask.device == means2d.device, (
+        lidar.tiling.cdf_dense_ray_mask.device,
+        means2d.device,
+    )
 
     device = means2d.device
     I = math.prod(image_dims)
 
     angles_pix = SphericalUnitCoord(
-        elevation = means2d.reshape(-1,2)[:, 0],
-        azimuth = means2d.reshape(-1,2)[:, 1],
+        elevation=means2d.reshape(-1, 2)[:, 0],
+        azimuth=means2d.reshape(-1, 2)[:, 1],
     )
     extent_pix = SphericalUnitCoord(
-        elevation = radii.reshape(-1,2)[:, 0],
-        azimuth = radii.reshape(-1,2)[:, 1],
+        elevation=radii.reshape(-1, 2)[:, 0],
+        azimuth=radii.reshape(-1, 2)[:, 1],
     )
 
     nonzero_extent = (extent_pix.azimuth > 0) & (extent_pix.elevation > 0)
-    full_circle_pix = 2*math.pi*ANGLE_TO_PIXEL_SCALING_FACTOR
+    full_circle_pix = 2 * math.pi * ANGLE_TO_PIXEL_SCALING_FACTOR
     fov_span_pix_az = ANGLE_TO_PIXEL_SCALING_FACTOR * lidar.fov_horiz_rad.span
     fov_span_pix_el = ANGLE_TO_PIXEL_SCALING_FACTOR * lidar.fov_vert_rad.span
 
     # 1. Compute relative angles once on the mean, then +/- extent.
-    mean_rel_pix = relative_sensor_angles(lidar, angles_pix, ANGLE_TO_PIXEL_SCALING_FACTOR)
+    mean_rel_pix = relative_sensor_angles(
+        lidar, angles_pix, ANGLE_TO_PIXEL_SCALING_FACTOR
+    )
 
     beg_pix = mean_rel_pix - extent_pix
     end_pix = mean_rel_pix + extent_pix
@@ -164,19 +198,29 @@ def _isect_tiles_lidar(
 
     begA_rel_pix = SphericalUnitCoord(
         azimuth=torch.where(full_cover | underflows, 0, beg_pix.azimuth),
-        elevation=beg_pix.elevation
+        elevation=beg_pix.elevation,
     )
     endA_rel_pix = SphericalUnitCoord(
-        azimuth=torch.where(full_cover, fov_span_pix_az, torch.where(overflows, full_circle_pix, end_pix.azimuth)),
-        elevation=end_pix.elevation
+        azimuth=torch.where(
+            full_cover,
+            fov_span_pix_az,
+            torch.where(overflows, full_circle_pix, end_pix.azimuth),
+        ),
+        elevation=end_pix.elevation,
     )
     begB_rel_pix = SphericalUnitCoord(
-        azimuth=torch.where(underflows & ~full_cover, beg_pix.azimuth+full_circle_pix, 0),
-        elevation=beg_pix.elevation
+        azimuth=torch.where(
+            underflows & ~full_cover, beg_pix.azimuth + full_circle_pix, 0
+        ),
+        elevation=beg_pix.elevation,
     )
     endB_rel_pix = SphericalUnitCoord(
-        azimuth=torch.where(overflows & ~full_cover, end_pix.azimuth-full_circle_pix, torch.where(underflows & ~full_cover, full_circle_pix, 0)),
-        elevation=end_pix.elevation
+        azimuth=torch.where(
+            overflows & ~full_cover,
+            end_pix.azimuth - full_circle_pix,
+            torch.where(underflows & ~full_cover, full_circle_pix, 0),
+        ),
+        elevation=end_pix.elevation,
     )
 
     # 3. Compute which tile (dense and regular) each boundary of the range fall into.
@@ -195,8 +239,13 @@ def _isect_tiles_lidar(
 
     # Make sure all indices are within bounds
     for s in [begA_sample, endA_sample, begB_sample, endB_sample]:
-        assert torch.all((0 <= s.idxdense.azimuth) & (s.idxdense.azimuth <= lidar.tiling.cdf_resolution_azimuth))
-        assert torch.all((0 <= s.idx.azimuth) & (s.idx.azimuth <= lidar.tiling.n_bins_azimuth))
+        assert torch.all(
+            (0 <= s.idxdense.azimuth)
+            & (s.idxdense.azimuth <= lidar.tiling.cdf_resolution_azimuth)
+        )
+        assert torch.all(
+            (0 <= s.idx.azimuth) & (s.idx.azimuth <= lidar.tiling.n_bins_azimuth)
+        )
 
     # Elevation ranges of Regions A and B must be the same.
     assert torch.all(begA_sample.idx.elevation == begB_sample.idx.elevation)
@@ -204,9 +253,13 @@ def _isect_tiles_lidar(
 
     # 4. Check if there's any ray in each one of the ranges.
     # If any of them has none, we don't need to process it.
-    has_raysA = nonzero_extent & has_any_rays_in_tile(lidar, begA_sample.idxdense, endA_sample.idxdense)
-    has_raysB = nonzero_extent & has_any_rays_in_tile(lidar, begB_sample.idxdense, endB_sample.idxdense)
-    has_rays = (has_raysA | has_raysB)
+    has_raysA = nonzero_extent & has_any_rays_in_tile(
+        lidar, begA_sample.idxdense, endA_sample.idxdense
+    )
+    has_raysB = nonzero_extent & has_any_rays_in_tile(
+        lidar, begB_sample.idxdense, endB_sample.idxdense
+    )
+    has_rays = has_raysA | has_raysB
 
     # 5. Calculate the final tile ranges that have at least 1 ray in it.
     tile_range_el = (
@@ -229,8 +282,12 @@ def _isect_tiles_lidar(
         #   underflows: A=[0, endA), B=[begB, n_bins) -> merged=[begB-n_bins, endA)
         #   overflows:  A=[begA, n_bins), B=[0, endB) -> merged=[begA, endB+n_bins)
         # The kernel then uses az % n_bins to map back to valid tile indices.
-        begA_tile_az = torch.where(has_raysB & underflows, begB_tile_az - n_bins_az, begA_tile_az)
-        endA_tile_az = torch.where(has_raysB & overflows,  endB_tile_az + n_bins_az, endA_tile_az)
+        begA_tile_az = torch.where(
+            has_raysB & underflows, begB_tile_az - n_bins_az, begA_tile_az
+        )
+        endA_tile_az = torch.where(
+            has_raysB & overflows, endB_tile_az + n_bins_az, endA_tile_az
+        )
         # Cap to at most n_bins wide to prevent double-counting tiles at the
         # seam when ceil(endA) and floor(begB) produce overlapping tile indices.
         begA_tile_az = torch.maximum(begA_tile_az, endA_tile_az - n_bins_az)
@@ -245,7 +302,8 @@ def _isect_tiles_lidar(
         # at 0 and the other at n_bins, any overlap means the gaussian covers
         # the entire FOV. Merge into [0, n_bins) in that case.
         tile_overlap = (
-            has_raysA & has_raysB
+            has_raysA
+            & has_raysB
             & (begB_tile_az < endA_tile_az)
             & (begA_tile_az < endB_tile_az)
         )
@@ -263,10 +321,10 @@ def _isect_tiles_lidar(
 
     # 6. Enumerate all gaussian x tile intersections.
     az_count = sum((e - s) for s, e in tile_ranges_az).to(torch.int32)
-    el_count = (tile_range_el[1] - tile_range_el[0])
+    el_count = tile_range_el[1] - tile_range_el[0]
     tiles_per_gauss = el_count * az_count
 
-    assert len(tiles_per_gauss) == I*N
+    assert len(tiles_per_gauss) == I * N
     n_isects = int(tiles_per_gauss.sum().item())
     accum_tiles_per_gauss = torch.cumsum(tiles_per_gauss, dim=0)
     assert accum_tiles_per_gauss[-1] == n_isects
@@ -276,7 +334,9 @@ def _isect_tiles_lidar(
     flatten_ids = torch.empty(n_isects, dtype=torch.int32, device="cpu")
 
     image_n_bits = I.bit_length()
-    tile_n_bits = (lidar.tiling.n_bins_elevation*lidar.tiling.n_bins_azimuth).bit_length()
+    tile_n_bits = (
+        lidar.tiling.n_bins_elevation * lidar.tiling.n_bins_azimuth
+    ).bit_length()
     assert image_n_bits + tile_n_bits <= 32, "Too many tiles"
 
     depths = depths.reshape(-1)
@@ -326,4 +386,3 @@ def _isect_tiles_lidar(
     assert flatten_ids.dtype == torch.int32, flatten_ids.dtype
 
     return tiles_per_gauss, isect_ids, flatten_ids
-

@@ -11,6 +11,7 @@ import torch.distributed
 import gc
 import os
 
+
 @pytest.fixture(autouse=True)
 def setup_test_environment():
     """
@@ -57,9 +58,7 @@ def dist_init():
     if not torch.distributed.is_initialized():
         os.environ.setdefault("MASTER_ADDR", "localhost")
         os.environ.setdefault("MASTER_PORT", "29500")
-        torch.distributed.init_process_group(
-            backend="nccl", world_size=1, rank=0
-        )
+        torch.distributed.init_process_group(backend="nccl", world_size=1, rank=0)
         # Warm up the communicator required by batch_isend_irecv.
         _ = [None]
         torch.distributed.all_gather_object(_, 0)
@@ -68,4 +67,3 @@ def dist_init():
 
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
-

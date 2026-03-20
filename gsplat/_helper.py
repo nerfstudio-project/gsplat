@@ -1,9 +1,26 @@
+# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 from typing import Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+
 
 def expand_named_params(named_params):
     """
@@ -24,6 +41,7 @@ def expand_named_params(named_params):
         >>> @pytest.mark.parametrize("rs_type", expand_named_params(ROLLING_SHUTTER_TYPES))
     """
     import pytest
+
     return [pytest.param(value, id=name) for name, value in named_params]
 
 
@@ -99,7 +117,9 @@ def get_inlier_abserror_mask(actual, expected, *, quantile=None, atol=None, rtol
         Boolean mask same shape as inputs, True for inliers (values within all specified thresholds)
     """
     # Validate arguments
-    assert rtol is None or atol is not None, "If rtol is specified, atol must also be specified"
+    assert (
+        rtol is None or atol is not None
+    ), "If rtol is specified, atol must also be specified"
 
     abs_diff = (actual - expected).abs()
 
@@ -138,22 +158,34 @@ def assert_shape(name: str, t: torch.Tensor, shape: tuple):
         raise ValueError(f"{name} must have shape {shape}, got {t.shape}")
 
 
-def assert_close(actual, expected,
-                 *,
-                 allow_subclasses=True,
-                 rtol=None, atol=None,
-                 equal_nan=False,
-                 check_device=True, check_dtype=True, check_layout=True, check_stride=False,
-                 msg=None
+def assert_close(
+    actual,
+    expected,
+    *,
+    allow_subclasses=True,
+    rtol=None,
+    atol=None,
+    equal_nan=False,
+    check_device=True,
+    check_dtype=True,
+    check_layout=True,
+    check_stride=False,
+    msg=None,
 ):
-    #rtol, atol = 0,0
+    # rtol, atol = 0,0
 
-    torch.testing.assert_close(actual, expected,
-                               allow_subclasses=allow_subclasses,
-                               rtol=rtol, atol=atol,
-                               equal_nan=equal_nan,
-                               check_device=check_device, check_dtype=check_dtype, check_layout=check_layout, check_stride=check_stride,
-                               msg=msg
+    torch.testing.assert_close(
+        actual,
+        expected,
+        allow_subclasses=allow_subclasses,
+        rtol=rtol,
+        atol=atol,
+        equal_nan=equal_nan,
+        check_device=check_device,
+        check_dtype=check_dtype,
+        check_layout=check_layout,
+        check_stride=check_stride,
+        msg=msg,
     )
 
 
@@ -164,13 +196,13 @@ def assert_mismatch_ratio(actual, expected, *, max=1e-5):
     if max is None:
         max = 1e-5
 
-    #max=0
+    # max=0
 
     assert actual.shape == expected.shape, f"{actual.shape=} {expected.shape=}"
 
     mismatch = (actual != expected).sum().item()
     total = expected.numel()
     mismatch_ratio = mismatch / total if total > 0 else 1
-    assert mismatch_ratio <= max, (
-        f"Too many validity mismatches: {mismatch}/{total} ({mismatch_ratio*100:.2f}%) "
-    )
+    assert (
+        mismatch_ratio <= max
+    ), f"Too many validity mismatches: {mismatch}/{total} ({mismatch_ratio*100:.2f}%) "

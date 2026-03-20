@@ -109,7 +109,9 @@ def make_params(
         device: Torch device for the tensors (defaults to cuda:0 if available).
     """
     if device is None:
-        device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        device = (
+            torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        )
     if h_inv is None:
         h_inv = make_identity_horizontal_poly()
     if v_inv is None:
@@ -118,6 +120,10 @@ def make_params(
     params.reference_poly = ref_poly
     params.horizontal_poly = torch.tensor(h_poly, dtype=torch.float32, device=device)
     params.vertical_poly = torch.tensor(v_poly, dtype=torch.float32, device=device)
-    params.horizontal_poly_inverse = torch.tensor(h_inv, dtype=torch.float32, device=device)
-    params.vertical_poly_inverse = torch.tensor(v_inv, dtype=torch.float32, device=device)
+    params.horizontal_poly_inverse = torch.tensor(
+        h_inv, dtype=torch.float32, device=device
+    )
+    params.vertical_poly_inverse = torch.tensor(
+        v_inv, dtype=torch.float32, device=device
+    )
     return params

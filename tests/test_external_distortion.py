@@ -38,7 +38,12 @@ device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("
 # Helper functions
 # ===========================================================================
 
-def distort_camera_rays_cuda(rays: torch.Tensor, params: "BivariateWindshieldModelParameters", inverse: bool = False) -> torch.Tensor:
+
+def distort_camera_rays_cuda(
+    rays: torch.Tensor,
+    params: "BivariateWindshieldModelParameters",
+    inverse: bool = False,
+) -> torch.Tensor:
     """Distort/undistort camera rays using the CUDA bivariate windshield model.
 
     Requires GSPLAT_BUILD_CAMERA_WRAPPERS=1.
@@ -62,7 +67,9 @@ def distort_camera_rays_cuda(rays: torch.Tensor, params: "BivariateWindshieldMod
     )
 
 
-def eval_bivariate_poly_cuda(x: torch.Tensor, y: torch.Tensor, poly_coeffs: torch.Tensor, order: int) -> torch.Tensor:
+def eval_bivariate_poly_cuda(
+    x: torch.Tensor, y: torch.Tensor, poly_coeffs: torch.Tensor, order: int
+) -> torch.Tensor:
     """Evaluate a 2D bivariate polynomial at (x, y) points using CUDA.
 
     Requires GSPLAT_BUILD_CAMERA_WRAPPERS=1.
@@ -77,6 +84,7 @@ def eval_bivariate_poly_cuda(x: torch.Tensor, y: torch.Tensor, poly_coeffs: torc
         Evaluated values [N] (float32, CUDA)
     """
     return _make_lazy_cuda_func("eval_bivariate_poly")(x, y, poly_coeffs, order)
+
 
 # ===========================================================================
 # 1. compute_order tests (pure Python)
@@ -149,7 +157,9 @@ class TestParameterConstruction:
         for order in range(BivariateWindshieldModelParameters.MAX_ORDER + 1):
             n = num_coeffs_for_order(order)
             coeffs = [0.0] * n
-            params = make_params(h_poly=coeffs, v_poly=coeffs, h_inv=coeffs, v_inv=coeffs)
+            params = make_params(
+                h_poly=coeffs, v_poly=coeffs, h_inv=coeffs, v_inv=coeffs
+            )
             assert params.horizontal_poly.shape == (n,)
 
     def test_reference_poly_forward(self):
@@ -174,7 +184,7 @@ class TestParameterConstruction:
         if not gsplat.has_3dgut():
             pytest.skip("CUDA extension not available")
         if not gsplat.has_camera_wrappers():
-            pytest.skip("Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)")            
+            pytest.skip("Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)")
         params = make_params(
             h_poly=make_identity_horizontal_poly(),
             v_poly=make_identity_vertical_poly(),
@@ -189,7 +199,7 @@ class TestParameterConstruction:
         if not gsplat.has_3dgut():
             pytest.skip("CUDA extension not available")
         if not gsplat.has_camera_wrappers():
-            pytest.skip("Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)")            
+            pytest.skip("Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)")
         n = num_coeffs_for_order(5)
         coeffs = [0.0] * n
         params = make_params(h_poly=coeffs, v_poly=coeffs, h_inv=coeffs, v_inv=coeffs)
@@ -212,7 +222,9 @@ class TestBivariatePolyEvaluationCUDA:
             pytest.skip("Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)")
 
     @staticmethod
-    def _eval_cuda(poly_coeffs: list, order: int, x_vals: list, y_vals: list) -> torch.Tensor:
+    def _eval_cuda(
+        poly_coeffs: list, order: int, x_vals: list, y_vals: list
+    ) -> torch.Tensor:
         x = torch.tensor(x_vals, dtype=torch.float32, device="cuda")
         y = torch.tensor(y_vals, dtype=torch.float32, device="cuda")
         coeffs = torch.tensor(poly_coeffs, dtype=torch.float32, device="cuda")
@@ -277,9 +289,9 @@ class TestBivariatePolyEvaluationCUDA:
             cuda_result = self._eval_cuda(coeffs, order, x_vals, y_vals)
             for i in range(len(x_vals)):
                 ref = ref_eval_bivariate_poly(coeffs, order, x_vals[i], y_vals[i])
-                assert cuda_result[i].item() == pytest.approx(ref, abs=1e-4), (
-                    f"Mismatch at order={order}, i={i}: CUDA={cuda_result[i].item()}, ref={ref}"
-                )
+                assert cuda_result[i].item() == pytest.approx(
+                    ref, abs=1e-4
+                ), f"Mismatch at order={order}, i={i}: CUDA={cuda_result[i].item()}, ref={ref}"
 
 
 # ===========================================================================
@@ -339,12 +351,12 @@ class TestDistortCameraRaysCUDA:
         ]
         result = self._distort_cuda(rays, h, v)
         for i, ray in enumerate(rays):
-            length = math.sqrt(sum(c ** 2 for c in ray))
+            length = math.sqrt(sum(c**2 for c in ray))
             expected = [c / length for c in ray]
             for j in range(3):
-                assert result[i, j].item() == pytest.approx(expected[j], abs=1e-5), (
-                    f"Component {j} mismatch for ray {ray}"
-                )
+                assert result[i, j].item() == pytest.approx(
+                    expected[j], abs=1e-5
+                ), f"Component {j} mismatch for ray {ray}"
 
     def test_zero_poly_maps_to_z_axis(self):
         """All-zero polynomials map any ray to the z-axis (since sin(0)=0)."""
@@ -378,9 +390,9 @@ class TestDistortCameraRaysCUDA:
         result = self._distort_cuda(rays, h, v)
         for i in range(len(rays)):
             length = torch.norm(result[i]).item()
-            assert length == pytest.approx(1.0, abs=1e-5), (
-                f"Non-unit length {length} for ray {rays[i]}"
-            )
+            assert length == pytest.approx(
+                1.0, abs=1e-5
+            ), f"Non-unit length {length} for ray {rays[i]}"
 
     def test_clamp_prevents_nan(self):
         """When x^2 + y^2 > 1, the clamp should prevent NaN in sqrt."""
@@ -408,8 +420,12 @@ class TestDistortCameraRaysCUDA:
         result_normal = self._distort_cuda(ray, h, v)
         result_swapped = self._distort_cuda(ray, v, h, h_inv=v, v_inv=h)
 
-        assert result_normal[0, 0].item() == pytest.approx(result_swapped[0, 1].item(), abs=1e-5)
-        assert result_normal[0, 1].item() == pytest.approx(result_swapped[0, 0].item(), abs=1e-5)
+        assert result_normal[0, 0].item() == pytest.approx(
+            result_swapped[0, 1].item(), abs=1e-5
+        )
+        assert result_normal[0, 1].item() == pytest.approx(
+            result_swapped[0, 0].item(), abs=1e-5
+        )
 
     def test_inverse_flag_uses_inverse_polynomials(self):
         """When inverse=True, the kernel should use the inverse polynomials."""
@@ -419,8 +435,12 @@ class TestDistortCameraRaysCUDA:
         v_inv = [0.0, 0.0, 1.0]
         ray = [[0.0, 0.0, 1.0]]
 
-        result_fwd = self._distort_cuda(ray, h_fwd, v_fwd, h_inv=h_inv, v_inv=v_inv, inverse=False)
-        result_inv = self._distort_cuda(ray, h_fwd, v_fwd, h_inv=h_inv, v_inv=v_inv, inverse=True)
+        result_fwd = self._distort_cuda(
+            ray, h_fwd, v_fwd, h_inv=h_inv, v_inv=v_inv, inverse=False
+        )
+        result_inv = self._distort_cuda(
+            ray, h_fwd, v_fwd, h_inv=h_inv, v_inv=v_inv, inverse=True
+        )
 
         # Forward: x = sin(0.1) ≈ 0.0998
         assert result_fwd[0, 0].item() == pytest.approx(math.sin(0.1), abs=1e-5)
@@ -443,9 +463,9 @@ class TestDistortCameraRaysCUDA:
         for i, ray in enumerate(rays_list):
             ref = ref_distort_camera_ray(tuple(ray), h, v, 1, 1)
             for j in range(3):
-                assert result[i, j].item() == pytest.approx(ref[j], abs=1e-5), (
-                    f"Mismatch at ray {i}, component {j}"
-                )
+                assert result[i, j].item() == pytest.approx(
+                    ref[j], abs=1e-5
+                ), f"Mismatch at ray {i}, component {j}"
 
     def test_cross_validate_nonidentity_poly(self):
         """Cross-validate CUDA vs Python for non-identity polynomials."""
@@ -464,9 +484,9 @@ class TestDistortCameraRaysCUDA:
         for i, ray in enumerate(rays_list):
             ref = ref_distort_camera_ray(tuple(ray), h, v, h_order, v_order)
             for j in range(3):
-                assert result[i, j].item() == pytest.approx(ref[j], abs=1e-4), (
-                    f"Mismatch at ray {i}, component {j}: CUDA={result[i,j].item()}, ref={ref[j]}"
-                )
+                assert result[i, j].item() == pytest.approx(
+                    ref[j], abs=1e-4
+                ), f"Mismatch at ray {i}, component {j}: CUDA={result[i,j].item()}, ref={ref[j]}"
 
     def test_batch_consistency(self):
         """CUDA kernel should produce same result regardless of batch size."""
@@ -480,7 +500,9 @@ class TestDistortCameraRaysCUDA:
         result_batch = self._distort_cuda([ray] * 10, h, v)
 
         for i in range(10):
-            torch.testing.assert_close(result_single[0], result_batch[i], atol=1e-7, rtol=1e-7)
+            torch.testing.assert_close(
+                result_single[0], result_batch[i], atol=1e-7, rtol=1e-7
+            )
 
     def test_boundary_rays_asin_clamp(self):
         """Boundary rays where ray[i]/ray_length == 1.0 must not produce NaN.
@@ -502,17 +524,19 @@ class TestDistortCameraRaysCUDA:
         ]
 
         cuda_result = self._distort_cuda(boundary_rays, h, v)
-        assert torch.isfinite(cuda_result).all(), \
-            "NaN/Inf in CUDA distort_camera_rays for boundary rays"
+        assert torch.isfinite(
+            cuda_result
+        ).all(), "NaN/Inf in CUDA distort_camera_rays for boundary rays"
 
         for i, ray in enumerate(boundary_rays):
             ref = ref_distort_camera_ray(tuple(ray), h, v, 1, 1)
             for j in range(3):
-                assert math.isfinite(ref[j]), \
-                    f"NaN/Inf in Python ref for ray {ray}, component {j}"
-                assert cuda_result[i, j].item() == pytest.approx(ref[j], abs=1e-5), (
-                    f"Mismatch at ray {i}, component {j}"
-                )
+                assert math.isfinite(
+                    ref[j]
+                ), f"NaN/Inf in Python ref for ray {ray}, component {j}"
+                assert cuda_result[i, j].item() == pytest.approx(
+                    ref[j], abs=1e-5
+                ), f"Mismatch at ray {i}, component {j}"
 
     def test_asin_clamp_with_imprecise_sqrt(self):
         """Python ref asin clamp must prevent ValueError when sqrt is imprecise.
@@ -544,18 +568,22 @@ class TestDistortCameraRaysCUDA:
         # Precondition: patched sqrt makes ratio > 1.0 for boundary rays
         ray_length = fast_math_sqrt(sum(c**2 for c in boundary_rays[0]))
         ratio = boundary_rays[0][0] / ray_length
-        assert ratio > 1.0, \
-            f"Precondition failed: patched sqrt should make ratio > 1.0, got {ratio}"
+        assert (
+            ratio > 1.0
+        ), f"Precondition failed: patched sqrt should make ratio > 1.0, got {ratio}"
         with pytest.raises(ValueError):
             math.asin(ratio)
 
         # All boundary rays must produce finite output despite ratio > 1.0
-        with unittest.mock.patch("gsplat.cuda._torch_external_distortion.math.sqrt", fast_math_sqrt):
+        with unittest.mock.patch(
+            "gsplat.cuda._torch_external_distortion.math.sqrt", fast_math_sqrt
+        ):
             for ray in boundary_rays:
                 result = ref_distort_camera_ray(ray, h, v, 1, 1)
                 for j, val in enumerate(result):
-                    assert math.isfinite(val), \
-                        f"NaN/Inf in component {j} for ray {ray}: got {val}"
+                    assert math.isfinite(
+                        val
+                    ), f"NaN/Inf in component {j} for ray {ray}: got {val}"
 
 
 # ===========================================================================
@@ -577,8 +605,13 @@ class TestCameraWithExternalDistortion:
     @staticmethod
     def _create_pinhole_camera(width=640, height=480, external_distortion_coeffs=None):
         from gsplat.cuda._wrapper import create_camera_model
-        focal_lengths = torch.tensor([[320.0, 320.0]], dtype=torch.float32, device="cuda")
-        principal_points = torch.tensor([[320.0, 240.0]], dtype=torch.float32, device="cuda")
+
+        focal_lengths = torch.tensor(
+            [[320.0, 320.0]], dtype=torch.float32, device="cuda"
+        )
+        principal_points = torch.tensor(
+            [[320.0, 240.0]], dtype=torch.float32, device="cuda"
+        )
         return create_camera_model(
             width=width,
             height=height,
@@ -592,8 +625,11 @@ class TestCameraWithExternalDistortion:
         """Project -> unproject roundtrip without distortion should recover direction."""
         cam = self._create_pinhole_camera()
         # Forward-looking rays
-        rays = torch.tensor([[[0.1, 0.05, 1.0], [0.0, 0.0, 1.0], [-0.1, 0.1, 1.0]]],
-                            dtype=torch.float32, device="cuda")
+        rays = torch.tensor(
+            [[[0.1, 0.05, 1.0], [0.0, 0.0, 1.0], [-0.1, 0.1, 1.0]]],
+            dtype=torch.float32,
+            device="cuda",
+        )
         img_pts, valid_proj = cam.camera_ray_to_image_point(rays)
         assert valid_proj.all()
 
@@ -614,10 +650,15 @@ class TestCameraWithExternalDistortion:
             h_inv=make_identity_horizontal_poly(),
             v_inv=make_identity_vertical_poly(),
         )
-        cam_identity = self._create_pinhole_camera(external_distortion_coeffs=identity_params)
+        cam_identity = self._create_pinhole_camera(
+            external_distortion_coeffs=identity_params
+        )
 
-        rays = torch.tensor([[[0.1, 0.05, 1.0], [0.0, 0.0, 1.0], [-0.05, 0.03, 1.0]]],
-                            dtype=torch.float32, device="cuda")
+        rays = torch.tensor(
+            [[[0.1, 0.05, 1.0], [0.0, 0.0, 1.0], [-0.05, 0.03, 1.0]]],
+            dtype=torch.float32,
+            device="cuda",
+        )
 
         img_none, _ = cam_none.camera_ray_to_image_point(rays)
         img_identity, _ = cam_identity.camera_ray_to_image_point(rays)
@@ -632,16 +673,21 @@ class TestCameraWithExternalDistortion:
             h_inv=[-0.05, 1.0, 0.0],
             v_inv=[0.0, 0.0, 1.0],
         )
-        cam_perturbed = self._create_pinhole_camera(external_distortion_coeffs=perturbed_params)
+        cam_perturbed = self._create_pinhole_camera(
+            external_distortion_coeffs=perturbed_params
+        )
 
-        rays = torch.tensor([[[0.0, 0.0, 1.0], [0.1, 0.0, 1.0]]],
-                            dtype=torch.float32, device="cuda")
+        rays = torch.tensor(
+            [[[0.0, 0.0, 1.0], [0.1, 0.0, 1.0]]], dtype=torch.float32, device="cuda"
+        )
 
         img_none, _ = cam_none.camera_ray_to_image_point(rays)
         img_perturbed, _ = cam_perturbed.camera_ray_to_image_point(rays)
 
         diff = (img_perturbed - img_none).abs().max().item()
-        assert diff > 1.0, f"Expected visible pixel shift from 0.05 rad offset, got max diff {diff}"
+        assert (
+            diff > 1.0
+        ), f"Expected visible pixel shift from 0.05 rad offset, got max diff {diff}"
 
     def test_distortion_undistortion_roundtrip(self):
         """Project with distortion -> unproject should approximately recover direction.
@@ -657,8 +703,11 @@ class TestCameraWithExternalDistortion:
         )
         cam = self._create_pinhole_camera(external_distortion_coeffs=params)
 
-        rays = torch.tensor([[[0.05, 0.03, 1.0], [0.0, 0.0, 1.0], [-0.05, 0.05, 1.0]]],
-                            dtype=torch.float32, device="cuda")
+        rays = torch.tensor(
+            [[[0.05, 0.03, 1.0], [0.0, 0.0, 1.0], [-0.05, 0.05, 1.0]]],
+            dtype=torch.float32,
+            device="cuda",
+        )
 
         img_pts, valid_proj = cam.camera_ray_to_image_point(rays)
         assert valid_proj.all()
@@ -680,8 +729,11 @@ class TestCameraWithExternalDistortion:
         )
         cam = self._create_pinhole_camera(external_distortion_coeffs=zero_params)
 
-        rays = torch.tensor([[[0.3, 0.2, 0.8], [-0.1, 0.5, 0.6], [0.0, 0.0, 1.0]]],
-                            dtype=torch.float32, device="cuda")
+        rays = torch.tensor(
+            [[[0.3, 0.2, 0.8], [-0.1, 0.5, 0.6], [0.0, 0.0, 1.0]]],
+            dtype=torch.float32,
+            device="cuda",
+        )
 
         img_pts, valid = cam.camera_ray_to_image_point(rays)
         # All rays distorted to z-axis -> all project to principal point (320, 240)
@@ -697,8 +749,9 @@ class TestCameraWithExternalDistortion:
         params = make_params(h_poly=h, v_poly=v, h_inv=h, v_inv=v)
         cam = self._create_pinhole_camera(external_distortion_coeffs=params)
 
-        rays = torch.tensor([[[0.1, 0.05, 1.0], [0.0, 0.0, 1.0]]],
-                            dtype=torch.float32, device="cuda")
+        rays = torch.tensor(
+            [[[0.1, 0.05, 1.0], [0.0, 0.0, 1.0]]], dtype=torch.float32, device="cuda"
+        )
         img_pts, valid = cam.camera_ray_to_image_point(rays)
         assert valid.all()
         assert not torch.isnan(img_pts).any()
@@ -761,12 +814,20 @@ class TestRenderingWithExternalDistortion:
         ftheta_coeffs = FThetaCameraDistortionParameters(
             reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
             pixeldist_to_angle_poly=(
-                0.0, 8.4335003e-03, 2.3174282e-06,
-                -5.0478608e-08, 6.1392608e-10, -1.7447865e-12,
+                0.0,
+                8.4335003e-03,
+                2.3174282e-06,
+                -5.0478608e-08,
+                6.1392608e-10,
+                -1.7447865e-12,
             ),
             angle_to_pixeldist_poly=(
-                0.0, 118.43232, -2.562147,
-                6.317949, -10.41861, 3.6694396,
+                0.0,
+                118.43232,
+                -2.562147,
+                6.317949,
+                -10.41861,
+                3.6694396,
             ),
             max_angle=1000,
             linear_cde=(9.9968284e-01, 1.8735906e-05, 1.7659619e-05),
@@ -810,7 +871,9 @@ class TestRenderingWithExternalDistortion:
             h_inv=make_identity_horizontal_poly(),
             v_inv=make_identity_vertical_poly(),
         )
-        renders_identity, _ = self._render(test_data, external_distortion_coeffs=identity_params)
+        renders_identity, _ = self._render(
+            test_data, external_distortion_coeffs=identity_params
+        )
 
         assert not torch.isnan(renders_identity).any()
         diff = (renders_identity - renders_none).abs()
@@ -826,13 +889,15 @@ class TestRenderingWithExternalDistortion:
             h_inv=[-0.05, 1.0, 0.0],
             v_inv=[0.0, 0.0, 1.0],
         )
-        renders_perturbed, _ = self._render(test_data, external_distortion_coeffs=perturbed_params)
+        renders_perturbed, _ = self._render(
+            test_data, external_distortion_coeffs=perturbed_params
+        )
 
         assert not torch.isnan(renders_perturbed).any()
         diff = (renders_perturbed - renders_none).abs()
-        assert diff.mean() > 1e-4, (
-            f"Expected visible difference from 0.05 rad offset, got mean diff {diff.mean():.6f}"
-        )
+        assert (
+            diff.mean() > 1e-4
+        ), f"Expected visible difference from 0.05 rad offset, got mean diff {diff.mean():.6f}"
 
     def test_zero_poly_distortion(self, test_data):
         """All-zero polynomials should not crash (maps everything to z-axis)."""
@@ -842,7 +907,9 @@ class TestRenderingWithExternalDistortion:
             h_inv=make_zero_poly(1),
             v_inv=make_zero_poly(1),
         )
-        renders, alphas = self._render(test_data, external_distortion_coeffs=zero_params)
+        renders, alphas = self._render(
+            test_data, external_distortion_coeffs=zero_params
+        )
         assert not torch.isnan(renders).any()
         assert not torch.isinf(renders).any()
 
