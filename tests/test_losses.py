@@ -988,3 +988,196 @@ class TestReduceEdgeCases:
     def test_sum_empty_returns_zero(self):
         result = reduce_sum(torch.tensor([]))
         assert torch.isclose(result, torch.tensor(0.0))
+
+
+# ---------------------------------------------------------------------------
+# Gaussian regularization losses
+# ---------------------------------------------------------------------------
+
+from gsplat.losses import (
+    bilateral_grid_drift_loss,
+    gaussian_density_reg,
+    gaussian_scale_reg,
+    gaussian_z_scale_reg,
+    out_of_bound_loss,
+)
+
+
+class TestGaussianScaleReg:
+    def test_zero_scales(self):
+        scales = torch.zeros(10, 3)
+        assert (gaussian_scale_reg(scales) == 0).all()
+
+    def test_known_value(self):
+        scales = torch.tensor([[1.0, -2.0, 3.0]])
+        expected = torch.tensor([[1.0, 2.0, 3.0]])
+        assert torch.allclose(gaussian_scale_reg(scales), expected)
+
+    def test_visibility_masking(self):
+        scales = torch.ones(4, 3)
+        vis = torch.tensor([1.0, 0.0, 1.0, 0.0])
+        result = gaussian_scale_reg(scales, visibility=vis)
+        assert (result[0] == 1.0).all()
+        assert (result[1] == 0.0).all()
+        assert (result[2] == 1.0).all()
+        assert (result[3] == 0.0).all()
+
+    def test_no_visibility(self):
+        scales = torch.tensor([[-0.5, 0.5, 1.5]])
+        expected = torch.tensor([[0.5, 0.5, 1.5]])
+        assert torch.allclose(gaussian_scale_reg(scales), expected)
+
+    def test_shape(self):
+        scales = torch.rand(100, 3)
+        assert gaussian_scale_reg(scales).shape == (100, 3)
+
+    def test_gradient_nonzero(self):
+        scales = torch.randn(10, 3, requires_grad=True)
+        gaussian_scale_reg(scales).sum().backward()
+        assert scales.grad.abs().sum() > 0
+
+    def test_gradient_with_visibility(self):
+        scales = torch.randn(4, 3, requires_grad=True)
+        vis = torch.tensor([1.0, 0.0, 1.0, 0.0])
+        gaussian_scale_reg(scales, visibility=vis).sum().backward()
+        # Masked Gaussians should have zero gradient
+        assert (scales.grad[1] == 0).all()
+        assert (scales.grad[3] == 0).all()
+        assert scales.grad[0].abs().sum() > 0
+
+
+class TestGaussianDensityReg:
+    def test_zero_densities(self):
+        d = torch.zeros(10)
+        assert (gaussian_density_reg(d) == 0).all()
+
+    def test_known_value(self):
+        d = torch.tensor([-3.0, 2.0, -1.0])
+        expected = torch.tensor([3.0, 2.0, 1.0])
+        assert torch.allclose(gaussian_density_reg(d), expected)
+
+    def test_visibility_masking(self):
+        d = torch.ones(4)
+        vis = torch.tensor([1.0, 0.0, 0.0, 1.0])
+        result = gaussian_density_reg(d, visibility=vis)
+        assert torch.allclose(result, vis)
+
+    def test_shape_1d(self):
+        d = torch.rand(50)
+        assert gaussian_density_reg(d).shape == (50,)
+
+    def test_shape_2d(self):
+        d = torch.rand(50, 1)
+        assert gaussian_density_reg(d).shape == (50, 1)
+
+    def test_gradient_nonzero(self):
+        d = torch.randn(10, requires_grad=True)
+        gaussian_density_reg(d).sum().backward()
+        assert d.grad.abs().sum() > 0
+
+
+class TestGaussianZScaleReg:
+    def test_below_threshold(self):
+        z = torch.tensor([0.1, 0.2, 0.3])
+        result = gaussian_z_scale_reg(z, threshold=0.5)
+        assert (result == 0).all()
+
+    def test_above_threshold(self):
+        z = torch.tensor([0.6, 0.8, 1.0])
+        result = gaussian_z_scale_reg(z, threshold=0.5)
+        expected = torch.tensor([0.1, 0.3, 0.5])
+        assert torch.allclose(result, expected)
+
+    def test_mixed(self):
+        z = torch.tensor([0.3, 0.5, 0.7])
+        result = gaussian_z_scale_reg(z, threshold=0.5)
+        expected = torch.tensor([0.0, 0.0, 0.2])
+        assert torch.allclose(result, expected)
+
+    def test_shape(self):
+        z = torch.rand(100)
+        assert gaussian_z_scale_reg(z, threshold=0.5).shape == (100,)
+
+    def test_gradient_selective(self):
+        z = torch.tensor([0.3, 0.7], requires_grad=True)
+        gaussian_z_scale_reg(z, threshold=0.5).sum().backward()
+        assert z.grad[0].item() == 0.0  # below threshold
+        assert z.grad[1].item() == 1.0  # above threshold
+
+
+class TestOutOfBoundLoss:
+    def test_inside_cuboid(self):
+        pos = torch.tensor([[0.0, 0.0, 0.0]])
+        dims = torch.tensor([[2.0, 2.0, 2.0]])
+        assert (out_of_bound_loss(pos, dims) == 0).all()
+
+    def test_outside_cuboid(self):
+        pos = torch.tensor([[2.0, 0.0, 0.0]])
+        dims = torch.tensor([[2.0, 2.0, 2.0]])
+        # |2| - 2/2 = 1.0 on x, 0 on y,z
+        expected = torch.tensor([[1.0, 0.0, 0.0]])
+        assert torch.allclose(out_of_bound_loss(pos, dims), expected)
+
+    def test_negative_position(self):
+        pos = torch.tensor([[-3.0, 0.0, 0.0]])
+        dims = torch.tensor([[4.0, 4.0, 4.0]])
+        # |-3| - 4/2 = 1.0 on x
+        expected = torch.tensor([[1.0, 0.0, 0.0]])
+        assert torch.allclose(out_of_bound_loss(pos, dims), expected)
+
+    def test_known_3d(self):
+        pos = torch.tensor([[2.0, -1.5, 0.5]])
+        dims = torch.tensor([[2.0, 2.0, 2.0]])
+        # x: |2|-1=1, y: |-1.5|-1=0.5, z: |0.5|-1=0 (inside)
+        expected = torch.tensor([[1.0, 0.5, 0.0]])
+        assert torch.allclose(out_of_bound_loss(pos, dims), expected)
+
+    def test_batch(self):
+        pos = torch.rand(100, 3) * 4 - 2  # [-2, 2]
+        dims = torch.ones(100, 3) * 3.0
+        result = out_of_bound_loss(pos, dims)
+        assert result.shape == (100, 3)
+        assert (result >= 0).all()
+
+    def test_gradient_nonzero(self):
+        pos = torch.tensor([[2.0, 0.0, 0.0]], requires_grad=True)
+        dims = torch.tensor([[2.0, 2.0, 2.0]])
+        out_of_bound_loss(pos, dims).sum().backward()
+        assert pos.grad[0, 0].item() == 1.0  # outside: grad = sign(pos) = 1
+        assert pos.grad[0, 1].item() == 0.0  # inside: grad = 0
+        assert pos.grad[0, 2].item() == 0.0
+
+
+class TestBilateralGridDriftLoss:
+    def test_identity_grids(self):
+        eye = torch.eye(3, 4).flatten().unsqueeze(0)  # (1, 12)
+        result = bilateral_grid_drift_loss([eye])
+        assert torch.allclose(result, torch.tensor([0.0]), atol=1e-6)
+
+    def test_zero_grid(self):
+        grid = torch.zeros(1, 12)
+        result = bilateral_grid_drift_loss([grid])
+        assert torch.isclose(result, torch.tensor([math.sqrt(3.0)]), atol=1e-5)
+
+    def test_multiple_grids(self):
+        eye = torch.eye(3, 4).flatten().unsqueeze(0)
+        zero = torch.zeros(1, 12)
+        result = bilateral_grid_drift_loss([eye, zero])
+        assert result.shape == (2,)
+        assert torch.isclose(result[0], torch.tensor(0.0), atol=1e-6)
+        assert result[1] > 0
+
+    def test_spatial_dims(self):
+        grid = torch.rand(2, 12, 3, 3)
+        result = bilateral_grid_drift_loss([grid])
+        assert result.shape == (2 * 3 * 3,)
+
+    def test_gradient_nonzero(self):
+        grid = torch.rand(1, 12, requires_grad=True)
+        bilateral_grid_drift_loss([grid]).sum().backward()
+        assert grid.grad.abs().sum() > 0
+
+    def test_empty_list(self):
+        result = bilateral_grid_drift_loss([])
+        assert result.shape == (0,)
+        assert result.dtype == torch.float32
