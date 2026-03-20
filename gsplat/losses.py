@@ -584,3 +584,101 @@ def reduce_sum(value: Tensor) -> Tensor:
         Scalar sum.
     """
     return value.sum()
+
+
+# ---------------------------------------------------------------------------
+# Gaussian regularization losses
+# ---------------------------------------------------------------------------
+
+
+def gaussian_scale_reg(scales: Tensor, visibility: Tensor | None = None) -> Tensor:
+    """Penalize large Gaussian scale values.
+
+    Returns the absolute value of each scale component, optionally weighted
+    by a per-Gaussian visibility mask.
+
+    Args:
+        scales: Gaussian scales ``[N, 3]``.
+        visibility: Optional visibility mask ``[N]`` or ``[N, 1]``.
+
+    Returns:
+        Per-element regularization ``[N, 3]`` (apply your own reduction).
+    """
+    loss = scales.abs()
+    if visibility is not None:
+        loss = loss * visibility.view(-1, *[1] * (loss.ndim - 1))
+    return loss
+
+
+def gaussian_density_reg(densities: Tensor, visibility: Tensor | None = None) -> Tensor:
+    """Penalize large Gaussian density (opacity) values.
+
+    Returns the absolute value of each density, optionally weighted by a
+    per-Gaussian visibility mask.
+
+    Args:
+        densities: Gaussian densities ``[N]`` or ``[N, 1]``.
+        visibility: Optional visibility mask broadcastable to *densities*.
+
+    Returns:
+        Per-element regularization, same shape as *densities*.
+    """
+    loss = densities.abs()
+    if visibility is not None:
+        loss = loss * visibility.view(-1, *[1] * (loss.ndim - 1))
+    return loss
+
+
+def gaussian_z_scale_reg(z_scales: Tensor, threshold: float) -> Tensor:
+    """Penalize z-scale values above a threshold.
+
+    Used to constrain the z-axis scale of road-layer Gaussians.
+
+    Args:
+        z_scales: Z-component of Gaussian scales ``[N]``.
+        threshold: Scale value above which penalty is applied.
+
+    Returns:
+        Per-element penalty ``[N]``.
+    """
+    return torch.relu(z_scales - threshold)
+
+
+def out_of_bound_loss(positions: Tensor, cuboid_dims: Tensor) -> Tensor:
+    """Penalize Gaussians outside their bounding cuboids.
+
+    Computes ``relu(|position| - cuboid_dim / 2)`` per axis, giving zero
+    loss for Gaussians inside the cuboid and linearly increasing loss
+    outside.
+
+    Args:
+        positions: Gaussian positions in local cuboid frame ``[N, 3]``.
+        cuboid_dims: Cuboid dimensions (full extents) per Gaussian ``[N, 3]``.
+
+    Returns:
+        Per-element penalty ``[N, 3]``.
+    """
+    return torch.relu(positions.abs() - cuboid_dims / 2)
+
+
+def bilateral_grid_drift_loss(
+    grids: list[Tensor], num_rows: int = 3, num_cols: int = 4
+) -> Tensor:
+    """Penalize bilateral grid deviation from identity transform.
+
+    Applies :func:`identity_distance` to each grid and concatenates the
+    results.  Grids may have different spatial shapes.
+
+    Args:
+        grids: List of grid tensors, each ``(B, C, ...)`` where
+            ``C = num_rows * num_cols``.
+        num_rows: Rows of the affine matrix (default ``3``).
+        num_cols: Columns of the affine matrix (default ``4``).
+
+    Returns:
+        Concatenated per-element Frobenius distances from identity,
+        or an empty tensor if *grids* is empty.
+    """
+    if not grids:
+        return torch.empty(0, device="cpu", dtype=torch.float32)
+    return torch.cat([identity_distance(g, num_rows, num_cols).view(-1) for g in grids])
