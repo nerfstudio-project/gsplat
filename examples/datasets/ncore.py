@@ -209,15 +209,43 @@ class NCoreParser:
         lidar_ids: Optional[List[str]],
     ) -> None:
         """Auto-detect sensor IDs if not provided; set camera_ids and lidar_ids."""
+
+        # Auto-detect _single_ sensors if not specified - sensors need to be specified explicitly
+        # to avoid ambiguity (e.g., in case of multiple downscaled sensors)
         if not camera_ids:
             camera_ids = sequence_loader.camera_ids
+
+            if len(camera_ids) > 1:
+                raise ValueError(
+                    "NCoreParser: Multiple camera sensors in dataset, explicit"
+                    f" specification of a (subset) of camera sensors required to avoid ambiguity: {camera_ids}"
+                )
+
             print(f"[NCoreParser] Auto-detected cameras: {camera_ids}")
         if not lidar_ids:
             lidar_ids = sequence_loader.lidar_ids
+
+            if len(lidar_ids) > 1:
+                raise ValueError(
+                    "NCoreParser: Multiple lidar sensors in dataset, explicit"
+                    f" specification of a (subset) of lidar sensors required to avoid ambiguity: {lidar_ids}"
+                )
+
             print(f"[NCoreParser] Auto-detected lidars: {lidar_ids}")
+
+        assert all(cid in sequence_loader.camera_ids for cid in camera_ids), (
+            f"NCoreParser: some specified camera_ids {camera_ids} not found in dataset cameras {sequence_loader.camera_ids}"
+        )
+        assert all(lid in sequence_loader.lidar_ids for lid in lidar_ids), (
+            f"NCoreParser: some specified lidar_ids {lidar_ids} not found in dataset lidars {sequence_loader.lidar_ids}"
+        )
+
         self.camera_ids: List[str] = list(camera_ids)
         self.lidar_ids: List[str] = list(lidar_ids)
         self.num_cameras: int = len(self.camera_ids)
+
+        print(f"[NCoreParser] Using cameras: {self.camera_ids}")
+        print(f"[NCoreParser] Using lidars: {self.lidar_ids}")
 
     def _compute_world_global_transform(self, sequence_loader: ncore.data.SequenceLoaderProtocol) -> None:
         """Set T_world_to_scene_world: transformation from NCore world -> world_global."""
