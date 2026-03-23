@@ -66,7 +66,7 @@ def _build_pinhole_K(
     )
 
 
-def _load_ego_mask(sensor: Any, n_dilation: int) -> Optional[np.ndarray]:
+def _load_ego_mask(sensor: ncore.data.CameraSensorProtocol, n_dilation: int) -> Optional[np.ndarray]:
     """Return a dilated boolean ego mask (True = ego vehicle) or None."""
     mask_images = sensor.get_mask_images()
     if "ego" not in mask_images:
@@ -202,7 +202,7 @@ class NCoreParser:
             )
         self.time_range_us = time_range
 
-    def _open_sequence_loader(self, path: Path) -> Any:
+    def _open_sequence_loader(self, path: Path) -> ncore.data.SequenceLoaderProtocol:
         """Open and return a SequenceLoaderV4 for this parser's component groups."""
         return ncore.data.v4.SequenceLoaderV4(
             ncore.data.v4.SequenceComponentGroupsReader(
@@ -215,7 +215,7 @@ class NCoreParser:
 
     def _resolve_sensor_ids(
         self,
-        sequence_loader: Any,
+        sequence_loader: ncore.data.SequenceLoaderProtocol,
         camera_ids: Optional[List[str]],
         lidar_ids: Optional[List[str]],
     ) -> None:
@@ -230,7 +230,7 @@ class NCoreParser:
         self.lidar_ids: List[str] = list(lidar_ids)
         self.num_cameras: int = len(self.camera_ids)
 
-    def _compute_world_global_transform(self, sequence_loader: Any) -> None:
+    def _compute_world_global_transform(self, sequence_loader: ncore.data.SequenceLoaderProtocol) -> None:
         """Set T_world_to_scene_world: rotation from NCore world -> world_global."""
         edge = sequence_loader.pose_graph.get_edge("world", "world_global")
         assert edge is not None, (
@@ -241,8 +241,8 @@ class NCoreParser:
         ).astype(np.float32)
 
     def _load_camera_data(
-        self, sequence_loader: Any, factor: float, n_dilation: int
-    ) -> Dict[str, Any]:
+        self, sequence_loader: ncore.data.SequenceLoaderProtocol, factor: float, n_dilation: int
+    ) -> Dict[str, ncore.data.CameraSensorProtocol]:
         """Load intrinsics, K matrices, and ego masks for all cameras."""
         camera_sensors = {
             cid: sequence_loader.get_camera_sensor(cid) for cid in self.camera_ids
@@ -250,7 +250,7 @@ class NCoreParser:
         self.Ks_dict: Dict[str, np.ndarray] = {}
         self.imsize_dict: Dict[str, Tuple[int, int]] = {}
         self.mask_dict: Dict[str, Optional[np.ndarray]] = {}
-        self.camera_models: Dict[str, Any] = {}
+        self.camera_models: Dict[str, ncore.sensors.CameraModel] = {}
         self.ftheta_coeffs_dict: Dict[str, Optional[FThetaCameraDistortionParameters]] = {}
 
         for camera_id in self.camera_ids:
@@ -259,12 +259,13 @@ class NCoreParser:
             if factor != 1.0:
                 try:
                     model_params = model_params.transform(image_domain_scale=factor)
-                except (AssertionError, ValueError):
+                except (AssertionError, ValueError) as e:
                     print(
-                        f"[NCoreParser] Warning: factor={factor} produces non-integer "
+                        f"[NCoreParser] Error: factor={factor} produces non-integer "
                         f"resolution for {camera_id}; using factor=1.0 (full resolution). "
-                        "Pass --data-factor 1 to suppress this warning."
+                        "Pass --data-factor 1 to suppress this error."
                     )
+                    raise e
 
             camera_model = ncore.sensors.CameraModel.from_parameters(
                 model_params, device="cpu", dtype=torch.float32
@@ -275,10 +276,10 @@ class NCoreParser:
             height = int(camera_model.resolution[1].item())
             self.imsize_dict[camera_id] = (width, height)
 
-            if isinstance(camera_model, ncore.sensors.FThetaCameraModel):
+            if isinstance(model_params, ncore.data.FThetaCameraModelParameters):
                 # map ncore's FTheta camera model to gsplat's
-                cx = float(camera_model.principal_point[0].item())
-                cy = float(camera_model.principal_point[1].item())
+                cx = float(model_params.principal_point[0].item())
+                cy = float(model_params.principal_point[1].item())
                 self.Ks_dict[camera_id] = np.array([[1.0, 0.0, cx], [0.0, 1.0, cy], [0.0, 0.0, 1.0]], dtype=np.float32)
                 ref_poly = FThetaPolynomialType[model_params.reference_poly.name]
                 self.ftheta_coeffs_dict[camera_id] = FThetaCameraDistortionParameters(
@@ -317,7 +318,7 @@ class NCoreParser:
 
     def _compute_scene_origin(
         self,
-        camera_sensors: Dict[str, Any],
+        camera_sensors: Dict[str, ncore.data.CameraSensorProtocol],
         camera_frame_ranges: Dict[str, range],
     ) -> None:
         """Set world_global_to_scene: translation that centres poses at the origin."""
@@ -349,7 +350,7 @@ class NCoreParser:
 
     def _load_poses(
         self,
-        camera_sensors: Dict[str, Any],
+        camera_sensors: Dict[str, ncore.data.CameraSensorProtocol],
         camera_frame_ranges: Dict[str, range],
     ) -> None:
         """Batch-load start/end poses for all frames; set camtoworlds and scene_scale."""
@@ -396,6 +397,7 @@ class NCoreParser:
 
         self.camtoworlds = np.stack(starts, axis=0)      # (N, 4, 4)
         self.camtoworlds_end = np.stack(ends, axis=0)    # (N, 4, 4)
+
         # Scene scale: max distance from origin (poses are already centred).
         self.scene_scale = float(
             np.linalg.norm(self.camtoworlds[:, :3, 3], axis=1).max()
@@ -412,7 +414,7 @@ class NCoreParser:
 
     def _load_lidar_points(
         self,
-        sequence_loader: Any,
+        sequence_loader: ncore.data.SequenceLoaderProtocol,
         max_points: int,
         step_frame: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
@@ -508,8 +510,8 @@ class NCoreDataset(torch.utils.data.Dataset):
             self.indices = all_indices[all_indices % parser.test_every == 0]
 
         # Per-worker sequence loader (lazily initialised).
-        self._sequence_loader: Optional[Any] = None
-        self._camera_sensors: Optional[Dict[str, Any]] = None
+        self._sequence_loader: Optional[ncore.data.SequenceLoaderProtocol] = None
+        self._camera_sensors: Optional[Dict[str, ncore.data.CameraSensorProtocol]] = None
         self._current_worker_id: Optional[int] = None
 
     def _init_worker(self) -> None:
