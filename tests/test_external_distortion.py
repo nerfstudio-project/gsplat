@@ -147,6 +147,7 @@ class TestParameterConstruction:
         expected = num_coeffs_for_order(BivariateWindshieldModelParameters.MAX_ORDER)
         assert BivariateWindshieldModelParameters.MAX_COEFFS == expected
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
     def test_construct_order1(self):
         params = make_params(
             h_poly=make_identity_horizontal_poly(),
@@ -156,6 +157,7 @@ class TestParameterConstruction:
         assert params.vertical_poly.shape == (3,)
         assert params.reference_poly == ExternalDistortionReferencePolynomial.FORWARD
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
     def test_construct_order5(self):
         """Construct with maximum order (5) polynomials."""
         n = num_coeffs_for_order(5)
@@ -167,6 +169,7 @@ class TestParameterConstruction:
         assert params.horizontal_poly.shape == (21,)
         assert params.vertical_poly.shape == (21,)
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
     def test_construct_all_orders(self):
         """Ensure we can construct parameters for every valid order 0..5."""
         for order in range(BivariateWindshieldModelParameters.MAX_ORDER + 1):
@@ -177,6 +180,7 @@ class TestParameterConstruction:
             )
             assert params.horizontal_poly.shape == (n,)
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
     def test_reference_poly_forward(self):
         params = make_params(
             h_poly=make_identity_horizontal_poly(),
@@ -185,6 +189,7 @@ class TestParameterConstruction:
         )
         assert params.reference_poly == ExternalDistortionReferencePolynomial.FORWARD
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
     def test_reference_poly_backward(self):
         params = make_params(
             h_poly=make_identity_horizontal_poly(),
