@@ -276,7 +276,7 @@ if $do_3dgs; then
 fi
 
 if $do_debug; then
-    run_args+=(-e DEBUG=1)
+    run_args+=(-e DEBUG=1 -e FAST_MATH=0)
 fi
 
 shell_args=()
