@@ -29,7 +29,7 @@ import ncore.sensors
 
 from gsplat.rendering import FThetaCameraDistortionParameters, FThetaPolynomialType
 
-from .ncore_utils import FrameConversion, HalfClosedInterval
+from .ncore_utils import FrameConversion
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +131,21 @@ class NCoreParser:
         self.masks_component_group = masks_component_group
         self.open_consolidated = open_consolidated
 
-        path = Path(meta_json_path)
-        self._load_meta(path, seek_offset_sec, duration_sec)
+        self.sequence_meta_file_path: Path = Path(meta_json_path)
+        sequence_loader = self._open_sequence_loader(self.sequence_meta_file_path)
 
-        sequence_loader = self._open_sequence_loader(path)
+        self.sequence_id: str = sequence_loader.sequence_id
+
+        time_range = sequence_loader.sequence_timestamp_interval_us
+        if seek_offset_sec is not None:
+            time_range.start += int(seek_offset_sec * 1e6)
+        if duration_sec is not None and duration_sec > 0:
+            time_range.stop = min(
+                time_range.start + int(duration_sec * 1e6),
+                time_range.stop,
+            )
+        self.time_range_us = time_range
+
         self._resolve_sensor_ids(sequence_loader, camera_ids, lidar_ids)
         self._compute_world_global_transform(sequence_loader)
 
@@ -166,13 +177,9 @@ class NCoreParser:
     # Private init helpers
     # ------------------------------------------------------------------
 
-    def _load_meta(
-        self,
-        path: Path,
-        seek_offset_sec: Optional[float],
-        duration_sec: Optional[float],
-    ) -> None:
-        """Load and validate the sequence JSON; set time_range_us."""
+    def _open_sequence_loader(self, path: Path) -> ncore.data.SequenceLoaderProtocol:
+        """Open and return a SequenceLoaderV4 for this parser's component groups."""
+
         assert path.is_file(), f"NCoreParser: path {path} is not a file"
         with open(path, "r") as fp:
             dataset_meta = json.load(fp)
@@ -186,24 +193,6 @@ class NCoreParser:
             )
         ), f"NCoreParser: {path} is not a NCore v4 single-sequence meta-file"
 
-        self.sequence_id: str = dataset_meta["sequence_id"]
-        self.sequence_meta_file_path: Path = path
-
-        time_range = HalfClosedInterval(
-            dataset_meta["sequence_timestamp_interval_us"]["start"],
-            dataset_meta["sequence_timestamp_interval_us"]["stop"],
-        )
-        if seek_offset_sec is not None:
-            time_range.start += int(seek_offset_sec * 1e6)
-        if duration_sec is not None and duration_sec > 0:
-            time_range.end = min(
-                time_range.start + int(duration_sec * 1e6),
-                time_range.end,
-            )
-        self.time_range_us = time_range
-
-    def _open_sequence_loader(self, path: Path) -> ncore.data.SequenceLoaderProtocol:
-        """Open and return a SequenceLoaderV4 for this parser's component groups."""
         return ncore.data.v4.SequenceLoaderV4(
             ncore.data.v4.SequenceComponentGroupsReader(
                 [path], open_consolidated=self.open_consolidated

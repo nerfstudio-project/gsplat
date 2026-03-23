@@ -21,28 +21,6 @@ import numpy as np
 import numpy.typing as npt
 
 
-class HalfClosedInterval:
-    """Represents a half-closed interval [start, end)."""
-
-    def __init__(self, start: int, end: int) -> None:
-        assert start <= end
-        self.start = start
-        self.end = end
-
-    def cover_range(self, sorted_samples: np.ndarray) -> range:
-        """Return the index range covering samples within [start, end)."""
-        cover_range_start = int(np.searchsorted(sorted_samples, self.start, side="left"))
-        cover_range_stop = int(np.searchsorted(sorted_samples, self.end, side="left"))
-        return range(cover_range_start, cover_range_stop)
-
-    def __contains__(self, item: object) -> bool:
-        if isinstance(item, int):
-            return self.start <= item < self.end
-        elif isinstance(item, HalfClosedInterval):
-            return (self.start <= item.start) and (item.end <= self.end)
-        raise TypeError(f"Expected int or HalfClosedInterval, got {type(item).__name__}")
-
-
 class FrameConversion:
     """Converts poses and points between canonical 3D frames.
 
