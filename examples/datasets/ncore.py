@@ -220,14 +220,13 @@ class NCoreParser:
         self.num_cameras: int = len(self.camera_ids)
 
     def _compute_world_global_transform(self, sequence_loader: ncore.data.SequenceLoaderProtocol) -> None:
-        """Set T_world_to_scene_world: rotation from NCore world -> world_global."""
-        edge = sequence_loader.pose_graph.get_edge("world", "world_global")
-        assert edge is not None, (
-            "NCoreParser: 'world' -> 'world_global' edge not found in pose graph"
-        )
-        self.T_world_to_scene_world: np.ndarray = np.linalg.inv(
-            edge.T_source_target
-        ).astype(np.float32)
+        """Set T_world_to_scene_world: transformation from NCore world -> world_global."""
+        if (edge := sequence_loader.pose_graph.get_edge("world", "world_global")) is not None:
+            self.T_world_to_scene_world: np.ndarray = np.linalg.inv(
+                edge.T_source_target
+            ).astype(np.float32)
+        else:
+            self.T_world_to_scene_world = np.eye(4, dtype=np.float32)
 
     def _load_camera_data(
         self, sequence_loader: ncore.data.SequenceLoaderProtocol, factor: float, n_dilation: int
