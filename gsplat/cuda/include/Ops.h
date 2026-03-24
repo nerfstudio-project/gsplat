@@ -95,8 +95,8 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
     at::Tensor cdf_dense_ray_mask;
     at::Tensor tiles_pack_info;
     at::Tensor tiles_to_elements_map;
-    int cdf_resolution_elevation() const { return this->cdf_dense_ray_mask.size(-1)-1; }
-    int cdf_resolution_azimuth() const { return this->cdf_dense_ray_mask.size(-2)-1; }
+    int cdf_resolution_elevation() const { return this->cdf_dense_ray_mask.size(-2)-1; }
+    int cdf_resolution_azimuth() const { return this->cdf_dense_ray_mask.size(-1)-1; }
 };
 
 // null operator for tutorial. Does nothing.
