@@ -749,8 +749,12 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
 
     torch.manual_seed(42)
 
-    params = parse_lidar_camera(lidar_model, batch_dims, 0, 0, device=device)
-    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(**params)
+    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+        lidar_model, batch_dims, 0, 0, device=device
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
 
     C, N = 3, 1000  # cameras and gaussians
 
@@ -927,12 +931,15 @@ def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
     )
 
     # And the lidar whole parameters
-    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+    base_params = gsplat.RowOffsetStructuredSpinningLidarModelParameters(
         row_elevations_rad=row_elevations_rad,
         column_azimuths_rad=column_azimuths_rad,
         row_azimuth_offsets_rad=row_azimuth_offsets_rad,
         spinning_direction=spinning_direction,
         spinning_frequency_hz=10.0,
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        base_params,
         angles_to_columns_map=torch.zeros((3, 5), dtype=torch.int32, device=device),
         tiling=tiling,
     )
@@ -2369,9 +2376,11 @@ def test_rasterize_to_pixels_eval3d(
 
     # Setup lidar
     if camera_model == "lidar":
-        lidar_params = parse_lidar_camera("at128", batch_dims, 0, 0, device=device)
+        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+            "at128", batch_dims, 0, 0, device=device
+        )
         lidar_coeffs = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
-            **lidar_params
+            lidar_params, angles_to_columns_map, tiling
         )
         width = lidar_coeffs.n_rows
         height = lidar_coeffs.n_columns

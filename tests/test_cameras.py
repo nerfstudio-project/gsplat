@@ -168,11 +168,11 @@ def parse_camera(
     params = camera_parser(param_str, batch_dims, width, height, device)
 
     if model_type == "lidar":
-        # Wrap lidar-specific params into a RowOffsetStructuredSpinningLidarModelParametersExt object
+        lidar_params, angles_to_columns_map, tiling = params
         return {
             "camera_model": model_type,
             "lidar_coeffs": RowOffsetStructuredSpinningLidarModelParametersExt(
-                **params
+                lidar_params, angles_to_columns_map, tiling
             ),
         }
     else:
@@ -464,8 +464,8 @@ def parse_lidar_camera(
 
     lidar_params = RowOffsetStructuredSpinningLidarModelParameters(**vars(params))
 
-    params.angles_to_columns_map = compute_lidar_angles_to_columns_map(lidar_params)
-    params.tiling = compute_lidar_tiling(
+    angles_to_columns_map = compute_lidar_angles_to_columns_map(lidar_params)
+    tiling = compute_lidar_tiling(
         lidar_params,
         n_bins_elevation=16,
         max_pts_per_tile=16 * 16,
@@ -473,7 +473,7 @@ def parse_lidar_camera(
         densification_factor_azimuth=8,
     )
 
-    return vars(params)
+    return lidar_params, angles_to_columns_map, tiling
 
 
 @pytest.fixture
