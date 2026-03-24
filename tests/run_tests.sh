@@ -294,12 +294,10 @@ elif $do_ssh; then
     shell_args+=(/usr/sbin/sshd -D -e)
 else
     if $do_sanitize; then
-        # CUDA compute-sanitizer needs the full path of the program to be analyzed
-        sanitizer_cmd='/usr/local/cuda/bin/compute-sanitizer "$(command -v pytest)"'
+        shell_args+=(/usr/local/cuda/bin/compute-sanitizer /usr/local/venv/bin/pytest)
         if $do_verbose; then
-            sanitizer_cmd+=' -sv'
+            shell_args+=(-sv)
         fi
-        shell_args+=(/bin/bash -c "$sanitizer_cmd")
         run_args+=(-e DEBUG=1) # it's helpful for triggering asserts and full symbol info
         run_args+=(--privileged) # compute-sanitizer sometimes segfaults if not running on privileged container
     else
