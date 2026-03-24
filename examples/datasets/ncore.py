@@ -49,7 +49,7 @@ class CameraRenderData:
     thin_prism_coeffs: Optional[np.ndarray]  # (4,) pinhole only; float32 or None
 
 
-def _build_pinhole_K(model_params: Any, camera_id: str) -> np.ndarray:
+def _build_pinhole_K(model_params: ncore.data.OpenCVPinholeCameraModelParameters | ncore.data.OpenCVFisheyeCameraModelParameters) -> np.ndarray:
     """Return a 3x3 pinhole intrinsic matrix. Caller guarantees focal_length and principal_point exist."""
     fl = model_params.focal_length
     pp = model_params.principal_point
@@ -66,6 +66,16 @@ def _load_ego_mask(sensor: ncore.data.CameraSensorProtocol, n_dilation: int) -> 
         return None
     mask = np.asarray(mask_images["ego"].convert("L")) != 0
     return ndimage.binary_dilation(mask, iterations=n_dilation).astype(bool)
+
+
+def _parse_optional_coeffs(coeffs: Optional[Any]) -> Optional[np.ndarray]:
+    """Convert optional distortion coefficients to float32 array, mapping all-zero arrays to None."""
+    if coeffs is None:
+        return None
+    coeffs_array = np.array(coeffs, dtype=np.float32)
+    if (coeffs_array == 0).all():
+        return None
+    return coeffs_array
 
 
 # ---------------------------------------------------------------------------
@@ -302,23 +312,29 @@ class NCoreParser:
                 )
                 print(f"[NCoreParser] {camera_id}: {width}x{height} (ftheta)")
             elif isinstance(model_params, ncore.data.OpenCVFisheyeCameraModelParameters):
-                self.Ks_dict[camera_id] = _build_pinhole_K(model_params, camera_id)
+                self.Ks_dict[camera_id] = _build_pinhole_K(model_params)
                 self.camera_render_data[camera_id] = CameraRenderData(
                     camera_model="fisheye", ftheta_coeffs=None,
                     radial_coeffs=np.array(model_params.radial_coeffs, dtype=np.float32),
                     tangential_coeffs=None, thin_prism_coeffs=None,
                 )
                 print(f"[NCoreParser] {camera_id}: {width}x{height} (opencv_fisheye)")
-            elif isinstance(model_params, ncore.data.OpenCVPinholeCameraModelParameters):
-                self.Ks_dict[camera_id] = _build_pinhole_K(model_params, camera_id)
-                rc = getattr(model_params, "radial_coeffs", None)
-                tc = getattr(model_params, "tangential_coeffs", None)
-                sc = getattr(model_params, "thin_prism_coeffs", None)
+            elif isinstance(
+                model_params, ncore.data.OpenCVPinholeCameraModelParameters
+            ):
+                self.Ks_dict[camera_id] = _build_pinhole_K(model_params)
                 self.camera_render_data[camera_id] = CameraRenderData(
-                    camera_model="pinhole", ftheta_coeffs=None,
-                    radial_coeffs=np.array(rc, dtype=np.float32) if rc is not None else None,
-                    tangential_coeffs=np.array(tc, dtype=np.float32) if tc is not None else None,
-                    thin_prism_coeffs=np.array(sc, dtype=np.float32) if sc is not None else None,
+                    camera_model="pinhole",
+                    ftheta_coeffs=None,
+                    radial_coeffs=_parse_optional_coeffs(
+                        getattr(model_params, "radial_coeffs", None)
+                    ),
+                    tangential_coeffs=_parse_optional_coeffs(
+                        getattr(model_params, "tangential_coeffs", None)
+                    ),
+                    thin_prism_coeffs=_parse_optional_coeffs(
+                        getattr(model_params, "thin_prism_coeffs", None)
+                    ),
                 )
                 print(f"[NCoreParser] {camera_id}: {width}x{height} (opencv_pinhole)")
             else:
