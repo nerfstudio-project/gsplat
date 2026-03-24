@@ -408,8 +408,13 @@ class Runner:
                 self.parser.camera_render_data[cam_id]
                 for cam_id in self.parser.camera_ids
             ]
-            if any(d.camera_model == "ftheta" for d in self.ncore_camera_data) and not cfg.with_eval3d:
-                print("[NCore] Warning: FTheta cameras detected; pass --with-eval3d True for correct results.")
+            if (
+                any(d.camera_model == "ftheta" for d in self.ncore_camera_data)
+                and not cfg.with_eval3d
+            ):
+                print(
+                    "[NCore] Warning: FTheta cameras detected; pass --with-eval3d True for correct results."
+                )
         else:
             self.parser = Parser(
                 data_dir=cfg.data_dir,
@@ -665,11 +670,21 @@ class Runner:
             camera_model = cam.camera_model
             ftheta_coeffs = cam.ftheta_coeffs
             if cam.radial_coeffs is not None:
-                radial_coeffs = torch.from_numpy(cam.radial_coeffs).to(means.device).unsqueeze(0)
+                radial_coeffs = (
+                    torch.from_numpy(cam.radial_coeffs).to(means.device).unsqueeze(0)
+                )
             if cam.tangential_coeffs is not None:
-                tangential_coeffs = torch.from_numpy(cam.tangential_coeffs).to(means.device).unsqueeze(0)
+                tangential_coeffs = (
+                    torch.from_numpy(cam.tangential_coeffs)
+                    .to(means.device)
+                    .unsqueeze(0)
+                )
             if cam.thin_prism_coeffs is not None:
-                thin_prism_coeffs = torch.from_numpy(cam.thin_prism_coeffs).to(means.device).unsqueeze(0)
+                thin_prism_coeffs = (
+                    torch.from_numpy(cam.thin_prism_coeffs)
+                    .to(means.device)
+                    .unsqueeze(0)
+                )
 
         render_colors, render_alphas, info = rasterization(
             means=means,
