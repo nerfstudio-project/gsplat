@@ -760,10 +760,10 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
 
     test_data = {
         "means2d": torch.randn(C, N, 2, device=device)
-        * torch.tensor([math.pi, 2 * math.pi], device=device),
-        # TODO: assuming .x=elevation and .y=azimuth. This must be transposed.
+        * torch.tensor([2 * math.pi, math.pi], device=device),
+        # .x=azimuth, .y=elevation
         "radii": torch.randn(C, N, 2, device=device).abs().clamp(max=1)
-        * torch.tensor([lidar.fov_vert_rad.span / 2, math.pi], device=device),
+        * torch.tensor([math.pi, lidar.fov_vert_rad.span / 2], device=device),
         "depths": torch.rand(C, N, device=device),
     }
     test_data = expand(test_data, batch_dims)
@@ -868,7 +868,7 @@ def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
         assert False, f"Invalid ray location: {ray_location=}"
 
     dense_mask = torch.zeros(
-        (cdf_resolution_azimuth, cdf_resolution_elevation),
+        (cdf_resolution_elevation, cdf_resolution_azimuth),
         dtype=torch.int32,
         device=device,
     )
@@ -886,9 +886,9 @@ def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
 
             # Always use the middle elevation, as only azimuth requires
             # special testing (periodic, non-periodic, etc).
-            middle_el_idx = dense_mask.shape[1] // 2
+            middle_el_idx = dense_mask.shape[0] // 2
 
-            dense_mask[az_idx, middle_el_idx] = 1
+            dense_mask[middle_el_idx, az_idx] = 1
 
     # Create the cdf dense ray mask given the dense mask with number of rays in a dense cell.
     cdf = torch.zeros(
@@ -1044,12 +1044,12 @@ def gaussian_param(lidar_param, gauss_start_pos, gauss_end_pos):
 
     return SimpleNamespace(
         means2d=torch.tensor(
-            [[[0.0, mean_az_pix]]],
+            [[[mean_az_pix, 0.0]]],
             dtype=torch.float32,
             device=device,
         ),
         radii=torch.tensor(
-            [[[1, radius_az_pix]]],
+            [[[radius_az_pix, 1]]],
             dtype=torch.int32,
             device=device,
         ),
@@ -1927,8 +1927,8 @@ def test_isect_lidar_corner_cases(
         )
 
     hfov_span_pix = lidar.fov_horiz_rad.span * ANGLE_TO_PIXEL_SCALING_FACTOR
-    gauss_mean_pix = gaussian_param.means2d[0, 0, 1].item()
-    gauss_radius_pix = gaussian_param.radii[0, 0, 1].item()
+    gauss_mean_pix = gaussian_param.means2d[0, 0, 0].item()
+    gauss_radius_pix = gaussian_param.radii[0, 0, 0].item()
     gauss_mean_rel_pix = abs_to_rel_az(gauss_mean_pix)
     gauss_min_rel_pix = abs_to_rel_az(gauss_mean_pix - gauss_radius_pix)
     gauss_max_rel_pix = abs_to_rel_az(gauss_mean_pix + gauss_radius_pix)
@@ -2382,8 +2382,8 @@ def test_rasterize_to_pixels_eval3d(
         lidar_coeffs = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
             lidar_params, angles_to_columns_map, tiling
         )
-        width = lidar_coeffs.n_rows
-        height = lidar_coeffs.n_columns
+        width = lidar_coeffs.n_columns
+        height = lidar_coeffs.n_rows
         focal = float(width)
         Ks = torch.tensor(
             [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
@@ -2448,8 +2448,8 @@ def test_rasterize_to_pixels_eval3d(
     # Identify intersecting tiles
     if camera_model == "lidar":
         tile_size = 16  # unused for lidar but required by rasterize API
-        tile_width = lidar_coeffs.tiling.n_bins_elevation
-        tile_height = lidar_coeffs.tiling.n_bins_azimuth
+        tile_width = lidar_coeffs.tiling.n_bins_azimuth
+        tile_height = lidar_coeffs.tiling.n_bins_elevation
         _tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
             lidar_coeffs,
             means2d,

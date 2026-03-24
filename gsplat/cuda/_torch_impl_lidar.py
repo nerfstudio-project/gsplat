@@ -111,10 +111,10 @@ def has_any_rays_in_tile(
     assert torch.all((0 <= end.azimuth) & (end.azimuth <= raycdf_size_az))
 
     num_rays = (
-        raycdf[end.azimuth, end.elevation]
-        - raycdf[beg.azimuth, end.elevation]
-        - raycdf[end.azimuth, beg.elevation]
-        + raycdf[beg.azimuth, beg.elevation]
+        raycdf[end.elevation, end.azimuth]
+        - raycdf[beg.elevation, end.azimuth]
+        - raycdf[end.elevation, beg.azimuth]
+        + raycdf[beg.elevation, beg.azimuth]
     )
 
     has_rays = (num_rays > 0) | ((beg.azimuth <= 0) & (end.azimuth >= raycdf_size_az))
@@ -157,12 +157,12 @@ def _isect_tiles_lidar(
     I = math.prod(image_dims)  # image count
 
     angles_pix = SphericalUnitCoord(
-        elevation=means2d.reshape(-1, 2)[:, 0],
-        azimuth=means2d.reshape(-1, 2)[:, 1],
+        azimuth=means2d.reshape(-1, 2)[:, 0],
+        elevation=means2d.reshape(-1, 2)[:, 1],
     )
     extent_pix = SphericalUnitCoord(
-        elevation=radii.reshape(-1, 2)[:, 0],
-        azimuth=radii.reshape(-1, 2)[:, 1],
+        azimuth=radii.reshape(-1, 2)[:, 0],
+        elevation=radii.reshape(-1, 2)[:, 1],
     )
 
     nonzero_extent = (extent_pix.azimuth > 0) & (extent_pix.elevation > 0)
@@ -357,7 +357,7 @@ def _isect_tiles_lidar(
             for az_s, az_e in tile_ranges_az:
                 for az in range(int(az_s[index]), int(az_e[index])):
                     actual_az = az % n_bins_az if periodic_az else az
-                    tile_id = actual_az * lidar.tiling.n_bins_elevation + el
+                    tile_id = el * lidar.tiling.n_bins_azimuth + actual_az
                     isect_ids_lo[curr_idx] = depth_id
                     isect_ids_hi[curr_idx] = (image_id << tile_n_bits) | tile_id
                     flatten_ids[curr_idx] = index

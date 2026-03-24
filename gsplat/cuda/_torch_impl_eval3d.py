@@ -66,17 +66,17 @@ def _generate_image_points(
     device = camera.focal_lengths.device
 
     if isinstance(camera, _RowOffsetStructuredSpinningLidarModel):
-        # Lidar image points are (elevation, azimuth) in scaled-angle space.
-        # Image layout: width = n_rows (elevation), height = n_columns (azimuth).
+        # Lidar image points are (azimuth, elevation) in scaled-angle space.
+        # Image layout: width = n_columns (azimuth), height = n_rows (elevation).
         n_rows, n_cols = camera.params.n_rows, camera.params.n_columns
         row_idx = torch.arange(n_rows, device=device)
         col_idx = torch.arange(n_cols, device=device)
         ri, ci = torch.meshgrid(row_idx, col_idx, indexing="ij")
         # element_to_image_point uses raw sensor angles (no modulo on elevation)
         # to match the CUDA kernel's element_to_image_point exactly.
-        img_pts = camera.element_to_image_point(ri, ci)  # (n_rows, n_cols, 2)
-        # Transpose to (n_cols, n_rows, 2) = (height, width, 2)
-        img_pts = img_pts.permute(1, 0, 2)
+        img_pts = camera.element_to_image_point(
+            ri, ci
+        )  # (n_rows, n_cols, 2) = (height, width, 2)
         pixel_coords = img_pts.reshape(-1, 2)  # [P, 2]
     else:
         px = torch.arange(image_width, device=device, dtype=torch.float32) + 0.5
@@ -712,8 +712,8 @@ def _rasterize_to_pixels_eval3d(
                     if lidar_coeffs is not None:
                         # Lidar tiling: each tile contains specific (row, col)
                         # elements from tiles_to_elements_map.
-                        # Image layout: width=n_rows (elevation), height=n_columns (azimuth).
-                        # pixel_id = azimuth * image_width + elevation
+                        # Image layout: width=n_columns (azimuth), height=n_rows (elevation).
+                        # pixel_id = elevation * image_width + azimuth
                         tile_local_idx = ty * tile_width + tx
                         elem_offset = lidar_coeffs.tiling.tiles_pack_info[
                             tile_local_idx, 0
@@ -723,7 +723,7 @@ def _rasterize_to_pixels_eval3d(
                         ].item()
                         elements = lidar_coeffs.tiling.tiles_to_elements_map[
                             elem_offset : elem_offset + elem_count
-                        ]  # (count, 2) with (elevation_idx, azimuth_idx)
+                        ]  # (count, 2) with (azimuth_idx, elevation_idx)
                         pix_ids_in_tile = (
                             elements[:, 1] * image_width + elements[:, 0]
                         ).long()

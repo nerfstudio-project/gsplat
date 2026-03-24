@@ -66,12 +66,7 @@ class _StructuredLidarModel(_LidarModel, _BaseCameraModel):
         # TODO: passing shutter type because the base expects it, but Lidar doesn't use it.
         # This is a clear sign of design smell, the camera/sensor class hierarchy needs a revamp
         # to properly support lidar sensors.
-        # TODO: we're transposing rows and columns by mapping n_rows->width and
-        # n_columns->height because the current pipeline uses image_point =
-        # [x, y] = [row, column] = [elevation, azimuth]. This needs to be
-        # reverted once the pipeline switches to the standard
-        # [x, y] = [column, row] = [azimuth, elevation].
-        _BaseCameraModel.__init__(self, width=params.n_rows, height=params.n_columns)
+        _BaseCameraModel.__init__(self, width=params.n_columns, height=params.n_rows)
 
 
 class _SpinningLidarModel(_LidarModel):
@@ -226,7 +221,7 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
             margin_factor: Margin factor for FOV bounds checking
 
         Returns:
-            image_points: Image points [..., 2] with [row, column]
+            image_points: Image points [..., 2] with [column, row] = [azimuth, elevation]
             valid_flags: Boolean flags [...] indicating if projection is valid
         """
         # Normalize rays
@@ -242,11 +237,8 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         column = angles.azimuth * self.ANGLE_TO_PIXEL_SCALING_FACTOR
         row = angles.elevation * self.ANGLE_TO_PIXEL_SCALING_FACTOR
 
-        # NOTE: here the image point is (elevation, azimuth)
-        # TODO: the current pipeline has image_point following [x, y] = [row,
-        # column] = [elevation, azimuth], but it should be [x, y] = [column,
-        # row] = [azimuth, elevation].
-        image_point = torch.stack([row, column], dim=-1)
+        # image_point = [x, y] = [column, row] = [azimuth, elevation]
+        image_point = torch.stack([column, row], dim=-1)
 
         # Validation: compute relative angles for FOV checking
 
@@ -279,7 +271,7 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
             col: Azimuth (column) indices [...] in [0, n_columns).
 
         Returns:
-            image_points: [..., 2] as (elevation * SCALE, azimuth * SCALE).
+            image_points: [..., 2] as (azimuth * SCALE, elevation * SCALE).
         """
         params = self.params
         el = params.row_elevations_rad[row]
@@ -289,8 +281,8 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         az = torch.where(az <= -torch.pi, az + 2 * torch.pi, az)
         return torch.stack(
             [
-                el * self.ANGLE_TO_PIXEL_SCALING_FACTOR,
                 az * self.ANGLE_TO_PIXEL_SCALING_FACTOR,
+                el * self.ANGLE_TO_PIXEL_SCALING_FACTOR,
             ],
             dim=-1,
         )
@@ -299,17 +291,17 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         """Inverse projection: 2D image point → 3D camera ray.
 
         Args:
-            image_point: Image points [..., 2] with [row, column] in scaled angle space
+            image_point: Image points [..., 2] with [column, row] = [azimuth, elevation] in scaled angle space
 
         Returns:
             camera_rays: Camera rays [..., 3] (x, y, z direction vectors)
             valid_flags: Boolean flags [...] indicating if point is valid
         """
-        row = image_point[..., 0]
-        column = image_point[..., 1]
+        column = image_point[..., 0]
+        row = image_point[..., 1]
 
         # Convert from scaled angle space to angles
-        # NOTE: the current pipeline uses image_point = [x, y] = [row, column] = [elevation, azimuth].
+        # image_point = [x, y] = [column, row] = [azimuth, elevation]
         kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
         angles = SphericalUnitCoord(elevation=row * kToAngle, azimuth=column * kToAngle)
 
@@ -332,13 +324,13 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         """Compute relative frame time for rolling shutter.
 
         Args:
-            image_point: Image points [..., 2] with [row, column] in scaled angle space
+            image_point: Image points [..., 2] with [column, row] = [azimuth, elevation] in scaled angle space
 
         Returns:
             relative_times: Relative frame times [...] in range [0, 1]
         """
-        row = image_point[..., 0]
-        column = image_point[..., 1]
+        column = image_point[..., 0]
+        row = image_point[..., 1]
 
         # Convert from scaled angle space back to angles
         kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR

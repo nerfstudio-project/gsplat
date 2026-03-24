@@ -1186,8 +1186,8 @@ def rasterize_to_pixels_eval3d_extra(
 
     tile_height, tile_width = isect_offsets.shape[-2:]
     if camera_model == "lidar":
-        assert tile_width == lidar_coeffs.tiling.n_bins_elevation
-        assert tile_height == lidar_coeffs.tiling.n_bins_azimuth
+        assert tile_width == lidar_coeffs.tiling.n_bins_azimuth
+        assert tile_height == lidar_coeffs.tiling.n_bins_elevation
         # TODO: improve checks. Right now we don't have access to max_pts_per_tile used,
         # hence this assert needs to be commented out.
         # assert tile_width*tile_height*lidar_coeffs.tiling.max_pts_per_tile >= lidar_coeffs.n_rows*lidar_coeffs.n_columns

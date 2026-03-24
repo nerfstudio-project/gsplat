@@ -559,7 +559,7 @@ def image_points(batch_dims, image_dims, ref_camera):
             * _RowOffsetStructuredSpinningLidarModel.ANGLE_TO_PIXEL_SCALING_FACTOR
         )
 
-        points = torch.stack([row, column], dim=-1)
+        points = torch.stack([column, row], dim=-1)
     else:
         # Regular cameras use pixel coordinates
         points = torch.rand(*shape, 2) * torch.tensor([height - 1, width - 1])

@@ -216,8 +216,8 @@ def test_rasterization(
         lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
             lidar_params, angles_to_columns_map, tiling
         )
-        width = lidar.n_rows
-        height = lidar.n_columns
+        width = lidar.n_columns
+        height = lidar.n_rows
         focal = width
     else:
         width, height = 300, 200

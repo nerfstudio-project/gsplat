@@ -436,7 +436,7 @@ class LidarTiling:
     n_bins_azimuth: int
     n_bins_elevation: int
     cdf_elevation: torch.Tensor
-    cdf_dense_ray_mask: torch.Tensor  # [azimuth, elevation]
+    cdf_dense_ray_mask: torch.Tensor  # [elevation, azimuth]
 
     # tiles_pack_info maps each tileid to the range of elements in it,
     # expressed as .x=offset into tiles_to_elements_map and .y=number of
@@ -459,7 +459,7 @@ class LidarTiling:
         ), self.cdf_dense_ray_mask.dtype
         assert self.cdf_dense_ray_mask.ndim == 2, self.cdf_dense_ray_mask.ndim
         assert (
-            self.cdf_dense_ray_mask.shape[-1] == self.cdf_elevation.shape[0]
+            self.cdf_dense_ray_mask.shape[-2] == self.cdf_elevation.shape[0]
         ), f"{self.cdf_dense_ray_mask.shape=} {self.cdf_elevation.shape=}"
 
         assert self.tiles_pack_info.ndim == 2, self.tiles_pack_info.ndim
@@ -481,11 +481,11 @@ class LidarTiling:
 
     @property
     def cdf_resolution_elevation(self) -> int:
-        return self.cdf_dense_ray_mask.shape[-1] - 1
+        return self.cdf_dense_ray_mask.shape[-2] - 1
 
     @property
     def cdf_resolution_azimuth(self) -> int:
-        return self.cdf_dense_ray_mask.shape[-2] - 1
+        return self.cdf_dense_ray_mask.shape[-1] - 1
 
 
 class RowOffsetStructuredSpinningLidarModelParametersExt(
@@ -732,19 +732,19 @@ def angles_to_dense_ray_mask_cdf(
     azimuths_indices = uniform_quantization(
         normalized_angles.azimuth, resolution_azimuth
     )
-    indices = elevations_indices + azimuths_indices * resolution_elevation
+    indices = azimuths_indices + elevations_indices * resolution_azimuth
 
     masks = torch.zeros(
-        resolution_azimuth * resolution_elevation,
+        resolution_elevation * resolution_azimuth,
         device=angles.device,
         dtype=torch.int32,
     )
     masks[indices] = 1
 
-    masks2d = masks.reshape(resolution_azimuth, resolution_elevation)
+    masks2d = masks.reshape(resolution_elevation, resolution_azimuth)
     masks2d_padded = torch.zeros(
-        resolution_azimuth + 1,
         resolution_elevation + 1,
+        resolution_azimuth + 1,
         device=angles.device,
         dtype=torch.int32,
     )
@@ -752,7 +752,7 @@ def angles_to_dense_ray_mask_cdf(
     masks2d_padded[1:, 1:] = masks2d
     masks2d_integral = masks2d_padded.cumsum(dim=0).cumsum(dim=1)
 
-    # Return ([azimuth+1, elevation+1)
+    # Return (elevation+1, azimuth+1)
     return masks2d_integral.int()
 
 
@@ -785,8 +785,8 @@ def angles_to_tile_indices(
     ).int()
     elevations_indices = cdf_elevation[elevations_indices_cdf].int()
 
-    # NOTE: tile indices are row-major
-    return elevations_indices + azimuths_indices * n_bins_elevation
+    # NOTE: tile indices are row-major: tile_id = elevation * n_bins_azimuth + azimuth
+    return azimuths_indices + elevations_indices * n_bins_azimuth
 
 
 def compute_tiles_to_elements_map(
@@ -830,7 +830,7 @@ def compute_tiles_to_elements_map(
     sorted_element_indices = torch.argsort(tile_indices)
     sorted_elements = elements[sorted_element_indices]
     sorted_elements = torch.stack(
-        [sorted_elements.elevation, sorted_elements.azimuth], dim=-1
+        [sorted_elements.azimuth, sorted_elements.elevation], dim=-1
     )
 
     # compute the dense mask

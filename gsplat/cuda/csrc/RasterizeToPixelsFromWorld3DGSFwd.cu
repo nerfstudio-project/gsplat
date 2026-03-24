@@ -105,8 +105,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const int tile_element_id = block.thread_rank();
         if(tile_element_id < element_count)
         {
-            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // row_elevation
-            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // col_azimuth
+            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // col_azimuth
+            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // row_elevation
             assert(0 <= i);
             assert(i < image_height);
             assert(0 <= j);
