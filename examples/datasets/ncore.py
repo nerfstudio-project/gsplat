@@ -126,6 +126,7 @@ class NCoreParser:
         masks_component_group: str = "default",
         open_consolidated: bool = True,
         n_camera_mask_dilation_iterations: int = 30,
+        lidar_color_generic_data_name: str = "rgb",
     ) -> None:
         self.test_every = test_every
         self.factor = factor
@@ -133,6 +134,7 @@ class NCoreParser:
         self.intrinsics_component_group = intrinsics_component_group
         self.masks_component_group = masks_component_group
         self.open_consolidated = open_consolidated
+        self.lidar_color_generic_data_name = lidar_color_generic_data_name
 
         self.sequence_meta_file_path: Path = Path(meta_json_path)
         sequence_loader = self._open_sequence_loader(self.sequence_meta_file_path)
@@ -482,6 +484,7 @@ class NCoreParser:
         )
 
         all_points: List[np.ndarray] = []
+        all_colors: List[np.ndarray] = []
         for lidar_frame_idx in lidar_frame_range[::step_frame]:
             try:
                 pc = lidar_sensor.get_frame_point_cloud(
@@ -498,12 +501,30 @@ class NCoreParser:
                 continue
 
             xyz = pc.xyz_m_end
+            color: Optional[np.ndarray] = None
+            if lidar_sensor.has_frame_generic_data(
+                lidar_frame_idx, self.lidar_color_generic_data_name
+            ):
+                color = lidar_sensor.get_frame_generic_data(
+                    lidar_frame_idx, self.lidar_color_generic_data_name
+                )
+                if color.shape != xyz.shape:
+                    raise ValueError(
+                        "Color data length does not match point cloud length "
+                        "(expecting 3-channel RGB color per point)"
+                    )
+                if color.dtype != np.uint8:
+                    raise ValueError("Expected color data in uint8 format")
+
+            point_filter = ...
             if lidar_sensor.has_frame_generic_data(lidar_frame_idx, "dynamic_flag"):
-                xyz = xyz[
-                    lidar_sensor.get_frame_generic_data(
-                        lidar_frame_idx, "dynamic_flag"
-                    ) != 1
-                ]
+                point_filter = (
+                    lidar_sensor.get_frame_generic_data(lidar_frame_idx, "dynamic_flag")
+                    != 1
+                )
+            xyz = xyz[point_filter]
+            if color is not None:
+                color = color[point_filter]
             if not len(xyz):
                 continue
 
@@ -516,18 +537,26 @@ class NCoreParser:
                 + T_sensor_scene[:3, 3:4]
             ).T
             all_points.append(xyz_scene.astype(np.float32))
+            if color is not None:
+                all_colors.append(color)
+            else:
+                all_colors.append(
+                    np.full((len(xyz_scene), 3), 128, dtype=np.uint8)
+                )
 
         if not all_points:
             print("[NCoreParser] Warning: no lidar points loaded")
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
 
         points = np.vstack(all_points)
+        points_rgb = np.vstack(all_colors)
         if len(points) > max_points:
             idx = np.random.choice(len(points), max_points, replace=False)
             points = points[idx]
+            points_rgb = points_rgb[idx]
 
         print(f"[NCoreParser] Loaded {len(points)} lidar points from '{lidar_id}'")
-        return points, np.full((len(points), 3), 128, dtype=np.uint8)
+        return points, points_rgb
 
 
 # ---------------------------------------------------------------------------

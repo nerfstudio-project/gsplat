@@ -101,6 +101,8 @@ class Config:
     ncore_duration_sec: Optional[float] = None
     # Maximum number of lidar init points
     ncore_max_lidar_points: int = 500_000
+    # Generic-data key for lidar point RGB colors (fallback to gray if unavailable)
+    ncore_lidar_color_generic_data_name: str = "rgb"
     # NCore component group names
     ncore_poses_component_group: str = "default"
     ncore_intrinsics_component_group: str = "default"
@@ -395,6 +397,7 @@ class Runner:
                 seek_offset_sec=cfg.ncore_seek_offset_sec,
                 duration_sec=cfg.ncore_duration_sec,
                 max_lidar_points=cfg.ncore_max_lidar_points,
+                lidar_color_generic_data_name=cfg.ncore_lidar_color_generic_data_name,
                 poses_component_group=cfg.ncore_poses_component_group,
                 intrinsics_component_group=cfg.ncore_intrinsics_component_group,
                 masks_component_group=cfg.ncore_masks_component_group,
