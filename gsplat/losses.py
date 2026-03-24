@@ -506,3 +506,81 @@ class LinearLambdaScheduler:
         cur_stage = (counter - self.start) // self.update_frequency
         ratio = min(1.0, max(0.0, cur_stage / self.total_stages))
         return (1 - ratio) * self.lambda_init + ratio * self.lambda_end
+
+
+# ---------------------------------------------------------------------------
+# Reduction functions
+# ---------------------------------------------------------------------------
+
+
+def reduce_mean(value: Tensor, mask: Tensor | None = None) -> Tensor:
+    """Mean reduction with optional mask.
+
+    Without *mask*, returns ``value.mean()`` (NaN for empty tensors,
+    following standard PyTorch behavior).  The caller can check
+    ``value.numel() == 0`` beforehand on CPU to handle this case.
+
+    When *mask* is provided, it must be a bool or integer tensor (not
+    floating point).  This ensures ``mask.sum().clamp(min=1)`` is a
+    correct denominator — fractional masks would require clamping to the
+    smallest representable float, which changes the semantics.  Callers
+    with float masks should convert to bool first (e.g. ``mask > 0``).
+
+    The masked mean is ``(value * mask).sum() / mask.sum()``, with the
+    denominator clamped to 1 to avoid division by zero.  This avoids a
+    CPU-GPU sync that would be required to check whether the mask is
+    all-zero on the host side.  The trade-off is that a return value of
+    ``0`` is ambiguous: it can mean either that the mask is entirely
+    zero (no active elements) or that the true weighted mean is zero.
+    The caller cannot distinguish these two cases without an explicit
+    sync.
+
+    Args:
+        value: Input tensor, any shape.
+        mask: Optional bool or integer mask tensor broadcastable to
+            *value*.  Raises ``AssertionError`` if floating point.
+
+    Returns:
+        Scalar reduced value.
+    """
+    if mask is not None:
+        assert not mask.is_floating_point(), (
+            f"mask must be bool or integer dtype, got {mask.dtype}. "
+            f"Convert to bool first (e.g. mask > 0)."
+        )
+        return (value * mask).sum() / mask.sum().clamp(min=1)
+    return value.mean()
+
+
+def reduce_quantile(value: Tensor, quantile: float) -> Tensor:
+    """Mean of the bottom *quantile* fraction of values.
+
+    Sorts the flattened values and averages the smallest ``quantile * N``
+    elements.
+
+    Args:
+        value: Input tensor, any shape.
+        quantile: Fraction in ``(0, 1]`` of values to keep.
+
+    Returns:
+        Scalar reduced value, or ``0`` if selection is empty.
+    """
+    assert 0 < quantile <= 1, "quantile must be in (0, 1]"
+    flat = value.flatten()
+    k = int(len(flat) * quantile)
+    if k == 0:
+        return value.new_zeros((), requires_grad=value.requires_grad)
+    topk = flat.topk(k, largest=False)
+    return topk.values.mean()
+
+
+def reduce_sum(value: Tensor) -> Tensor:
+    """Sum reduction.
+
+    Args:
+        value: Input tensor, any shape.
+
+    Returns:
+        Scalar sum.
+    """
+    return value.sum()
