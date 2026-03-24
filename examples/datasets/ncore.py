@@ -625,15 +625,38 @@ class NCoreDataset(torch.utils.data.Dataset):
             "camera_idx": camera_idx,
         }
 
+        valid_mask: Optional[np.ndarray] = None
+
+        # static ego mask, if present
         ego_mask = self.parser.mask_dict.get(camera_id)
         if ego_mask is not None:
-            valid_mask = ~ego_mask  # True = valid pixel
-            if self.parser.factor != 1.0:
+            valid_mask = (~ego_mask).astype(bool)  # True = valid pixel
+            if valid_mask.shape != (height, width):
                 valid_mask = cv2.resize(
                     valid_mask.astype(np.uint8),
                     (width, height),
                     interpolation=cv2.INTER_NEAREST,
                 ).astype(bool)
+
+        # per-frame mask, if present
+        if sensor.has_frame_generic_data(frame_idx, "mask"):
+            frame_mask_raw = sensor.get_frame_generic_data(frame_idx, "mask")
+            frame_mask = np.asarray(frame_mask_raw)
+            if frame_mask.ndim == 3 and frame_mask.shape[-1] == 1:
+                frame_mask = frame_mask[..., 0]
+            # assumption: True/non-zero values in generic "mask" indicate valid pixels
+            frame_mask = np.squeeze(frame_mask).astype(bool)
+            if frame_mask.shape != (height, width):
+                frame_mask = cv2.resize(
+                    frame_mask.astype(np.uint8),
+                    (width, height),
+                    interpolation=cv2.INTER_NEAREST,
+                ).astype(bool)
+
+            # merge with ego mask if present
+            valid_mask = frame_mask if valid_mask is None else (valid_mask & frame_mask)
+
+        if valid_mask is not None:
             data["mask"] = torch.from_numpy(valid_mask).bool()
 
         return data
