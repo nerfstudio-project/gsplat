@@ -13,11 +13,22 @@ returning reduced ones because the element-wise computation dominates.
 from __future__ import annotations
 
 import math
+import os
+import sys
 from typing import Optional
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+
+# When True, loss functions validate input domains (value ranges,
+# normalization, post-activation checks).  These checks cause extra GPU
+# kernels and CPU-GPU syncs, so they default to False.
+# Enable via GSPLAT_ENFORCE_CONTRACTS=1 or PYTHONOPTIMIZE=0 (debug mode); off when unset.
+ENFORCE_CONTRACTS: bool = (
+    os.environ.get("GSPLAT_ENFORCE_CONTRACTS") == "1"
+    or os.environ.get("PYTHONOPTIMIZE") == "0"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -133,14 +144,23 @@ def ssim_loss(
     Uses ``fused_ssim`` when available for better performance, otherwise falls
     back to :func:`torch_ssim_loss`.
 
+    Inputs must be in ``[0, 1]`` range (normalized images).
+
     Args:
-        img1: First image batch, shape ``(B, C, H, W)``.
-        img2: Second image batch, shape ``(B, C, H, W)``.
+        img1: First image batch, shape ``(B, C, H, W)``, values in ``[0, 1]``.
+        img2: Second image batch, shape ``(B, C, H, W)``, values in ``[0, 1]``.
         window_size: Size of the Gaussian window (default ``11``).
 
     Returns:
         Scalar SSIM loss (mean over batch, channels, and spatial dimensions).
     """
+    if ENFORCE_CONTRACTS:
+        assert (
+            img1.min() >= 0.0 and img1.max() <= 1.0
+        ), f"img1 must be in [0, 1], got [{img1.min().item():.3f}, {img1.max().item():.3f}]"
+        assert (
+            img2.min() >= 0.0 and img2.max() <= 1.0
+        ), f"img2 must be in [0, 1], got [{img2.min().item():.3f}, {img2.max().item():.3f}]"
     try:
         from fused_ssim import fused_ssim
 
@@ -371,17 +391,30 @@ def log_l1(pred: Tensor, target: Tensor) -> Tensor:
 def normal_cosine_loss(pred_normal: Tensor, gt_normal: Tensor) -> Tensor:
     """Cosine distance loss for surface normals: ``1 - cos(pred, gt)``.
 
-    Both inputs must be normalized 3D vectors.
+    Both inputs must be approximately unit-normalized 3D vectors.
 
     Args:
-        pred_normal: Predicted normals of shape ``(..., 3)``.
-        gt_normal: Ground-truth normals of shape ``(..., 3)``.
+        pred_normal: Predicted normals of shape ``(..., 3)``, approximately
+            unit length.
+        gt_normal: Ground-truth normals of shape ``(..., 3)``, approximately
+            unit length.
 
     Returns:
         Per-element cosine distance of shape ``(...)``.
     """
     assert pred_normal.shape == gt_normal.shape
     assert pred_normal.shape[-1] == 3
+    if ENFORCE_CONTRACTS:
+        pred_norms = pred_normal.norm(dim=-1)
+        gt_norms = gt_normal.norm(dim=-1)
+        assert torch.allclose(pred_norms, torch.ones_like(pred_norms), atol=1e-3), (
+            f"pred_normal must be unit-normalized, got norms in "
+            f"[{pred_norms.min().item():.4f}, {pred_norms.max().item():.4f}]"
+        )
+        assert torch.allclose(gt_norms, torch.ones_like(gt_norms), atol=1e-3), (
+            f"gt_normal must be unit-normalized, got norms in "
+            f"[{gt_norms.min().item():.4f}, {gt_norms.max().item():.4f}]"
+        )
     return 1.0 - torch.sum(pred_normal * gt_normal, dim=-1)
 
 
@@ -597,13 +630,21 @@ def gaussian_scale_reg(scales: Tensor, visibility: Tensor | None = None) -> Tens
     Returns the absolute value of each scale component, optionally weighted
     by a per-Gaussian visibility mask.
 
+    Scales must be post-activation (non-negative).  Pass ``exp(log_scales)``,
+    not raw log-scale parameters.
+
     Args:
-        scales: Gaussian scales ``[N, 3]``.
+        scales: Post-activation Gaussian scales ``[N, 3]``, must be ``>= 0``.
         visibility: Optional visibility mask ``[N]`` or ``[N, 1]``.
 
     Returns:
         Per-element regularization ``[N, 3]`` (apply your own reduction).
     """
+    if ENFORCE_CONTRACTS:
+        assert (scales >= 0).all(), (
+            f"scales must be post-activation (>= 0), got min={scales.min().item():.4f}. "
+            f"Pass exp(log_scales), not raw log-scale parameters."
+        )
     loss = scales.abs()
     if visibility is not None:
         loss = loss * visibility.view(-1, *[1] * (loss.ndim - 1))
@@ -616,13 +657,22 @@ def gaussian_density_reg(densities: Tensor, visibility: Tensor | None = None) ->
     Returns the absolute value of each density, optionally weighted by a
     per-Gaussian visibility mask.
 
+    Densities must be post-activation (non-negative).  Pass
+    ``sigmoid(opacity_logits)``, not raw logit parameters.
+
     Args:
-        densities: Gaussian densities ``[N]`` or ``[N, 1]``.
+        densities: Post-activation Gaussian densities ``[N]`` or ``[N, 1]``,
+            must be ``>= 0``.
         visibility: Optional visibility mask broadcastable to *densities*.
 
     Returns:
         Per-element regularization, same shape as *densities*.
     """
+    if ENFORCE_CONTRACTS:
+        assert (densities >= 0).all(), (
+            f"densities must be post-activation (>= 0), got min={densities.min().item():.4f}. "
+            f"Pass sigmoid(opacity_logits), not raw logit parameters."
+        )
     loss = densities.abs()
     if visibility is not None:
         loss = loss * visibility.view(-1, *[1] * (loss.ndim - 1))
@@ -634,13 +684,20 @@ def gaussian_z_scale_reg(z_scales: Tensor, threshold: float) -> Tensor:
 
     Used to constrain the z-axis scale of road-layer Gaussians.
 
+    Z-scales must be post-activation (non-negative).
+
     Args:
-        z_scales: Z-component of Gaussian scales ``[N]``.
+        z_scales: Post-activation z-component of Gaussian scales ``[N]``,
+            must be ``>= 0``.
         threshold: Scale value above which penalty is applied.
 
     Returns:
         Per-element penalty ``[N]``.
     """
+    if ENFORCE_CONTRACTS:
+        assert (
+            z_scales >= 0
+        ).all(), f"z_scales must be post-activation (>= 0), got min={z_scales.min().item():.4f}"
     return torch.relu(z_scales - threshold)
 
 
@@ -653,11 +710,16 @@ def out_of_bound_loss(positions: Tensor, cuboid_dims: Tensor) -> Tensor:
 
     Args:
         positions: Gaussian positions in local cuboid frame ``[N, 3]``.
-        cuboid_dims: Cuboid dimensions (full extents) per Gaussian ``[N, 3]``.
+        cuboid_dims: Cuboid dimensions (full extents) per Gaussian ``[N, 3]``,
+            must be positive.
 
     Returns:
         Per-element penalty ``[N, 3]``.
     """
+    if ENFORCE_CONTRACTS:
+        assert (
+            cuboid_dims > 0
+        ).all(), f"cuboid_dims must be positive, got min={cuboid_dims.min().item():.4f}"
     return torch.relu(positions.abs() - cuboid_dims / 2)
 
 
