@@ -403,11 +403,12 @@ class Runner:
             )
             self.trainset = NCoreDataset(self.parser, split="train")
             self.valset = NCoreDataset(self.parser, split="val")
-            # Build a per-camera ftheta_coeffs list (None for pinhole cameras).
-            self.ftheta_coeffs_list = [
-                self.parser.ftheta_coeffs_dict.get(cam_id)
+            self.ncore_camera_data = [
+                self.parser.camera_render_data[cam_id]
                 for cam_id in self.parser.camera_ids
             ]
+            if any(d.camera_model == "ftheta" for d in self.ncore_camera_data) and not cfg.with_eval3d:
+                print("[NCore] Warning: FTheta cameras detected; pass --with-eval3d True for correct results.")
         else:
             self.parser = Parser(
                 data_dir=cfg.data_dir,
@@ -653,12 +654,22 @@ class Runner:
         if camera_model is None:
             camera_model = self.cfg.camera_model
         ftheta_coeffs = None
-        if (
-            camera_idcs is not None
-            and hasattr(self, "ftheta_coeffs_list")
-            and self.ftheta_coeffs_list is not None
-        ):
-            ftheta_coeffs = self.ftheta_coeffs_list[camera_idcs.item()]
+        radial_coeffs = None
+        tangential_coeffs = None
+        thin_prism_coeffs = None
+        with_ut = self.cfg.with_ut
+
+        if camera_idcs is not None and hasattr(self, "ncore_camera_data"):
+            cam = self.ncore_camera_data[camera_idcs.item()]
+            camera_model = cam.camera_model
+            ftheta_coeffs = cam.ftheta_coeffs
+            if cam.radial_coeffs is not None:
+                radial_coeffs = torch.from_numpy(cam.radial_coeffs).to(means.device).unsqueeze(0)
+            if cam.tangential_coeffs is not None:
+                tangential_coeffs = torch.from_numpy(cam.tangential_coeffs).to(means.device).unsqueeze(0)
+            if cam.thin_prism_coeffs is not None:
+                thin_prism_coeffs = torch.from_numpy(cam.thin_prism_coeffs).to(means.device).unsqueeze(0)
+
         render_colors, render_alphas, info = rasterization(
             means=means,
             quats=quats,
@@ -679,9 +690,12 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=camera_model,
-            with_ut=self.cfg.with_ut,
+            with_ut=with_ut,
             with_eval3d=self.cfg.with_eval3d,
             ftheta_coeffs=ftheta_coeffs,
+            radial_coeffs=radial_coeffs,
+            tangential_coeffs=tangential_coeffs,
+            thin_prism_coeffs=thin_prism_coeffs,
             **kwargs,
         )
         if masks is not None:
@@ -1527,7 +1541,10 @@ if __name__ == "__main__":
                 "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
             )
 
-    if cfg.with_ut:
-        assert cfg.with_eval3d, "Training with UT requires setting `with_eval3d` flag."
+    if cfg.with_ut and cfg.with_eval3d:
+        print(
+            "[Trainer] Note: with_ut=True + with_eval3d=True (full 3DGUT mode). "
+            "DefaultStrategy is incompatible with eval3d; use MCMCStrategy (the `mcmc` subcommand)."
+        )
 
     cli(main, cfg, verbose=True)
