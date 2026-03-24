@@ -99,8 +99,6 @@ class Config:
     ncore_seek_offset_sec: Optional[float] = None
     # Clip duration in seconds (None = full sequence)
     ncore_duration_sec: Optional[float] = None
-    # Force global-shutter mode (use mean pose instead of per-pixel rolling shutter)
-    ncore_force_global_shutter: bool = False
     # Maximum number of lidar init points
     ncore_max_lidar_points: int = 500_000
     # NCore component group names
