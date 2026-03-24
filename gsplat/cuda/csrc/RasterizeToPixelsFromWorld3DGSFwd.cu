@@ -160,14 +160,14 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // TODO: this should be templated on the sensor type or whether we're using rays as input.
     if(inside && rays == nullptr)
     {
-        float px = (float)j + 0.5f;
-        float py = (float)i + 0.5f;
-
         // shift pointers to the current camera. note that glm is colume-major.
         const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
         const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
 
-        // Create ray from pixel
+        // Create ray from pixel.
+        // Each camera model's element_to_image_point converts (j, i) pixel
+        // indices to the image-point convention it expects: pixel centers for
+        // cameras, scaled-angle coordinates for lidar.
         if (camera_model_type == CameraModelType::PINHOLE) {
             if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
                 PerfectPinholeCameraModel::Parameters cm_params = {};
@@ -175,11 +175,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 cm_params.shutter_type = rs_type;
                 cm_params.principal_point = { principal_point.x, principal_point.y };
                 cm_params.focal_length = { focal_length.x, focal_length.y };
-                cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+                cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
                     &external_distortion_device_params.value() : nullptr;
-                PerfectPinholeCameraModel camera_model(cm_params);
-                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-            } else {
+                ray = PerfectPinholeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
+            else {
                 OpenCVPinholeCameraModel<>::Parameters cm_params = {};
                 cm_params.resolution = {image_width, image_height};
                 cm_params.shutter_type = rs_type;
@@ -194,12 +194,12 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 if (thin_prism_coeffs != nullptr) {
                     cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
                 }
-                cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+                cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
                     &external_distortion_device_params.value() : nullptr;
-                OpenCVPinholeCameraModel camera_model(cm_params);
-                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+                ray = OpenCVPinholeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
             }
-        } else if (camera_model_type == CameraModelType::FISHEYE) {
+        }
+        else if (camera_model_type == CameraModelType::FISHEYE) {
             OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
             cm_params.shutter_type = rs_type;
@@ -208,11 +208,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             if (radial_coeffs != nullptr) {
                 cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
             }
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+            cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
                 &external_distortion_device_params.value() : nullptr;
-            OpenCVFisheyeCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else if (camera_model_type == CameraModelType::FTHETA) {
+            ray = OpenCVFisheyeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else if (camera_model_type == CameraModelType::FTHETA) {
             FThetaCameraModel<>::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
             cm_params.shutter_type = rs_type;
@@ -220,19 +220,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             cm_params.dist = ftheta_device_coeffs;
             cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
                 &external_distortion_device_params.value() : nullptr;
-            FThetaCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else if (camera_model_type == CameraModelType::LIDAR) {
+            ray = FThetaCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else if (camera_model_type == CameraModelType::LIDAR) {
             assert(lidar_device_coeffs);
-            RowOffsetStructuredSpinningLidarModel lidar_model(*lidar_device_coeffs);
-            // For lidar, convert pixel indices to scaled-angle image points.
-            // The camera model's image_point_to_camera_ray expects angles * SCALE,
-            // not pixel-center coordinates.
-            // j = elevation index (width = n_rows), i = azimuth index (height = n_columns)
-            const vec2 img_pt = lidar_model.element_to_image_point(j, i);
-            ray = lidar_model.image_point_to_world_ray_shutter_pose(img_pt, rs_params);
-        } else {
-            // should never reach here
+            ray = RowOffsetStructuredSpinningLidarModel(*lidar_device_coeffs).element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else {
             assert(false);
             return;
         }
