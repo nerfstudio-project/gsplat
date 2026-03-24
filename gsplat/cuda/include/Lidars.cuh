@@ -38,8 +38,10 @@ struct RowOffsetStructuredSpinningLidarModelParametersExtDevice
     gsplat::FOVDevice fov_horiz_rad;
     float fov_eps_rad;
 
-    // Not adding row_elevations_rad/column_azimuth_rad/... because
-    // angles_to_columns_map has everything we need from them.
+    // Per-element sensor angles (device pointers)
+    const float* row_elevations_rad;
+    const float* column_azimuths_rad;
+    const float* row_azimuth_offsets_rad;
 
     // Spinning direction and frequency of the lidar
     gsplat::SpinningDirection spinning_direction;
@@ -196,6 +198,32 @@ public:
                      rel_azimuth <= lidar.fov_horiz_rad.span + tol_azimuth;
 
         return {image_point, valid};
+    }
+
+    // Convert pixel indices (row, col) to image points in scaled angle space.
+    __device__
+    glm::fvec2 element_to_image_point(int row, int col) const
+    {
+        const auto &lidar = parameters.lidar;
+        assert(row >= 0 && row < lidar.n_rows);
+        assert(col >= 0 && col < lidar.n_columns);
+
+        const float elevation = lidar.row_elevations_rad[row];
+        float azimuth = lidar.column_azimuths_rad[col]
+                      + lidar.row_azimuth_offsets_rad[row];
+        // Normalize to (-pi, pi]
+        if (azimuth > PI)
+        {
+            azimuth -= 2.f * PI;
+        }
+        if (azimuth <= -PI)
+        {
+            azimuth += 2.f * PI;
+        }
+        return {
+            elevation * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR,
+            azimuth * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR
+        };
     }
 
     __device__

@@ -61,14 +61,30 @@ def _generate_image_points(
     Returns:
         pixel_coords: [P, 2] where P = image_width * image_height.
     """
+    from gsplat.cuda._torch_lidars import _RowOffsetStructuredSpinningLidarModel
+
     device = camera.focal_lengths.device
 
-    px = torch.arange(image_width, device=device, dtype=torch.float32) + 0.5
-    py = torch.arange(image_height, device=device, dtype=torch.float32) + 0.5
-    grid_x, grid_y = torch.meshgrid(px, py, indexing="xy")
-    pixel_coords = torch.stack(
-        [grid_x.reshape(-1), grid_y.reshape(-1)], dim=-1
-    )  # [P, 2]
+    if isinstance(camera, _RowOffsetStructuredSpinningLidarModel):
+        # Lidar image points are (elevation, azimuth) in scaled-angle space.
+        # Image layout: width = n_rows (elevation), height = n_columns (azimuth).
+        n_rows, n_cols = camera.params.n_rows, camera.params.n_columns
+        row_idx = torch.arange(n_rows, device=device)
+        col_idx = torch.arange(n_cols, device=device)
+        ri, ci = torch.meshgrid(row_idx, col_idx, indexing="ij")
+        # element_to_image_point uses raw sensor angles (no modulo on elevation)
+        # to match the CUDA kernel's element_to_image_point exactly.
+        img_pts = camera.element_to_image_point(ri, ci)  # (n_rows, n_cols, 2)
+        # Transpose to (n_cols, n_rows, 2) = (height, width, 2)
+        img_pts = img_pts.permute(1, 0, 2)
+        pixel_coords = img_pts.reshape(-1, 2)  # [P, 2]
+    else:
+        px = torch.arange(image_width, device=device, dtype=torch.float32) + 0.5
+        py = torch.arange(image_height, device=device, dtype=torch.float32) + 0.5
+        grid_x, grid_y = torch.meshgrid(px, py, indexing="xy")
+        pixel_coords = torch.stack(
+            [grid_x.reshape(-1), grid_y.reshape(-1)], dim=-1
+        )  # [P, 2]
 
     return pixel_coords
 
@@ -574,10 +590,11 @@ def _rasterize_to_pixels_eval3d(
     if rays is not None:
         rays_exp = rays.reshape(I, image_height * image_width, 6)
     else:
+        cam_model = "lidar" if lidar_coeffs is not None else "pinhole"
         camera = _BaseCameraModel.create(
             width=image_width,
             height=image_height,
-            camera_model="pinhole",
+            camera_model=cam_model,
             focal_lengths=Ks_exp[:, [0, 1], [0, 1]],  # [I, 2]
             principal_points=Ks_exp[:, [0, 1], [2, 2]],  # [I, 2]
             rs_type=rs_type,

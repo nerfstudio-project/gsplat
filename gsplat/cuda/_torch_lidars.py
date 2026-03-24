@@ -267,6 +267,34 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
 
         return image_point, valid
 
+    def element_to_image_point(self, row: Tensor, col: Tensor) -> Tensor:
+        """Convert element indices to image points in scaled angle space.
+
+        Mirrors the CUDA ``element_to_image_point`` in Lidars.cuh: looks up
+        raw sensor angles and scales them, without modulo-based normalization
+        on elevation.
+
+        Args:
+            row: Elevation (row) indices [...] in [0, n_rows).
+            col: Azimuth (column) indices [...] in [0, n_columns).
+
+        Returns:
+            image_points: [..., 2] as (elevation * SCALE, azimuth * SCALE).
+        """
+        params = self.params
+        el = params.row_elevations_rad[row]
+        az = params.column_azimuths_rad[col] + params.row_azimuth_offsets_rad[row]
+        # Normalize azimuth to (-pi, pi] via conditional subtract/add
+        az = torch.where(az > torch.pi, az - 2 * torch.pi, az)
+        az = torch.where(az <= -torch.pi, az + 2 * torch.pi, az)
+        return torch.stack(
+            [
+                el * self.ANGLE_TO_PIXEL_SCALING_FACTOR,
+                az * self.ANGLE_TO_PIXEL_SCALING_FACTOR,
+            ],
+            dim=-1,
+        )
+
     def image_point_to_camera_ray(self, image_point: Tensor) -> tuple[Tensor, Tensor]:
         """Inverse projection: 2D image point → 3D camera ray.
 

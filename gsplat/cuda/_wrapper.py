@@ -267,9 +267,9 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
             "RowOffsetStructuredSpinningLidarModelParametersExt"
         )
         return LidarParamsCUDA(
-            row_elevations_rad=self.row_elevations_rad,
-            column_azimuths_rad=self.column_azimuths_rad,
-            row_azimuth_offsets_rad=self.row_azimuth_offsets_rad,
+            row_elevations_rad=self.row_elevations_rad.contiguous(),
+            column_azimuths_rad=self.column_azimuths_rad.contiguous(),
+            row_azimuth_offsets_rad=self.row_azimuth_offsets_rad.contiguous(),
             spinning_direction=self.spinning_direction.value,
             spinning_frequency_hz=self.spinning_frequency_hz,
             fov_vert_rad=FOV.from_base(self.fov_vert_rad).to_cpp(),
@@ -278,10 +278,10 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
             angles_to_columns_map=self.angles_to_columns_map,
             n_bins_azimuth=self.tiling.n_bins_azimuth,
             n_bins_elevation=self.tiling.n_bins_elevation,
-            cdf_elevation=self.tiling.cdf_elevation,
+            cdf_elevation=self.tiling.cdf_elevation.contiguous(),
             cdf_dense_ray_mask=self.tiling.cdf_dense_ray_mask.contiguous(),
-            tiles_to_elements_map=self.tiling.tiles_to_elements_map,
-            tiles_pack_info=self.tiling.tiles_pack_info,
+            tiles_to_elements_map=self.tiling.tiles_to_elements_map.contiguous(),
+            tiles_pack_info=self.tiling.tiles_pack_info.contiguous(),
         )
 
 
@@ -2028,7 +2028,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
-            lidar_coeffs,
+            lidar_coeffs,  # already converted to C++ in forward
             external_distortion_coeffs,
             isect_offsets,
             flatten_ids,

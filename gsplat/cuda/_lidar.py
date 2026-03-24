@@ -663,9 +663,21 @@ def compute_angles_to_columns_map(
         grid_rays.valid_flag
     ), "Bug: grid rays must be valid in the FOV of the sensor"
 
-    # Compute a column-major list of all sensor coordinates
     elements = lidar.create_elements()
-    sensor_angles = lidar.elements_to_sensor_angles(elements).reshape(-1)
+    raw_elevation = lidar.row_elevations_rad[elements.elevation]
+    raw_azimuth = (
+        lidar.column_azimuths_rad[elements.azimuth]
+        + lidar.row_azimuth_offsets_rad[elements.elevation]
+    )
+    raw_azimuth = torch.where(
+        raw_azimuth > torch.pi, raw_azimuth - 2 * torch.pi, raw_azimuth
+    )
+    raw_azimuth = torch.where(
+        raw_azimuth <= -torch.pi, raw_azimuth + 2 * torch.pi, raw_azimuth
+    )
+    sensor_angles = SphericalUnitCoord(
+        elevation=raw_elevation, azimuth=raw_azimuth
+    ).reshape(-1)
 
     assert sensor_angles.shape == (lidar.n_rows * lidar.n_columns,), sensor_angles.shape
 
