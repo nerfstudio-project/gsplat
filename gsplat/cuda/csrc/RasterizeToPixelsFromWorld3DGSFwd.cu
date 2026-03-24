@@ -147,8 +147,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         rays += iid * image_height * image_width * 6;
     }
 
-    float px = (float)j + 0.5f;
-    float py = (float)i + 0.5f;
     int32_t pix_id = i * image_width + j;
 
     // Create rolling shutter parameter
@@ -160,8 +158,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     WorldRay ray;
 
     // TODO: this should be templated on the sensor type or whether we're using rays as input.
-    if(rays == nullptr)
+    if(inside && rays == nullptr)
     {
+        float px = (float)j + 0.5f;
+        float py = (float)i + 0.5f;
+
         // shift pointers to the current camera. note that glm is colume-major.
         const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
         const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
@@ -223,8 +224,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
         } else if (camera_model_type == CameraModelType::LIDAR) {
             assert(lidar_device_coeffs);
-            RowOffsetStructuredSpinningLidarModel camera_model(*lidar_device_coeffs);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+            RowOffsetStructuredSpinningLidarModel lidar_model(*lidar_device_coeffs);
+            // For lidar, convert pixel indices to scaled-angle image points.
+            // The camera model's image_point_to_camera_ray expects angles * SCALE,
+            // not pixel-center coordinates.
+            // j = elevation index (width = n_rows), i = azimuth index (height = n_columns)
+            const vec2 img_pt = lidar_model.element_to_image_point(j, i);
+            ray = lidar_model.image_point_to_world_ray_shutter_pose(img_pt, rs_params);
         } else {
             // should never reach here
             assert(false);
@@ -233,10 +239,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     }
     else
     {
-        assert(rays != nullptr);
+        // rays may be nullptr for inactive threads when inside==false
         ray.valid_flag = false;
         if(inside)
         {
+            assert(rays != nullptr);
             // TODO: use at least 3x64b loads instead of 6x32b
             ray.ray_org = {rays[pix_id*6+0], rays[pix_id*6+1], rays[pix_id*6+2]};
             ray.ray_dir = {rays[pix_id*6+3], rays[pix_id*6+4], rays[pix_id*6+5]};

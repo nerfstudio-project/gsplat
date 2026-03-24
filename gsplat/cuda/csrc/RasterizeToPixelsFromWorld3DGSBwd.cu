@@ -158,8 +158,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         return;
     }
 
-    const float px = (float)j + 0.5f;
-    const float py = (float)i + 0.5f;
     // clamp this value to the last pixel
     const int32_t pix_id =
         min(i * image_width + j, image_width * image_height - 1);
@@ -171,8 +169,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     );
 
     WorldRay ray;
-    if(rays == nullptr)
+    if(inside && rays == nullptr)
     {
+        float px = (float)j + 0.5f;
+        float py = (float)i + 0.5f;
+
         // shift pointers to the current camera. note that glm is colume-major.
         const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
         const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
@@ -234,8 +235,10 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
         } else if (camera_model_type == CameraModelType::LIDAR) {
             assert(lidar_device_coeffs);
-            RowOffsetStructuredSpinningLidarModel camera_model(*lidar_device_coeffs);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+            RowOffsetStructuredSpinningLidarModel lidar_model(*lidar_device_coeffs);
+
+            const vec2 img_pt = lidar_model.element_to_image_point(j, i);
+            ray = lidar_model.image_point_to_world_ray_shutter_pose(img_pt, rs_params);
         } else {
             // should never reach here
             assert(false);
@@ -244,10 +247,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     }
     else
     {
-        assert(rays != nullptr);
+        // rays may be nullptr for inactive threads when inside==false
         ray.valid_flag = false;
         if(inside)
         {
+            assert(rays != nullptr);
             // TODO: use at least 3x64b loads instead of 6x32b
             ray.ray_org = {rays[pix_id*6+0], rays[pix_id*6+1], rays[pix_id*6+2]};
             ray.ray_dir = {rays[pix_id*6+3], rays[pix_id*6+4], rays[pix_id*6+5]};
