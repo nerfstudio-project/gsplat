@@ -498,14 +498,18 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
     tiling: LidarTiling
 
     def __init__(
-        self, angles_to_columns_map: Tensor, tiling: LidarTiling, **kwargs
+        self,
+        params: RowOffsetStructuredSpinningLidarModelParameters,
+        angles_to_columns_map: Tensor,
+        tiling: LidarTiling,
     ) -> None:
         assert angles_to_columns_map is not None
         assert tiling is not None
 
+        # Copy-construct the base class from an already-validated params instance
+        self.__dict__.update(params.__dict__)
         self.angles_to_columns_map = angles_to_columns_map
         self.tiling = tiling
-        super().__init__(**kwargs)
 
         assert (
             self.angles_to_columns_map.shape[0] % self.row_elevations_rad.shape[0] == 0
