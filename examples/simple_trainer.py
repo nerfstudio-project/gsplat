@@ -99,10 +99,10 @@ class Config:
     ncore_seek_offset_sec: Optional[float] = None
     # Clip duration in seconds (None = full sequence)
     ncore_duration_sec: Optional[float] = None
-    # Force global-shutter mode (use mean pose instead of per-pixel rolling shutter)
-    ncore_force_global_shutter: bool = False
     # Maximum number of lidar init points
     ncore_max_lidar_points: int = 500_000
+    # Generic-data key for lidar point RGB colors (fallback to gray if unavailable)
+    ncore_lidar_color_generic_data_name: str = "rgb"
     # NCore component group names
     ncore_poses_component_group: str = "default"
     ncore_intrinsics_component_group: str = "default"
@@ -397,9 +397,11 @@ class Runner:
                 seek_offset_sec=cfg.ncore_seek_offset_sec,
                 duration_sec=cfg.ncore_duration_sec,
                 max_lidar_points=cfg.ncore_max_lidar_points,
+                lidar_color_generic_data_name=cfg.ncore_lidar_color_generic_data_name,
                 poses_component_group=cfg.ncore_poses_component_group,
                 intrinsics_component_group=cfg.ncore_intrinsics_component_group,
                 masks_component_group=cfg.ncore_masks_component_group,
+                normalize_world_space=cfg.normalize_world_space,
             )
             self.trainset = NCoreDataset(self.parser, split="train")
             self.valset = NCoreDataset(self.parser, split="val")
@@ -407,8 +409,13 @@ class Runner:
                 self.parser.camera_render_data[cam_id]
                 for cam_id in self.parser.camera_ids
             ]
-            if any(d.camera_model == "ftheta" for d in self.ncore_camera_data) and not cfg.with_eval3d:
-                print("[NCore] Warning: FTheta cameras detected; pass --with-eval3d True for correct results.")
+            if (
+                any(d.camera_model == "ftheta" for d in self.ncore_camera_data)
+                and not cfg.with_eval3d
+            ):
+                print(
+                    "[NCore] Warning: FTheta cameras detected; pass --with-eval3d True for correct results."
+                )
         else:
             self.parser = Parser(
                 data_dir=cfg.data_dir,
@@ -664,11 +671,21 @@ class Runner:
             camera_model = cam.camera_model
             ftheta_coeffs = cam.ftheta_coeffs
             if cam.radial_coeffs is not None:
-                radial_coeffs = torch.from_numpy(cam.radial_coeffs).to(means.device).unsqueeze(0)
+                radial_coeffs = (
+                    torch.from_numpy(cam.radial_coeffs).to(means.device).unsqueeze(0)
+                )
             if cam.tangential_coeffs is not None:
-                tangential_coeffs = torch.from_numpy(cam.tangential_coeffs).to(means.device).unsqueeze(0)
+                tangential_coeffs = (
+                    torch.from_numpy(cam.tangential_coeffs)
+                    .to(means.device)
+                    .unsqueeze(0)
+                )
             if cam.thin_prism_coeffs is not None:
-                thin_prism_coeffs = torch.from_numpy(cam.thin_prism_coeffs).to(means.device).unsqueeze(0)
+                thin_prism_coeffs = (
+                    torch.from_numpy(cam.thin_prism_coeffs)
+                    .to(means.device)
+                    .unsqueeze(0)
+                )
 
         render_colors, render_alphas, info = rasterization(
             means=means,

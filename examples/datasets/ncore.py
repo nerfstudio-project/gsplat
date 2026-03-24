@@ -31,6 +31,12 @@ import ncore.sensors
 from gsplat.rendering import FThetaCameraDistortionParameters, FThetaPolynomialType
 
 from .ncore_utils import FrameConversion
+from .normalize import (
+    similarity_from_cameras,
+    align_principal_axes,
+    transform_cameras,
+    transform_points,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -43,13 +49,18 @@ class CameraRenderData:
     """Per-camera rendering parameters for gsplat rasterization."""
 
     camera_model: str  # "pinhole" | "fisheye" | "ftheta"
-    ftheta_coeffs: Optional[FThetaCameraDistortionParameters]  # non-None only for ftheta
+    ftheta_coeffs: Optional[
+        FThetaCameraDistortionParameters
+    ]  # non-None only for ftheta
     radial_coeffs: Optional[np.ndarray]  # (4,) fisheye or (4|6,) pinhole; float32
     tangential_coeffs: Optional[np.ndarray]  # (2,) pinhole only; float32 or None
     thin_prism_coeffs: Optional[np.ndarray]  # (4,) pinhole only; float32 or None
 
 
-def _build_pinhole_K(model_params: Any, camera_id: str) -> np.ndarray:
+def _build_pinhole_K(
+    model_params: ncore.data.OpenCVPinholeCameraModelParameters
+    | ncore.data.OpenCVFisheyeCameraModelParameters,
+) -> np.ndarray:
     """Return a 3x3 pinhole intrinsic matrix. Caller guarantees focal_length and principal_point exist."""
     fl = model_params.focal_length
     pp = model_params.principal_point
@@ -59,13 +70,25 @@ def _build_pinhole_K(model_params: Any, camera_id: str) -> np.ndarray:
     return np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float32)
 
 
-def _load_ego_mask(sensor: ncore.data.CameraSensorProtocol, n_dilation: int) -> Optional[np.ndarray]:
+def _load_ego_mask(
+    sensor: ncore.data.CameraSensorProtocol, n_dilation: int
+) -> Optional[np.ndarray]:
     """Return a dilated boolean ego mask (True = ego vehicle) or None."""
     mask_images = sensor.get_mask_images()
     if "ego" not in mask_images:
         return None
     mask = np.asarray(mask_images["ego"].convert("L")) != 0
     return ndimage.binary_dilation(mask, iterations=n_dilation).astype(bool)
+
+
+def _parse_optional_coeffs(coeffs: Optional[Any]) -> Optional[np.ndarray]:
+    """Convert optional distortion coefficients to float32 array, mapping all-zero arrays to None."""
+    if coeffs is None:
+        return None
+    coeffs_array = np.array(coeffs, dtype=np.float32)
+    if (coeffs_array == 0).all():
+        return None
+    return coeffs_array
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +116,9 @@ class NCoreParser:
                          position is at the origin.  This is the frame stored
                          in self.camtoworlds and consumed by the trainer.
                          Keeping poses near the origin improves numerical
-                         stability during 3DGS optimisation (analogous to the
-                         normalize=True path in the COLMAP parser).
+                         stability during 3DGS optimisation.
+                         When normalize_world_space=True, an additional
+                         similarity + PCA transform is applied on top.
                          world_global_to_scene (FrameConversion) applies only
                          this translation; all rotation is already handled by
                          T_world_to_scene_world.
@@ -116,13 +140,17 @@ class NCoreParser:
         masks_component_group: str = "default",
         open_consolidated: bool = True,
         n_camera_mask_dilation_iterations: int = 30,
+        lidar_color_generic_data_name: str = "rgb",
+        normalize_world_space: bool = False,
     ) -> None:
         self.test_every = test_every
         self.factor = factor
+        self.normalize_world_space = normalize_world_space
         self.poses_component_group = poses_component_group
         self.intrinsics_component_group = intrinsics_component_group
         self.masks_component_group = masks_component_group
         self.open_consolidated = open_consolidated
+        self.lidar_color_generic_data_name = lidar_color_generic_data_name
 
         self.sequence_meta_file_path: Path = Path(meta_json_path)
         sequence_loader = self._open_sequence_loader(self.sequence_meta_file_path)
@@ -136,7 +164,9 @@ class NCoreParser:
             start_us += int(seek_offset_sec * 1e6)
         if duration_sec is not None and duration_sec > 0:
             stop_us = min(start_us + int(duration_sec * 1e6), stop_us)
-        self.time_range_us = dataclasses.replace(time_range, start=start_us, stop=stop_us)
+        self.time_range_us = dataclasses.replace(
+            time_range, start=start_us, stop=stop_us
+        )
 
         self._resolve_sensor_ids(sequence_loader, camera_ids, lidar_ids)
         self._compute_world_global_transform(sequence_loader)
@@ -158,6 +188,17 @@ class NCoreParser:
         self.points, self.points_rgb = self._load_lidar_points(
             sequence_loader, max_lidar_points, lidar_step_frame
         )
+
+        # Normalize the world space (orient, centre, and rescale).
+        if self.normalize_world_space:
+            self._normalize_world_space()
+
+        # Scene scale: max distance of each camera from the mean camera position.
+        # This matches the COLMAP convention (colmap.py:396-400).
+        camera_locations = self.camtoworlds[:, :3, 3]
+        scene_center = np.mean(camera_locations, axis=0)
+        dists = np.linalg.norm(camera_locations - scene_center, axis=1)
+        self.scene_scale = float(np.max(dists))
 
         print(
             f"[NCoreParser] Loaded sequence '{self.sequence_id}': "
@@ -225,12 +266,12 @@ class NCoreParser:
 
             print(f"[NCoreParser] Auto-detected lidars: {lidar_ids}")
 
-        assert all(cid in sequence_loader.camera_ids for cid in camera_ids), (
-            f"NCoreParser: some specified camera_ids {camera_ids} not found in dataset cameras {sequence_loader.camera_ids}"
-        )
-        assert all(lid in sequence_loader.lidar_ids for lid in lidar_ids), (
-            f"NCoreParser: some specified lidar_ids {lidar_ids} not found in dataset lidars {sequence_loader.lidar_ids}"
-        )
+        assert all(
+            cid in sequence_loader.camera_ids for cid in camera_ids
+        ), f"NCoreParser: some specified camera_ids {camera_ids} not found in dataset cameras {sequence_loader.camera_ids}"
+        assert all(
+            lid in sequence_loader.lidar_ids for lid in lidar_ids
+        ), f"NCoreParser: some specified lidar_ids {lidar_ids} not found in dataset lidars {sequence_loader.lidar_ids}"
 
         self.camera_ids: List[str] = list(camera_ids)
         self.lidar_ids: List[str] = list(lidar_ids)
@@ -239,9 +280,13 @@ class NCoreParser:
         print(f"[NCoreParser] Using cameras: {self.camera_ids}")
         print(f"[NCoreParser] Using lidars: {self.lidar_ids}")
 
-    def _compute_world_global_transform(self, sequence_loader: ncore.data.SequenceLoaderProtocol) -> None:
+    def _compute_world_global_transform(
+        self, sequence_loader: ncore.data.SequenceLoaderProtocol
+    ) -> None:
         """Set T_world_to_scene_world: transformation from NCore world -> world_global."""
-        if (edge := sequence_loader.pose_graph.get_edge("world", "world_global")) is not None:
+        if (
+            edge := sequence_loader.pose_graph.get_edge("world", "world_global")
+        ) is not None:
             self.T_world_to_scene_world: np.ndarray = np.linalg.inv(
                 edge.T_source_target
             ).astype(np.float32)
@@ -249,7 +294,10 @@ class NCoreParser:
             self.T_world_to_scene_world = np.eye(4, dtype=np.float32)
 
     def _load_camera_data(
-        self, sequence_loader: ncore.data.SequenceLoaderProtocol, factor: float, n_dilation: int
+        self,
+        sequence_loader: ncore.data.SequenceLoaderProtocol,
+        factor: float,
+        n_dilation: int,
     ) -> Dict[str, ncore.data.CameraSensorProtocol]:
         """Load intrinsics, K matrices, and ego masks for all cameras."""
         camera_sensors = {
@@ -287,50 +335,80 @@ class NCoreParser:
             if isinstance(model_params, ncore.data.FThetaCameraModelParameters):
                 cx = float(model_params.principal_point[0].item())
                 cy = float(model_params.principal_point[1].item())
-                self.Ks_dict[camera_id] = np.array([[1.0, 0.0, cx], [0.0, 1.0, cy], [0.0, 0.0, 1.0]], dtype=np.float32)
+                self.Ks_dict[camera_id] = np.array(
+                    [[1.0, 0.0, cx], [0.0, 1.0, cy], [0.0, 0.0, 1.0]], dtype=np.float32
+                )
                 ref_poly = FThetaPolynomialType[model_params.reference_poly.name]
                 ftheta_coeffs = FThetaCameraDistortionParameters(
                     reference_poly=ref_poly,
-                    pixeldist_to_angle_poly=tuple(float(x) for x in model_params.pixeldist_to_angle_poly),
-                    angle_to_pixeldist_poly=tuple(float(x) for x in model_params.angle_to_pixeldist_poly),
+                    pixeldist_to_angle_poly=tuple(
+                        float(x) for x in model_params.pixeldist_to_angle_poly
+                    ),
+                    angle_to_pixeldist_poly=tuple(
+                        float(x) for x in model_params.angle_to_pixeldist_poly
+                    ),
                     max_angle=float(model_params.max_angle),
                     linear_cde=tuple(float(x) for x in model_params.linear_cde),
                 )
                 self.camera_render_data[camera_id] = CameraRenderData(
-                    camera_model="ftheta", ftheta_coeffs=ftheta_coeffs,
-                    radial_coeffs=None, tangential_coeffs=None, thin_prism_coeffs=None,
+                    camera_model="ftheta",
+                    ftheta_coeffs=ftheta_coeffs,
+                    radial_coeffs=None,
+                    tangential_coeffs=None,
+                    thin_prism_coeffs=None,
                 )
                 print(f"[NCoreParser] {camera_id}: {width}x{height} (ftheta)")
-            elif isinstance(model_params, ncore.data.OpenCVFisheyeCameraModelParameters):
-                self.Ks_dict[camera_id] = _build_pinhole_K(model_params, camera_id)
+            elif isinstance(
+                model_params, ncore.data.OpenCVFisheyeCameraModelParameters
+            ):
+                self.Ks_dict[camera_id] = _build_pinhole_K(model_params)
                 self.camera_render_data[camera_id] = CameraRenderData(
-                    camera_model="fisheye", ftheta_coeffs=None,
-                    radial_coeffs=np.array(model_params.radial_coeffs, dtype=np.float32),
-                    tangential_coeffs=None, thin_prism_coeffs=None,
+                    camera_model="fisheye",
+                    ftheta_coeffs=None,
+                    radial_coeffs=np.array(
+                        model_params.radial_coeffs, dtype=np.float32
+                    ),
+                    tangential_coeffs=None,
+                    thin_prism_coeffs=None,
                 )
                 print(f"[NCoreParser] {camera_id}: {width}x{height} (opencv_fisheye)")
-            elif isinstance(model_params, ncore.data.OpenCVPinholeCameraModelParameters):
-                self.Ks_dict[camera_id] = _build_pinhole_K(model_params, camera_id)
-                rc = getattr(model_params, "radial_coeffs", None)
-                tc = getattr(model_params, "tangential_coeffs", None)
-                sc = getattr(model_params, "thin_prism_coeffs", None)
+            elif isinstance(
+                model_params, ncore.data.OpenCVPinholeCameraModelParameters
+            ):
+                self.Ks_dict[camera_id] = _build_pinhole_K(model_params)
                 self.camera_render_data[camera_id] = CameraRenderData(
-                    camera_model="pinhole", ftheta_coeffs=None,
-                    radial_coeffs=np.array(rc, dtype=np.float32) if rc is not None else None,
-                    tangential_coeffs=np.array(tc, dtype=np.float32) if tc is not None else None,
-                    thin_prism_coeffs=np.array(sc, dtype=np.float32) if sc is not None else None,
+                    camera_model="pinhole",
+                    ftheta_coeffs=None,
+                    radial_coeffs=_parse_optional_coeffs(
+                        getattr(model_params, "radial_coeffs", None)
+                    ),
+                    tangential_coeffs=_parse_optional_coeffs(
+                        getattr(model_params, "tangential_coeffs", None)
+                    ),
+                    thin_prism_coeffs=_parse_optional_coeffs(
+                        getattr(model_params, "thin_prism_coeffs", None)
+                    ),
                 )
                 print(f"[NCoreParser] {camera_id}: {width}x{height} (opencv_pinhole)")
             else:
                 # Unknown camera type: synthesize K from resolution, treat as perfect pinhole.
-                print(f"[NCoreParser] {camera_id}: {width}x{height} (unknown, synthesizing K from resolution)")
+                print(
+                    f"[NCoreParser] {camera_id}: {width}x{height} (unknown, synthesizing K from resolution)"
+                )
                 self.Ks_dict[camera_id] = np.array(
-                    [[float(width), 0.0, width / 2.0], [0.0, float(width), height / 2.0], [0.0, 0.0, 1.0]],
+                    [
+                        [float(width), 0.0, width / 2.0],
+                        [0.0, float(width), height / 2.0],
+                        [0.0, 0.0, 1.0],
+                    ],
                     dtype=np.float32,
                 )
                 self.camera_render_data[camera_id] = CameraRenderData(
-                    camera_model="pinhole", ftheta_coeffs=None,
-                    radial_coeffs=None, tangential_coeffs=None, thin_prism_coeffs=None,
+                    camera_model="pinhole",
+                    ftheta_coeffs=None,
+                    radial_coeffs=None,
+                    tangential_coeffs=None,
+                    thin_prism_coeffs=None,
                 )
 
             self.mask_dict[camera_id] = _load_ego_mask(sensor, n_dilation)
@@ -431,13 +509,66 @@ class NCoreParser:
                 starts.append(T_start[local_idx])
                 ends.append(T_end[local_idx])
 
-        self.camtoworlds = np.stack(starts, axis=0)      # (N, 4, 4)
-        self.camtoworlds_end = np.stack(ends, axis=0)    # (N, 4, 4)
+        self.camtoworlds = np.stack(starts, axis=0)  # (N, 4, 4)
+        self.camtoworlds_end = np.stack(ends, axis=0)  # (N, 4, 4)
 
-        # Scene scale: max distance from origin (poses are already centred).
-        self.scene_scale = float(
-            np.linalg.norm(self.camtoworlds[:, :3, 3], axis=1).max()
-        )
+    def _normalize_world_space(self) -> None:
+        """Normalize world-space coordinates for poses and points.
+
+        Three successive transforms are applied:
+        1. ``similarity_from_cameras`` - rotate so z+ is the up axis, recenter
+           at the camera focus point, and rescale by 1/median camera distance.
+        2. ``align_principal_axes`` - PCA rotation that aligns the point-cloud
+           principal axes to the coordinate axes.
+        3. Upside-down fix - if the point cloud is inverted (median z > mean z),
+           apply a 180° rotation around the x-axis.
+
+        Operates on ``self.camtoworlds``, ``self.camtoworlds_end``, and
+        ``self.points`` in-place and stores the composed transform in
+        ``self.transform``.
+        """
+        # Ensure float64 for numerical precision during normalization.
+        camtoworlds = self.camtoworlds.astype(np.float64)
+        camtoworlds_end = self.camtoworlds_end.astype(np.float64)
+        points = self.points.astype(np.float64) if len(self.points) else self.points
+
+        T1 = similarity_from_cameras(camtoworlds)
+        camtoworlds = transform_cameras(T1, camtoworlds)
+        camtoworlds_end = transform_cameras(T1, camtoworlds_end)
+        if len(points):
+            points = transform_points(T1, points)
+
+        if len(points):
+            T2 = align_principal_axes(points)
+        else:
+            T2 = np.eye(4)
+        camtoworlds = transform_cameras(T2, camtoworlds)
+        camtoworlds_end = transform_cameras(T2, camtoworlds_end)
+        if len(points):
+            points = transform_points(T2, points)
+
+        transform = T2 @ T1
+
+        # Upside-down fix: if median z > mean z, flip around x-axis.
+        if len(points) and np.median(points[:, 2]) > np.mean(points[:, 2]):
+            T3 = np.array(
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, -1.0, 0.0, 0.0],
+                    [0.0, 0.0, -1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ]
+            )
+            camtoworlds = transform_cameras(T3, camtoworlds)
+            camtoworlds_end = transform_cameras(T3, camtoworlds_end)
+            points = transform_points(T3, points)
+            transform = T3 @ transform
+
+        self.camtoworlds = camtoworlds
+        self.camtoworlds_end = camtoworlds_end
+        if len(self.points):
+            self.points = points.astype(np.float32)
+        self.transform = transform
 
     # ------------------------------------------------------------------
     # Private runtime helpers
@@ -456,7 +587,9 @@ class NCoreParser:
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Load and transform lidar points to scene frame for Gaussian initialisation."""
         if not self.lidar_ids:
-            print("[NCoreParser] No lidar sensors available; using empty init point cloud")
+            print(
+                "[NCoreParser] No lidar sensors available; using empty init point cloud"
+            )
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
 
         lidar_id = self.lidar_ids[0]
@@ -466,6 +599,7 @@ class NCoreParser:
         )
 
         all_points: List[np.ndarray] = []
+        all_colors: List[np.ndarray] = []
         for lidar_frame_idx in lidar_frame_range[::step_frame]:
             try:
                 pc = lidar_sensor.get_frame_point_cloud(
@@ -482,12 +616,30 @@ class NCoreParser:
                 continue
 
             xyz = pc.xyz_m_end
+            color: Optional[np.ndarray] = None
+            if lidar_sensor.has_frame_generic_data(
+                lidar_frame_idx, self.lidar_color_generic_data_name
+            ):
+                color = lidar_sensor.get_frame_generic_data(
+                    lidar_frame_idx, self.lidar_color_generic_data_name
+                )
+                if color.shape != xyz.shape:
+                    raise ValueError(
+                        "Color data length does not match point cloud length "
+                        "(expecting 3-channel RGB color per point)"
+                    )
+                if color.dtype != np.uint8:
+                    raise ValueError("Expected color data in uint8 format")
+
+            point_filter = ...
             if lidar_sensor.has_frame_generic_data(lidar_frame_idx, "dynamic_flag"):
-                xyz = xyz[
-                    lidar_sensor.get_frame_generic_data(
-                        lidar_frame_idx, "dynamic_flag"
-                    ) != 1
-                ]
+                point_filter = (
+                    lidar_sensor.get_frame_generic_data(lidar_frame_idx, "dynamic_flag")
+                    != 1
+                )
+            xyz = xyz[point_filter]
+            if color is not None:
+                color = color[point_filter]
             if not len(xyz):
                 continue
 
@@ -500,18 +652,24 @@ class NCoreParser:
                 + T_sensor_scene[:3, 3:4]
             ).T
             all_points.append(xyz_scene.astype(np.float32))
+            if color is not None:
+                all_colors.append(color)
+            else:
+                all_colors.append(np.full((len(xyz_scene), 3), 128, dtype=np.uint8))
 
         if not all_points:
             print("[NCoreParser] Warning: no lidar points loaded")
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
 
         points = np.vstack(all_points)
+        points_rgb = np.vstack(all_colors)
         if len(points) > max_points:
             idx = np.random.choice(len(points), max_points, replace=False)
             points = points[idx]
+            points_rgb = points_rgb[idx]
 
         print(f"[NCoreParser] Loaded {len(points)} lidar points from '{lidar_id}'")
-        return points, np.full((len(points), 3), 128, dtype=np.uint8)
+        return points, points_rgb
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +705,9 @@ class NCoreDataset(torch.utils.data.Dataset):
 
         # Per-worker sequence loader (lazily initialised).
         self._sequence_loader: Optional[ncore.data.SequenceLoaderProtocol] = None
-        self._camera_sensors: Optional[Dict[str, ncore.data.CameraSensorProtocol]] = None
+        self._camera_sensors: Optional[
+            Dict[str, ncore.data.CameraSensorProtocol]
+        ] = None
         self._current_worker_id: Optional[int] = None
 
     def _init_worker(self) -> None:
@@ -603,21 +763,46 @@ class NCoreDataset(torch.utils.data.Dataset):
         data: Dict[str, Any] = {
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(self.parser.camtoworlds[index]).float(),
-            "camtoworld_end": torch.from_numpy(self.parser.camtoworlds_end[index]).float(),
+            "camtoworld_end": torch.from_numpy(
+                self.parser.camtoworlds_end[index]
+            ).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,
             "camera_idx": camera_idx,
         }
 
+        valid_mask: Optional[np.ndarray] = None
+
+        # static ego mask, if present
         ego_mask = self.parser.mask_dict.get(camera_id)
         if ego_mask is not None:
-            valid_mask = ~ego_mask  # True = valid pixel
-            if self.parser.factor != 1.0:
+            valid_mask = (~ego_mask).astype(bool)  # True = valid pixel
+            if valid_mask.shape != (height, width):
                 valid_mask = cv2.resize(
                     valid_mask.astype(np.uint8),
                     (width, height),
                     interpolation=cv2.INTER_NEAREST,
                 ).astype(bool)
+
+        # per-frame mask, if present
+        if sensor.has_frame_generic_data(frame_idx, "mask"):
+            frame_mask_raw = sensor.get_frame_generic_data(frame_idx, "mask")
+            frame_mask = np.asarray(frame_mask_raw)
+            if frame_mask.ndim == 3 and frame_mask.shape[-1] == 1:
+                frame_mask = frame_mask[..., 0]
+            # assumption: True/non-zero values in generic "mask" indicate valid pixels
+            frame_mask = np.squeeze(frame_mask).astype(bool)
+            if frame_mask.shape != (height, width):
+                frame_mask = cv2.resize(
+                    frame_mask.astype(np.uint8),
+                    (width, height),
+                    interpolation=cv2.INTER_NEAREST,
+                ).astype(bool)
+
+            # merge with ego mask if present
+            valid_mask = frame_mask if valid_mask is None else (valid_mask & frame_mask)
+
+        if valid_mask is not None:
             data["mask"] = torch.from_numpy(valid_mask).bool()
 
         return data

@@ -66,37 +66,7 @@ the examples (requires installing some extrra dependencies via `pip install -r e
 - [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
 - [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
 - [Render a large scene in real-time.](https://docs.gsplat.studio/main/examples/large_scale.html)
-
-### NCore v4 Dataset
-
-To train on an [NCore v4](https://docs.nvidia.com/ncore/) capture, point `--data-dir` at the sequence meta-JSON file and set `--data-type ncore`:
-
-```bash
-cd examples
-python simple_trainer.py default \
-    --data-type ncore \
-    --data-dir /path/to/sequence.json \
-    --data-factor 1 \
-    --result-dir results/my_scene \
-    --init-type lidar
-```
-
-And for datasets with FTheta cameras:
-
-```bash
-cd examples
-python simple_trainer.py mcmc \
-    --data-type ncore \
-    --data-dir /path/to/sequence.json \
-    --data-factor 1 \
-    --result-dir results/my_scene \
-    --init-type lidar \
-    --camera-model ftheta \
-    --with-ut \
-    --with-eval3d
-```
-
-> **Note**: `nvidia-ncore` must be installed as part of `examples/requirements.txt`. Training with `--data-factor` values other than `1` requires that all camera resolutions are divisible by the factor.
+- [Train on an NCore v4 capture.](https://docs.gsplat.studio/main/examples/ncore.html)
 
 
 ## Development and Contribution
