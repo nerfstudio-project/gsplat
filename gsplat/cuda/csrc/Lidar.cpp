@@ -27,6 +27,9 @@ RowOffsetStructuredSpinningLidarModelParametersExtDevice::RowOffsetStructuredSpi
     , fov_vert_rad{params.fov_vert_rad}
     , fov_horiz_rad{params.fov_horiz_rad}
     , fov_eps_rad{params.fov_eps_rad}
+    , row_elevations_rad{params.row_elevations_rad.data_ptr<float>()}
+    , column_azimuths_rad{params.column_azimuths_rad.data_ptr<float>()}
+    , row_azimuth_offsets_rad{params.row_azimuth_offsets_rad.data_ptr<float>()}
     , spinning_direction{params.spinning_direction}
     , spinning_frequency_hz{params.spinning_frequency_hz}
     , angles_to_columns_map{params.angles_to_columns_map.data_ptr<int32_t>()}
@@ -41,6 +44,9 @@ RowOffsetStructuredSpinningLidarModelParametersExtDevice::RowOffsetStructuredSpi
     , tiles_pack_info{reinterpret_cast<const glm::ivec2 *>(params.tiles_pack_info.data_ptr<int32_t>())}
     , tiles_to_elements_map{reinterpret_cast<const glm::ivec2 *>(params.tiles_to_elements_map.data_ptr<int32_t>())}
 {
+    CHECK_INPUT(params.row_elevations_rad);
+    CHECK_INPUT(params.column_azimuths_rad);
+    CHECK_INPUT(params.row_azimuth_offsets_rad);
     CHECK_INPUT(params.angles_to_columns_map);
     CHECK_INPUT(params.cdf_elevation);
     CHECK_INPUT(params.cdf_dense_ray_mask);
