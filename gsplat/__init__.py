@@ -74,6 +74,7 @@ from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
 from .cuda._lidar import (
     compute_angles_to_columns_map as compute_lidar_angles_to_columns_map,
+    LidarTiling,
     SpinningDirection,
     compute_tiling as compute_lidar_tiling,
 )
@@ -124,5 +125,6 @@ all = [
     "RowOffsetStructuredSpinningLidarModelParametersExt",
     "compute_lidar_angles_to_columns_map",
     "compute_lidar_tiling",
+    "LidarTiling",
     "SpinningDirection",
 ]
