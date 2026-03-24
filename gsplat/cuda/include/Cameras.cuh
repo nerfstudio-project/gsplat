@@ -370,6 +370,25 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         return cam_ray;
     }
 
+    // Convert pixel indices (column j, row i) to image-point coordinates.
+    // For pixel-based cameras, returns pixel centers (j+0.5, i+0.5).
+    // Lidar overrides this to return scaled-angle coordinates.
+    inline __device__ glm::fvec2 element_to_image_point(int j, int i) const
+    {
+        return {(float)j + 0.5f, (float)i + 0.5f};
+    }
+
+    // Generate a world ray for pixel (j, i) using rolling shutter parameters.
+    // Chains element_to_image_point → image_point_to_world_ray_shutter_pose.
+    inline __device__ WorldRay element_to_world_ray_shutter_pose(
+        int j, int i,
+        const RollingShutterParameters &rs_params) const
+    {
+        auto derived = static_cast<DerivedCameraModel const *>(this);
+        const auto img_pt = derived->element_to_image_point(j, i);
+        return derived->image_point_to_world_ray_shutter_pose(img_pt, rs_params);
+    }
+
     // Function to compute the relative frame time for a given image point based
     // on the shutter type
     inline __device__ auto
