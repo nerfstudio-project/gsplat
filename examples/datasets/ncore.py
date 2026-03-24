@@ -130,14 +130,13 @@ class NCoreParser:
         self.sequence_id: str = sequence_loader.sequence_id
 
         time_range = sequence_loader.sequence_timestamp_interval_us
+        start_us = time_range.start
+        stop_us = time_range.stop
         if seek_offset_sec is not None:
-            time_range.start += int(seek_offset_sec * 1e6)
+            start_us += int(seek_offset_sec * 1e6)
         if duration_sec is not None and duration_sec > 0:
-            time_range.stop = min(
-                time_range.start + int(duration_sec * 1e6),
-                time_range.stop,
-            )
-        self.time_range_us = time_range
+            stop_us = min(start_us + int(duration_sec * 1e6), stop_us)
+        self.time_range_us = dataclasses.replace(time_range, start=start_us, stop=stop_us)
 
         self._resolve_sensor_ids(sequence_loader, camera_ids, lidar_ids)
         self._compute_world_global_transform(sequence_loader)
