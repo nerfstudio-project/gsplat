@@ -23,6 +23,7 @@ import torch
 import platform
 import json
 from types import SimpleNamespace
+from torch.utils.cpp_extension import CUDA_HOME
 
 try:
     import torch.utils.cpp_extension as jit
@@ -74,6 +75,11 @@ def get_build_parameters():
         os.path.join(PATH, "include/"),
         os.path.join(current_dir, "csrc", "third_party", "glm"),
     ]
+    # Fix for CUDA 12+ in conda environment
+    if os.path.isdir(os.path.join(CUDA_HOME, "targets")):
+        for arch in os.listdir(os.path.join(CUDA_HOME, "targets")):
+            if os.path.isdir(p := os.path.join(CUDA_HOME, "targets", arch, "include")):
+                extra_include_paths.append(p)
 
     # Source files ------------------------------------
     sources = (

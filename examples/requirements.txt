@@ -19,7 +19,7 @@ scikit-learn
 tqdm
 torchmetrics==1.8.2
 opencv-python-headless
-tyro>=0.8.8
+tyro>=0.8.8,<1.0.9
 Pillow
 piexif
 tensorboard
