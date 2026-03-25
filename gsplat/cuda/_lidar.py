@@ -15,7 +15,6 @@
 from torch import Tensor
 import hashlib
 import math
-from functools import lru_cache
 from dataclasses import dataclass, field, InitVar
 from enum import Enum
 from types import SimpleNamespace
@@ -523,34 +522,6 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
         assert (
             a2cmap_resfactor
             == self.angles_to_columns_map.shape[1] / self.column_azimuths_rad.shape[0]
-        )
-
-    @staticmethod
-    @lru_cache(maxsize=16)
-    def fetch_cached(
-        lidar_params: RowOffsetStructuredSpinningLidarModelParameters,
-        n_bins_elevation: int = 16,
-        max_pts_per_tile: int = 16 * 16,
-        resolution_elevation: int = 1600,
-        densification_factor_azimuth: int = 8,
-    ) -> "RowOffsetStructuredSpinningLidarModelParametersExt":
-        """Build extended lidar parameters with cached acceleration structures.
-
-        Computes ``angles_to_columns_map`` and tiling structures, caching the
-        result so that repeated calls with the same parameters (e.g. across
-        frames) return instantly.  Call ``fetch_cached.cache_clear()`` to
-        evict all entries.
-        """
-        angles_to_columns_map = compute_angles_to_columns_map(lidar_params)
-        tiling = compute_tiling(
-            lidar_params,
-            n_bins_elevation=n_bins_elevation,
-            max_pts_per_tile=max_pts_per_tile,
-            resolution_elevation=resolution_elevation,
-            densification_factor_azimuth=densification_factor_azimuth,
-        )
-        return RowOffsetStructuredSpinningLidarModelParametersExt(
-            lidar_params, angles_to_columns_map, tiling
         )
 
 
