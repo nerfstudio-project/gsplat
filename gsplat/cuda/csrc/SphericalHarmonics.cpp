@@ -54,7 +54,6 @@ at::Tensor spherical_harmonics_fwd(
 }
 
 std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
-    int64_t K,
     int64_t degrees_to_use,
     const at::Tensor &dirs,                // [..., 3]
     const at::Tensor &coeffs,              // [..., K, 3]

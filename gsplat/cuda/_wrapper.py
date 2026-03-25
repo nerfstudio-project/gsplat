@@ -2317,17 +2317,14 @@ class _SphericalHarmonics(torch.autograd.Function):
         )
         ctx.save_for_backward(dirs, coeffs, masks)
         ctx.sh_degree = sh_degree
-        ctx.num_bases = coeffs.shape[-2]
         return colors
 
     @staticmethod
     def backward(ctx, v_colors: Tensor):
         dirs, coeffs, masks = ctx.saved_tensors
         sh_degree = ctx.sh_degree
-        num_bases = ctx.num_bases
         compute_v_dirs = ctx.needs_input_grad[1]
         v_coeffs, v_dirs = _make_lazy_cuda_func("spherical_harmonics_bwd")(
-            num_bases,
             sh_degree,
             dirs,
             coeffs,
