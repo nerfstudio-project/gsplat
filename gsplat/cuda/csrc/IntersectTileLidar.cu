@@ -38,10 +38,11 @@ namespace cg = cooperative_groups;
 __device__
 int cdf_region_sum(const int32_t *raycdf, int raycdf_stride, int range_min_el, int range_max_el, int range_min_az, int range_max_az)
 {
-    return raycdf[range_max_az*raycdf_stride + range_max_el]
-           - raycdf[range_min_az*raycdf_stride + range_max_el]
-           - raycdf[range_max_az*raycdf_stride + range_min_el]
-           + raycdf[range_min_az*raycdf_stride + range_min_el];
+    // cdf_dense_ray_mask layout: (elevation, azimuth), row-major: flat_idx = el * stride + az
+    return raycdf[range_max_el*raycdf_stride + range_max_az]
+           - raycdf[range_min_el*raycdf_stride + range_max_az]
+           - raycdf[range_max_el*raycdf_stride + range_min_az]
+           + raycdf[range_min_el*raycdf_stride + range_min_az];
 };
 
 __device__
@@ -65,7 +66,7 @@ bool has_any_rays_in_tile(
     if (range_min_az <= 0 && range_max_az >= raycdf_size_az)
         return true;
 
-    const int raycdf_stride = raycdf_size_el + 1;
+    const int raycdf_stride = raycdf_size_az + 1;
     const int *raycdf = lidar.cdf_dense_ray_mask;
     const int num_rays = cdf_region_sum(raycdf, raycdf_stride, range_min_el, range_max_el, range_min_az, range_max_az);
     return num_rays > 0;
@@ -160,9 +161,8 @@ __global__ void intersect_tile_lidar_kernel(
     const int raycdf_size_el = lidar.cdf_resolution_elevation;
 
     vec2 mean2d = glm::make_vec2(means2d + 2*idxgauss);
-    // TODO: need to transpose it to x==azimuth, y==elevation when mean2d.x/y are transposed upstream
-    const float elevation_pix = mean2d.x;
-    const float azimuth_pix = mean2d.y;
+    const float azimuth_pix = mean2d.x;
+    const float elevation_pix = mean2d.y;
 
     const float fov_span_pix_el = lidar.fov_vert_rad.span * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
     const float fov_span_pix_az = lidar.fov_horiz_rad.span * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
@@ -173,10 +173,10 @@ __global__ void intersect_tile_lidar_kernel(
         = sensor.relative_sensor_angles(elevation_pix, azimuth_pix, lidar.ANGLE_TO_PIXEL_SCALING_FACTOR);
 
     // Now calculate the gaussian range
-    const float beg_az = mean_rel_az - radius_y;
-    const float end_az_raw = mean_rel_az + radius_y;
-    const float beg_el = min(max(mean_rel_el - radius_x, 0.f), fov_span_pix_el);
-    const float end_el = min(max(mean_rel_el + radius_x, 0.f), fov_span_pix_el);
+    const float beg_az = mean_rel_az - radius_x;
+    const float end_az_raw = mean_rel_az + radius_x;
+    const float beg_el = min(max(mean_rel_el - radius_y, 0.f), fov_span_pix_el);
+    const float end_el = min(max(mean_rel_el + radius_y, 0.f), fov_span_pix_el);
 
     // Check full_cover before capping to 2*pi, since the cap can push end
     // below fov_span for wide FOVs even though the gaussian covers the full FOV.
@@ -378,7 +378,7 @@ __global__ void intersect_tile_lidar_kernel(
             const int32_t actual_az = periodic_az ? ((az + n_bins_az) % n_bins_az) : az;
             for (int32_t el = tile_min_el; el < tile_max_el; ++el)
             {
-                const int64_t tile_id_enc = actual_az*lidar.n_bins_elevation + el;
+                const int64_t tile_id_enc = el*lidar.n_bins_azimuth + actual_az;
                 isect_ids[idxflatten] = image_id_enc | (tile_id_enc << 32) | depth_id_enc;
                 flatten_ids[idxflatten] = idxgauss;
                 idxflatten += 1;

@@ -210,8 +210,8 @@ def test_rasterization(
     if camera_model == "lidar":
         lidar_params, angles_to_columns_map, tiling = parse_lidar_camera("at128", batch_dims, 0, 0, device=device)
         lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(lidar_params, angles_to_columns_map, tiling)
-        width = lidar.n_rows
-        height = lidar.n_columns
+        width = lidar.n_columns
+        height = lidar.n_rows
         focal = width
     else:
         width, height = 300, 200
