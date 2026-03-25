@@ -26,6 +26,7 @@ import pytest
 import torch
 import re
 import math
+from functools import lru_cache
 from itertools import product, chain
 from types import SimpleNamespace
 from dataclasses import dataclass
@@ -392,6 +393,26 @@ def parse_ftheta_camera(
 # ==================================================
 
 
+@lru_cache(maxsize=16)
+def _cached_lidar_preprocessing(
+    lidar_params: RowOffsetStructuredSpinningLidarModelParameters,
+    n_bins_elevation: int,
+    max_pts_per_tile: int,
+    resolution_elevation: int,
+    densification_factor_azimuth: int,
+):
+    """Cache expensive lidar preprocessing across test fixtures."""
+    angles_to_columns_map = compute_lidar_angles_to_columns_map(lidar_params)
+    tiling = compute_lidar_tiling(
+        lidar_params,
+        n_bins_elevation=n_bins_elevation,
+        max_pts_per_tile=max_pts_per_tile,
+        resolution_elevation=resolution_elevation,
+        densification_factor_azimuth=densification_factor_azimuth,
+    )
+    return angles_to_columns_map, tiling
+
+
 def parse_lidar_camera(
     param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device
 ):
@@ -464,8 +485,7 @@ def parse_lidar_camera(
 
     lidar_params = RowOffsetStructuredSpinningLidarModelParameters(**vars(params))
 
-    angles_to_columns_map = compute_lidar_angles_to_columns_map(lidar_params)
-    tiling = compute_lidar_tiling(
+    angles_to_columns_map, tiling = _cached_lidar_preprocessing(
         lidar_params,
         n_bins_elevation=16,
         max_pts_per_tile=16 * 16,
