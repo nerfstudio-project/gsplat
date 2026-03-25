@@ -6,6 +6,10 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+import gsplat.losses as _losses_module
+
+_losses_module.ENFORCE_CONTRACTS = True
+
 from gsplat.losses import (
     create_ssim_window,
     depth_l1_loss,
@@ -1009,7 +1013,7 @@ class TestGaussianScaleReg:
         assert (gaussian_scale_reg(scales) == 0).all()
 
     def test_known_value(self):
-        scales = torch.tensor([[1.0, -2.0, 3.0]])
+        scales = torch.tensor([[1.0, 2.0, 3.0]])  # post-activation
         expected = torch.tensor([[1.0, 2.0, 3.0]])
         assert torch.allclose(gaussian_scale_reg(scales), expected)
 
@@ -1023,7 +1027,7 @@ class TestGaussianScaleReg:
         assert (result[3] == 0.0).all()
 
     def test_no_visibility(self):
-        scales = torch.tensor([[-0.5, 0.5, 1.5]])
+        scales = torch.tensor([[0.5, 0.5, 1.5]])  # post-activation
         expected = torch.tensor([[0.5, 0.5, 1.5]])
         assert torch.allclose(gaussian_scale_reg(scales), expected)
 
@@ -1032,12 +1036,12 @@ class TestGaussianScaleReg:
         assert gaussian_scale_reg(scales).shape == (100, 3)
 
     def test_gradient_nonzero(self):
-        scales = torch.randn(10, 3, requires_grad=True)
+        scales = torch.rand(10, 3, requires_grad=True)  # post-activation
         gaussian_scale_reg(scales).sum().backward()
         assert scales.grad.abs().sum() > 0
 
     def test_gradient_with_visibility(self):
-        scales = torch.randn(4, 3, requires_grad=True)
+        scales = torch.rand(4, 3, requires_grad=True)  # post-activation
         vis = torch.tensor([1.0, 0.0, 1.0, 0.0])
         gaussian_scale_reg(scales, visibility=vis).sum().backward()
         # Masked Gaussians should have zero gradient
@@ -1052,12 +1056,12 @@ class TestGaussianDensityReg:
         assert (gaussian_density_reg(d) == 0).all()
 
     def test_known_value(self):
-        d = torch.tensor([-3.0, 2.0, -1.0])
-        expected = torch.tensor([3.0, 2.0, 1.0])
+        d = torch.tensor([0.3, 0.7, 1.0])  # post-activation
+        expected = torch.tensor([0.3, 0.7, 1.0])
         assert torch.allclose(gaussian_density_reg(d), expected)
 
     def test_visibility_masking(self):
-        d = torch.ones(4)
+        d = torch.ones(4)  # post-activation
         vis = torch.tensor([1.0, 0.0, 0.0, 1.0])
         result = gaussian_density_reg(d, visibility=vis)
         assert torch.allclose(result, vis)
@@ -1071,7 +1075,7 @@ class TestGaussianDensityReg:
         assert gaussian_density_reg(d).shape == (50, 1)
 
     def test_gradient_nonzero(self):
-        d = torch.randn(10, requires_grad=True)
+        d = torch.rand(10, requires_grad=True)  # post-activation
         gaussian_density_reg(d).sum().backward()
         assert d.grad.abs().sum() > 0
 
@@ -1181,3 +1185,78 @@ class TestBilateralGridDriftLoss:
         result = bilateral_grid_drift_loss([])
         assert result.shape == (0,)
         assert result.dtype == torch.float32
+
+
+# ---------------------------------------------------------------------------
+# Input contract assertions
+# ---------------------------------------------------------------------------
+
+
+class TestInputContracts:
+    def test_ssim_rejects_out_of_range(self):
+        img = torch.rand(1, 3, 32, 32) * 255
+        with pytest.raises(AssertionError, match="must be in"):
+            ssim_loss(img, img)
+
+    def test_ssim_rejects_negative(self):
+        img = torch.rand(1, 3, 32, 32) - 0.5
+        with pytest.raises(AssertionError, match="must be in"):
+            ssim_loss(img, torch.rand(1, 3, 32, 32))
+
+    def test_ssim_accepts_valid_range(self):
+        img = torch.rand(1, 3, 32, 32)
+        loss = ssim_loss(img, img)
+        assert torch.isfinite(loss)
+
+    def test_normal_cosine_rejects_unnormalized(self):
+        n = torch.randn(5, 3) * 10
+        with pytest.raises(AssertionError, match="unit-normalized"):
+            normal_cosine_loss(n, F.normalize(torch.randn(5, 3), dim=-1))
+
+    def test_normal_cosine_accepts_normalized(self):
+        n1 = F.normalize(torch.randn(5, 3), dim=-1)
+        n2 = F.normalize(torch.randn(5, 3), dim=-1)
+        loss = normal_cosine_loss(n1, n2)
+        assert torch.isfinite(loss).all()
+
+    def test_gaussian_scale_rejects_negative(self):
+        scales = torch.tensor([[-1.0, 0.5, 0.3]])
+        with pytest.raises(AssertionError, match="post-activation"):
+            gaussian_scale_reg(scales)
+
+    def test_gaussian_scale_accepts_positive(self):
+        scales = torch.tensor([[0.01, 0.5, 1.0]])
+        result = gaussian_scale_reg(scales)
+        assert (result >= 0).all()
+
+    def test_gaussian_density_rejects_negative(self):
+        densities = torch.tensor([-0.5, 0.3, 0.8])
+        with pytest.raises(AssertionError, match="post-activation"):
+            gaussian_density_reg(densities)
+
+    def test_gaussian_density_accepts_positive(self):
+        densities = torch.tensor([0.0, 0.5, 1.0])
+        result = gaussian_density_reg(densities)
+        assert (result >= 0).all()
+
+    def test_gaussian_z_scale_rejects_negative(self):
+        z = torch.tensor([-0.1, 0.5])
+        with pytest.raises(AssertionError, match="post-activation"):
+            gaussian_z_scale_reg(z, threshold=0.3)
+
+    def test_gaussian_z_scale_accepts_positive(self):
+        z = torch.tensor([0.1, 0.5])
+        result = gaussian_z_scale_reg(z, threshold=0.3)
+        assert torch.isfinite(result).all()
+
+    def test_out_of_bound_rejects_negative_dims(self):
+        pos = torch.zeros(1, 3)
+        dims = torch.tensor([[-1.0, 2.0, 3.0]])
+        with pytest.raises(AssertionError, match="positive"):
+            out_of_bound_loss(pos, dims)
+
+    def test_out_of_bound_accepts_positive_dims(self):
+        pos = torch.zeros(1, 3)
+        dims = torch.tensor([[2.0, 2.0, 2.0]])
+        result = out_of_bound_loss(pos, dims)
+        assert (result == 0).all()
