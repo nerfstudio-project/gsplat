@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import numpy as np
-from typing import Callable, Dict, List, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import torch
 import torch.nn.functional as F
@@ -320,39 +320,120 @@ def sample_add(
     n: int,
     binoms: Tensor,
     min_opacity: float = 0.005,
+    n_active: Optional[int] = None,
 ):
-    opacities = torch.sigmoid(params["opacities"])
+    if n_active is None:
+        opacities = torch.sigmoid(params["opacities"])
 
+        eps = torch.finfo(torch.float32).eps
+        probs = opacities.flatten()
+        sampled_idxs = _multinomial_sample(probs, n, replacement=True)
+        new_opacities, new_scales = compute_relocation(
+            opacities=opacities[sampled_idxs],
+            scales=torch.exp(params["scales"])[sampled_idxs],
+            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+            binoms=binoms,
+        )
+        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
+
+        def param_fn(name: str, p: Tensor) -> Tensor:
+            if name == "opacities":
+                p[sampled_idxs] = torch.logit(new_opacities)
+            elif name == "scales":
+                p[sampled_idxs] = torch.log(new_scales)
+            p_new = torch.cat([p, p[sampled_idxs]])
+            return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+
+        def optimizer_fn(key: str, v: Tensor) -> Tensor:
+            v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+            return torch.cat([v, v_new])
+
+        # update the parameters and the state in the optimizers
+        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+        # update the extra running state
+        for k, v in state.items():
+            v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+            if isinstance(v, torch.Tensor):
+                state[k] = torch.cat((v, v_new))
+        return None
+    
+    opacities = torch.sigmoid(params["opacities"][:n_active])
     eps = torch.finfo(torch.float32).eps
     probs = opacities.flatten()
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
+
     new_opacities, new_scales = compute_relocation(
         opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"])[sampled_idxs],
-        ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+        scales=torch.exp(params["scales"][:n_active])[sampled_idxs],
+        ratios=torch.bincount(sampled_idxs, minlength=n_active)[sampled_idxs] + 1,
         binoms=binoms,
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
-    def param_fn(name: str, p: Tensor) -> Tensor:
-        if name == "opacities":
-            p[sampled_idxs] = torch.logit(new_opacities)
-        elif name == "scales":
-            p[sampled_idxs] = torch.log(new_scales)
-        p_new = torch.cat([p, p[sampled_idxs]])
-        return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+    # Update parent Gaussians in-place (split energy between parent and child)
+    params["opacities"].data[sampled_idxs] = torch.logit(new_opacities)
+    params["scales"].data[sampled_idxs] = torch.log(new_scales)
 
-    def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
-        return torch.cat([v, v_new])
+    # Write children into the pre-allocated empty rows [n_active:n_active+n]
+    dst = slice(n_active, n_active + n)
+    for name in params.keys():
+        params[name].data[dst] = params[name].data[sampled_idxs]
 
-    # update the parameters and the state in the optimizers
-    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
-    # update the extra running state
+    # Zero out optimizer states for the new rows
+    for name in params.keys():
+        if name not in optimizers:
+            continue
+        optimizer = optimizers[name]
+        param = params[name]
+        if param in optimizer.state:
+            for key, v in optimizer.state[param].items():
+                if key != "step" and isinstance(v, Tensor):
+                    v[dst] = 0
+
+    # Zero out extra running state for new rows
     for k, v in state.items():
-        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
         if isinstance(v, torch.Tensor):
-            state[k] = torch.cat((v, v_new))
+            v[dst] = 0
+
+    return n_active + n
+
+
+@torch.no_grad()
+def grow_active_params(
+    splats: torch.nn.ParameterDict,
+    active_params: Dict[str, torch.nn.Parameter],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    new_n_active: int,
+) -> None:
+    """Grow active-slice Parameters from their current size to new_n_active.
+
+    Each active_params[name] is a narrow view into splats[name].data.
+    After this call, active_params[name] covers splats[name].data[:new_n_active]
+    and optimizer momentum tensors are zero-padded for the new rows.
+    """
+    for name, old_param in list(active_params.items()):
+        old_n = old_param.shape[0]
+        new_param = torch.nn.Parameter(
+            splats[name].data[:new_n_active], requires_grad=old_param.requires_grad
+        )
+        if name in optimizers:
+            optimizer = optimizers[name]
+            if old_param in optimizer.state:
+                old_state = optimizer.state.pop(old_param)
+                new_state: Dict = {}
+                for k, v in old_state.items():
+                    if isinstance(v, Tensor) and v.dim() > 0 and v.shape[0] == old_n:
+                        new_v = v.new_zeros(new_n_active, *v.shape[1:])
+                        new_v[:old_n].copy_(v)
+                        new_state[k] = new_v
+                    else:
+                        new_state[k] = v
+                optimizer.state[new_param] = new_state
+            for group in optimizer.param_groups:
+                for i, p in enumerate(group["params"]):
+                    if p is old_param:
+                        group["params"][i] = new_param
+        active_params[name] = new_param
 
 
 @torch.no_grad()
