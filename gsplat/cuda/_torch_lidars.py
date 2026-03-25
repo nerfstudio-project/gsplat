@@ -26,7 +26,6 @@ from torch import Tensor
 from gsplat._helper import assert_shape
 from ._lidar import (
     SpinningDirection,
-    SphericalUnitCoord,
     FOV,
     LidarModelParameters,
     StructuredLidarModelParameters,
@@ -90,26 +89,26 @@ class _SpinningLidarModel(_LidarModel):
     ) -> bool:
         return torch.abs(end_angle - start_angle) >= scale * 2 * math.pi
 
-    def relative_sensor_angles(
-        self, angles: SphericalUnitCoord, *, scale: float = 1
-    ) -> SphericalUnitCoord:
-        rel_elevation = self.relative_clock_rotation(
-            self.fov_vert_rad.start * scale,
-            angles.elevation,
-            SpinningDirection.CLOCKWISE,
-        )
+    def relative_sensor_angles(self, angles: Tensor, *, scale: float = 1) -> Tensor:
+        angles_az = angles[..., 0]
+        angles_el = angles[..., 1]
         rel_azimuth = self.relative_angle(
             self.fov_horiz_rad.start * scale,
-            angles.azimuth,
+            angles_az,
             self.spinning_direction,
             scale=scale,
         )
+        rel_elevation = self.relative_clock_rotation(
+            self.fov_vert_rad.start * scale,
+            angles_el,
+            SpinningDirection.CLOCKWISE,
+        )
 
-        return SphericalUnitCoord(elevation=rel_elevation, azimuth=rel_azimuth)
+        return torch.stack([rel_azimuth, rel_elevation], dim=-1)
 
-    def valid_sensor_angles(
-        self, angles: SphericalUnitCoord, *, scale: float = 1
-    ) -> Tensor:
+    def valid_sensor_angles(self, angles: Tensor, *, scale: float = 1) -> Tensor:
+        angles_az = angles[..., 0]
+        angles_el = angles[..., 1]
         # Account for accumulated numerical errors via some epsilon in FOV check (1x eps on the start of the FOV)
         fov_vert_start_adj = self.fov_vert_rad.start + self.fov_eps_rad
         if self.spinning_direction == SpinningDirection.CLOCKWISE:
@@ -118,11 +117,11 @@ class _SpinningLidarModel(_LidarModel):
             fov_horiz_start_adj = self.fov_horiz_rad.start - self.fov_eps_rad
 
         rel_elevation = self.relative_clock_rotation(
-            fov_vert_start_adj * scale, angles.elevation, SpinningDirection.CLOCKWISE
+            fov_vert_start_adj * scale, angles_el, SpinningDirection.CLOCKWISE
         )
         rel_azimuth = self.relative_angle(
             fov_horiz_start_adj * scale,
-            angles.azimuth,
+            angles_az,
             self.spinning_direction,
             scale=scale,
         )
@@ -228,14 +227,15 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         ray_normalized = _safe_normalize(camera_ray)
 
         # Convert to spherical coordinates (same as CUDA implementation)
-        angles = SphericalUnitCoord(
-            elevation=torch.asin(ray_normalized[..., 2]),
-            azimuth=torch.atan2(ray_normalized[..., 1], ray_normalized[..., 0]),
-        )
+        ray_x = ray_normalized[..., 0]
+        ray_y = ray_normalized[..., 1]
+        ray_z = ray_normalized[..., 2]
+        azimuth = torch.atan2(ray_y, ray_x)
+        elevation = torch.asin(ray_z)
 
         # Scale angles to pixel space
-        column = angles.azimuth * self.ANGLE_TO_PIXEL_SCALING_FACTOR
-        row = angles.elevation * self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        column = azimuth * self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        row = elevation * self.ANGLE_TO_PIXEL_SCALING_FACTOR
 
         # image_point = [x, y] = [column, row] = [azimuth, elevation]
         image_point = torch.stack([column, row], dim=-1)
@@ -243,7 +243,10 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         # Validation: compute relative angles for FOV checking
 
         # Compute relative angles from FOV start
+        angles = torch.stack([azimuth, elevation], dim=-1)
         rel_angles = self.relative_sensor_angles(angles)
+        rel_az = rel_angles[..., 0]
+        rel_el = rel_angles[..., 1]
 
         # Apply margin for FOV checking
         margin_elevation = margin_factor * self.fov_vert_rad.span
@@ -251,10 +254,10 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
 
         # Check if within FOV+margin
         valid = (
-            (rel_angles.elevation <= self.fov_vert_rad.span + margin_elevation)
-            & (rel_angles.azimuth <= self.fov_horiz_rad.span + margin_azimuth)
-            & (rel_angles.elevation >= -margin_elevation)
-            & (rel_angles.azimuth >= -margin_azimuth)
+            (rel_el <= self.fov_vert_rad.span + margin_elevation)
+            & (rel_az <= self.fov_horiz_rad.span + margin_azimuth)
+            & (rel_el >= -margin_elevation)
+            & (rel_az >= -margin_azimuth)
         )
 
         return image_point, valid
@@ -279,13 +282,9 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         # Normalize azimuth to (-pi, pi] via conditional subtract/add
         az = torch.where(az > torch.pi, az - 2 * torch.pi, az)
         az = torch.where(az <= -torch.pi, az + 2 * torch.pi, az)
-        return torch.stack(
-            [
-                az * self.ANGLE_TO_PIXEL_SCALING_FACTOR,
-                el * self.ANGLE_TO_PIXEL_SCALING_FACTOR,
-            ],
-            dim=-1,
-        )
+        azimuth = az * self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        elevation = el * self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        return torch.stack([azimuth, elevation], dim=-1)
 
     def image_point_to_camera_ray(self, image_point: Tensor) -> tuple[Tensor, Tensor]:
         """Inverse projection: 2D image point → 3D camera ray.
@@ -303,21 +302,23 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
         # Convert from scaled angle space to angles
         # image_point = [x, y] = [column, row] = [azimuth, elevation]
         kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
-        angles = SphericalUnitCoord(elevation=row * kToAngle, azimuth=column * kToAngle)
+        angles_az = column * kToAngle
+        angles_el = row * kToAngle
 
         # Convert to Cartesian coordinates
-        cos_elevation = torch.cos(angles.elevation)
+        cos_elevation = torch.cos(angles_el)
         camera_ray = torch.stack(
             [
-                torch.cos(angles.azimuth) * cos_elevation,
-                torch.sin(angles.azimuth) * cos_elevation,
-                torch.sin(angles.elevation),
+                torch.cos(angles_az) * cos_elevation,
+                torch.sin(angles_az) * cos_elevation,
+                torch.sin(angles_el),
             ],
             dim=-1,
         )
 
         camera_ray = _safe_normalize(camera_ray)
 
+        angles = torch.stack([angles_az, angles_el], dim=-1)
         return camera_ray, self.valid_sensor_angles(angles)
 
     def shutter_relative_frame_time(self, image_point: Tensor) -> Tensor:
@@ -334,7 +335,7 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
 
         # Convert from scaled angle space back to angles
         kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
-        angles = SphericalUnitCoord(elevation=row * kToAngle, azimuth=column * kToAngle)
+        angles = torch.stack([column * kToAngle, row * kToAngle], dim=-1)
 
         assert torch.all(self.valid_sensor_angles(angles))
 
@@ -348,15 +349,17 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
 
         # 1.compute relative angles wrt. FOV start
         rel_angles = self.relative_sensor_angles(angles)
+        rel_az = rel_angles[..., 0]
+        rel_el = rel_angles[..., 1]
 
         # 2. Compute the indices into the lookup map
         ivert = torch.clamp(
-            rel_angles.elevation / map_resolution_vert_rad + 0.5,
+            rel_el / map_resolution_vert_rad + 0.5,
             0,
             self.angles_to_columns_map.shape[0] - 1,
         ).to(torch.int)
         ihoriz = torch.clamp(
-            rel_angles.azimuth / map_resolution_horiz_rad + 0.5,
+            rel_az / map_resolution_horiz_rad + 0.5,
             0,
             self.angles_to_columns_map.shape[1] - 1,
         ).to(torch.int)
