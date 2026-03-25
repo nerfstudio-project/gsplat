@@ -713,8 +713,10 @@ def _rasterize_to_pixels_eval3d(
                         elements = lidar_coeffs.tiling.tiles_to_elements_map[
                             elem_offset : elem_offset + elem_count
                         ]  # (count, 2) with (azimuth_idx, elevation_idx)
+                        elem_az = elements[:, 0]
+                        elem_el = elements[:, 1]
                         pix_ids_in_tile = (
-                            elements[:, 1] * image_width + elements[:, 0]
+                            elem_el * image_width + elem_az
                         ).long()
                     else:
                         py_start = ty * tile_size
