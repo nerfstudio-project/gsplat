@@ -1,0 +1,77 @@
+"""Test for the autonomous driving training example.
+
+Runs av_trainer.py with a small number of steps and verifies that the
+training converges to a minimum PSNR threshold on held-out test views.
+Requires CUDA and the test_pandaset.npz asset.
+"""
+
+import os
+import sys
+import tempfile
+
+import pytest
+import torch
+
+import gsplat
+
+SCRIPT_DIR = os.path.dirname(__file__)
+
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "../examples"))
+
+import av_trainer
+
+PANDASET_PATH = os.path.join(SCRIPT_DIR, "../assets/test_pandaset.npz")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support not built")
+class TestAVExample:
+    @pytest.fixture(autouse=True)
+    def _check_asset(self):
+        if not os.path.exists(PANDASET_PATH):
+            raise FileNotFoundError(
+                f"Required test asset not found: {PANDASET_PATH}. "
+                "Download it or run the PandaSet npz creation script."
+            )
+
+    @pytest.mark.slow
+    def test_training_converges(self):
+        """Train for 15K steps and verify PSNR >= 16 dB on test views."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            losses, checkpoints = av_trainer.train(
+                scene_path=PANDASET_PATH,
+                max_steps=15000,
+                lr=0.005,
+                log_every=5000,
+                eval_every=5000,
+                result_dir=tmpdir,
+            )
+
+            # Loss must decrease
+            assert (
+                losses[-1] < losses[0]
+            ), f"Loss did not decrease: {losses[0]:.4f} -> {losses[-1]:.4f}"
+
+            # Final PSNR must be at least 16 dB
+            final_psnr = checkpoints[-1].get("mean_psnr", 0)
+            assert (
+                final_psnr >= 16.0
+            ), f"Test PSNR too low: {final_psnr:.2f} dB (expected >= 16.0)"
+
+    def test_quick_smoke(self):
+        """Quick smoke test: 100 steps, just verify no crash."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            losses, checkpoints = av_trainer.train(
+                scene_path=PANDASET_PATH,
+                max_steps=100,
+                lr=0.005,
+                log_every=50,
+                eval_every=100,
+                result_dir=tmpdir,
+            )
+
+            assert len(losses) == 100
+            assert all(loss > 0 for loss in losses)
+            # Check eval ran and produced finite PSNR
+            assert "mean_psnr" in checkpoints[-1]
+            assert checkpoints[-1]["mean_psnr"] > 0
