@@ -75,7 +75,7 @@ def get_build_parameters():
         os.path.join(current_dir, "csrc", "third_party", "glm"),
     ]
     # Fix for CUDA 12+ in conda environment
-    if os.path.isdir(os.path.join(CUDA_HOME, "targets")):
+    if CUDA_HOME and os.path.isdir(os.path.join(CUDA_HOME, "targets")):
         for arch in os.listdir(os.path.join(CUDA_HOME, "targets")):
             if os.path.isdir(p := os.path.join(CUDA_HOME, "targets", arch, "include")):
                 extra_include_paths.append(p)
