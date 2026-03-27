@@ -49,7 +49,7 @@ except ImportError:
 PATH = os.path.dirname(os.path.abspath(__file__))
 DEBUG = os.getenv("DEBUG", "0") == "1"
 FAST_MATH = os.getenv("FAST_MATH", "1") == "1"
-WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
+WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "1" if DEBUG else "0") == "1"
 NVCC_FLAGS = os.getenv("NVCC_FLAGS", "")
 MAX_JOBS = os.getenv("MAX_JOBS")
 NINJA_STATUS = os.getenv("NINJA_STATUS")
@@ -121,7 +121,8 @@ def get_build_parameters():
     # MSVC (cl) does not support -O3/-O0; use -O2/-Od (torch converts - to /)
     if DEBUG:
         extra_cflags += ["-g", "-O0"]
-        extra_cuda_cflags += ["-lineinfo"]
+        # -lineinfo is emitted below via WITH_SYMBOLS (auto-enabled when DEBUG=1),
+        # so no need to add it here; WITH_SYMBOLS is the single source of truth.
         if sys.platform != "win32":  # MSVC equivalent (/W4 /WX) is untested
             extra_cflags += ["-Wall"]
             extra_cuda_cflags += [
@@ -179,6 +180,9 @@ def get_build_parameters():
         sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
 
     extra_ldflags += [] if WITH_SYMBOLS or sys.platform == "win32" else ["-s"]
+
+    if WITH_SYMBOLS:
+        extra_cuda_cflags += ["-lineinfo"]
 
     if torch.version.hip:
         # USE_ROCM was added to later versions of PyTorch.
