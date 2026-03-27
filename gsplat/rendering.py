@@ -25,6 +25,7 @@ from torch import Tensor
 from typing_extensions import Literal
 from ._helper import assert_shape
 from .trace import trace_function, trace_pop, trace_push, trace_range
+from .profile import capture_inputs
 
 from .cuda._wrapper import (
     RollingShutterType,
@@ -271,6 +272,7 @@ def compute_directions(
 
 
 @trace_function("render")
+@capture_inputs(envvar="GSPLAT_INPUT_CAPTURE_RASTERIZATION")
 def rasterization(
     means: Tensor,  # [..., N, 3]
     quats: Tensor,  # [..., N, 4]
