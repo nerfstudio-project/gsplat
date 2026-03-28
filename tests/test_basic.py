@@ -2376,8 +2376,10 @@ def test_rasterize_to_pixels_eval3d(
 
     # Setup lidar
     if camera_model == "lidar":
+        # This test consumes randomness before lidar setup, so fix the lidar
+        # param seed explicitly to keep the preprocessing cache reusable.
         lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
-            "at128", batch_dims, 0, 0, device=device
+            "at128", batch_dims, 0, 0, device=device, seed=42
         )
         lidar_coeffs = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
             lidar_params, angles_to_columns_map, tiling
