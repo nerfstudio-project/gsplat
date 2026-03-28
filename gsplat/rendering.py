@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
 import math
 from typing import Dict, Optional, Tuple, cast
 
@@ -23,6 +24,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
 from ._helper import assert_shape
+from .trace import trace_function, trace_pop, trace_push, trace_range
 
 from .cuda._wrapper import (
     RollingShutterType,
@@ -224,6 +226,7 @@ def viewmat_to_camera_position(viewmats: Tensor) -> Tensor:
     return -(R.mT @ t.unsqueeze(-1)).squeeze(-1)
 
 
+@trace_function("dirs")
 def compute_directions(
     batch_dims: tuple,
     means: Tensor,
@@ -253,6 +256,7 @@ def compute_directions(
     return F.normalize(dirs, p=2, dim=-1)
 
 
+@trace_function("render")
 def rasterization(
     means: Tensor,  # [..., N, 3]
     quats: Tensor,  # [..., N, 4]
@@ -687,6 +691,7 @@ def rasterization(
     # and the rasterize computation over cameras. So first we gather the cameras
     # from all ranks for projection.
     if distributed:
+        trace_push("dist-gather")
         assert batch_dims == (), "Distributed mode does not support batch dimensions"
         world_rank = torch.distributed.get_rank()
         world_size = torch.distributed.get_world_size()
@@ -706,7 +711,9 @@ def rasterization(
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
+        trace_pop()  # dist-gather
 
+    trace_push("projection")
     if with_ut:
         # Use provided UT parameters or create default
         if ut_params is None:
@@ -766,6 +773,7 @@ def rasterization(
             opacities=opacities,  # use opacities to compute a tigher bound for radii.
         )
 
+    trace_push("unpack")
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
         (
@@ -779,8 +787,6 @@ def rasterization(
             conics,
             compensations,
         ) = proj_results
-        opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
-        image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
@@ -790,10 +796,19 @@ def rasterization(
         indptr, batch_ids, camera_ids, gaussian_ids = None, None, None, None
         image_ids = None
 
-    if compensations is not None:
-        opacities = opacities * compensations
+    trace_pop()  # unpack
+    if packed:
+        with trace_range("gather-opacity"):
+            opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
+        with trace_range("image-ids"):
+            image_ids = batch_ids * C + camera_ids
 
-    valid_gaussians = (radii > 0).all(dim=-1)
+    if compensations is not None:
+        with trace_range("adj-opacity"):
+            opacities = opacities * compensations
+    with trace_range("masking"):
+        valid_gaussians = (radii > 0).all(dim=-1)
+    trace_pop()  # projection
 
     meta.update(
         {
@@ -828,23 +843,27 @@ def rasterization(
         if extra_signals is not None:
             feature_list.append(extra_signals)
         if feature_list:
-            proj_features = (
-                torch.cat(feature_list, dim=-1)
-                if len(feature_list) > 1
-                else feature_list[0]
-            )
-            proj_features = normalize_features_layout(
-                proj_features,
-                batch_dims,
-                C,
-                proj_features.shape[-1:],
-                batch_ids,
-                camera_ids,
-                gaussian_ids,
-            )
+            with trace_range("concat-features") if len(
+                feature_list
+            ) > 1 else nullcontext():
+                proj_features = (
+                    torch.cat(feature_list, dim=-1)
+                    if len(feature_list) > 1
+                    else feature_list[0]
+                )
+                proj_features = normalize_features_layout(
+                    proj_features,
+                    batch_dims,
+                    C,
+                    proj_features.shape[-1:],
+                    batch_ids,
+                    camera_ids,
+                    gaussian_ids,
+                )
     else:
         # At least one signal needs SH evaluation. Normalize and evaluate each
         # independently, then concatenate.
+        trace_push("sh-processing")
         dirs = compute_directions(
             batch_dims,
             means,
@@ -861,6 +880,7 @@ def rasterization(
             colors_tail = (
                 colors.shape[-2:] if colors_sh_degree is not None else colors.shape[-1:]
             )
+            trace_push("colors")
             colors = normalize_features_layout(
                 colors, batch_dims, C, colors_tail, batch_ids, camera_ids, gaussian_ids
             )
@@ -869,7 +889,9 @@ def rasterization(
                     colors_sh_degree, dirs, colors, masks=valid_gaussians
                 )
                 # Make sure colors >= 0 so that it's apples-to-apples with Inria CUDA backend
-                colors = torch.clamp_min(colors + 0.5, 0.0)
+                with trace_range("adj-colors"):
+                    colors = torch.clamp_min(colors + 0.5, 0.0)
+            trace_pop()  # colors
             feature_list.append(colors)
 
         if extra_signals is not None:
@@ -878,6 +900,7 @@ def rasterization(
                 if extra_signals_sh_degree is not None
                 else extra_signals.shape[-1:]
             )
+            trace_push("extra")
             extra_signals = normalize_features_layout(
                 extra_signals,
                 batch_dims,
@@ -892,19 +915,22 @@ def rasterization(
                     extra_signals_sh_degree, dirs, extra_signals, masks=valid_gaussians
                 )
                 extra_signals = extra_signals + 0.5
+            trace_pop()  # extra
             feature_list.append(extra_signals)
 
+        trace_pop()  # sh-processing
         if feature_list:
-            proj_features = (
-                torch.cat(feature_list, dim=-1)
-                if len(feature_list) > 1
-                else feature_list[0]
-            )
+            if len(feature_list) > 1:
+                with trace_range("concat-features"):
+                    proj_features = torch.cat(feature_list, dim=-1)
+            else:
+                proj_features = feature_list[0]
 
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
     if distributed:
+        trace_push("dist-scatter")
         if packed:
             # count how many elements need to be sent to each rank
             cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
@@ -1020,12 +1046,14 @@ def rasterization(
             depths = reshape_view(C, depths, N_world)
             conics = reshape_view(C, conics, N_world)
             opacities = reshape_view(C, opacities, N_world)
+        trace_pop()  # dist-scatter
 
     # Rasterize to pixels.
     # Append depth channel to proj_features if needed.
     # Layout is [proj_features(D+E) | depth(1)], with depth always last.
     # In depth-only modes proj_features may not be set yet (no colors, no extra_signals).
     if render_mode_has_depth_channel(render_mode):
+        trace_push("append-depth")
         if render_mode_has_hit_distance(render_mode):
             depth_channel = torch.zeros_like(
                 depths[..., None]
@@ -1049,11 +1077,13 @@ def rasterization(
                 backgrounds = torch.zeros(
                     (*batch_dims, C, 1), device=backgrounds.device
                 )
+        trace_pop()  # append-depth
     else:
         assert render_mode_has_only_color(render_mode)
 
     assert proj_features is not None
 
+    trace_push("tiling")
     if lidar_coeffs is not None:
         tile_width = lidar_coeffs.tiling.n_bins_azimuth
         tile_height = lidar_coeffs.tiling.n_bins_elevation
@@ -1090,6 +1120,7 @@ def rasterization(
 
     # print("rank", world_rank, "Before isect_offset_encode")
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+    trace_pop()  # tiling
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
     meta.update(
@@ -1115,6 +1146,7 @@ def rasterization(
         render_colors, render_alphas = [], []
         render_normals = None  # Only compute normals in first chunk
         for i in range(n_chunks):
+            trace_push("chunk", payload=i)
             features_chunk = proj_features[
                 ..., i * channel_chunk : (i + 1) * channel_chunk
             ]
@@ -1181,9 +1213,11 @@ def rasterization(
                     packed=packed,
                     absgrad=absgrad,
                 )
+            trace_pop()  # chunk
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
-        render_colors = torch.cat(render_colors, dim=-1)
+        with trace_range("concat-chunks"):
+            render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
     else:
         render_normals = None
@@ -1238,8 +1272,8 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
             )
-
     if extra_signals is not None:
+        trace_push("post-processing")
         # Extract the extra signals (per ray) from render_colors
         E = extra_signals.shape[-1]
         meta["render_extra_signals"] = render_colors[..., D : D + E]
@@ -1254,9 +1288,11 @@ def rasterization(
             render_colors = torch.cat([render_colors[..., 0:D], render_depth], dim=-1)
         else:
             render_colors = render_colors[..., 0:D]
+        trace_pop()  # post-processing
     else:
         # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
         if render_mode_has_expected_depth(render_mode):
+            trace_push("post-processing")
             # normalize the accumulated depth to get the expected depth
             render_colors = torch.cat(
                 [
@@ -1265,6 +1301,7 @@ def rasterization(
                 ],
                 dim=-1,
             )
+            trace_pop()  # post-processing
 
     # Add normals to meta if computed
     if return_normals:
