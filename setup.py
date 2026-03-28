@@ -82,6 +82,7 @@ setup(
         "ninja",
         "numpy",
         "jaxtyping",
+        "nvtx",
         "rich>=12",
         "torch",
         "typing_extensions; python_version<'3.8'",

@@ -73,6 +73,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         "ninja==1.13.0"
         "numpy==2.2.6"
         "jaxtyping==0.3.4"
+        "nvtx==0.2.15"
         "rich==14.3.3"
         "torch==2.9.1"
         "typing_extensions; python_version<'3.8'"
