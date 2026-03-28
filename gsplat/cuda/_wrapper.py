@@ -25,6 +25,7 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 from gsplat._helper import assert_shape
+from gsplat.trace import trace_function
 from gsplat.cuda._lidar import (
     SpinningDirection,
     LidarModelParameters,
@@ -339,6 +340,7 @@ def adam(
     )
 
 
+@trace_function("sh-fwd")
 def spherical_harmonics(
     degrees_to_use: int,
     dirs: Tensor,  # [..., 3]
@@ -476,6 +478,7 @@ def proj(
     return _Proj.apply(means, covars, Ks, width, height, camera_model)
 
 
+@trace_function("project-fwd")
 def fully_fused_projection(
     means: Tensor,  # [..., N, 3]
     covars: Optional[Tensor],  # [..., N, 6] or None
@@ -632,6 +635,7 @@ def fully_fused_projection(
 
 
 @torch.no_grad()
+@trace_function("isect-camera")
 def isect_tiles(
     means2d: Tensor,  # [..., N, 2] or [nnz, 2]
     radii: Tensor,  # [..., N, 2] or [nnz, 2]
@@ -710,6 +714,7 @@ def isect_tiles(
 
 
 @torch.no_grad()
+@trace_function("isect-lidar")
 def isect_tiles_lidar(
     lidar: RowOffsetStructuredSpinningLidarModelParametersExt,
     means2d: Tensor,  # [..., N, 2] or [nnz, 2]
@@ -783,6 +788,7 @@ def isect_tiles_lidar(
 
 
 @torch.no_grad()
+@trace_function("offsets")
 def isect_offset_encode(
     isect_ids: Tensor,
     n_images: int,
@@ -805,6 +811,7 @@ def isect_offset_encode(
     )
 
 
+@trace_function("render2D-fwd")
 def rasterize_to_pixels(
     means2d: Tensor,  # [..., N, 2] or [nnz, 2]
     conics: Tensor,  # [..., N, 3] or [nnz, 3]
@@ -1019,6 +1026,7 @@ def rasterize_to_pixels_eval3d(
     return colors, alphas
 
 
+@trace_function("render3D-fwd")
 def rasterize_to_pixels_eval3d_extra(
     means: Tensor,  # [..., N, 3]
     quats: Tensor,  # [..., N, 4]
@@ -1503,6 +1511,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         return radii, means2d, depths, conics, compensations
 
     @staticmethod
+    @trace_function("project-bwd")
     def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
         (
             means,
@@ -1573,6 +1582,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         )
 
 
+@trace_function("projectUT-fwd")
 def fully_fused_projection_with_ut(
     means: Tensor,  # [..., N, 3]
     quats: Tensor,  # [..., N, 4]
@@ -1684,7 +1694,6 @@ def fully_fused_projection_with_ut(
         compensations = None
     return radii, means2d, depths, conics, compensations
 
-
 class _RasterizeToPixels(torch.autograd.Function):
     """Rasterize gaussians"""
 
@@ -1742,6 +1751,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         return render_colors, render_alphas
 
     @staticmethod
+    @trace_function("render2D-bwd")
     def backward(
         ctx,
         v_render_colors: Tensor,  # [..., H, W, 3]
@@ -1958,6 +1968,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         return render_colors, render_alphas, last_ids, sample_counts, render_normals
 
     @staticmethod
+    @trace_function("render3D-bwd")
     def backward(
         ctx,
         v_render_colors: Tensor,  # [..., C, H, W, 3]
@@ -2175,6 +2186,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         )
 
     @staticmethod
+    @trace_function("project-bwd")
     def backward(
         ctx,
         v_batch_ids,
@@ -2320,6 +2332,7 @@ class _SphericalHarmonics(torch.autograd.Function):
         return colors
 
     @staticmethod
+    @trace_function("sh-bwd")
     def backward(ctx, v_colors: Tensor):
         dirs, coeffs, masks = ctx.saved_tensors
         sh_degree = ctx.sh_degree
