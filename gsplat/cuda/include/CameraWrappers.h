@@ -30,7 +30,6 @@
 #include "ExternalDistortion.h"
 #include "ExternalDistortion.cuh"
 #include "Lidars.cuh"
-#include "Ops.h"
 
 namespace gsplat {
 
@@ -150,6 +149,12 @@ public:
     );
 };
 
+/**
+ * @brief Template implementation of camera model wrappers.
+ *
+ * CameraModel must be a fully-specialized camera model type
+ * (e.g., PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>).
+ */
 template <class CameraModel>
 class PyBaseCameraModel : public PyBaseCameraModel<>
 {
@@ -204,34 +209,61 @@ protected:
     const CameraModel* dev_cameras() const { return m_dev_cameras.get(); }
     const CameraModel* const_dev_cameras() const { return m_dev_cameras.get(); }
 
-    /**
-     * @brief Allocate and initialize external distortion device params.
-     * Must be called before constructing cameras on device.
-     * @param params External distortion parameters (with CUDA tensors)
-     */
-    void init_external_distortion(const extdist::BivariateWindshieldModelParameters& params);
-
-    /**
-     * @brief Get pointer to device-side external distortion params (or nullptr).
-     */
-    const extdist::BivariateWindshieldModelDeviceParams* dev_ext_dist_params() const {
-        return m_dev_ext_dist_params.get();
-    }
-
 private:
     std::unique_ptr<CameraModel, CudaDeleter> m_dev_cameras;
-    std::unique_ptr<extdist::BivariateWindshieldModelDeviceParams, CudaDeleter> m_dev_ext_dist_params;
 
     torch::Tensor m_focal_lengths;
     torch::Tensor m_principal_points;
-    // Keep external distortion tensors alive (they own the data pointed to by device params)
-    std::optional<extdist::BivariateWindshieldModelParameters> m_ext_dist_params_storage;
+};
+
+/**
+ * @brief Helper base for Py* wrapper classes that delegate to an internal impl.
+ *
+ * Camera models are now templates on ExternalDistortionModel, but torch::class_
+ * requires non-template concrete types. This base holds a type-erased impl
+ * and forwards all virtual methods.
+ */
+class PyDelegatingCameraModel : public PyBaseCameraModel<>
+{
+public:
+    std::tuple<torch::Tensor, torch::Tensor> camera_ray_to_image_point(
+        const torch::Tensor& camera_ray, float margin_factor) const override {
+        return m_impl->camera_ray_to_image_point(camera_ray, margin_factor);
+    }
+    std::tuple<torch::Tensor, torch::Tensor> image_point_to_camera_ray(
+        const torch::Tensor& image_points) const override {
+        return m_impl->image_point_to_camera_ray(image_points);
+    }
+    torch::Tensor shutter_relative_frame_time(
+        const torch::Tensor& image_points) const override {
+        return m_impl->shutter_relative_frame_time(image_points);
+    }
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> image_point_to_world_ray_shutter_pose(
+        const torch::Tensor& image_points,
+        const torch::Tensor& pose_start, const torch::Tensor& pose_end) const override {
+        return m_impl->image_point_to_world_ray_shutter_pose(image_points, pose_start, pose_end);
+    }
+    std::tuple<torch::Tensor, torch::Tensor> world_point_to_image_point_shutter_pose(
+        const torch::Tensor& world_points,
+        const torch::Tensor& pose_start, const torch::Tensor& pose_end,
+        float margin_factor) const override {
+        return m_impl->world_point_to_image_point_shutter_pose(world_points, pose_start, pose_end, margin_factor);
+    }
+    int width() const override { return m_impl->width(); }
+    int height() const override { return m_impl->height(); }
+    int num_cameras() const override { return m_impl->num_cameras(); }
+    ShutterType rs_type() const override { return m_impl->rs_type(); }
+    torch::Tensor principal_points() const override { return m_impl->principal_points(); }
+    torch::Tensor focal_lengths() const override { return m_impl->focal_lengths(); }
+
+protected:
+    c10::intrusive_ptr<PyBaseCameraModel<>> m_impl;
 };
 
 /**
  * @brief Perfect pinhole camera model (no distortion)
  */
-class PyPerfectPinholeCameraModel : public PyBaseCameraModel<PerfectPinholeCameraModel>
+class PyPerfectPinholeCameraModel : public PyDelegatingCameraModel
 {
 public:
     /**
@@ -256,7 +288,7 @@ public:
 /**
  * @brief OpenCV pinhole camera model with distortion
  */
-class PyOpenCVPinholeCameraModel : public PyBaseCameraModel<OpenCVPinholeCameraModel<>>
+class PyOpenCVPinholeCameraModel : public PyDelegatingCameraModel
 {
 public:
     /**
@@ -287,7 +319,7 @@ public:
 /**
  * @brief OpenCV fisheye camera model with distortion
  */
-class PyOpenCVFisheyeCameraModel : public PyBaseCameraModel<OpenCVFisheyeCameraModel<>>
+class PyOpenCVFisheyeCameraModel : public PyDelegatingCameraModel
 {
 public:
     /**
@@ -314,31 +346,37 @@ public:
 /**
  * @brief F-Theta camera model with polynomial distortion
  */
-class PyFThetaCameraModel : public PyBaseCameraModel<FThetaCameraModel<>>
+class PyFThetaCameraModel : public PyDelegatingCameraModel
 {
 public:
     /**
      * @brief Constructor for F-Theta camera (no K matrix - uses principal points directly)
+     *
+     * F-theta distortion parameters are shared across all cameras in a batch.
+     * The rasterization kernel uses a single FThetaCameraDistortionDeviceParams,
+     * so only one set of polynomial / linear / max-angle coefficients is
+     * accepted.  Only the principal point may vary per camera.
+     *
      * @param width Image width in pixels
      * @param height Image height in pixels
-     * @param principal_points Principal points [..., 2] (cx, cy)
-     * @param pixeldist_to_angle_poly Pixel distance to angle polynomial [..., 6]
-     * @param angle_to_pixeldist_poly Angle to pixel distance polynomial [..., 6]
-     * @param linear_cde Linear correction coefficients [..., 3]
+     * @param principal_points Per-camera principal points [..., 2] (cx, cy)
+     * @param pixeldist_to_angle_poly Pixel-distance-to-angle polynomial [6] (single, shared across batch)
+     * @param angle_to_pixeldist_poly Angle-to-pixel-distance polynomial [6] (single, shared across batch)
+     * @param linear_cde Linear correction coefficients [3] (single, shared across batch)
      * @param reference_poly Reference polynomial type (FThetaPolynomialType enum value)
-     * @param max_angle Maximum angle for FOV clamping (radians)
+     * @param max_angle Maximum angle for FOV clamping in radians, scalar (single, shared across batch)
      * @param shutter_type Rolling shutter type
      * @param external_distortion_coeffs Optional bivariate windshield model distortion parameters
      */
     PyFThetaCameraModel(
         int width,
         int height,
-        const torch::Tensor& principal_points,         // [..., 2]
-        const torch::Tensor& pixeldist_to_angle_poly,  // [..., 6]
-        const torch::Tensor& angle_to_pixeldist_poly,  // [..., 6]
-        const torch::Tensor& linear_cde,               // [..., 3]
+        const torch::Tensor& principal_points,         // [..., 2] per camera
+        const torch::Tensor& pixeldist_to_angle_poly,  // [6] shared
+        const torch::Tensor& angle_to_pixeldist_poly,  // [6] shared
+        const torch::Tensor& linear_cde,               // [3] shared
         FThetaCameraDistortionParameters::PolynomialType reference_poly,
-        const torch::Tensor &max_angle,                // [...]
+        const torch::Tensor &max_angle,                // scalar, shared
         ShutterType rs_type,
         const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
     );

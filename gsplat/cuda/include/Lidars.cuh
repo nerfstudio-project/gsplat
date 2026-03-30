@@ -20,11 +20,6 @@
 #include "Cameras.cuh" // For BaseCameraModel
 #include "Lidars.h"
 
-namespace gsplat
-{
-    struct RowOffsetStructuredSpinningLidarModelParametersExt;
-}
-
 // Lidar camera parameters struct (device-side)
 // TODO: Create a poper LidarModelParamters hierarchy.
 struct RowOffsetStructuredSpinningLidarModelParametersExtDevice
@@ -71,28 +66,30 @@ struct RowOffsetStructuredSpinningLidarModelParametersExtDevice
 
 // Lidar camera model for spinning lidar sensors (e.g., Hesai Pandar128, AT128)
 // TODO: Create a proper LidarModel hierarchy.
-struct RowOffsetStructuredSpinningLidarModel : BaseCameraModel<RowOffsetStructuredSpinningLidarModel>
+struct RowOffsetStructuredSpinningLidarModel : BaseCameraModel<RowOffsetStructuredSpinningLidarModel, gsplat::extdist::EmptyExternalDistortionModel>
 {
-    using Base = BaseCameraModel<RowOffsetStructuredSpinningLidarModel>;
+    using Base = BaseCameraModel<RowOffsetStructuredSpinningLidarModel, gsplat::extdist::EmptyExternalDistortionModel>;
+
+    using KernelParameters = RowOffsetStructuredSpinningLidarModelParametersExtDevice;
 
     struct Parameters : Base::Parameters
     {
-        __device__
-        explicit Parameters(RowOffsetStructuredSpinningLidarModelParametersExtDevice lidar_params)
-            : Base::Parameters{
-                {static_cast<unsigned int>(lidar_params.n_columns), static_cast<unsigned int>(lidar_params.n_rows)},
-                ShutterType::ROLLING_LEFT_TO_RIGHT
-              }
-            , lidar(std::move(lidar_params))
+        RowOffsetStructuredSpinningLidarModelParametersExtDevice lidar;
+
+        inline __device__
+        explicit Parameters(const KernelParameters& kernel_parameters, int camera_index)
+            : Base::Parameters({
+                {static_cast<unsigned int>(kernel_parameters.n_columns), static_cast<unsigned int>(kernel_parameters.n_rows)},
+                ShutterType::ROLLING_LEFT_TO_RIGHT,
+                {},
+            }, camera_index)
+            , lidar(kernel_parameters)
         {
         }
-
-        RowOffsetStructuredSpinningLidarModelParametersExtDevice lidar;
     };
 
-    __device__
-    explicit RowOffsetStructuredSpinningLidarModel(RowOffsetStructuredSpinningLidarModelParametersExtDevice params)
-        : parameters(std::move(params))
+    inline __device__ RowOffsetStructuredSpinningLidarModel(const KernelParameters& kernel_parameters, int camera_index)
+        : parameters(kernel_parameters, camera_index)
     {
     }
 
@@ -316,3 +313,14 @@ public:
                (rel_azimuth <= scale*(lidar.fov_horiz_rad.span + lidar.fov_eps_rad*2));
     }
 };
+
+// Type trait to detect LIDAR model
+template <typename T>
+struct is_lidar : std::false_type {};
+
+template <>
+struct is_lidar<RowOffsetStructuredSpinningLidarModel> : std::true_type {};
+
+// Type list of all lidar model types
+using LidarModelTypes = TypeList<RowOffsetStructuredSpinningLidarModel>;
+using LidarModelKernelParamsVariant = gsplat::TypeListToKernelParamsVariant<LidarModelTypes>;

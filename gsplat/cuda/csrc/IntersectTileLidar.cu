@@ -123,7 +123,7 @@ __global__ void intersect_tile_lidar_kernel(
     const uint32_t N,
     // parallelize over nnz, only used if packed is True
     const uint32_t nnz,
-    RowOffsetStructuredSpinningLidarModel sensor,
+    RowOffsetStructuredSpinningLidarModel::KernelParameters sensor_params,
     const int64_t *__restrict__ image_ids,    // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
@@ -155,6 +155,7 @@ __global__ void intersect_tile_lidar_kernel(
         return;
     }
 
+    const RowOffsetStructuredSpinningLidarModel sensor(sensor_params, 0);
     const RowOffsetStructuredSpinningLidarModelParametersExtDevice &lidar = sensor.parameters.lidar;
 
     const int raycdf_size_az = lidar.cdf_resolution_azimuth;
@@ -449,7 +450,7 @@ void launch_intersect_tile_lidar_kernel(
                     I,
                     N,
                     nnz,
-                    RowOffsetStructuredSpinningLidarModel{*lidar},
+                    *lidar,
                     image_ids.has_value()
                         ? image_ids.value().data_ptr<int64_t>()
                         : nullptr,

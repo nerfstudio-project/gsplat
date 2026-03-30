@@ -33,13 +33,14 @@
 #include "Utils.cuh"
 #include "Cameras.cuh"
 #include "Lidars.cuh"
+#include "Sensors.cuh"
 #include "Ops.h"
 
 namespace gsplat {
 
 namespace cg = cooperative_groups;
 
-template <typename scalar_t>
+template <typename SensorModel, typename scalar_t>
 __global__ void projection_ut_3dgs_fused_kernel(
     const uint32_t B,
     const uint32_t C,
@@ -50,24 +51,18 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const scalar_t *__restrict__ opacities, // [B, N] optional
     const scalar_t *__restrict__ viewmats0, // [B, C, 4, 4]
     const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
-    const scalar_t *__restrict__ Ks,        // [B, C, 3, 3]
+    // Image width and height are redundant, they are in the sensor model parameters
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const CameraModelType camera_model_type,
     const bool global_z_order,
     // uncented transform
     const UnscentedTransformParameters ut_params,    
-    const ShutterType rs_type,
-    const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
-    const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
-    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
-    const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
-    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_coeffs,
-    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params, // external distortion parameters
+    // sensor model parameters
+    const typename SensorModel::KernelParameters sensor_model_params,
     // outputs
     int32_t *__restrict__ radii,         // [B, C, N, 2]
     scalar_t *__restrict__ means2d,      // [B, C, N, 2]
@@ -113,10 +108,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
         return;
     }
 
-    // shift pointers to the current camera. note that glm is colume-major.
-    const vec2 focal_length = {Ks[bid * C * 9 + cid * 9 + 0], Ks[bid * C * 9 + cid * 9 + 4]};
-    const vec2 principal_point = {Ks[bid * C * 9 + cid * 9 + 2], Ks[bid * C * 9 + cid * 9 + 5]};
-
     // Create rolling shutter parameter
     auto rs_params = RollingShutterParameters(
         viewmats0 + bid * C * 16 + cid * 16,
@@ -138,82 +129,9 @@ __global__ void projection_ut_3dgs_fused_kernel(
     // Make sure the rotation quaternion is normalized
     quat *= rsqrtf(quat_norm2);
 
-    // projection using uncented transform
-    ImageGaussianReturn image_gaussian_return;
-    if (camera_model_type == CameraModelType::PINHOLE) {
-        if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-            PerfectPinholeCameraModel::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.focal_length = { focal_length.x, focal_length.y };
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-                &external_distortion_device_params.value() : nullptr;
-            PerfectPinholeCameraModel camera_model(cm_params);
-            image_gaussian_return =
-                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                    camera_model, rs_params, ut_params, mean, scale, quat);
-        } else {
-            OpenCVPinholeCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.focal_length = { focal_length.x, focal_length.y };
-            if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + bid * C * 6 + cid * 6);
-            }
-            if (tangential_coeffs != nullptr) {
-                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + bid * C * 2 + cid * 2);
-            }
-            if (thin_prism_coeffs != nullptr) {
-                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + bid * C * 4 + cid * 4);
-            }
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-                &external_distortion_device_params.value() : nullptr;
-            OpenCVPinholeCameraModel camera_model(cm_params);
-            image_gaussian_return =
-                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                    camera_model, rs_params, ut_params, mean, scale, quat);
-        }
-    } else if (camera_model_type == CameraModelType::FISHEYE) {
-        OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
-        cm_params.resolution = {image_width, image_height};
-        cm_params.shutter_type = rs_type;
-        cm_params.principal_point = { principal_point.x, principal_point.y };
-        cm_params.focal_length = { focal_length.x, focal_length.y };
-        if (radial_coeffs != nullptr) {
-            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + bid * C * 4 + cid * 4);
-        }
-        cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-            &external_distortion_device_params.value() : nullptr;
-        OpenCVFisheyeCameraModel camera_model(cm_params);
-        image_gaussian_return =
-            world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                camera_model, rs_params, ut_params, mean, scale, quat);
-
-    } else if (camera_model_type == CameraModelType::FTHETA) {
-        FThetaCameraModel<>::Parameters cm_params = {};
-        cm_params.resolution = {image_width, image_height};
-        cm_params.shutter_type = rs_type;
-        cm_params.principal_point = { principal_point.x, principal_point.y };
-        cm_params.dist = ftheta_device_coeffs;
-        cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
-            &external_distortion_device_params.value() : nullptr;
-        FThetaCameraModel camera_model(cm_params);
-        image_gaussian_return =
-            world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                camera_model, rs_params, ut_params, mean, scale, quat);
-    } else if (camera_model_type == CameraModelType::LIDAR) {
-        assert(lidar_coeffs);
-        RowOffsetStructuredSpinningLidarModel camera_model(*lidar_coeffs);
-        image_gaussian_return =
-            world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                camera_model, rs_params, ut_params, mean, scale, quat);
-    } else {
-        // should never reach here
-        assert(false);
-        return;
-    }
+    // projection using unscented transform
+    ImageGaussianReturn image_gaussian_return = world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
+        SensorModel(sensor_model_params, bid * C + cid), rs_params, ut_params, mean, scale, quat);
 
     auto [mean2d, covar2d, valid_ut] = image_gaussian_return;
     if (!valid_ut) {
@@ -282,7 +200,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
         return;
     }
 
-    if(camera_model_type == CameraModelType::LIDAR) {
+    if constexpr (is_lidar<SensorModel>::value) {
         // LIDAR culling is performed inside world_gaussian_to_image_gaussian_unscented_transform_shutter_pose,
         // so no additional 2D image-region masking is needed here.
     }
@@ -360,69 +278,114 @@ void launch_projection_ut_3dgs_fused_kernel(
         return;
     }
 
-    FThetaCameraDistortionDeviceParams ftheta_device_coeffs(*ftheta_coeffs);
-    cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
-    if (external_distortion_params.has_value()) {
-        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(*external_distortion_params.value());
-    }
+    // Set-up the sensor model parameters.
+    // We do the dispatch between the runtime configurations and the actual concrete sensor model
+    // by storing them in a std::variant, then calling the specialized kernel on the concrete type.
+    const auto external_distortion_kernel_params = [&]() -> extdist::ExternalDistortionModelKernelParamsVariant {
+        if (external_distortion_params.has_value()) {
+            return extdist::BivariateWindshieldModel::KernelParameters{*external_distortion_params.value()};
+        }
+        else {
+            return extdist::EmptyExternalDistortionModel::KernelParameters{};
+        }
+    }();
 
-    cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs = cuda::std::nullopt;
-    if (lidar_coeffs.has_value()) {
-        TORCH_CHECK(camera_model == CameraModelType::LIDAR, "If lidar sensor coefficients are given, the camera model must be lidar");
-        lidar_device_coeffs = RowOffsetStructuredSpinningLidarModelParametersExtDevice(*lidar_coeffs.value());
-    }
-    else {
-        TORCH_CHECK(camera_model != CameraModelType::LIDAR, "If the sensor isn't lidar, lidar coefficients must not be given");
-    }
+    const auto sensor_model_params = [&]() -> SensorModelKernelParamsVariant {
+        if (camera_model == CameraModelType::PINHOLE) {
+            if (!radial_coeffs.has_value() && !tangential_coeffs.has_value() && !thin_prism_coeffs.has_value()) {
+                return to_sensor_model_kernel_params(
+                    get_camera_model_kernel_params<PerfectPinholeCameraModel>(
+                        {image_width, image_height},
+                        rs_type,
+                        external_distortion_kernel_params,
+                        Ks.const_data_ptr<float>()
+                    )
+                );
+            }
+            else {
+                return to_sensor_model_kernel_params(
+                    get_camera_model_kernel_params<OpenCVPinholeCameraModel>(
+                        {image_width, image_height},
+                        rs_type,
+                        external_distortion_kernel_params,
+                        Ks.const_data_ptr<float>(),
+                        radial_coeffs.has_value() ? radial_coeffs.value().const_data_ptr<float>() : nullptr,
+                        tangential_coeffs.has_value() ? tangential_coeffs.value().const_data_ptr<float>() : nullptr,
+                        thin_prism_coeffs.has_value() ? thin_prism_coeffs.value().const_data_ptr<float>() : nullptr
+                    )
+                );
+            }
+        }
+        else if (camera_model == CameraModelType::FISHEYE) {
+            return to_sensor_model_kernel_params(
+                get_camera_model_kernel_params<OpenCVFisheyeCameraModel>(
+                    {image_width, image_height},
+                    rs_type,
+                    external_distortion_kernel_params,
+                    Ks.const_data_ptr<float>(),
+                    radial_coeffs.has_value() ? radial_coeffs.value().const_data_ptr<float>() : nullptr
+                )
+            );
+        }
+        else if (camera_model == CameraModelType::FTHETA) {
+            return to_sensor_model_kernel_params(
+                get_camera_model_kernel_params<FThetaCameraModel>(
+                    {image_width, image_height},
+                    rs_type,
+                    external_distortion_kernel_params,
+                    Ks.const_data_ptr<float>(),
+                    *ftheta_coeffs
+                )
+            );
+        }
+        else if (camera_model == CameraModelType::LIDAR) {
+            TORCH_CHECK(lidar_coeffs.has_value(), "Lidar coefficients must be given for lidar camera model");
+            return RowOffsetStructuredSpinningLidarModel::KernelParameters{*lidar_coeffs.value()};
+        }
+        else {
+            TORCH_CHECK(false, "Invalid camera model: only pinhole, fisheye, ftheta, and lidar camera models are supported");
+        }
+    }();
 
-    projection_ut_3dgs_fused_kernel<float>
-        <<<grid,
-        threads,
-        shmem_size,
-        at::cuda::getCurrentCUDAStream()>>>(
-            B,
-            C,
-            N,
-            means.const_data_ptr<float>(),
-            quats.const_data_ptr<float>(),
-            scales.const_data_ptr<float>(),
-            opacities.has_value() ? opacities.value().const_data_ptr<float>()
-                                  : nullptr,
-            viewmats0.const_data_ptr<float>(),
-            viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
-                                  : nullptr,
-            Ks.const_data_ptr<float>(),
-            image_width,
-            image_height,
-            eps2d,
-            near_plane,
-            far_plane,
-            radius_clip,
-            camera_model,
-            global_z_order,
-            // uncented transform
-            *ut_params,
-            rs_type,
-            radial_coeffs.has_value()
-                ? radial_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            tangential_coeffs.has_value()
-                ? tangential_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            thin_prism_coeffs.has_value()
-                ? thin_prism_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            ftheta_device_coeffs,
-            lidar_device_coeffs,
-            external_distortion_device_params,
-            radii.data_ptr<int32_t>(),
-            means2d.data_ptr<float>(),
-            depths.data_ptr<float>(),
-            conics.data_ptr<float>(),
-            compensations.has_value() ? compensations.value().data_ptr<float>()
-                                      : nullptr
-        );
-}
+    cuda::std::visit([&](const auto& sensor_kernel_params) {
+        using SensorModelKernelParams = std::decay_t<decltype(sensor_kernel_params)>;
+        using SensorModel = SensorModelFromKernelParams<SensorModelKernelParams>;
+
+        projection_ut_3dgs_fused_kernel<SensorModel, float>
+            <<<grid,
+            threads,
+            shmem_size,
+            at::cuda::getCurrentCUDAStream()>>>(
+                B,
+                C,
+                N,
+                means.const_data_ptr<float>(),
+                quats.const_data_ptr<float>(),
+                scales.const_data_ptr<float>(),
+                opacities.has_value() ? opacities.value().const_data_ptr<float>()
+                                      : nullptr,
+                viewmats0.const_data_ptr<float>(),
+                viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
+                                      : nullptr,
+                image_width,
+                image_height,
+                eps2d,
+                near_plane,
+                far_plane,
+                radius_clip,
+                global_z_order,
+                // uncented transform
+                *ut_params,
+                sensor_kernel_params,
+                radii.data_ptr<int32_t>(),
+                means2d.data_ptr<float>(),
+                depths.data_ptr<float>(),
+                conics.data_ptr<float>(),
+                compensations.has_value() ? compensations.value().data_ptr<float>()
+                                          : nullptr
+            );
+        }, sensor_model_params);
+    }
 
 } // namespace gsplat
 

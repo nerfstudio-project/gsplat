@@ -324,20 +324,24 @@ inline __device__ auto interpolate_shutter_pose(
     return ShutterPose{t_rs, q_rs};
 }
 
-template <class DerivedCameraModel> struct BaseCameraModel {
+template <class DerivedCameraModel, typename ExternalDistortionModel> struct BaseCameraModel {
     // CRTP base class for all camera model types
+    struct KernelParameters {
+        std::array<uint32_t, 2> resolution;
+        ShutterType shutter_type;
+        ExternalDistortionModel::KernelParameters external_distortion;
+    };
 
     struct Parameters {
         std::array<uint32_t, 2> resolution;
         ShutterType shutter_type;
-        const gsplat::extdist::BivariateWindshieldModelDeviceParams* external_distortion_params = nullptr;
+        ExternalDistortionModel external_distortion;
+
+        inline __device__ Parameters(const KernelParameters& kernel_parameters, int camera_index)
+            : resolution(kernel_parameters.resolution),
+              shutter_type(kernel_parameters.shutter_type),
+              external_distortion(kernel_parameters.external_distortion, camera_index) {}
     };
-
-    __host__ __device__ BaseCameraModel(
-        const gsplat::extdist::BivariateWindshieldModelDeviceParams* ext_dist_params = nullptr)
-        : external_distortion_params(ext_dist_params) {}
-
-    const gsplat::extdist::BivariateWindshieldModelDeviceParams* external_distortion_params;
 
     struct ImagePointReturn {
         glm::fvec2 imagePoint;
@@ -350,17 +354,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         float margin_factor
     ) const -> ImagePointReturn {
         auto derived = static_cast<DerivedCameraModel const*>(this);
-        auto distorted_ray = cam_ray;
-
-        if (external_distortion_params != nullptr) {
-            distorted_ray = gsplat::extdist::BivariateWindshieldModel::distort_camera_ray(
-                cam_ray,
-                external_distortion_params->horizontal_poly_ptr,
-                external_distortion_params->vertical_poly_ptr,
-                external_distortion_params->horizontal_poly_order,
-                external_distortion_params->vertical_poly_order
-            );
-        }
+        auto distorted_ray = derived->parameters.external_distortion.distort_camera_ray(cam_ray);
         
         return derived->camera_ray_to_image_point_impl(distorted_ray, margin_factor);
     }
@@ -370,14 +364,8 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         auto derived = static_cast<DerivedCameraModel const*>(this);
         auto cam_ray = derived->image_point_to_camera_ray_impl(image_point);
         
-        if (cam_ray.valid_flag && external_distortion_params != nullptr) {
-            cam_ray.ray_dir = gsplat::extdist::BivariateWindshieldModel::distort_camera_ray(
-                cam_ray.ray_dir,
-                external_distortion_params->horizontal_poly_inverse_ptr,
-                external_distortion_params->vertical_poly_inverse_ptr,
-                external_distortion_params->horizontal_poly_inverse_order,
-                external_distortion_params->vertical_poly_inverse_order
-            );
+        if (cam_ray.valid_flag) {
+            cam_ray.ray_dir = derived->parameters.external_distortion.undistort_camera_ray(cam_ray.ray_dir);
         }
         
         return cam_ray;
@@ -534,19 +522,30 @@ template <class DerivedCameraModel> struct BaseCameraModel {
     }
 };
 
-struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
+template <typename ExternalDistortionModel>
+struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel<ExternalDistortionModel>, ExternalDistortionModel> {
     // OpenCV-like pinhole camera model without any distortion
 
-    using Base = BaseCameraModel<PerfectPinholeCameraModel>;
+    using Base = BaseCameraModel<PerfectPinholeCameraModel, ExternalDistortionModel>;
+
+    struct KernelParameters : Base::KernelParameters {
+        const float *__restrict__ Ks;
+    };
 
     struct Parameters : Base::Parameters {
         std::array<float, 2> principal_point;
         std::array<float, 2> focal_length;
+
+        inline __device__ Parameters(const KernelParameters& kernel_parameters, int camera_index)
+            : Base::Parameters(kernel_parameters, camera_index)
+            , principal_point({kernel_parameters.Ks[camera_index * 9 + 2], kernel_parameters.Ks[camera_index * 9 + 5]})
+            , focal_length({kernel_parameters.Ks[camera_index * 9 + 0], kernel_parameters.Ks[camera_index * 9 + 4]}) {}
     };
 
-    __device__ PerfectPinholeCameraModel(Parameters const &parameters)
-        : Base(parameters.external_distortion_params),
-          parameters(parameters) {}
+    inline __device__ PerfectPinholeCameraModel(const KernelParameters& kernel_parameters, int camera_index)
+        : parameters(kernel_parameters, camera_index)
+    {
+    }
 
     Parameters parameters;
 
@@ -598,13 +597,19 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
     }
 };
 
-template <size_t N_MAX_UNDISTORTION_ITERATIONS = 5>
+template <typename ExternalDistortionModel, size_t N_MAX_UNDISTORTION_ITERATIONS = 5>
 struct OpenCVPinholeCameraModel
-    : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX_UNDISTORTION_ITERATIONS>> {
+    : BaseCameraModel<OpenCVPinholeCameraModel<ExternalDistortionModel, N_MAX_UNDISTORTION_ITERATIONS>, ExternalDistortionModel> {
     // OpenCV-compatible pinhole camera model
 
-    using Base = BaseCameraModel<
-        OpenCVPinholeCameraModel<N_MAX_UNDISTORTION_ITERATIONS>>;
+    using Base = BaseCameraModel<OpenCVPinholeCameraModel<ExternalDistortionModel, N_MAX_UNDISTORTION_ITERATIONS>, ExternalDistortionModel>;
+
+    struct KernelParameters : Base::KernelParameters {
+        const float *__restrict__ Ks;
+        const float *__restrict__ radial_coeffs;
+        const float *__restrict__ tangential_coeffs;
+        const float *__restrict__ thin_prism_coeffs;
+    };
 
     struct Parameters : Base::Parameters {
         std::array<float, 2> principal_point;
@@ -612,19 +617,34 @@ struct OpenCVPinholeCameraModel
         std::array<float, 6> radial_coeffs = {0.f};
         std::array<float, 2> tangential_coeffs = {0.f};
         std::array<float, 4> thin_prism_coeffs = {0.f};
+
+        inline __device__ Parameters(const KernelParameters& kernel_parameters, int camera_index)
+            : Base::Parameters(kernel_parameters, camera_index)
+            , principal_point({kernel_parameters.Ks[camera_index * 9 + 2], kernel_parameters.Ks[camera_index * 9 + 5]})
+            , focal_length({kernel_parameters.Ks[camera_index * 9 + 0], kernel_parameters.Ks[camera_index * 9 + 4]})
+            , radial_coeffs(
+                kernel_parameters.radial_coeffs
+                ? make_array<float, 6>(kernel_parameters.radial_coeffs + camera_index * 6)
+                : std::array<float, 6>{0.f, 0.f, 0.f, 0.f, 0.f, 0.f}
+            )
+            , tangential_coeffs(
+                kernel_parameters.tangential_coeffs
+                ? make_array<float, 2>(kernel_parameters.tangential_coeffs + camera_index * 2)
+                : std::array<float, 2>{0.f, 0.f}
+            )
+            , thin_prism_coeffs(
+                kernel_parameters.thin_prism_coeffs
+                ? make_array<float, 4>(kernel_parameters.thin_prism_coeffs + camera_index * 4)
+                : std::array<float, 4>{0.f, 0.f, 0.f, 0.f}
+            ) {}
     };
 
-    __device__ OpenCVPinholeCameraModel(
-        Parameters const &parameters,
-        float stop_undistortion_square_error_px2 = 1e-12
-    )
-        : Base(parameters.external_distortion_params),
-          parameters(parameters),
-          undistortion_stop_square_error_px2(stop_undistortion_square_error_px2
-          ) {}
+    inline __device__ OpenCVPinholeCameraModel(const KernelParameters& kernel_parameters, int camera_index)
+        : parameters(kernel_parameters, camera_index)
+    {
+    }
 
     Parameters parameters;
-    float undistortion_stop_square_error_px2;
 
     struct DistortionReturn {
         float icD;
@@ -760,9 +780,10 @@ struct OpenCVPinholeCameraModel
             auto const uv_next = (uv_0 - delta) / icD;
 
             // Check for convergence
+            constexpr float STOP_UNDISTORTION_SQUARE_ERROR_PX2 = 1e-12f;
             if (auto const residual_vec = uv - uv_next;
                 glm::dot(residual_vec, residual_vec) <
-                undistortion_stop_square_error_px2)
+                STOP_UNDISTORTION_SQUARE_ERROR_PX2)
                 break;
 
             uv = uv_next;
@@ -906,7 +927,7 @@ struct OpenCVPinholeCameraModel
 // solve 1 + ax + bx^2 + cx^3 = 0
 inline __host__ __device__ float
 compute_opencv_fisheye_max_angle(float a, float b, float c) {
-    const float INF = std::numeric_limits<float>::max();
+    constexpr float INF = std::numeric_limits<float>::max();
 
     if (c == 0.0f) {
         if (b == 0.0f) {
@@ -961,23 +982,36 @@ compute_opencv_fisheye_max_angle(float a, float b, float c) {
     return INF;
 }
 
-template <size_t N_NEWTON_ITERATIONS = 20>
+template <typename ExternalDistortionModel, size_t N_NEWTON_ITERATIONS = 20>
 struct OpenCVFisheyeCameraModel
-    : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>> {
+    : BaseCameraModel<OpenCVFisheyeCameraModel<ExternalDistortionModel, N_NEWTON_ITERATIONS>, ExternalDistortionModel> {
     // OpenCV-compatible fisheye camera model
 
-    using Base = BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>>;
+    using Base = BaseCameraModel<OpenCVFisheyeCameraModel<ExternalDistortionModel, N_NEWTON_ITERATIONS>, ExternalDistortionModel>;
+
+    struct KernelParameters : Base::KernelParameters {
+        const float *__restrict__ Ks;
+        const float *__restrict__ radial_coeffs;
+    };
 
     struct Parameters : Base::Parameters {
         std::array<float, 2> principal_point;
         std::array<float, 2> focal_length;
         std::array<float, 4> radial_coeffs = {0.f};
+
+        inline __device__ Parameters(const KernelParameters& kernel_parameters, int camera_index)
+            : Base::Parameters(kernel_parameters, camera_index)
+            , principal_point({kernel_parameters.Ks[camera_index * 9 + 2], kernel_parameters.Ks[camera_index * 9 + 5]})
+            , focal_length({kernel_parameters.Ks[camera_index * 9 + 0], kernel_parameters.Ks[camera_index * 9 + 4]})
+            , radial_coeffs(
+                kernel_parameters.radial_coeffs
+                ? make_array<float, 4>(kernel_parameters.radial_coeffs + camera_index * 4)
+                : std::array<float, 4>{0.f, 0.f, 0.f, 0.f}
+            ) {}
     };
 
-    __host__ __device__ OpenCVFisheyeCameraModel(
-        Parameters const &parameters, float min_2d_norm = 1e-6f
-    )
-        : Base(parameters.external_distortion_params), parameters(parameters), min_2d_norm(min_2d_norm) {
+    inline __device__ OpenCVFisheyeCameraModel(const KernelParameters& kernel_parameters, int camera_index)
+        : parameters(kernel_parameters, camera_index) {
         // initialize ninth-degree odd-only forward polynomial (mapping angles
         // to normalized distances) theta + k1*theta^3 + k2*theta^5 + k3*theta^7
         // + k4*theta^9
@@ -1036,7 +1070,6 @@ struct OpenCVFisheyeCameraModel
     }
 
     Parameters parameters;
-    float min_2d_norm;
     std::array<float, 5> forward_poly_odd;
     std::array<float, 5> dforward_poly_even;
     std::array<float, 2> approx_backward_poly;
@@ -1142,7 +1175,8 @@ struct OpenCVFisheyeCameraModel
 
         // Compute the camera ray and set the ones at the image center to
         // [0,0,1]
-        if (delta >= min_2d_norm) {
+        constexpr float MIN_2D_NORM = 1e-6f;
+        if (delta >= MIN_2D_NORM) {
             // Scale the uv coordinates by the sine of the angle theta
             auto const scale_factor = std::sin(theta) / delta;
             return {
@@ -1179,21 +1213,29 @@ struct FThetaCameraDistortionDeviceParams {
     std::array<float, 3> linear_cde;
 };
 
-template <size_t N_NEWTON_ITERATIONS = 3>
-struct FThetaCameraModel : BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>> {
+template <typename ExternalDistortionModel, size_t N_NEWTON_ITERATIONS = 3>
+struct FThetaCameraModel : BaseCameraModel<FThetaCameraModel<ExternalDistortionModel, N_NEWTON_ITERATIONS>, ExternalDistortionModel> {
     // FTheta camera model
 public:
-    using Base = BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>>;
+    using Base = BaseCameraModel<FThetaCameraModel<ExternalDistortionModel, N_NEWTON_ITERATIONS>, ExternalDistortionModel>;
+
+    struct KernelParameters : Base::KernelParameters {
+        const float *__restrict__ Ks;
+        FThetaCameraDistortionDeviceParams dist;
+    };
 
     struct Parameters : Base::Parameters {
         FThetaCameraDistortionDeviceParams dist;
         std::array<float, 2> principal_point;
+
+        inline __device__ Parameters(const KernelParameters& kernel_parameters, int camera_index)
+            : Base::Parameters(kernel_parameters, camera_index)
+            , dist(kernel_parameters.dist)
+            , principal_point({kernel_parameters.Ks[camera_index * 9 + 2], kernel_parameters.Ks[camera_index * 9 + 5]}) {}
     };
 
-    __host__ __device__ FThetaCameraModel(
-        Parameters const& parameters, float min_2d_norm = 1e-6f
-    )
-        : Base(parameters.external_distortion_params), parameters(parameters), min_2d_norm(min_2d_norm), dreference_poly{} {
+    inline __device__ FThetaCameraModel(const KernelParameters& kernel_parameters, int camera_index)
+        : parameters(kernel_parameters, camera_index), dreference_poly{} {
 
         auto const dist = parameters.dist;
 
@@ -1211,7 +1253,6 @@ public:
     }
 
     Parameters parameters;
-    float min_2d_norm;
     std::array<float, 5> dreference_poly; // coefficient of first derivative of the reference polynomial
 
     inline __device__ auto camera_ray_to_image_point_impl(
@@ -1311,7 +1352,8 @@ public:
 
         // Compute the camera ray and set the ones at the image center to
         // [0,0,1]
-        if (delta >= min_2d_norm) {
+        constexpr float MIN_2D_NORM = 1e-6f;
+        if (delta >= MIN_2D_NORM) {
             // Scale the uv coordinates by the sine of the angle theta
             auto const scale_factor = std::sin(theta) / delta;
             return {
@@ -1479,4 +1521,54 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     }
 
     return {image_mean, image_covariance, valid};
+}
+
+// ---------------------------------------------------------------------------
+// Camera model type list: cartesian product of cameras × distortion models
+// ---------------------------------------------------------------------------
+
+// Wrappers that adapt each camera model template for CartesianProduct.
+template <template <typename> class CameraTemplate>
+struct CameraModelWrapper {
+    template <typename D> using Apply = CameraTemplate<D>;
+};
+
+using CameraModelWrappers = TypeList<
+    CameraModelWrapper<PerfectPinholeCameraModel>,
+    CameraModelWrapper<OpenCVPinholeCameraModel>,
+    CameraModelWrapper<OpenCVFisheyeCameraModel>,
+    CameraModelWrapper<FThetaCameraModel>
+>;
+
+// All camera model types: every camera instantiated with every distortion model.
+using CameraModelTypes = CartesianProduct<CameraModelWrappers, gsplat::extdist::ExternalDistortionModelTypes>;
+
+// Camera model kernel parameters variant.
+using CameraModelKernelParamsVariant = gsplat::TypeListToKernelParamsVariant<CameraModelTypes>;
+
+// Build camera model KernelParameters for a given camera template and distortion.
+//
+// Visits the external distortion variant to recover the concrete distortion
+// KernelParameters type, then constructs SensorModel<DistortionModel>::KernelParameters
+// with the base parameters (resolution, shutter, distortion) plus any
+// camera-specific arguments (Ks pointer, distortion coefficient pointers, etc.).
+template <template <typename> class SensorModel, typename... Args>
+inline auto get_camera_model_kernel_params(
+    std::array<uint32_t, 2> resolution,
+    ShutterType shutter_type,
+    const gsplat::extdist::ExternalDistortionModelKernelParamsVariant& external_distortion_kernel_params,
+    Args... args
+) -> CameraModelKernelParamsVariant {
+    return cuda::std::visit([&](const auto& distortion_kernel_params) -> CameraModelKernelParamsVariant {
+        using DistortionKernelParams = std::decay_t<decltype(distortion_kernel_params)>;
+        using DistortionModel = gsplat::extdist::DistortionModelFromKernelParams<DistortionKernelParams>;
+        return typename SensorModel<DistortionModel>::KernelParameters{
+            {
+                resolution,
+                shutter_type,
+                distortion_kernel_params,
+            },
+            std::forward<Args>(args)...
+        };
+    }, external_distortion_kernel_params);
 }
