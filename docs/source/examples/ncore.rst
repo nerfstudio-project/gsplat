@@ -18,7 +18,7 @@ Point ``--data-dir`` at the sequence meta-JSON file and set ``--data-type ncore`
         --result-dir results/my_scene \
         --init-type lidar
 
-For datasets with FTheta cameras:
+For datasets with FTheta cameras (auto-detected from sequence metadata):
 
 .. code-block:: bash
 
@@ -29,14 +29,25 @@ For datasets with FTheta cameras:
         --data-factor 1 \
         --result-dir results/my_scene \
         --init-type lidar \
-        --camera-model ftheta \
         --with-ut \
         --with-eval3d
 
 .. note::
 
+   The camera model (pinhole, fisheye, or FTheta) is read automatically from the NCore
+   sequence metadata. Passing ``--camera-model`` has no effect when ``--data-type ncore``
+   is used.
+
+.. note::
+
    Training with ``--data-factor`` values other than ``1`` requires that all
    camera resolutions are divisible by the factor.
+
+.. note::
+
+   World-space normalization (PCA + scale) is applied by default
+   (``--normalize-world-space`` is ``True``). For outdoor or large-scale captures
+   where preserving real-world scale matters, pass ``--no-normalize-world-space``.
 
 .. note::
 
