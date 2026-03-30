@@ -4,6 +4,9 @@ compile_commands.json
 # Visual Studio Code configs.
 .vscode/
 
+# Cursor configs
+.cursor/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

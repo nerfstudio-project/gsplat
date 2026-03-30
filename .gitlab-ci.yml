@@ -66,5 +66,8 @@ test:
     - 'echo "ccache directory: ${CCACHE_DIR}"'
 
     - rm -f "$CCACHE_STATSLOG"
-    - pytest -sv
+    # Install the geometry library needed by the active test surface.
+    - libs/install.sh geometry
+    # Root pytest.ini testpaths are tests/ only; include colocated geometry tests explicitly.
+    - pytest -sv tests libs/geometry/functional
     - ccache --show-log-stats -v
