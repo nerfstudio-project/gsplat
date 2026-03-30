@@ -90,10 +90,4 @@ enum CameraModelType {
 // Prevents gradient explosion when alpha approaches 1.0.
 #define MIN_ONE_MINUS_ALPHA 1e-6f
 
-#ifdef __CUDACC__
-#   define GSPLAT_NOINLINE __noinline__
-#else
-#   define GSPLAT_NOINLINE
-#endif
-
 } // namespace gsplat

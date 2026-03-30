@@ -160,71 +160,138 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // TODO: this should be templated on the sensor type or whether we're using rays as input.
     if(inside && rays == nullptr)
     {
-        // shift pointers to the current camera. note that glm is colume-major.
-        const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
-        const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
-
         // Create ray from pixel.
         // Each camera model's element_to_image_point converts (j, i) pixel
         // indices to the image-point convention it expects: pixel centers for
         // cameras, scaled-angle coordinates for lidar.
         if (camera_model_type == CameraModelType::PINHOLE) {
             if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-                PerfectPinholeCameraModel::Parameters cm_params = {};
-                cm_params.resolution = {image_width, image_height};
-                cm_params.shutter_type = rs_type;
-                cm_params.principal_point = { principal_point.x, principal_point.y };
-                cm_params.focal_length = { focal_length.x, focal_length.y };
-                cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
-                    &external_distortion_device_params.value() : nullptr;
-                ray = PerfectPinholeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+                if (external_distortion_device_params.has_value()) {
+                    using CameraModel = PerfectPinholeCameraModel<extdist::BivariateWindshieldModel>;
+                    CameraModel::KernelParameters kernel_params = {
+                        {
+                            {image_width, image_height},
+                            rs_type,
+                            *external_distortion_device_params,
+                        },
+                        Ks,
+                    };
+                    CameraModel camera_model(kernel_params, iid);
+                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+                } else {
+                    using CameraModel = PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
+                    CameraModel::KernelParameters kernel_params = {
+                        {
+                            {image_width, image_height},
+                            rs_type,
+                            {},
+                        },
+                        Ks,
+                    };
+                    CameraModel camera_model(kernel_params, iid);
+                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+                }
             }
             else {
-                OpenCVPinholeCameraModel<>::Parameters cm_params = {};
-                cm_params.resolution = {image_width, image_height};
-                cm_params.shutter_type = rs_type;
-                cm_params.principal_point = { principal_point.x, principal_point.y };
-                cm_params.focal_length = { focal_length.x, focal_length.y };
-                if (radial_coeffs != nullptr) {
-                    cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + iid * 6);
+                if (external_distortion_device_params.has_value()) {
+                    using CameraModel = OpenCVPinholeCameraModel<extdist::BivariateWindshieldModel>;
+                    CameraModel::KernelParameters kernel_params = {
+                        {
+                            {image_width, image_height},
+                            rs_type,
+                            *external_distortion_device_params,
+                        },
+                        Ks,
+                        radial_coeffs,
+                        tangential_coeffs,
+                        thin_prism_coeffs,
+                    };
+                    CameraModel camera_model(kernel_params, iid);
+                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+                } else {
+                    using CameraModel = OpenCVPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
+                    CameraModel::KernelParameters kernel_params = {
+                        {
+                            {image_width, image_height},
+                            rs_type,
+                            {},
+                        },
+                        Ks,
+                        radial_coeffs,
+                        tangential_coeffs,
+                        thin_prism_coeffs,
+                    };
+                    CameraModel camera_model(kernel_params, iid);
+                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
                 }
-                if (tangential_coeffs != nullptr) {
-                    cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + iid * 2);
-                }
-                if (thin_prism_coeffs != nullptr) {
-                    cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
-                }
-                cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
-                    &external_distortion_device_params.value() : nullptr;
-                ray = OpenCVPinholeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
             }
         }
         else if (camera_model_type == CameraModelType::FISHEYE) {
-            OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.focal_length = { focal_length.x, focal_length.y };
-            if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
+            if (external_distortion_device_params.has_value()) {
+                using CameraModel = OpenCVFisheyeCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    {
+                        {image_width, image_height},
+                        rs_type,
+                        *external_distortion_device_params,
+                    },
+                    Ks,
+                    radial_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = OpenCVFisheyeCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    {
+                        {image_width, image_height},
+                        rs_type,
+                        {},
+                    },
+                    Ks,
+                    radial_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
             }
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
-                &external_distortion_device_params.value() : nullptr;
-            ray = OpenCVFisheyeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
         }
         else if (camera_model_type == CameraModelType::FTHETA) {
-            FThetaCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.dist = ftheta_device_coeffs;
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
-                &external_distortion_device_params.value() : nullptr;
-            ray = FThetaCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+            if (external_distortion_device_params.has_value()) {
+                using CameraModel = FThetaCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    {
+                        {image_width, image_height},
+                        rs_type,
+                        *external_distortion_device_params,
+                    },
+                    Ks,
+                    ftheta_device_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    {
+                        {image_width, image_height},
+                        rs_type,
+                        {},
+                    },
+                    Ks,
+                    ftheta_device_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
         }
         else if (camera_model_type == CameraModelType::LIDAR) {
+            using CameraModel = RowOffsetStructuredSpinningLidarModel;
             assert(lidar_device_coeffs);
-            ray = RowOffsetStructuredSpinningLidarModel(*lidar_device_coeffs).element_to_world_ray_shutter_pose(j, i, rs_params);
+            CameraModel::KernelParameters kernel_params = {
+                *lidar_device_coeffs,
+            };
+            CameraModel camera_model(kernel_params, iid);
+            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
         }
         else {
             assert(false);
