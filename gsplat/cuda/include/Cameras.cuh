@@ -296,6 +296,19 @@ struct ShutterPose {
     }
 };
 
+// When precise quaternion normalization is needed, CUDA <= 12.8 does not keep
+// enough precision under -use_fast_math and needs the explicit operation below.
+inline __device__ auto precise_normalize(glm::fquat const &q) -> glm::fquat {
+#if defined(__CUDACC_VER_MAJOR__) && \
+    ((__CUDACC_VER_MAJOR__ < 12) || \
+     (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ <= 8))
+    auto const inv_norm = __frsqrt_rn(glm::dot(q, q));
+    return q * inv_norm;
+#else
+    return glm::normalize(q);
+#endif
+}
+
 inline __device__ auto interpolate_shutter_pose(
     float relative_frame_time,
     RollingShutterParameters const &rolling_shutter_parameters
@@ -502,7 +515,11 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 
             t_rs = (1.f - relative_frame_time) * t_start +
                    relative_frame_time * t_end;
-            q_rs = glm::normalize(glm::slerp(q_start, q_end, relative_frame_time));
+            // The rolling-shutter optimization loop is sensitive to small pose
+            // updates, so use the precise normalization here.
+            q_rs = precise_normalize(
+                glm::slerp(q_start, q_end, relative_frame_time)
+            );
 
             auto const [image_point_rs, valid_rs] =
                 derived->camera_ray_to_image_point(
