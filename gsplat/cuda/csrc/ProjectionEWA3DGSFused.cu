@@ -183,7 +183,7 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     // compute the inverse of the 2d covariance
     mat2 covar2d_inv = glm::inverse(covar2d);
 
-    float extend = 3.33f;
+    float extend = GAUSSIAN_EXTEND;
     if (opacities != nullptr) {
         float opacity = opacities[bid * N + gid];
         if (compensations != nullptr) {
@@ -197,7 +197,7 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
         }
         // Compute opacity-aware bounding box.
         // https://arxiv.org/pdf/2402.00525 Section B.2
-        extend = min(extend, sqrt(2.0f * __logf(opacity / ALPHA_THRESHOLD)));
+        extend = min(GAUSSIAN_EXTEND, sqrt(2.0f * __logf(opacity / ALPHA_THRESHOLD)));
     }
 
     // compute tight rectangular bounding box (non differentiable)

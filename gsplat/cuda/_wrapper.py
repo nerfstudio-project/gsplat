@@ -649,8 +649,13 @@ def isect_tiles(
     n_images: Optional[int] = None,
     image_ids: Optional[Tensor] = None,
     gaussian_ids: Optional[Tensor] = None,
+    conics: Optional[Tensor] = None,  # [..., N, 3] or [nnz, 3], enables AccuTile when provided
+    opacities: Optional[Tensor] = None,  # [..., N] or [nnz], enables AccuTile when provided
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Maps projected Gaussians to intersecting tiles.
+
+    When `conics` and `opacities` are provided the kernel uses conservative ellipse intersection (AccuTile/SNUGBOX), 
+    skipping tiles that the opacity-thresholded ellipse does not touch. When either is `None` the kernel falls back to the original axis-aligned bounding box.
 
     Args:
         means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
@@ -665,6 +670,8 @@ def isect_tiles(
         n_images: Number of images. Required if packed is True.
         image_ids: The image indices of the projected Gaussians. Required if packed is True.
         gaussian_ids: The column indices of the projected Gaussians. Required if packed is True.
+        conics: Inverse of projected covariances (upper triangle). [..., N, 3] if packed is False, [nnz, 3] if packed is True. Enables AccuTile when provided together with opacities.
+        opacities: Gaussian opacities. [..., N] if packed is False, [nnz] if packed is True. Enables AccuTile when provided together with conics.
 
     Returns:
         A tuple:
@@ -682,6 +689,10 @@ def isect_tiles(
         assert means2d.shape == (nnz, 2), means2d.shape
         assert radii.shape == (nnz, 2), radii.shape
         assert depths.shape == (nnz,), depths.shape
+        if conics is not None:
+            assert conics.shape == (nnz, 3), conics.shape
+        if opacities is not None:
+            assert opacities.shape == (nnz,), opacities.shape
         assert image_ids is not None, "image_ids is required if packed is True"
         assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
         assert n_images is not None, "n_images is required if packed is True"
@@ -696,11 +707,17 @@ def isect_tiles(
         assert means2d.shape == image_dims + (N, 2), means2d.shape
         assert radii.shape == image_dims + (N, 2), radii.shape
         assert depths.shape == image_dims + (N,), depths.shape
+        if conics is not None:
+            assert conics.shape == image_dims + (N, 3), conics.shape
+        if opacities is not None:
+            assert opacities.shape == image_dims + (N,), opacities.shape
 
     tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func("intersect_tile")(
         means2d.contiguous(),
         radii.contiguous(),
         depths.contiguous(),
+        conics.contiguous() if conics is not None else None,
+        opacities.contiguous() if opacities is not None else None,
         image_ids,
         gaussian_ids,
         I,
