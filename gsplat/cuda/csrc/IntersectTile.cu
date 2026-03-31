@@ -361,10 +361,10 @@ void launch_intersect_tile_kernel(
                     radii.const_data_ptr<int32_t>(),
                     depths.const_data_ptr<scalar_t>(),
                     conics.has_value()
-                        ? conics.value().data_ptr<float>()
+                        ? conics.value().const_data_ptr<float>()
                         : nullptr,
                     opacities.has_value()
-                        ? opacities.value().data_ptr<float>()
+                        ? opacities.value().const_data_ptr<float>()
                         : nullptr,
                     cum_tiles_per_gauss.has_value()
                         ? cum_tiles_per_gauss.value().const_data_ptr<int64_t>()
