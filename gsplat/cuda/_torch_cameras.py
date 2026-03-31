@@ -190,13 +190,15 @@ def _pose_camera_ray_to_world_ray(
 
     t = pose[..., :3]  # [B, 3] translation
     q = pose[..., 3:]  # [B, 4] quaternion
-    R_inv = _quat_to_rotmat(_quat_inverse(q))  # [B, 3, 3]
+    q_inv = _quat_inverse(q)
 
-    # Compute origin: -R_inv @ t
-    origin = torch.matmul(-R_inv, t[..., None]).squeeze(-1)  # [B, 3]
+    # Avoid extra fp32 drift from rebuilding the inverse rotation matrix and
+    # applying a separate matmul for the translated camera origin.
+    origin = _quat_rotate(q_inv, -t)  # [B, 3]
 
-    # Compute direction: R_inv @ d_camera
-    direction = torch.matmul(R_inv, camera_ray[..., None]).squeeze(-1)  # [B, 3]
+    # Use quaternion rotation for the direction as well instead of rebuilding
+    # R_inv and applying a separate matmul in fp32.
+    direction = _quat_rotate(q_inv, camera_ray)  # [B, 3]
 
     # Postconditions
     assert_shape("origin", origin, B + (3,))

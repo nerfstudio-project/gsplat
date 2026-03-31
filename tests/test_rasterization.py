@@ -208,7 +208,11 @@ def test_rasterization(
                 )
 
     if camera_model == "lidar":
-        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera("at128", batch_dims, 0, 0, device=device)
+        # This test consumes randomness before lidar setup, so fix the lidar
+        # param seed explicitly to keep the preprocessing cache reusable.
+        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+            "at128", batch_dims, 0, 0, device=device, seed=42
+        )
         lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(lidar_params, angles_to_columns_map, tiling)
         width = lidar.n_columns
         height = lidar.n_rows
