@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -212,6 +213,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
             )
         elif render_tab_state.render_mode == "alpha":
             alpha = render_alphas[0, ..., 0:1]
+            if render_tab_state.inverse:
+                alpha = 1 - alpha
             renders = (
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )

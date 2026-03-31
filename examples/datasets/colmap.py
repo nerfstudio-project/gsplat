@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +26,26 @@ import torch
 from PIL import Image
 from pycolmap import SceneManager
 from tqdm import tqdm
+
+import struct as _struct
+if _struct.calcsize("L") != 8:
+    import pycolmap.scene_manager as _psm
+    _real_struct = _psm.struct
+    class _StructCompat:
+        """Proxy that maps 'L' → '<Q' on Windows where sizeof(long)==4."""
+        @staticmethod
+        def _fix(fmt):
+            return fmt.replace("L", "Q")
+        def unpack(self, fmt, buf):
+            return _real_struct.unpack(self._fix(fmt), buf)
+        def pack(self, fmt, *args):
+            return _real_struct.pack(self._fix(fmt), *args)
+        def calcsize(self, fmt):
+            return _real_struct.calcsize(self._fix(fmt))
+        def __getattr__(self, name):
+            return getattr(_real_struct, name)
+    _psm.struct = _StructCompat()
+
 from typing_extensions import assert_never
 
 from exif import compute_exposure_from_exif

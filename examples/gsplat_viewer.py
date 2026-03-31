@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,9 +19,6 @@ from pathlib import Path
 from typing import Literal
 from typing import Tuple, Callable
 from nerfview import Viewer, RenderTabState
-
-from gsplat.rendering import RasterizeMode
-from gsplat.cuda._wrapper import CameraModel
 
 
 class GsplatRenderTabState(RenderTabState):
@@ -44,8 +41,8 @@ class GsplatRenderTabState(RenderTabState):
     colormap: Literal[
         "turbo", "viridis", "magma", "inferno", "cividis", "gray"
     ] = "turbo"
-    rasterize_mode: RasterizeMode = "classic"
-    camera_model: CameraModel = "pinhole"
+    rasterize_mode: Literal["classic", "antialiased"] = "classic"
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
 
 class GsplatViewer(Viewer):
@@ -167,12 +164,10 @@ class GsplatViewer(Viewer):
 
                 @render_mode_dropdown.on_update
                 def _(_) -> None:
-                    if "depth" in render_mode_dropdown.value:
-                        normalize_nearfar_checkbox.disabled = False
-                        inverse_checkbox.disabled = False
-                    else:
-                        normalize_nearfar_checkbox.disabled = True
-                        inverse_checkbox.disabled = True
+                    is_depth = "depth" in render_mode_dropdown.value
+                    is_alpha = render_mode_dropdown.value == "alpha"
+                    normalize_nearfar_checkbox.disabled = not is_depth
+                    inverse_checkbox.disabled = not (is_depth or is_alpha)
                     self.render_tab_state.render_mode = render_mode_dropdown.value
                     self.rerender(_)
 

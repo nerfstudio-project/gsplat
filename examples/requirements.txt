@@ -24,3 +24,4 @@ git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b443
 git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16
 splines
 ppisp @ git+https://github.com/nv-tlabs/ppisp@v1.0.0
+git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch

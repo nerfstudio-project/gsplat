@@ -1,0 +1,230 @@
+# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import viser
+from pathlib import Path
+from typing import Callable, Literal
+from nerfview import Viewer
+
+from gsplat_viewer import GsplatViewer, GsplatRenderTabState
+
+
+class GsplatNHTRenderTabState(GsplatRenderTabState):
+    """Render tab state for NHT (Neural Harmonic Textures) viewer.
+
+    NHT replaces spherical harmonics with per-Gaussian feature vectors decoded
+    by a deferred shading MLP, so the ``max_sh_degree`` control is unused.
+    """
+
+    max_sh_degree: int = 0
+
+
+class GsplatNHTViewer(GsplatViewer):
+    """Viewer for gsplat NHT (deferred shading) models."""
+
+    def __init__(
+        self,
+        server: viser.ViserServer,
+        render_fn: Callable,
+        output_dir: Path,
+        mode: Literal["rendering", "training"] = "rendering",
+    ):
+        super().__init__(server, render_fn, output_dir, mode)
+        server.gui.set_panel_label("gsplat NHT viewer")
+
+    def _init_rendering_tab(self):
+        self.render_tab_state = GsplatNHTRenderTabState()
+        self._rendering_tab_handles = {}
+        self._rendering_folder = self.server.gui.add_folder("Rendering")
+
+    def _populate_rendering_tab(self):
+        server = self.server
+        with self._rendering_folder:
+            with server.gui.add_folder("Gsplat NHT"):
+                total_gs_count_number = server.gui.add_number(
+                    "Total",
+                    initial_value=self.render_tab_state.total_gs_count,
+                    disabled=True,
+                    hint="Total number of splats in the scene.",
+                )
+                rendered_gs_count_number = server.gui.add_number(
+                    "Rendered",
+                    initial_value=self.render_tab_state.rendered_gs_count,
+                    disabled=True,
+                    hint="Number of splats rendered.",
+                )
+
+                near_far_plane_vec2 = server.gui.add_vector2(
+                    "Near/Far",
+                    initial_value=(
+                        self.render_tab_state.near_plane,
+                        self.render_tab_state.far_plane,
+                    ),
+                    min=(1e-3, 1e1),
+                    max=(1e1, 1e3),
+                    step=1e-3,
+                    hint="Near and far plane for rendering.",
+                )
+
+                @near_far_plane_vec2.on_update
+                def _(_) -> None:
+                    self.render_tab_state.near_plane = near_far_plane_vec2.value[0]
+                    self.render_tab_state.far_plane = near_far_plane_vec2.value[1]
+                    self.rerender(_)
+
+                radius_clip_slider = server.gui.add_number(
+                    "Radius Clip",
+                    initial_value=self.render_tab_state.radius_clip,
+                    min=0.0,
+                    max=100.0,
+                    step=1.0,
+                    hint="2D radius clip for rendering.",
+                )
+
+                @radius_clip_slider.on_update
+                def _(_) -> None:
+                    self.render_tab_state.radius_clip = radius_clip_slider.value
+                    self.rerender(_)
+
+                eps2d_slider = server.gui.add_number(
+                    "2D Epsilon",
+                    initial_value=self.render_tab_state.eps2d,
+                    min=0.0,
+                    max=1.0,
+                    step=0.01,
+                    hint="Epsilon added to the eigenvalues of projected 2D covariance matrices.",
+                )
+
+                @eps2d_slider.on_update
+                def _(_) -> None:
+                    self.render_tab_state.eps2d = eps2d_slider.value
+                    self.rerender(_)
+
+                backgrounds_slider = server.gui.add_rgb(
+                    "Background",
+                    initial_value=self.render_tab_state.backgrounds,
+                    hint="Background color for rendering.",
+                )
+
+                @backgrounds_slider.on_update
+                def _(_) -> None:
+                    self.render_tab_state.backgrounds = backgrounds_slider.value
+                    self.rerender(_)
+
+                render_mode_dropdown = server.gui.add_dropdown(
+                    "Render Mode",
+                    ("rgb", "depth(accumulated)", "depth(expected)", "alpha"),
+                    initial_value=self.render_tab_state.render_mode,
+                    hint="Render mode to use.",
+                )
+
+                @render_mode_dropdown.on_update
+                def _(_) -> None:
+                    is_depth = "depth" in render_mode_dropdown.value
+                    is_alpha = render_mode_dropdown.value == "alpha"
+                    normalize_nearfar_checkbox.disabled = not is_depth
+                    inverse_checkbox.disabled = not (is_depth or is_alpha)
+                    self.render_tab_state.render_mode = render_mode_dropdown.value
+                    self.rerender(_)
+
+                normalize_nearfar_checkbox = server.gui.add_checkbox(
+                    "Normalize Near/Far",
+                    initial_value=self.render_tab_state.normalize_nearfar,
+                    disabled=True,
+                    hint="Normalize depth with near/far plane.",
+                )
+
+                @normalize_nearfar_checkbox.on_update
+                def _(_) -> None:
+                    self.render_tab_state.normalize_nearfar = (
+                        normalize_nearfar_checkbox.value
+                    )
+                    self.rerender(_)
+
+                inverse_checkbox = server.gui.add_checkbox(
+                    "Inverse",
+                    initial_value=self.render_tab_state.inverse,
+                    disabled=True,
+                    hint="Inverse the depth.",
+                )
+
+                @inverse_checkbox.on_update
+                def _(_) -> None:
+                    self.render_tab_state.inverse = inverse_checkbox.value
+                    self.rerender(_)
+
+                colormap_dropdown = server.gui.add_dropdown(
+                    "Colormap",
+                    ("turbo", "viridis", "magma", "inferno", "cividis", "gray"),
+                    initial_value=self.render_tab_state.colormap,
+                    hint="Colormap used for rendering depth/alpha.",
+                )
+
+                @colormap_dropdown.on_update
+                def _(_) -> None:
+                    self.render_tab_state.colormap = colormap_dropdown.value
+                    self.rerender(_)
+
+                rasterize_mode_dropdown = server.gui.add_dropdown(
+                    "Anti-Aliasing",
+                    ("classic", "antialiased"),
+                    initial_value=self.render_tab_state.rasterize_mode,
+                    hint="Whether to use classic or antialiased rasterization.",
+                )
+
+                @rasterize_mode_dropdown.on_update
+                def _(_) -> None:
+                    self.render_tab_state.rasterize_mode = rasterize_mode_dropdown.value
+                    self.rerender(_)
+
+                camera_model_dropdown = server.gui.add_dropdown(
+                    "Camera",
+                    ("pinhole", "ortho", "fisheye"),
+                    initial_value=self.render_tab_state.camera_model,
+                    hint="Camera model used for rendering.",
+                )
+
+                @camera_model_dropdown.on_update
+                def _(_) -> None:
+                    self.render_tab_state.camera_model = camera_model_dropdown.value
+                    self.rerender(_)
+
+        self._rendering_tab_handles.update(
+            {
+                "total_gs_count_number": total_gs_count_number,
+                "rendered_gs_count_number": rendered_gs_count_number,
+                "near_far_plane_vec2": near_far_plane_vec2,
+                "radius_clip_slider": radius_clip_slider,
+                "eps2d_slider": eps2d_slider,
+                "backgrounds_slider": backgrounds_slider,
+                "render_mode_dropdown": render_mode_dropdown,
+                "normalize_nearfar_checkbox": normalize_nearfar_checkbox,
+                "inverse_checkbox": inverse_checkbox,
+                "colormap_dropdown": colormap_dropdown,
+                "rasterize_mode_dropdown": rasterize_mode_dropdown,
+                "camera_model_dropdown": camera_model_dropdown,
+            }
+        )
+        # Skip GsplatViewer._populate_rendering_tab and call Viewer directly
+        Viewer._populate_rendering_tab(self)
+
+    def _after_render(self):
+        self._rendering_tab_handles[
+            "total_gs_count_number"
+        ].value = self.render_tab_state.total_gs_count
+        self._rendering_tab_handles[
+            "rendered_gs_count_number"
+        ].value = self.render_tab_state.rendered_gs_count

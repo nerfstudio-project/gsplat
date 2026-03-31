@@ -1,4 +1,3 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,27 +22,9 @@ import torch
 import platform
 import json
 from types import SimpleNamespace
-
-try:
-    import torch.utils.cpp_extension as jit
-except ImportError as e:
-    if "pkg_resources" in str(e):
-        raise ImportError(
-            "torch.utils.cpp_extension failed to import because 'pkg_resources' "
-            "is no longer available in setuptools >= 82. "
-            "Fix: pip install 'setuptools<82'\n"
-            "This is a known issue with PyTorch < 2.9. "
-            "Alternatively, upgrade to PyTorch >= 2.9."
-        ) from e
-    raise
+import torch.utils.cpp_extension as jit
 from contextlib import nullcontext, contextmanager
-
-try:
-    from rich.console import Console
-
-    _console = Console()
-except ImportError:
-    _console = None
+from rich.console import Console
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 DEBUG = os.getenv("DEBUG", "0") == "1"
@@ -59,7 +40,6 @@ BUILD_3DGS = os.getenv("BUILD_3DGS")
 BUILD_2DGS = os.getenv("BUILD_2DGS")
 BUILD_ADAM = os.getenv("BUILD_ADAM")
 BUILD_RELOC = os.getenv("BUILD_RELOC")
-BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
 
 NUM_CHANNELS = os.getenv("NUM_CHANNELS")
 
@@ -80,6 +60,13 @@ def get_build_parameters():
         + list(glob.glob(os.path.join(PATH, "csrc/*.cpp")))
         + [os.path.join(PATH, "ext.cpp")]
     )
+    if sys.platform == "win32":
+        # setuptools on Windows needs /-separated relative paths
+        _project_root = os.path.dirname(os.path.dirname(current_dir))
+        sources = [
+            os.path.relpath(s, _project_root).replace("\\", "/")
+            for s in sources
+        ]
 
     # Compiler flags ----------------------------------
     extra_cflags = []
@@ -89,11 +76,9 @@ def get_build_parameters():
     if sys.platform == "win32":
         extra_cflags += ["/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN"]
         extra_cuda_cflags += [
-            "-std=c++20",
             "-allow-unsupported-compiler",
-            "-Xcompiler",
-            "/Zc:preprocessor",
-            "-DWIN32_LEAN_AND_MEAN",
+            "-std=c++20",
+            "-Xcompiler", "/Zc:preprocessor",
         ]
     else:
         extra_cflags = ["-std=c++20"]
@@ -106,56 +91,35 @@ def get_build_parameters():
     extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
-    # MSVC (cl) does not support -O3/-O0; use -O2/-Od (torch converts - to /)
     if sys.platform == "win32":
-        if DEBUG:
-            extra_cflags += ["/Zi", "/Od"]
-            extra_cuda_cflags += ["-Od"]
-        else:
-            extra_cflags += ["/O2", "-DNDEBUG"]
-            extra_cuda_cflags += ["-O2", "-DNDEBUG"]
+        extra_cflags += [] if DEBUG else ["-DNDEBUG"]
     else:
         extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
-
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
 
     extra_cuda_cflags += ["-lineinfo"] if DEBUG else []
 
-    # Silencing of warnings
+    # Silencing of warnings (GCC/Clang only)
+    if sys.platform != "win32":
+        extra_cflags += ["-Wno-attributes"]
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
     extra_cuda_cflags += ["-diag-suppress", "20012,186"]
     if not os.name == "nt":
-        extra_cflags += ["-Wno-sign-compare", "-Wno-attributes"]
+        extra_cflags += ["-Wno-sign-compare"]
 
     if BUILD_2DGS is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
-        if sys.platform == "win32":
-            extra_cuda_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
     if BUILD_3DGS is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_3DGS={BUILD_3DGS}"]
-        if sys.platform == "win32":
-            extra_cuda_cflags += [f"-DGSPLAT_BUILD_3DGS={BUILD_3DGS}"]
     if BUILD_3DGUT is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_3DGUT={BUILD_3DGUT}"]
-        if sys.platform == "win32":
-            extra_cuda_cflags += [f"-DGSPLAT_BUILD_3DGUT={BUILD_3DGUT}"]
     if BUILD_ADAM is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_ADAM={BUILD_ADAM}"]
-        if sys.platform == "win32":
-            extra_cuda_cflags += [f"-DGSPLAT_BUILD_ADAM={BUILD_ADAM}"]
     if BUILD_RELOC is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_RELOC={BUILD_RELOC}"]
-        if sys.platform == "win32":
-            extra_cuda_cflags += [f"-DGSPLAT_BUILD_RELOC={BUILD_RELOC}"]
-    if BUILD_CAMERA_WRAPPERS:
-        extra_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
-        if sys.platform == "win32":
-            extra_cuda_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
-    else:
-        # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
-        sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
 
-    extra_ldflags += [] if WITH_SYMBOLS or sys.platform == "win32" else ["-s"]
+    if sys.platform != "win32":
+        extra_ldflags += [] if WITH_SYMBOLS else ["-s"]
 
     if torch.version.hip:
         # USE_ROCM was added to later versions of PyTorch.
@@ -171,17 +135,15 @@ def get_build_parameters():
         and sys.platform != "darwin"
     ):
         extra_cflags += ["-DAT_PARALLEL_OPENMP"]
-        if sys.platform == "win32":
-            extra_cflags += ["/openmp"]
-            extra_cuda_cflags += ["-Xcompiler", "/openmp"]
-        else:
-            extra_cflags += ["-fopenmp"]
-        if sys.platform == "win32":
-            extra_cuda_cflags += ["-DAT_PARALLEL_OPENMP"]
+        extra_cflags += ["/openmp"] if sys.platform == "win32" else ["-fopenmp"]
     else:
         print("Compiling without OpenMP...")
 
-    if sys.platform != "win32":
+    if sys.platform == "win32":
+        # On Windows only pass -D defines to nvcc; MSVC /flags would be
+        # misinterpreted as file paths by nvcc.
+        extra_cuda_cflags += [f for f in extra_cflags if f.startswith("-D")]
+    else:
         extra_cuda_cflags += extra_cflags
 
     if NUM_CHANNELS is not None:
@@ -226,14 +188,9 @@ def build_and_load_gsplat():
                 saved_build_params = SimpleNamespace(**json.load(f))
             build_params_changed = saved_build_params != build_params
     except Exception as e:
-        if _console is not None:
-            _console.print(
-                f"[bold yellow]gsplat: rebuilding due to error loading saved build parameters: {e}"
-            )
-        else:
-            print(
-                f"gsplat: rebuilding due to error loading saved build parameters: {e}"
-            )
+        Console().print(
+            f"[bold yellow]gsplat: rebuilding due to error loading saved build parameters: {e}"
+        )
 
     # If parameters have changed,
     if build_params_changed:
@@ -241,24 +198,17 @@ def build_and_load_gsplat():
         shutil.rmtree(build_dir)
         # Print out what triggered the rebuild (for debugging...)
         if saved_build_params is not None:
-            if _console is not None:
-                _console.print(
-                    f"[bold yellow]gsplat: rebuilding due to build parameter change"
-                )
-            else:
-                print("gsplat: rebuilding due to build parameter change")
+            Console().print(
+                f"[bold yellow]gsplat: rebuilding due to build parameter change"
+            )
             saved_dict = saved_build_params.__dict__
             current_dict = build_params.__dict__
             for k in sorted(set(saved_dict) | set(current_dict)):
                 saved_val = saved_dict.get(k, "<missing>")
                 current_val = current_dict.get(k, "<missing>")
                 if saved_val != current_val:
-                    if _console is not None:
-                        _console.print(f"[white] old {k}: {saved_val}")
-                        _console.print(f"[white] new {k}: {current_val}")
-                    else:
-                        print(f"  old {k}: {saved_val}")
-                        print(f"  new {k}: {current_val}")
+                    Console().print(f"[white] old {k}: {saved_val}")
+                    Console().print(f"[white] new {k}: {current_val}")
 
     # Make sure the build directory exists.
     if build_dir:
@@ -271,24 +221,16 @@ def build_and_load_gsplat():
     @contextmanager
     def status_context():
         tic = time.time()
-        msg = f"gsplat: Setting up CUDA with MAX_JOBS={MAX_JOBS if MAX_JOBS else 'max'} (This may take a few minutes the first time)"
-        if _console is not None:
-            ctx = _console.status(f"[bold yellow]{msg}", spinner="bouncingBall")
-        else:
-            print(msg)
-            ctx = nullcontext()
-        with ctx:
+        with Console().status(
+            f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={MAX_JOBS if MAX_JOBS else 'max'} (This may take a few minutes the first time)",
+            spinner="bouncingBall",
+        ):
             yield
 
         toc = time.time()
-        if _console is not None:
-            _console.print(
-                f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
-            )
-        else:
-            print(
-                f"gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds."
-            )
+        Console().print(
+            f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
+        )
 
     # If the build exists, we assume the extension has been built
     # and we can load it.

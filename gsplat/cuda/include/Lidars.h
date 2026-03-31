@@ -17,6 +17,8 @@
 #pragma once
 
 #include <torch/custom_class.h>
+#include <c10/util/intrusive_ptr.h>
+#include <ATen/core/Tensor.h>
 
 namespace gsplat {
 
@@ -49,6 +51,43 @@ struct FOVDevice
 
     float start;
     float span;
+};
+
+/**
+ * Host-side lidar parameters (Python RowOffsetStructuredSpinningLidarModelParametersExt).
+ * Full definition required for CUDA host code and for MSVC when Lidar sources include Lidars.cuh.
+ */
+struct RowOffsetStructuredSpinningLidarModelParametersExt : torch::CustomClassHolder {
+    at::Tensor row_elevations_rad;
+    at::Tensor column_azimuths_rad;
+    at::Tensor row_azimuth_offsets_rad;
+    c10::intrusive_ptr<FOV> fov_vert_rad;
+    c10::intrusive_ptr<FOV> fov_horiz_rad;
+    float fov_eps_rad = 0.f;
+    SpinningDirection spinning_direction = SpinningDirection::CLOCKWISE;
+    float spinning_frequency_hz = 0.f;
+
+    at::Tensor angles_to_columns_map;
+    int n_bins_azimuth = 0;
+    int n_bins_elevation = 0;
+    at::Tensor cdf_elevation;
+    at::Tensor cdf_dense_ray_mask;
+    at::Tensor tiles_pack_info;
+    at::Tensor tiles_to_elements_map;
+
+    int n_rows() const {
+        return static_cast<int>(row_elevations_rad.size(0));
+    }
+    int n_columns() const {
+        return static_cast<int>(column_azimuths_rad.size(0));
+    }
+
+    int cdf_resolution_elevation() const {
+        return static_cast<int>(cdf_dense_ray_mask.size(-1)) - 1;
+    }
+    int cdf_resolution_azimuth() const {
+        return static_cast<int>(cdf_dense_ray_mask.size(-2)) - 1;
+    }
 };
 
 } // namespace gsplat

@@ -19,11 +19,6 @@
 #include "Cameras.cuh" // For BaseCameraModel
 #include "Lidars.h"
 
-namespace gsplat
-{
-    struct RowOffsetStructuredSpinningLidarModelParametersExt;
-}
-
 // Lidar camera parameters struct (device-side)
 // TODO: Create a poper LidarModelParamters hierarchy.
 struct RowOffsetStructuredSpinningLidarModelParametersExtDevice

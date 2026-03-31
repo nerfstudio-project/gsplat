@@ -23,4 +23,3 @@ requires = [
     "rich",
 ]
 build-backend = "setuptools.build_meta"
-

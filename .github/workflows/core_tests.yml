@@ -14,14 +14,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v3
         with:
           submodules: 'recursive'
-
-      - name: Set up Python 3.10
+          
+      - name: Set up Python 3.8.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.8.12"
       - name: Install dependencies
         run: |
           pip install black[jupyter]==22.3.0 pytest

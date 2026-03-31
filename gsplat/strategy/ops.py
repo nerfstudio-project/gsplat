@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,9 +21,9 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from gsplat import quat_scale_to_covar_preci
-from gsplat.relocation import compute_relocation
-from gsplat.utils import normalized_quat_to_rotmat
+from ..cuda._wrapper import quat_scale_to_covar_preci
+from ..relocation import compute_relocation
+from ..utils import normalized_quat_to_rotmat
 
 
 @torch.no_grad()

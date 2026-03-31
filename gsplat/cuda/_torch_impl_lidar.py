@@ -17,8 +17,12 @@ from torch import Tensor
 from dataclasses import dataclass
 import math
 from typing import Tuple, Union, Literal
-from ._lidar import SpinningDirection, relative_sensor_angles, SphericalUnitCoord
-from ._wrapper import RowOffsetStructuredSpinningLidarModelParametersExt
+from ._lidar import (
+    SpinningDirection,
+    relative_sensor_angles,
+    SphericalUnitCoord,
+    RowOffsetStructuredSpinningLidarModelParametersExt,
+)
 import struct
 
 ANGLE_TO_PIXEL_SCALING_FACTOR: int = 1024

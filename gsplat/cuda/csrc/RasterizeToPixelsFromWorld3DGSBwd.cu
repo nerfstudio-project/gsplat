@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -25,14 +25,11 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
-#include <cuda/std/optional>
 
 #include "Common.h"
-#include "ExternalDistortion.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
 #include "Cameras.cuh"
-#include "Lidars.cuh"
 #include "MacroUtils.h"
 
 namespace gsplat {
@@ -67,17 +64,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // uncented transform
     const UnscentedTransformParameters ut_params,    
     const ShutterType rs_type,
-    const scalar_t *__restrict__ rays,              // [B, C, H, W, 6]
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
-    const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
-    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
-    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
+    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const bool use_hit_distance,
     // fwd outputs
     const scalar_t
         *__restrict__ render_alphas,      // [B, C, image_height, image_width, 1]
@@ -87,69 +80,30 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                                                   // image_width, CDIM]
     const scalar_t
         *__restrict__ v_render_alphas, // [B, C, image_height, image_width, 1]
-    const scalar_t
-        *__restrict__ v_render_normals, // [B, C, image_height, image_width, 3] optional
     // grad inputs
     vec3 *__restrict__ v_means,        // [B, N, 3]
     vec4 *__restrict__ v_quats,        // [B, N, 4]
     vec3 *__restrict__ v_scales,       // [B, N, 3]
     scalar_t *__restrict__ v_colors,   // [B, C, N, CDIM] or [nnz, CDIM]
-    scalar_t *__restrict__ v_opacities, // [B, C, N] or [nnz]
-    scalar_t *__restrict__ v_rays      // [B, C, image_height, image_width, 6]
+    scalar_t *__restrict__ v_opacities // [B, C, N] or [nnz]
 ) {
     auto block = cg::this_thread_block();
     uint32_t iid = block.group_index().x;
     uint32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
-
-    uint32_t i, j;
-    bool inside;
-    if(camera_model_type == CameraModelType::LIDAR) {
-        assert(lidar_device_coeffs);
-        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
-        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
-        const int tile_element_id = block.thread_rank();
-        if(tile_element_id < element_count)
-        {
-            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // row_elevation
-            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // col_azimuth
-            assert(0 <= i);
-            assert(i < image_height);
-            assert(0 <= j);
-            assert(j < image_width);
-            inside = true;
-        }
-        else
-        {
-            inside = false;
-        }
-    }
-    else
-    {
-        i = block.group_index().y * tile_size + block.thread_index().y;
-        j = block.group_index().z * tile_size + block.thread_index().x;
-        inside = (i < image_height && j < image_width);
-    }
+    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
+    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     tile_offsets += iid * tile_height * tile_width;
     render_alphas += iid * image_height * image_width;
     last_ids += iid * image_height * image_width;
     v_render_colors += iid * image_height * image_width * CDIM;
     v_render_alphas += iid * image_height * image_width;
-    if (v_render_normals != nullptr) {
-        v_render_normals += iid * image_height * image_width * 3;
-    }
     if (backgrounds != nullptr) {
         backgrounds += iid * CDIM;
     }
     if (masks != nullptr) {
         masks += iid * tile_height * tile_width;
-    }
-    if(rays != nullptr) {
-        rays += iid*image_height*image_width*6;
-    }
-    if (v_rays != nullptr) {
-        v_rays += iid*image_height*image_width*6;
     }
 
     // when the mask is provided, do nothing and return if
@@ -169,96 +123,68 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         viewmats0 + iid * 16,
         viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16
     );
-
+    // shift pointers to the current camera. note that glm is colume-major.
+    const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
+    const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
+    
+    // Create ray from pixel
     WorldRay ray;
-    if(rays == nullptr)
-    {
-        // shift pointers to the current camera. note that glm is colume-major.
-        const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
-        const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
-        
-        // Create ray from pixel
-        if (camera_model_type == CameraModelType::PINHOLE) {
-            if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-                PerfectPinholeCameraModel::Parameters cm_params = {};
-                cm_params.resolution = {image_width, image_height};
-                cm_params.shutter_type = rs_type;
-                cm_params.principal_point = { principal_point.x, principal_point.y };
-                cm_params.focal_length = { focal_length.x, focal_length.y };
-                cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-                    &external_distortion_device_params.value() : nullptr;
-                PerfectPinholeCameraModel camera_model(cm_params);
-                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-            } else {
-                OpenCVPinholeCameraModel<>::Parameters cm_params = {};
-                cm_params.resolution = {image_width, image_height};
-                cm_params.shutter_type = rs_type;
-                cm_params.principal_point = { principal_point.x, principal_point.y };
-                cm_params.focal_length = { focal_length.x, focal_length.y };
-                if (radial_coeffs != nullptr) {
-                    cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + iid * 6);
-                }
-                if (tangential_coeffs != nullptr) {
-                    cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + iid * 2);
-                }
-                if (thin_prism_coeffs != nullptr) {
-                    cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
-                }
-                cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-                    &external_distortion_device_params.value() : nullptr;
-                OpenCVPinholeCameraModel camera_model(cm_params);
-                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-            }
-        } else if (camera_model_type == CameraModelType::FISHEYE) {
-            OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
+    if (camera_model_type == CameraModelType::PINHOLE) {
+        if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
+            PerfectPinholeCameraModel::Parameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = { principal_point.x, principal_point.y };
+            cm_params.focal_length = { focal_length.x, focal_length.y };
+            PerfectPinholeCameraModel camera_model(cm_params);
+            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+        } else {
+            OpenCVPinholeCameraModel<>::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
             if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
+                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + iid * 6);
             }
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-                &external_distortion_device_params.value() : nullptr;
-            OpenCVFisheyeCameraModel camera_model(cm_params);
+            if (tangential_coeffs != nullptr) {
+                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + iid * 2);
+            }
+            if (thin_prism_coeffs != nullptr) {
+                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
+            }
+            OpenCVPinholeCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else if (camera_model_type == CameraModelType::FTHETA) {
-            FThetaCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.dist = ftheta_device_coeffs;
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
-                &external_distortion_device_params.value() : nullptr;
-            FThetaCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else if (camera_model_type == CameraModelType::LIDAR) {
-            assert(lidar_device_coeffs);
-            RowOffsetStructuredSpinningLidarModel camera_model(*lidar_device_coeffs);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else {
-            // should never reach here
-            assert(false);
-            return;
         }
-    }
-    else
-    {
-        assert(rays != nullptr);
-        ray.valid_flag = false;
-        if(inside)
-        {
-            // TODO: use at least 3x64b loads instead of 6x32b
-            ray.ray_org = {rays[pix_id*6+0], rays[pix_id*6+1], rays[pix_id*6+2]};
-            ray.ray_dir = {rays[pix_id*6+3], rays[pix_id*6+4], rays[pix_id*6+5]};
-            ray.valid_flag = true;
+    } else if (camera_model_type == CameraModelType::FISHEYE) {
+        OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
+        cm_params.resolution = {image_width, image_height};
+        cm_params.shutter_type = rs_type;
+        cm_params.principal_point = { principal_point.x, principal_point.y };
+        cm_params.focal_length = { focal_length.x, focal_length.y };
+        if (radial_coeffs != nullptr) {
+            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
         }
+        OpenCVFisheyeCameraModel camera_model(cm_params);
+        ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+    } else if (camera_model_type == CameraModelType::FTHETA) {
+        FThetaCameraModel<>::Parameters cm_params = {};
+        cm_params.resolution = {image_width, image_height};
+        cm_params.shutter_type = rs_type;
+        cm_params.principal_point = { principal_point.x, principal_point.y };
+        cm_params.dist = ftheta_coeffs;
+        FThetaCameraModel camera_model(cm_params);
+        ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+    } else {
+        // should never reach here
+        assert(false);
+        return;
     }
     const vec3 ray_d = ray.ray_dir;
     const vec3 ray_o = ray.ray_org;
 
     // keep not rasterizing threads around for reading data
-    bool done = inside && ray.valid_flag;
+    bool done = (i < image_height && j < image_width) && ray.valid_flag;
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
@@ -288,8 +214,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     float T = T_final;
     // the contribution from gaussians behind the current one
     float buffer[CDIM] = {0.f};
-    // the contribution from gaussians behind the current one (for normals)
-    vec3 normal_buffer = {0.f, 0.f, 0.f};
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = done ? last_ids[pix_id] : 0;
 
@@ -300,17 +224,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         v_render_c[k] = v_render_colors[pix_id * CDIM + k];
     }
     const float v_render_a = v_render_alphas[pix_id];
-    
-    // df/d_normal for this pixel (only if computing normals)
-    vec3 v_render_n = vec3(0.f, 0.f, 0.f);
-    if (v_render_normals != nullptr) {
-        v_render_n.x = v_render_normals[pix_id * 3 + 0];
-        v_render_n.y = v_render_normals[pix_id * 3 + 1];
-        v_render_n.z = v_render_normals[pix_id * 3 + 2];
-    }
-
-    vec3 v_ray_o = {0.f, 0.f, 0.f};
-    vec3 v_ray_d = {0.f, 0.f, 0.f};
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -397,18 +310,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 power = -0.5f * grayDist;
 
                 vis = __expf(power);
-                alpha = min(MAX_ALPHA, opac * vis);
+                alpha = min(0.999f, opac * vis);
                 if (power > 0.f || alpha < 1.f / 255.f) {
                     valid = false;
-                }
-
-                // Recompute hit_distance to match forward pass when use_hit_distance=True
-                if (use_hit_distance) {
-                    const float hit_t = glm::dot(grd_n, -gro);
-                    const vec3 grds = scale * (grd_n * hit_t);
-                    const float hit_dist = glm::length(grds);
-                    // Replace last channel in rgbs_batch with recomputed hit_distance
-                    rgbs_batch[t * CDIM + (CDIM - 1)] = hit_dist;
                 }
             }
 
@@ -421,9 +325,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             vec3 v_scale_local = {0.f, 0.f, 0.f};
             vec4 v_quat_local = {0.f, 0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
-
             // initialize everything to 0, only set if the lane is valid
-            vec3 normal = {0.f, 0.f, 0.f};  // pre-declare for use in v_alpha and later
             if (valid) {
                 // compute the current T for this gaussian
                 float ra = 1.0f / (1.0f - alpha);
@@ -434,22 +336,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
-                
-                // Precompute normal if needed (for both v_alpha contribution and gradient)
-                bool flipped = false;
-                if (v_render_normals != nullptr) {
-                    // Recompute normal from forward pass
-                    // normal = R * (0, 0, 1) = R[:, 2] (third column)
-                    const vec3 unnormalized_normal = R[2];
-                    
-                    // Direction resolution: flip if facing away from ray
-                    flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
-                    const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
-                    
-                    // Normalize
-                    normal = safe_normalize(unnormalized_flipped);
-                }
-                
                 // contribution from this pixel
                 float v_alpha = 0.f;
 #pragma unroll
@@ -468,99 +354,28 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     }
                     v_alpha += -T_final * ra * accum;
                 }
-                
-                // Add contribution from normals to v_alpha (product rule term)
-                // Forward: render_normals += normal * vis (where vis = alpha * T)
-                // So v_alpha_normals = dot(normal * T - normal_buffer * ra, v_render_n)
-                if (v_render_normals != nullptr) {
-                    v_alpha += glm::dot(normal * T - normal_buffer * ra, v_render_n);
-                }
 
-                // Add contribution from hit distance (if enabled)
-                vec3 v_grd_n_hit = vec3(0.f);
-                vec3 v_gro_hit = vec3(0.f);
-                if (use_hit_distance) {
-                    const float v_depth = v_rgb_local[CDIM - 1];  // gradient from depth channel (last channel)
-
-                    // From forward:
-                    const float hit_t = glm::dot(grd_n, -gro);
-                    const vec3 grds = scale * (grd_n * hit_t);
-                    const float hit_dist_len = glm::length(grds);
-
-                    // Backward through length(grds)
-                    vec3 v_grds = vec3(0.f);
-                    if (hit_dist_len > 1e-8f) {
-                        v_grds = (grds / hit_dist_len) * v_depth;
-                    }
-
-                    // Backward through grds = scale * grd_n * hit_t (element-wise multiply)
-                    // d/d(hit_t): scale * grd_n
-                    const float v_hit_t = glm::dot(scale * grd_n, v_grds);
-                    // d/d(grd_n): scale * hit_t (element-wise)
-                    v_grd_n_hit = (scale * hit_t) * v_grds;  // element-wise
-                    // d/d(scale): grd_n * hit_t (element-wise)
-                    v_scale_local += (grd_n * hit_t) * v_grds;  // element-wise
-
-                    // Backward through hit_t = dot(grd_n, -gro)
-                    v_grd_n_hit += -gro * v_hit_t;
-                    v_gro_hit = -grd_n * v_hit_t;
-                }
-
-                if (opac * vis <= MAX_ALPHA) {
+                if (opac * vis <= 0.999f) {
                     const float v_vis = opac * v_alpha;
                     float v_gradDist = -0.5f * vis * v_vis;
                     vec3 v_gcrod = 2.0f * v_gradDist * gcrod;
-                    vec3 v_grd_n = -glm::cross(v_gcrod, gro) + v_grd_n_hit;
-                    vec3 v_gro = glm::cross(v_gcrod, grd_n) + v_gro_hit;
+                    vec3 v_grd_n = - glm::cross(v_gcrod, gro);
+                    vec3 v_gro = glm::cross(v_gcrod, grd_n);
                     vec3 v_grd = safe_normalize_bw(grd, v_grd_n);
                     mat3 v_Mt = glm::outerProduct(v_grd, ray_d) + 
                         glm::outerProduct(v_gro, o_minus_mu);
                     vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
 
                     v_mean_local += -v_o_minus_mu;
-                    
-                    // Compute ray gradients
-                    // From o_minus_mu = ray_o - xyz, we get:
-                    v_ray_o += v_o_minus_mu;
-                    // From grd = Mt * ray_d, we get:
-                    v_ray_d += glm::transpose(Mt) * v_grd;
-
                     quat_scale_to_preci_half_vjp(
                         quat, scale, R, glm::transpose(v_Mt), v_quat_local, v_scale_local
                     );
                     v_opacity_local = vis * v_alpha;
-                    
-                    // Compute normal gradient contribution (if computing normals)
-                    // Note: normal was precomputed above for v_alpha contribution
-                    if (v_render_normals != nullptr) {
-                        // Compute gradient contribution
-                        // Forward: render_normals += normal * fac (where fac = alpha * T)
-                        const vec3 v_normal_local = v_render_n * fac;
-                        
-                        // Forward: normal = safe_normalize(unnormalized_flipped)
-                        const vec3 unnormalized_normal = R[2];
-                        const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
-                        const vec3 v_unnormalized_flipped = safe_normalize_bw(unnormalized_flipped, v_normal_local);
-                        
-                        // Forward: unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal
-                        const vec3 v_unnormalized = flipped ? -v_unnormalized_flipped : v_unnormalized_flipped;
-
-                        // Forward: R[2][:] = unnormalized_normal
-                        const mat3 v_R = mat3(vec3(0.f, 0.f, 0.f), vec3(0.f, 0.f, 0.f), v_unnormalized);
-
-                        // backward through R = quat_to_rotmat(quat)
-                        quat_to_rotmat_vjp(quat, v_R, v_quat_local);
-                    }
                 }
 
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     buffer[k] += rgbs_batch[t * CDIM + k] * fac;
-                }
-                
-                // Update normal buffer (for product rule in next iterations)
-                if (v_render_normals != nullptr) {
-                    normal_buffer += normal * fac;
                 }
             }
             warpSum<CDIM>(v_rgb_local, warp);
@@ -599,16 +414,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             }
         }
     }
-
-    if (v_rays != nullptr && inside) {
-        float *v_ray_ptr = (float *)(v_rays) + 6 * pix_id;
-        v_ray_ptr[0] = v_ray_o.x;
-        v_ray_ptr[1] = v_ray_o.y;
-        v_ray_ptr[2] = v_ray_o.z;
-        v_ray_ptr[3] = v_ray_d.x;
-        v_ray_ptr[4] = v_ray_d.y;
-        v_ray_ptr[5] = v_ray_d.z;
-    }
 }
 
 template <uint32_t CDIM>
@@ -631,33 +436,27 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::Tensor Ks,                      // [..., C, 3, 3]
     const CameraModelType camera_model,
     // uncented transform
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
-    const at::optional<at::Tensor> rays,              // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
-    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
     // intersections
     const at::Tensor tile_offsets,    // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,     // [n_isects]
-    const bool use_hit_distance,
     // forward outputs
     const at::Tensor render_alphas,   // [..., C, image_height, image_width, 1]
     const at::Tensor last_ids,        // [..., C, image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
-    const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
     // outputs
     at::Tensor v_means,      // [..., N, 3]
     at::Tensor v_quats,      // [..., N, 4]
     at::Tensor v_scales,     // [..., N, 3]
     at::Tensor v_colors,     // [..., C, N, 3] or [nnz, 3]
-    at::Tensor v_opacities,  // [..., C, N] or [nnz]
-    at::optional<at::Tensor> v_rays // [..., C, image_height, image_width, 6]
+    at::Tensor v_opacities   // [..., C, N] or [nnz]
 ) {
     bool packed = opacities.dim() == 1;
     assert (packed == false); // only support non-packed for now
@@ -699,25 +498,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         );
     }
 
-    TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
-    TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
-    FThetaCameraDistortionDeviceParams ftheta_device_coeffs(*ftheta_coeffs);
-    cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
-    if (external_distortion_params.has_value()) {
-        TORCH_CHECK(external_distortion_params.value(), "external_distortion_params intrusive_ptr is null");
-        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(*external_distortion_params.value());
-    }
-
-    cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs = cuda::std::nullopt;
-    if (lidar_coeffs.has_value()) {
-        TORCH_CHECK(camera_model == CameraModelType::LIDAR, "If lidar sensor coefficients are given, the camera model must be lidar");
-        lidar_device_coeffs = *lidar_coeffs.value();
-    }
-    else
-    {
-        TORCH_CHECK(camera_model != CameraModelType::LIDAR, "If the sensor isn't lidar, lidar coefficients must not be given");
-    }
-
     rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
             B,
@@ -745,10 +525,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             Ks.data_ptr<float>(),
             camera_model,
             // uncented transform
-            *ut_params,
+            ut_params,
             rs_type,
-            rays.has_value() ? rays.value().data_ptr<float>()
-                           : nullptr,
             radial_coeffs.has_value() ? radial_coeffs.value().data_ptr<float>()
                                     : nullptr,
             tangential_coeffs.has_value()
@@ -757,25 +535,20 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             thin_prism_coeffs.has_value()
                 ? thin_prism_coeffs.value().data_ptr<float>()
                 : nullptr,
-            ftheta_device_coeffs,
-            lidar_device_coeffs,
-            external_distortion_device_params,
+            ftheta_coeffs,
             // intersections
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
-            use_hit_distance,
             render_alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
             v_render_colors.data_ptr<float>(),
             v_render_alphas.data_ptr<float>(),
-            v_render_normals.has_value() ? v_render_normals.value().data_ptr<float>() : nullptr,
             // outputs
             reinterpret_cast<vec3 *>(v_means.data_ptr<float>()),
             reinterpret_cast<vec4 *>(v_quats.data_ptr<float>()),
             reinterpret_cast<vec3 *>(v_scales.data_ptr<float>()),
             v_colors.data_ptr<float>(),
-            v_opacities.data_ptr<float>(),
-            v_rays.has_value() ? v_rays.value().data_ptr<float>() : nullptr
+            v_opacities.data_ptr<float>()
         );
 }
 
@@ -798,34 +571,23 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const at::optional<at::Tensor> viewmats1,                              \
         const at::Tensor Ks,                                                   \
         const CameraModelType camera_model,                                    \
-        const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,     \
+        const UnscentedTransformParameters ut_params,                         \
         const ShutterType rs_type,                                             \
-        const at::optional<at::Tensor> rays,                                   \
-        const at::optional<at::Tensor> radial_coeffs,                          \
-        const at::optional<at::Tensor> tangential_coeffs,                      \
-        const at::optional<at::Tensor> thin_prism_coeffs,                      \
-        const c10::intrusive_ptr<FThetaCameraDistortionParameters>             \
-            &ftheta_coeffs,                                                    \
-        const at::optional<c10::intrusive_ptr<                                 \
-            RowOffsetStructuredSpinningLidarModelParametersExt>>               \
-            &lidar_coeffs,                                                     \
-        const at::optional<                                                    \
-            c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>   \
-            &external_distortion_params,                                       \
+        const at::optional<at::Tensor> radial_coeffs,                         \
+        const at::optional<at::Tensor> tangential_coeffs,                     \
+        const at::optional<at::Tensor> thin_prism_coeffs,                     \
+        const FThetaCameraDistortionParameters ftheta_coeffs,                 \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
-        const bool use_hit_distance,                                           \
         const at::Tensor render_alphas,                                        \
         const at::Tensor last_ids,                                             \
         const at::Tensor v_render_colors,                                      \
         const at::Tensor v_render_alphas,                                      \
-        const at::optional<at::Tensor> v_render_normals,                       \
         at::Tensor v_means,                                                    \
         at::Tensor v_quats,                                                    \
         at::Tensor v_scales,                                                   \
         at::Tensor v_colors,                                                   \
-        at::Tensor v_opacities,                                                \
-        at::optional<at::Tensor> v_rays                                        \
+        at::Tensor v_opacities                                                 \
     );
 
 GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)

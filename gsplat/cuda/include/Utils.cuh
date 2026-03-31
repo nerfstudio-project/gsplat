@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -128,6 +129,19 @@ template <class WarpT> inline __device__ void warpSum(vec3 &val, WarpT &warp) {
 template <class WarpT> inline __device__ void warpSum(vec2 &val, WarpT &warp) {
     val.x = cg::reduce(warp, val.x, cg::plus<float>());
     val.y = cg::reduce(warp, val.y, cg::plus<float>());
+}
+
+template <class WarpT> inline __device__ void warpSum(float4 &val, WarpT &warp) {
+    val.x = cg::reduce(warp, val.x, cg::plus<float>());
+    val.y = cg::reduce(warp, val.y, cg::plus<float>());
+    val.z = cg::reduce(warp, val.z, cg::plus<float>());
+    val.w = cg::reduce(warp, val.w, cg::plus<float>());
+}
+
+template <class WarpT> inline __device__ void warpSum(float3 &val, WarpT &warp) {
+    val.x = cg::reduce(warp, val.x, cg::plus<float>());
+    val.y = cg::reduce(warp, val.y, cg::plus<float>());
+    val.z = cg::reduce(warp, val.z, cg::plus<float>());
 }
 
 template <class WarpT> inline __device__ void warpSum(mat4 &val, WarpT &warp) {

@@ -2,13 +2,13 @@
  * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
- *
+ * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
+ * 
  * http://www.apache.org/licenses/LICENSE-2.0
- *
+ * 
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
-#include <glm/glm.hpp>
 
 namespace gsplat {
 
@@ -67,25 +66,17 @@ enum CameraModelType {
     ORTHO = 1,
     FISHEYE = 2,
     FTHETA = 3,
-    LIDAR = 4,
 };
 
 #define N_THREADS_PACKED 256
 #define ALPHA_THRESHOLD (1.f / 255.f)
-// MAX_ALPHA and TRANSMITTANCE_THRESHOLD are chosen so that the equivalent of
-// a maximal opacity Gaussian has to be rasterized twice to reach the threshold,
-// without getting the transmittance too small for numerical stability of
-// the backward pass.
-// i.e. TRANSMITTANCE_THRESHOLD = (1 - MAX_ALPHA)^2
-#define MAX_ALPHA 0.99f
-#define TRANSMITTANCE_THRESHOLD 1e-4f
+// NHT: harmonic encoding (sin, cos to separate channels)
+#define NUM_ENCODING_FREQUENCIES 1
+#define FREQUENCY_SCALE_EXPONENTIAL 0  // 0=linear (k+1), 1=exponential (2^k)
+#define ENCF (NUM_ENCODING_FREQUENCIES * 2)
+#define FREQ_IDX(k, f) ((k) * ENCF + (f))
 
-#define MAX_KERNEL_DENSITY_CUTOFF 0.0113
-
-#ifdef __CUDACC__
-#   define GSPLAT_NOINLINE __noinline__
-#else
-#   define GSPLAT_NOINLINE
-#endif
+// NHT: tetrahedral feature interpolation (4 vertices per 3DGS primitive)
+#define VERTEX_PER_PRIM 4
 
 } // namespace gsplat
