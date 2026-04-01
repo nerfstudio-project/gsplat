@@ -267,9 +267,9 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
             "RowOffsetStructuredSpinningLidarModelParametersExt"
         )
         return LidarParamsCUDA(
-            row_elevations_rad=self.row_elevations_rad,
-            column_azimuths_rad=self.column_azimuths_rad,
-            row_azimuth_offsets_rad=self.row_azimuth_offsets_rad,
+            row_elevations_rad=self.row_elevations_rad.contiguous(),
+            column_azimuths_rad=self.column_azimuths_rad.contiguous(),
+            row_azimuth_offsets_rad=self.row_azimuth_offsets_rad.contiguous(),
             spinning_direction=self.spinning_direction.value,
             spinning_frequency_hz=self.spinning_frequency_hz,
             fov_vert_rad=FOV.from_base(self.fov_vert_rad).to_cpp(),
@@ -278,10 +278,10 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
             angles_to_columns_map=self.angles_to_columns_map,
             n_bins_azimuth=self.tiling.n_bins_azimuth,
             n_bins_elevation=self.tiling.n_bins_elevation,
-            cdf_elevation=self.tiling.cdf_elevation,
+            cdf_elevation=self.tiling.cdf_elevation.contiguous(),
             cdf_dense_ray_mask=self.tiling.cdf_dense_ray_mask.contiguous(),
-            tiles_to_elements_map=self.tiling.tiles_to_elements_map,
-            tiles_pack_info=self.tiling.tiles_pack_info,
+            tiles_to_elements_map=self.tiling.tiles_to_elements_map.contiguous(),
+            tiles_pack_info=self.tiling.tiles_pack_info.contiguous(),
         )
 
 
@@ -1186,8 +1186,8 @@ def rasterize_to_pixels_eval3d_extra(
 
     tile_height, tile_width = isect_offsets.shape[-2:]
     if camera_model == "lidar":
-        assert tile_width == lidar_coeffs.tiling.n_bins_elevation
-        assert tile_height == lidar_coeffs.tiling.n_bins_azimuth
+        assert tile_width == lidar_coeffs.tiling.n_bins_azimuth
+        assert tile_height == lidar_coeffs.tiling.n_bins_elevation
         # TODO: improve checks. Right now we don't have access to max_pts_per_tile used,
         # hence this assert needs to be commented out.
         # assert tile_width*tile_height*lidar_coeffs.tiling.max_pts_per_tile >= lidar_coeffs.n_rows*lidar_coeffs.n_columns
@@ -2028,7 +2028,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
-            lidar_coeffs,
+            lidar_coeffs,  # already converted to C++ in forward
             external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
@@ -2317,17 +2317,14 @@ class _SphericalHarmonics(torch.autograd.Function):
         )
         ctx.save_for_backward(dirs, coeffs, masks)
         ctx.sh_degree = sh_degree
-        ctx.num_bases = coeffs.shape[-2]
         return colors
 
     @staticmethod
     def backward(ctx, v_colors: Tensor):
         dirs, coeffs, masks = ctx.saved_tensors
         sh_degree = ctx.sh_degree
-        num_bases = ctx.num_bases
         compute_v_dirs = ctx.needs_input_grad[1]
         v_coeffs, v_dirs = _make_lazy_cuda_func("spherical_harmonics_bwd")(
-            num_bases,
             sh_degree,
             dirs,
             coeffs,

@@ -424,9 +424,9 @@ def rasterization(
         viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]
         Ks: The camera intrinsics. [..., C, 3, 3]
         width: The width of the image.
-          For lidar sensors, this is ignored. The width is taken from lidar_coeffs.n_rows.
-        height: The height of the image.
           For lidar sensors, this is ignored. The width is taken from lidar_coeffs.n_columns.
+        height: The height of the image.
+          For lidar sensors, this is ignored. The height is taken from lidar_coeffs.n_rows.
         near_plane: The near plane for clipping. Default is 0.01.
         far_plane: The far plane for clipping. Default is 1e10.
         radius_clip: Gaussians with 2D radius smaller or equal than this value will be
@@ -550,8 +550,8 @@ def rasterization(
     )
 
     if lidar_coeffs is not None:
-        width = lidar_coeffs.n_rows
-        height = lidar_coeffs.n_columns
+        width = lidar_coeffs.n_columns
+        height = lidar_coeffs.n_rows
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
@@ -1055,8 +1055,8 @@ def rasterization(
     assert proj_features is not None
 
     if lidar_coeffs is not None:
-        tile_width = lidar_coeffs.tiling.n_bins_elevation
-        tile_height = lidar_coeffs.tiling.n_bins_azimuth
+        tile_width = lidar_coeffs.tiling.n_bins_azimuth
+        tile_height = lidar_coeffs.tiling.n_bins_elevation
         tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
             lidar_coeffs,
             means2d,
@@ -1367,8 +1367,8 @@ def _rasterization(
     from gsplat.cuda._math import _quat_scale_to_covar_preci
 
     if lidar_coeffs is not None:
-        width = lidar_coeffs.n_rows
-        height = lidar_coeffs.n_columns
+        width = lidar_coeffs.n_columns
+        height = lidar_coeffs.n_rows
 
     has_color = render_mode_has_color(render_mode)
 
@@ -1464,8 +1464,8 @@ def _rasterization(
 
     # Identify intersecting tiles
     if lidar_coeffs is not None:
-        tile_width = lidar_coeffs.tiling.n_bins_elevation
-        tile_height = lidar_coeffs.tiling.n_bins_azimuth
+        tile_width = lidar_coeffs.tiling.n_bins_azimuth
+        tile_height = lidar_coeffs.tiling.n_bins_elevation
         tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
             lidar_coeffs,
             means2d,
