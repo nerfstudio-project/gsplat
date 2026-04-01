@@ -422,7 +422,12 @@ def _cached_lidar_preprocessing(
 
 
 def parse_lidar_camera(
-    param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device
+    param_str: str,
+    batch_dims: tuple,
+    width: int,
+    height: int,
+    device: torch.device,
+    seed: int | None = None,
 ):
     """Parse parameters for lidar camera model."""
 
@@ -457,6 +462,14 @@ def parse_lidar_camera(
 
     elevation_span = abs(elevation_end - elevation_start)
     azimuth_base_span = abs(azimuth_base_end - azimuth_base_start)
+    # Allow tests to request deterministic lidar params without depending on
+    # whatever random draws happened earlier in the same test. This keeps the
+    # preprocessing cache reusable while preserving the old ambient-RNG behavior
+    # when seed=None.
+    generator = None
+    if seed is not None:
+        generator = torch.Generator(device=device)
+        generator.manual_seed(seed)
 
     # Generate random row elevations within FOV (sorted descending for typical lidar)
     params.row_elevations_rad = (
@@ -468,7 +481,10 @@ def parse_lidar_camera(
             device=device
             # Add small noise, but make sure it's not larger than the spacing between each row.
         )
-        + (torch.rand(n_rows, dtype=torch.float32, device=device) - 0.5)
+        + (
+            torch.rand(n_rows, dtype=torch.float32, device=device, generator=generator)
+            - 0.5
+        )
         * (elevation_span / (n_rows - 1))
         * 0.01
     )
@@ -481,14 +497,20 @@ def parse_lidar_camera(
             dtype=torch.float32,
             device=device,
         )
-        + (torch.rand(n_columns, dtype=torch.float32, device=device) - 0.5)
+        + (
+            torch.rand(
+                n_columns, dtype=torch.float32, device=device, generator=generator
+            )
+            - 0.5
+        )
         * (azimuth_base_span / (n_columns - 1))
         * 0.01
     )
 
     # Generate small random azimuth offsets per row
     params.row_azimuth_offsets_rad = (
-        torch.rand(n_rows, dtype=torch.float32, device=device) - 0.5
+        torch.rand(n_rows, dtype=torch.float32, device=device, generator=generator)
+        - 0.5
     ) * 0.2
 
     lidar_params = RowOffsetStructuredSpinningLidarModelParameters(**vars(params))

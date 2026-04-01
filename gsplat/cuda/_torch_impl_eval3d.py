@@ -155,8 +155,14 @@ def _compute_gaussian_transform(
     min_scale = scales_flat.min()
     assert min_scale > 0, f"Non-positive scale detected: {min_scale}"
 
-    # Compute M = R * (1/scales)
-    M_preci_half = _quat_scale_to_preci_half(quats_flat, scales_flat)
+    # Build the transform in float64, then cast back, to avoid fp32 rounding
+    # pushing marginal eval3d samples across the alpha threshold.
+    build_dtype = (
+        torch.float64 if quats_flat.dtype == torch.float32 else quats_flat.dtype
+    )
+    M_preci_half = _quat_scale_to_preci_half(
+        quats_flat.to(build_dtype), scales_flat.to(build_dtype)
+    ).to(quats_flat.dtype)
     assert torch.all(torch.isfinite(M_preci_half)), "Non-finite values in M_preci_half"
 
     # Transpose: iscl_rot = M^T
