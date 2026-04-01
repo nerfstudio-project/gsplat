@@ -25,12 +25,17 @@ pytest <THIS_PY_FILE> -s
 from itertools import product, chain
 from typing import Optional, Tuple
 
+import gsplat
 import pytest
 import torch
-import gsplat
 
 from tests.test_cameras import parse_lidar_camera
-from gsplat.rendering import RenderMode
+from gsplat.rendering import (
+    RenderMode,
+    render_mode_has_color,
+    render_mode_has_depth_channel,
+    render_mode_has_hit_distance,
+)
 from gsplat.cuda._constants import ALPHA_THRESHOLD
 
 device = torch.device("cuda:0")
@@ -40,7 +45,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
-    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info",
+    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed",
     [
         pytest.param(
             *params,
@@ -54,6 +59,15 @@ device = torch.device("cuda:0")
                     (params[5] == False or params[6] == False)
                     and not gsplat.has_3dgs(),
                     reason="3DGS support isn't built in",
+                ),
+                # sh_degree (1) and per_view_color (0) require colors, which requires a color render_mode (2)
+                pytest.mark.skipif(
+                    params[1] is not None and not render_mode_has_color(params[2]),
+                    reason="sh_degree requires colors, invalid with depth-only render_mode",
+                ),
+                pytest.mark.skipif(
+                    params[0] == True and not render_mode_has_color(params[2]),
+                    reason="per_view_color requires colors, invalid with depth-only render_mode",
                 ),
             ],
         )
@@ -70,6 +84,7 @@ device = torch.device("cuda:0")
                 [False],  # with_ut
                 ["pinhole"],  # camera_model
                 [None],  # extra_signals_info
+                [False],  # distributed
             ),
             # 3DGUT
             product(
@@ -86,6 +101,7 @@ device = torch.device("cuda:0")
                     (None, 20),
                     (3, 3),
                 ],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
+                [False],  # distributed
             ),
             # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
             # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
@@ -94,13 +110,28 @@ device = torch.device("cuda:0")
             product(
                 [False],  # per_view_color
                 [None],  # sh_degree
-                ["RGB-d"],  # render_mode (hit distance + RGB)
+                ["RGB-d", "d"],  # render_mode
                 [False],  # packed (must be False)
                 [()],  # batch_dims
                 [True],  # with_eval3d
                 [True],  # with_ut
                 ["pinhole"],  # camera_model
                 [None, (None, 20)],  # extra_signals_info — (None,20) triggers padding
+                [False],  # distributed
+            ),
+            # Distributed rendering (single-rank): exercises the all-gather /
+            # scatter code path.  Constraints: batch_dims=(), no per_view_color.
+            product(
+                [False],  # per_view_color (distributed forbids per-view)
+                [None, 3],  # sh_degree
+                ["RGB", "RGB+D", "D"],  # render_mode
+                [True, False],  # packed
+                [()],  # batch_dims (distributed requires ())
+                [False],  # with_eval3d
+                [False],  # with_ut
+                ["pinhole"],  # camera_model
+                [None],  # extra_signals_info
+                [True],  # distributed
             ),
         )
     ],
@@ -115,7 +146,11 @@ def test_rasterization(
     with_ut: bool,
     camera_model: str,
     extra_signals_info: Optional[tuple],
+    distributed: bool,
+    dist_init,
 ):
+    if distributed and not torch.distributed.is_initialized():
+        pytest.skip("distributed process group not initialized")
     from gsplat.rendering import _rasterization, rasterization
 
     torch.manual_seed(42)
@@ -125,7 +160,11 @@ def test_rasterization(
     quats = torch.randn(batch_dims + (N, 4), device=device)
     scales = torch.rand(batch_dims + (N, 3), device=device)
     opacities = torch.rand(batch_dims + (N,), device=device)
-    if per_view_color:
+    # Depth-only modes with no SH and no per_view_color pass colors=None.
+    # (per_view_color and sh_degree combos are already filtered by skipif above.)
+    if not render_mode_has_color(render_mode):
+        colors = None
+    elif per_view_color:
         if sh_degree is None:
             colors = torch.rand(batch_dims + (C, N, 3), device=device)
         else:
@@ -206,14 +245,15 @@ def test_rasterization(
         lidar_coeffs=lidar,
         extra_signals=extra_signals,
         extra_signals_sh_degree=extra_signals_sh_degree,
+        distributed=distributed,
     )
 
-    if render_mode in ("D", "d", "Ed"):
-        assert renders.shape == (*batch_dims, C, height, width, 1)
-    elif render_mode == "RGB":
-        assert renders.shape == (*batch_dims, C, height, width, 3)
-    elif render_mode in ("RGB+D", "RGB-d", "RGB-Ed"):
-        assert renders.shape == (*batch_dims, C, height, width, 4)
+    expected_channels = 0
+    if render_mode_has_color(render_mode):
+        expected_channels += 3
+    if render_mode_has_depth_channel(render_mode):
+        expected_channels += 1
+    assert renders.shape == (*batch_dims, C, height, width, expected_channels)
 
     _renders, _alphas, _meta = _rasterization(
         means=means,
@@ -237,7 +277,6 @@ def test_rasterization(
 
     rtol = 1e-4
     atol = 1e-4
-    is_hit_distance = render_mode in ("d", "RGB-d", "Ed", "RGB-Ed")
 
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
     if extra_signals is not None:
@@ -248,9 +287,9 @@ def test_rasterization(
             atol=atol,
         )
 
-    if is_hit_distance:
+    if render_mode_has_hit_distance(render_mode):
         # For combined RGB+depth modes, verify RGB channels match.
-        if render_mode in ("RGB-d", "RGB-Ed"):
+        if render_mode_has_color(render_mode):
             torch.testing.assert_close(
                 renders[..., :3], _renders[..., :3], rtol=rtol, atol=atol
             )

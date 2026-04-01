@@ -258,7 +258,9 @@ def rasterization(
     quats: Tensor,  # [..., N, 4]
     scales: Tensor,  # [..., N, 3]
     opacities: Tensor,  # [..., N]
-    colors: Tensor,  # [..., (C,) N, D] or [..., (C,) N, K, 3]
+    colors: Optional[
+        Tensor
+    ],  # [..., (C,) N, D] or [..., (C,) N, K, 3]; None for depth-only render_modes
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -531,6 +533,17 @@ def rasterization(
 
     """
     meta = {}
+    has_color = render_mode_has_color(render_mode)
+
+    if colors is None and has_color:
+        raise ValueError(
+            f"colors must be provided when render_mode='{render_mode}' includes RGB. "
+            f"Pass colors=None only for depth-only render modes (D, d, Ed, ED)."
+        )
+    if colors is None and sh_degree is not None:
+        raise ValueError(
+            f"sh_degree must be None when colors is None, got sh_degree={sh_degree}."
+        )
 
     external_distortion_coeffs = cast(
         Optional[BivariateWindshieldModelParameters], external_distortion_coeffs
@@ -545,7 +558,9 @@ def rasterization(
     B = math.prod(batch_dims)
     N = means.shape[-2]
     C = viewmats.shape[-3]
-    D = colors.shape[-1]  # Number of input color channels
+    D = (
+        colors.shape[-1] if has_color else 0
+    )  # number of primary color channels; 0 for depth-only
     I = B * C
     H = height
     W = width
@@ -580,15 +595,17 @@ def rasterization(
         return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
 
     def check_features(features: Tensor, sh_degree: Optional[int], name: str) -> bool:
+        channels = features.shape[-1]
+
         if sh_degree is None:
             # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
             assert (
                 features.dim() == num_batch_dims + 2
-                and features.shape[:-1] == batch_dims + (N,)
+                and features.shape[:-1] == (*batch_dims, N)
             ) or (
                 features.dim() == num_batch_dims + 3
-                and features.shape[:-1] == batch_dims + (C, N)
-            ), features.shape
+                and features.shape[:-1] == (*batch_dims, C, N)
+            ), f"{name}'s shape {features.shape=} must be either {(*batch_dims, N, channels)} or {(*batch_dims, C, N, channels)}"
             if distributed:
                 assert (
                     features.dim() == num_batch_dims + 2
@@ -599,19 +616,22 @@ def rasterization(
             assert (
                 features.dim() == num_batch_dims + 3
                 and features.shape[:-2] == batch_dims + (N,)
-                and features.shape[-1] == 3
+                and channels == 3
             ) or (
                 features.dim() == num_batch_dims + 4
                 and features.shape[:-2] == batch_dims + (C, N)
-                and features.shape[-1] == 3
-            ), features.shape
+                and channels == 3
+            ), f"{name}'s shape {features.shape=} must be either {(*batch_dims, N, 3)} or {(*batch_dims, C, N, 3)}"
+
             assert (sh_degree + 1) ** 2 <= features.shape[-2], features.shape
             if distributed:
                 assert (
                     features.dim() == num_batch_dims + 3
                 ), f"Distributed mode only supports per-Gaussian {name}."
 
-    check_features(colors, sh_degree, "colors")
+    # Skip colors validation for depth-only modes (colors are ignored/overwritten)
+    if has_color:
+        check_features(colors, sh_degree, "colors")
 
     if extra_signals is not None:
         check_features(extra_signals, extra_signals_sh_degree, "extra signals")
@@ -790,24 +810,41 @@ def rasterization(
         }
     )
 
-    # If both colors and extra-signals don't require SH evaluation,
-    if sh_degree is None and extra_signals_sh_degree is None:
-        # We can process both at once
-        if extra_signals is not None:
-            colors = torch.cat([colors, extra_signals], dim=-1)
+    # Assemble proj_features: evaluate SH (if needed) for colors and extra_signals,
+    # then concatenate them into the feature tensor that will be passed through
+    # distributed communication and finally to rasterization.
+    # In depth-only modes, skip color processing entirely (colors_sh_degree=None).
+    colors_sh_degree = sh_degree if has_color else None
 
-        # Turn colors into [..., C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
-        colors = normalize_features_layout(
-            colors,
-            batch_dims,
-            C,
-            colors.shape[-1:],
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-        )
+    proj_features = None
+
+    if colors_sh_degree is None and extra_signals_sh_degree is None:
+        # No SH evaluation needed — concatenate and normalize in one pass.
+        # Note: we avoid torch.cat for single-element lists because it always
+        # allocates a new tensor even when there is nothing to concatenate.
+        feature_list = []
+        if has_color:
+            feature_list.append(colors)
+        if extra_signals is not None:
+            feature_list.append(extra_signals)
+        if feature_list:
+            proj_features = (
+                torch.cat(feature_list, dim=-1)
+                if len(feature_list) > 1
+                else feature_list[0]
+            )
+            proj_features = normalize_features_layout(
+                proj_features,
+                batch_dims,
+                C,
+                proj_features.shape[-1:],
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+            )
     else:
-        # Calculate the view directions from camera to gaussians
+        # At least one signal needs SH evaluation. Normalize and evaluate each
+        # independently, then concatenate.
         dirs = compute_directions(
             batch_dims,
             means,
@@ -819,66 +856,50 @@ def rasterization(
             viewmats_rs=viewmats_rs,
         )
 
-        if sh_degree is None:
-            colors = normalize_features_layout(
-                colors,
-                batch_dims,
-                C,
-                colors.shape[-1:],
-                batch_ids,
-                camera_ids,
-                gaussian_ids,
+        feature_list = []
+        if has_color:
+            colors_tail = (
+                colors.shape[-2:] if colors_sh_degree is not None else colors.shape[-1:]
             )
-        else:
             colors = normalize_features_layout(
-                colors,
-                batch_dims,
-                C,
-                colors.shape[-2:],
-                batch_ids,
-                camera_ids,
-                gaussian_ids,
+                colors, batch_dims, C, colors_tail, batch_ids, camera_ids, gaussian_ids
             )
+            if colors_sh_degree is not None:
+                colors = spherical_harmonics(
+                    colors_sh_degree, dirs, colors, masks=valid_gaussians
+                )
+                # Make sure colors >= 0 so that it's apples-to-apples with Inria CUDA backend
+                colors = torch.clamp_min(colors + 0.5, 0.0)
+            feature_list.append(colors)
 
-            colors = spherical_harmonics(sh_degree, dirs, colors, masks=valid_gaussians)
-            # Make sure colors >= 0 so that it's apples-to-apples with Inria CUDA backend
-            colors = torch.clamp_min(colors + 0.5, 0.0)
-
-        # Process extra signals, if any
         if extra_signals is not None:
-            if extra_signals_sh_degree is None:
-                extra_signals = normalize_features_layout(
-                    extra_signals,
-                    batch_dims,
-                    C,
-                    extra_signals.shape[-1:],
-                    batch_ids,
-                    camera_ids,
-                    gaussian_ids,
-                )
-            else:
-                extra_signals = normalize_features_layout(
-                    extra_signals,
-                    batch_dims,
-                    C,
-                    extra_signals.shape[-2:],
-                    batch_ids,
-                    camera_ids,
-                    gaussian_ids,
-                )
-
+            es_tail = (
+                extra_signals.shape[-2:]
+                if extra_signals_sh_degree is not None
+                else extra_signals.shape[-1:]
+            )
+            extra_signals = normalize_features_layout(
+                extra_signals,
+                batch_dims,
+                C,
+                es_tail,
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+            )
+            if extra_signals_sh_degree is not None:
                 extra_signals = spherical_harmonics(
                     extra_signals_sh_degree, dirs, extra_signals, masks=valid_gaussians
                 )
                 extra_signals = extra_signals + 0.5
+            feature_list.append(extra_signals)
 
-            # Now that colors and extra_signals are view-dependent, we can concatenate them
-            # and process them both together.
-            assert colors.shape[:-1] == extra_signals.shape[:-1], (
-                colors.shape,
-                extra_signals.shape,
+        if feature_list:
+            proj_features = (
+                torch.cat(feature_list, dim=-1)
+                if len(feature_list) > 1
+                else feature_list[0]
             )
-            colors = torch.cat([colors, extra_signals], dim=-1)
 
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
@@ -896,12 +917,26 @@ def rasterization(
             (radii,) = all_to_all_tensor_list(
                 world_size, [radii], cnts, output_splits=collected_splits
             )
-            means2d, depths, conics, opacities, colors = all_to_all_tensor_list(
-                world_size,
-                [means2d, depths, conics, opacities, colors],
-                cnts,
-                output_splits=collected_splits,
-            )
+            if proj_features is not None:
+                (
+                    means2d,
+                    depths,
+                    conics,
+                    opacities,
+                    proj_features,
+                ) = all_to_all_tensor_list(
+                    world_size,
+                    [means2d, depths, conics, opacities, proj_features],
+                    cnts,
+                    output_splits=collected_splits,
+                )
+            else:
+                (means2d, depths, conics, opacities) = all_to_all_tensor_list(
+                    world_size,
+                    [means2d, depths, conics, opacities],
+                    cnts,
+                    output_splits=collected_splits,
+                )
 
             # before sending the data, we should turn the camera_ids from global to local.
             # i.e. the camera_ids produced by the projection stage are over all cameras world-wide,
@@ -948,55 +983,76 @@ def rasterization(
             )
             radii = reshape_view(C, radii, N_world)
 
-            means2d, depths, conics, opacities, colors = all_to_all_tensor_list(
-                world_size,
-                [
-                    means2d.flatten(0, 1),
-                    depths.flatten(0, 1),
-                    conics.flatten(0, 1),
-                    opacities.flatten(0, 1),
-                    colors.flatten(0, 1),
-                ],
-                splits=[C_i * N for C_i in C_world],
-                output_splits=[C * N_i for N_i in N_world],
-            )
+            if proj_features is not None:
+                (
+                    means2d,
+                    depths,
+                    conics,
+                    opacities,
+                    proj_features,
+                ) = all_to_all_tensor_list(
+                    world_size,
+                    [
+                        means2d.flatten(0, 1),
+                        depths.flatten(0, 1),
+                        conics.flatten(0, 1),
+                        opacities.flatten(0, 1),
+                        proj_features.flatten(0, 1),
+                    ],
+                    splits=[C_i * N for C_i in C_world],
+                    output_splits=[C * N_i for N_i in N_world],
+                )
+                proj_features = reshape_view(C, proj_features, N_world)
+            else:
+                (means2d, depths, conics, opacities) = all_to_all_tensor_list(
+                    world_size,
+                    [
+                        means2d.flatten(0, 1),
+                        depths.flatten(0, 1),
+                        conics.flatten(0, 1),
+                        opacities.flatten(0, 1),
+                    ],
+                    splits=[C_i * N for C_i in C_world],
+                    output_splits=[C * N_i for N_i in N_world],
+                )
+
             means2d = reshape_view(C, means2d, N_world)
             depths = reshape_view(C, depths, N_world)
             conics = reshape_view(C, conics, N_world)
             opacities = reshape_view(C, opacities, N_world)
-            colors = reshape_view(C, colors, N_world)
 
-    # Rasterize to pixels
+    # Rasterize to pixels.
+    # Append depth channel to proj_features if needed.
+    # Layout is [proj_features(D+E) | depth(1)], with depth always last.
+    # In depth-only modes proj_features may not be set yet (no colors, no extra_signals).
+    if render_mode_has_depth_channel(render_mode):
+        if render_mode_has_hit_distance(render_mode):
+            depth_channel = torch.zeros_like(
+                depths[..., None]
+            )  # kernel overwrites with hit distance
+        else:
+            depth_channel = depths[..., None]  # projection depth
 
-    # Determine if we need hit distance (computed in rasterization) or Gaussian depth (from projection)
-    if render_mode_has_depth_channel(render_mode) and render_mode_has_color(
-        render_mode
-    ):
-        if render_mode_has_hit_distance(render_mode):
-            # Hit distance modes: use zeros as placeholder (kernel will overwrite with hit distance)
-            colors = torch.cat((colors, torch.zeros_like(depths[..., None])), dim=-1)
+        if proj_features is not None:
+            proj_features = torch.cat((proj_features, depth_channel), dim=-1)
+            if backgrounds is not None:
+                backgrounds = torch.cat(
+                    [
+                        backgrounds,
+                        torch.zeros((*batch_dims, C, 1), device=backgrounds.device),
+                    ],
+                    dim=-1,
+                )
         else:
-            # Gaussian depth modes: use projection depth
-            colors = torch.cat((colors, depths[..., None]), dim=-1)
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [
-                    backgrounds,
-                    torch.zeros(batch_dims + (C, 1), device=backgrounds.device),
-                ],
-                dim=-1,
-            )
-    elif render_mode_has_only_depth_channel(render_mode):
-        if render_mode_has_hit_distance(render_mode):
-            # Hit distance modes: zeros as placeholder (kernel will overwrite)
-            colors = torch.zeros_like(depths[..., None])
-        else:
-            # Gaussian depth modes: use projection depth
-            colors = depths[..., None]
-        if backgrounds is not None:
-            backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
+            proj_features = depth_channel
+            if backgrounds is not None:
+                backgrounds = torch.zeros(
+                    (*batch_dims, C, 1), device=backgrounds.device
+                )
     else:
         assert render_mode_has_only_color(render_mode)
+
+    assert proj_features is not None
 
     if lidar_coeffs is not None:
         tile_width = lidar_coeffs.tiling.n_bins_elevation
@@ -1051,13 +1107,15 @@ def rasterization(
     )
 
     # print("rank", world_rank, "Before rasterize_to_pixels")
-    if colors.shape[-1] > channel_chunk:
+    if proj_features.shape[-1] > channel_chunk:
         # slice into chunks
-        n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
+        n_chunks = (proj_features.shape[-1] + channel_chunk - 1) // channel_chunk
         render_colors, render_alphas = [], []
         render_normals = None  # Only compute normals in first chunk
         for i in range(n_chunks):
-            colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
+            features_chunk = proj_features[
+                ..., i * channel_chunk : (i + 1) * channel_chunk
+            ]
             backgrounds_chunk = (
                 backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
                 if backgrounds is not None
@@ -1076,7 +1134,7 @@ def rasterization(
                     means=means,
                     quats=quats,
                     scales=scales,
-                    colors=colors_chunk,
+                    colors=features_chunk,
                     opacities=opacities,
                     viewmats=viewmats,
                     Ks=Ks,
@@ -1110,7 +1168,7 @@ def rasterization(
                 render_colors_, render_alphas_ = rasterize_to_pixels(
                     means2d,
                     conics,
-                    colors_chunk,
+                    features_chunk,
                     opacities,
                     width,
                     height,
@@ -1138,7 +1196,7 @@ def rasterization(
                 means=means,
                 quats=quats,
                 scales=scales,
-                colors=colors,
+                colors=proj_features,
                 opacities=opacities,
                 viewmats=viewmats,
                 Ks=Ks,
@@ -1167,7 +1225,7 @@ def rasterization(
             render_colors, render_alphas = rasterize_to_pixels(
                 means2d,
                 conics,
-                colors,
+                proj_features,
                 opacities,
                 width,
                 height,
@@ -1312,12 +1370,16 @@ def _rasterization(
         width = lidar_coeffs.n_rows
         height = lidar_coeffs.n_columns
 
+    has_color = render_mode_has_color(render_mode)
+
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
     B = math.prod(batch_dims)
     N = means.shape[-2]
     C = viewmats.shape[-3]
-    D = colors.shape[-1]  # Number of input color channels
+    D = (
+        colors.shape[-1] if has_color else 0
+    )  # number of primary color channels; 0 for depth-only
     I = B * C
     H = height
     W = width
@@ -1330,28 +1392,29 @@ def _rasterization(
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     assert rays is None or rays.shape == batch_dims + (C, H, W, 6), rays.shape
 
-    if sh_degree is None:
-        # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
-        assert (
-            colors.dim() == num_batch_dims + 2
-            and colors.shape[:-1] == batch_dims + (N,)
-        ) or (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-1] == batch_dims + (C, N)
-        ), colors.shape
-    else:
-        # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
-        # Allowing for activating partial SH bands
-        assert (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-2] == batch_dims + (N,)
-            and colors.shape[-1] == 3
-        ) or (
-            colors.dim() == num_batch_dims + 4
-            and colors.shape[:-2] == batch_dims + (C, N)
-            and colors.shape[-1] == 3
-        ), colors.shape
-        assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
+    if has_color:
+        if sh_degree is None:
+            # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
+            assert (
+                colors.dim() == num_batch_dims + 2
+                and colors.shape[:-1] == batch_dims + (N,)
+            ) or (
+                colors.dim() == num_batch_dims + 3
+                and colors.shape[:-1] == batch_dims + (C, N)
+            ), colors.shape
+        else:
+            # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
+            # Allowing for activating partial SH bands
+            assert (
+                colors.dim() == num_batch_dims + 3
+                and colors.shape[:-2] == batch_dims + (N,)
+                and colors.shape[-1] == 3
+            ) or (
+                colors.dim() == num_batch_dims + 4
+                and colors.shape[:-2] == batch_dims + (C, N)
+                and colors.shape[-1] == 3
+            ), colors.shape
+            assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
     if with_ut:
         radii, means2d, depths, conics, compensations = _fully_fused_projection_with_ut(
@@ -1433,9 +1496,10 @@ def _rasterization(
 
     # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
     # Make sure they're clamped if evaluating SH.
-    colors = _maybe_evaluate_sh(
-        sh_degree, colors, means, radii, viewmats, batch_dims, C, N, True
-    )
+    if has_color:
+        colors = _maybe_evaluate_sh(
+            sh_degree, colors, means, radii, viewmats, batch_dims, C, N, True
+        )
 
     # Now do the same to the extra signals.
     if extra_signals is not None:
@@ -1451,13 +1515,13 @@ def _rasterization(
             N,
             False,
         )
-        # Now that colors and extra_signals are view-dependent, we can concatenate them
-        # and process them both together.
-        assert colors.shape[:-1] == extra_signals.shape[:-1], (
-            colors.shape,
-            extra_signals.shape,
-        )
-        colors = torch.cat([colors, extra_signals], dim=-1)
+        if has_color:
+            # Concatenate colors and extra_signals for joint rasterization.
+            assert colors.shape[:-1] == extra_signals.shape[:-1], (
+                colors.shape,
+                extra_signals.shape,
+            )
+            colors = torch.cat([colors, extra_signals], dim=-1)
 
     # Rasterize to pixels
     if render_mode_has_depth_channel(render_mode) and render_mode_has_color(
@@ -1473,9 +1537,16 @@ def _rasterization(
                 dim=-1,
             )
     elif render_mode_has_only_depth_channel(render_mode):
-        colors = depths[..., None]
+        # In depth-only mode, extra_signals were not concatenated into colors
+        # above. Place them before depth so depth stays last.
+        if extra_signals is not None and not has_color:
+            colors = torch.cat([extra_signals, depths[..., None]], dim=-1)
+        else:
+            colors = depths[..., None]
         if backgrounds is not None:
-            backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
+            backgrounds = torch.zeros(
+                batch_dims + (C, colors.shape[-1]), device=backgrounds.device
+            )
     else:  # RGB
         pass
 
