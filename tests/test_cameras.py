@@ -39,6 +39,14 @@ from gsplat.cuda._backend import _C
 if _C is None:
     pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
 
+from gsplat.cuda._wrapper import has_camera_wrappers
+
+if not has_camera_wrappers():
+    pytest.skip(
+        "Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)",
+        allow_module_level=True,
+    )
+
 from gsplat._helper import expand_named_params
 from gsplat.cuda._torch_cameras import (  # PyTorch reference
     _BaseCameraModel,
