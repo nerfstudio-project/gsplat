@@ -148,9 +148,9 @@ def get_build_parameters():
         if sys.platform == "win32":
             extra_cuda_cflags += [f"-DGSPLAT_BUILD_RELOC={BUILD_RELOC}"]
     if BUILD_CAMERA_WRAPPERS:
-        extra_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
+        extra_cflags += ["-DGSPLAT_BUILD_CAMERA_WRAPPERS=1"]
         if sys.platform == "win32":
-            extra_cuda_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
+            extra_cuda_cflags += ["-DGSPLAT_BUILD_CAMERA_WRAPPERS=1"]
     else:
         # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
         sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]

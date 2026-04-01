@@ -23,7 +23,7 @@
 #include "ExternalDistortion.h"
 #include "csrc/Config.h"
 
-#if BUILD_CAMERA_WRAPPERS
+#if GSPLAT_BUILD_CAMERA_WRAPPERS
 #include "CameraWrappers.h"
 #include "ExternalDistortionWrappers.h"
 #endif
@@ -414,7 +414,7 @@ TORCH_LIBRARY(gsplat, m) {
 
     // ==================== Camera Model Bindings ====================
 
-#if BUILD_CAMERA_WRAPPERS
+#if GSPLAT_BUILD_CAMERA_WRAPPERS
     m.class_<gsplat::PyBaseCameraModel<>>("BaseCameraModel")
         .def(
             "camera_ray_to_image_point",
