@@ -1,14 +1,16 @@
 # assume torch is already installed
+nvidia-ncore==18.6.0
 
 # pycolmap for data parsing
 git+https://github.com/rmbrualla/pycolmap@cc7ea4b7301720ac29287dbe450952511b32125e
-# (optional) nerfacc for torch version rasterization 
+# (optional) nerfacc for torch version rasterization
 # git+https://github.com/nerfstudio-project/nerfacc
 
 viser
 git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787
 imageio[ffmpeg]
 numpy<2.0.0
+scipy
 scikit-learn
 tqdm
 torchmetrics[image]
