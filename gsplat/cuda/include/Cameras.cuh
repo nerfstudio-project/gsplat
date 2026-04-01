@@ -614,7 +614,13 @@ struct OpenCVPinholeCameraModel
             1.f + r2 * (parameters.radial_coeffs[3] +
                         r2 * (parameters.radial_coeffs[4] +
                               r2 * parameters.radial_coeffs[5]));
-        auto const icD = icD_numerator / icD_denominator;
+        // Guard against the rational distortion model having a pole (denominator
+        // = 0) at this r².  Setting icD = 0 makes the downstream validity check
+        // (icD > 0.8) reject this point, which is the correct behavior — the
+        // camera model cannot reliably project at this radius.
+        auto const icD = (std::fabs(icD_denominator) > 1e-8f)
+            ? icD_numerator / icD_denominator
+            : 0.f;
 
         auto const delta_x = parameters.tangential_coeffs[0] * a1 +
                              parameters.tangential_coeffs[1] * a2 +
@@ -1234,7 +1240,14 @@ public:
         // undoing linear term A = [c,d;e;1] via A^-1 = [1,-d;-e,c] / (c-e*d)
         auto const& [c, d, e] = parameters.dist.linear_cde;
         image_point -= glm::fvec2{parameters.principal_point[0], parameters.principal_point[1]};
-        auto const uv = glm::fvec2{image_point.x - d * image_point.y, -e * image_point.x + c * image_point.y} / (c - e * d);
+        // The CDE linear matrix [[c,d],[e,1]] must be invertible for
+        // unprojection.  A singular matrix (det = c - e*d ≈ 0) means the
+        // calibration is degenerate — return an invalid ray.
+        auto const cde_det = c - e * d;
+        if (std::fabs(cde_det) < 1e-8f) {
+            return {glm::fvec3{0.f, 0.f, 1.f}, false};
+        }
+        auto const uv = glm::fvec2{image_point.x - d * image_point.y, -e * image_point.x + c * image_point.y} / cde_det;
 
         // Compute the radial distance from the principal point
         auto const delta = length(uv);

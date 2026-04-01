@@ -615,7 +615,11 @@ def _quat_slerp(x: Tensor, y: Tensor, t: Tensor) -> Tensor:
 
     # Check if any quaternions need slerp (are not close)
     if (cosTheta <= threshold).any():
-        theta = torch.acos(cosTheta)
+        # Clamp cosTheta to [0, 1] before acos: it is the abs of a dot product
+        # of quaternions that should be unit-length, so mathematically it is in
+        # [0, 1]. FP rounding can push it past 1.0 by an ULP, which makes
+        # acos return NaN.
+        theta = torch.acos(cosTheta.clamp(max=1.0))
         assert (
             theta.isfinite().all()
         ), f"cosTheta ∈ [{cosTheta.min().item(),cosTheta.max().item()}]"

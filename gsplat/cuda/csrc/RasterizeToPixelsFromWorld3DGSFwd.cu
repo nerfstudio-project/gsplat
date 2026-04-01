@@ -326,7 +326,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             
             const vec4 quat = quats[isect_bid * N + isect_gid];
             vec3 scale = scales[isect_bid * N + isect_gid];
-            
+
+            // Projection kernel culls degenerate Gaussians (zero quaternion,
+            // zero scale) by setting radii = 0, preventing them from entering
+            // the intersection list. Assert the preconditions here.
+            assert(glm::dot(quat, quat) > 0.f);
+            assert(scale[0] > 0.f && scale[1] > 0.f && scale[2] > 0.f);
+
             mat3 R = quat_to_rotmat(quat);
             mat3 S = mat3(
                 1.0f / scale[0],

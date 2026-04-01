@@ -472,7 +472,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 // since the output T = coprod (1 - alpha_i), we have T_(i-1) =
                 // T_i * 1/(1 - alpha_(i-1)) potential numerical stability issue
                 // if alpha -> 1
-                float ra = 1.0f / (1.0f - alpha);
+                float ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
                 T *= ra;
 
                 // update v_rgb for this gaussian

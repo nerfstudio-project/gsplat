@@ -466,6 +466,16 @@ def _fully_fused_projection_with_ut(
     center_z = means_cam[..., 2]  # [B, C, N]
     in_frustum = (center_z >= near_plane) & (center_z <= far_plane)
 
+    # Cull degenerate Gaussians: zero-length quaternion (no defined orientation)
+    # or near-zero scale on any axis (divergent precision matrix in rasterization).
+    # Matches the CUDA projection kernel's is_near_zero() guard.
+    EPS = torch.finfo(dtype).eps
+    quat_norm2 = (quats * quats).sum(dim=-1)  # [..., N]
+    valid_quat = quat_norm2 > EPS  # [..., N]
+    valid_scale = (scales > EPS).all(dim=-1)  # [..., N]
+    # Broadcast from [..., N] to [..., C, N] to match in_frustum shape
+    in_frustum = in_frustum & valid_quat[..., None, :] & valid_scale[..., None, :]
+
     # Projection using unscented transform
     (
         mean_2d,
@@ -492,10 +502,24 @@ def _fully_fused_projection_with_ut(
 
     valid_gaussian = valid_gaussian & (det > 0.0)
 
+    # The UT center covariance weight can be very negative (e.g. ≈ -96 with
+    # default alpha=0.1), so the UT covariance is not guaranteed positive-
+    # semidefinite.  Cull Gaussians with negative diagonal entries — the UT
+    # has failed to produce a valid 2D covariance for them.
+    cov_diag_check = torch.diagonal(cov_2d, dim1=-2, dim2=-1)  # [B, C, N, 2]
+    valid_gaussian = (
+        valid_gaussian & (cov_diag_check[..., 0] > 0.0) & (cov_diag_check[..., 1] > 0.0)
+    )
+
     # Compute conics (inverse of 2D covariance)
     # This is more robust than manual formula, especially for non-symmetric matrices
     # (numerical errors in weighted sum can break exact symmetry)
-    cov_2d_inv = torch.linalg.inv(cov_2d)  # [B, C, N, 2, 2]
+    # Add a small epsilon to the diagonal to prevent torch.linalg.inv from
+    # producing NaN on singular matrices (invalid Gaussians are masked out
+    # by valid_gaussian anyway, but autograd still propagates through inv).
+    cov_2d_inv = torch.linalg.inv(
+        cov_2d + 1e-6 * torch.eye(2, dtype=cov_2d.dtype, device=cov_2d.device)
+    )  # [B, C, N, 2, 2]
 
     # Apply opacity-based culling
     # Reference: https://arxiv.org/pdf/2402.00525 Section B.2
@@ -531,11 +555,22 @@ def _fully_fused_projection_with_ut(
     v1 = b + tmp
 
     # Radius bound: r_i = min(extend * sqrt(cov[i][i]), extend * sqrt(λ_max))
-    r1 = extend * torch.sqrt(v1)  # [B, C, N]
+    # Clamp to 0: for invalid Gaussians with negative covariance diagonal the
+    # largest eigenvalue v1 can be negative.  These Gaussians are culled by
+    # valid_gaussian, but sqrt(negative) produces NaN and autograd propagates
+    # NaN gradients to valid Gaussians too.
+    r1 = extend * torch.sqrt(v1.clamp(min=0.0))  # [B, C, N]
 
     # Compute radii for both x and y axes
     radius = torch.ceil(
-        torch.minimum(extend[..., None] * torch.sqrt(cov_diag), r1[..., None])
+        torch.minimum(
+            # Clamp to 0 before sqrt: with negative UT center weight the covariance
+            # diagonal can be negative even after blur. These Gaussians are culled
+            # by valid_gaussian above, but sqrt(negative) produces NaN in the tensor
+            # and autograd propagates NaN gradients to valid Gaussians too.
+            extend[..., None] * torch.sqrt(cov_diag.clamp(min=0.0)),
+            r1[..., None],
+        )
     )  # [B, C, N, 2]
 
     # Apply radius clipping and image bounds culling

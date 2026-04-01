@@ -168,7 +168,10 @@ public:
         glm::fvec3 const ray_normalized = cam_ray / ray_length;
 
         // Convert 3D ray to spherical coordinates (elevation, azimuth)
-        const float elevation = std::asin(ray_normalized.z);
+        // Clamp to [-1, 1] before asin: ray_normalized is unit-length so
+        // |z| <= 1 mathematically, but FP rounding (especially under fast math)
+        // can push the value past 1.0 by an ULP, making asin return NaN.
+        const float elevation = std::asin(std::clamp(ray_normalized.z, -1.f, 1.f));
         const float azimuth = std::atan2(ray_normalized.y, ray_normalized.x);
 
         // Image point: [row, column] (in scaled angle space)
