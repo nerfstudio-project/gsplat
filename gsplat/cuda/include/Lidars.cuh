@@ -38,8 +38,10 @@ struct RowOffsetStructuredSpinningLidarModelParametersExtDevice
     gsplat::FOVDevice fov_horiz_rad;
     float fov_eps_rad;
 
-    // Not adding row_elevations_rad/column_azimuth_rad/... because
-    // angles_to_columns_map has everything we need from them.
+    // Per-element sensor angles (device pointers)
+    const float* row_elevations_rad;
+    const float* column_azimuths_rad;
+    const float* row_azimuth_offsets_rad;
 
     // Spinning direction and frequency of the lidar
     gsplat::SpinningDirection spinning_direction;
@@ -76,13 +78,8 @@ struct RowOffsetStructuredSpinningLidarModel : BaseCameraModel<RowOffsetStructur
     {
         __device__
         explicit Parameters(RowOffsetStructuredSpinningLidarModelParametersExtDevice lidar_params)
-            // TODO: We're mapping n_rows->width and n_columns->height because
-            // the current pipeline uses image_point = [x, y] = [row, column]
-            // = [elevation, azimuth]. This should be reverted once the pipeline
-            // switches to the standard [x, y] = [column, row] = [azimuth,
-            // elevation].
             : Base::Parameters{
-                {static_cast<unsigned int>(lidar_params.n_rows), static_cast<unsigned int>(lidar_params.n_columns)},
+                {static_cast<unsigned int>(lidar_params.n_columns), static_cast<unsigned int>(lidar_params.n_rows)},
                 ShutterType::ROLLING_LEFT_TO_RIGHT
               }
             , lidar(std::move(lidar_params))
@@ -120,12 +117,10 @@ public:
         assert(lidar.angles_to_columns_map != nullptr);
 
         // Convert image point (in scaled pixel space) back to angles
-        // TODO: transposing here because the current pipeline uses image_point =
-        // [x, y] = [elevation, azimuth], this needs to be reverted
-        // once the pipeline switches to the standard [x, y] = [azimuth, elevation].
+        // image_point = [x, y] = [azimuth, elevation]
         constexpr float kToAngle = 1.f / lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
-        const float elevation = image_point.x * kToAngle;
-        const float azimuth = image_point.y * kToAngle;
+        const float azimuth = image_point.x * kToAngle;
+        const float elevation = image_point.y * kToAngle;
 
         // Compute relative angles (within sensor FOV)
         const auto [rel_elevation, rel_azimuth] = this->relative_sensor_angles(elevation, azimuth);
@@ -174,13 +169,10 @@ public:
         const float elevation = std::asin(std::clamp(ray_normalized.z, -1.f, 1.f));
         const float azimuth = std::atan2(ray_normalized.y, ray_normalized.x);
 
-        // Image point: [row, column] (in scaled angle space)
-        // TODO: the current pipeline uses image_point = [x, y] = [row, column]
-        // = [elevation, azimuth]. Must undo this swap once the pipeline switches
-        // to the standard [x, y] = [column, row] = [azimuth, elevation].
+        // Image point: [x, y] = [column, row] = [azimuth, elevation] (in scaled angle space)
         const float row = elevation * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
         const float column = azimuth * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
-        const glm::fvec2 image_point = glm::fvec2{row, column};
+        const glm::fvec2 image_point = glm::fvec2{column, row};
 
         // For validation, compute relative angles
         auto [rel_elevation, rel_azimuth] = this->relative_sensor_angles(elevation, azimuth);
@@ -198,17 +190,43 @@ public:
         return {image_point, valid};
     }
 
+    // Convert pixel indices (j=column, i=row) to image points in scaled angle space.
+    // Matches base class convention: j is the width axis (azimuth), i is the height axis (elevation).
+    __device__
+    glm::fvec2 element_to_image_point(int j, int i) const
+    {
+        const int row = i;  // height axis = elevation
+        const int col = j;  // width axis = azimuth
+        const auto &lidar = parameters.lidar;
+        assert(row >= 0 && row < lidar.n_rows);
+        assert(col >= 0 && col < lidar.n_columns);
+
+        const float elevation = lidar.row_elevations_rad[row];
+        float azimuth = lidar.column_azimuths_rad[col]
+                      + lidar.row_azimuth_offsets_rad[row];
+        // Normalize to (-pi, pi]
+        if (azimuth > PI)
+        {
+            azimuth -= 2.f * PI;
+        }
+        if (azimuth <= -PI)
+        {
+            azimuth += 2.f * PI;
+        }
+        return {
+            azimuth * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR,
+            elevation * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR
+        };
+    }
+
     __device__
     CameraRay image_point_to_camera_ray(glm::fvec2 image_point) const
     {
         const RowOffsetStructuredSpinningLidarModelParametersExtDevice &lidar = parameters.lidar;
 
-        // TODO: transposing because the current pipeline uses image_point =
-        // [x, y] = [row, column] = [elevation, azimuth], but this must be reverted
-        // once the pipeline switches to the standard [x, y] = [column, row] =
-        // [azimuth, elevation].
-        const float row = image_point.x;
-        const float col = image_point.y;
+        // image_point = [x, y] = [column, row] = [azimuth, elevation]
+        const float col = image_point.x;
+        const float row = image_point.y;
 
         // Inverse of forward projection: elevation = row / scale
         const float elevation = row / lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;

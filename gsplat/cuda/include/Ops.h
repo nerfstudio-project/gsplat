@@ -95,8 +95,8 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
     at::Tensor cdf_dense_ray_mask;
     at::Tensor tiles_pack_info;
     at::Tensor tiles_to_elements_map;
-    int cdf_resolution_elevation() const { return this->cdf_dense_ray_mask.size(-1)-1; }
-    int cdf_resolution_azimuth() const { return this->cdf_dense_ray_mask.size(-2)-1; }
+    int cdf_resolution_elevation() const { return this->cdf_dense_ray_mask.size(-2)-1; }
+    int cdf_resolution_azimuth() const { return this->cdf_dense_ray_mask.size(-1)-1; }
 };
 
 // null operator for tutorial. Does nothing.
@@ -249,7 +249,6 @@ at::Tensor spherical_harmonics_fwd(
     const at::optional<at::Tensor> &masks // [...]
 );
 std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
-    int64_t K,
     int64_t degrees_to_use,
     const at::Tensor &dirs,                // [..., 3]
     const at::Tensor &coeffs,              // [..., K, 3]

@@ -82,6 +82,10 @@ enum CameraModelType {
 
 #define MAX_KERNEL_DENSITY_CUTOFF 0.0113
 
+// Floor for the antialiased compensation factor (sqrt(det_orig / det_blur)).
+// Prevents compensation from reaching zero for extremely small Gaussians.
+#define MIN_COMPENSATION 0.005f
+
 // Floor for (1 - alpha) when computing 1/(1-alpha) in backward rasterization.
 // Prevents gradient explosion when alpha approaches 1.0.
 #define MIN_ONE_MINUS_ALPHA 1e-6f

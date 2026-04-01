@@ -23,3 +23,7 @@ MAX_ALPHA = 0.99
 TRANSMITTANCE_THRESHOLD = 1e-4
 
 MAX_KERNEL_DENSITY_CUTOFF = 0.0113
+
+# Floor for the antialiased compensation factor (sqrt(det_orig / det_blur)).
+# Prevents compensation from reaching zero for extremely small Gaussians.
+MIN_COMPENSATION = 0.005

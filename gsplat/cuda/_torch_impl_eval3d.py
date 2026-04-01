@@ -31,16 +31,13 @@ import torch
 
 from ._math import (
     _numerically_stable_norm2,
-    _quat_inverse,
     _quat_to_rotmat,
     _safe_normalize,
     _quat_scale_to_preci_half,
 )
 from ._torch_cameras import (
+    _BaseCameraModel,
     _viewmat_to_pose,
-    _pose_camera_world_position,
-    _PerfectPinholeCameraModel,
-    _interpolate_shutter_pose,
 )
 from ._wrapper import RollingShutterType
 from ._constants import (
@@ -50,54 +47,90 @@ from ._constants import (
 )
 
 
-def _generate_rays_from_pixels(
-    pixel_coords: Tensor,  # [..., N, 2]
-    cam_centers: Tensor,  # [..., N, 3]
-    R_cam_to_world: Tensor,  # [..., N, 3, 3]
-    Ks: Tensor,  # [..., N, 3, 3]
-    means_dtype: torch.dtype,
-) -> Tuple[Tensor, Tensor]:
-    """
-    Generate ray origins and directions from pixel coordinates.
+def _generate_image_points(
+    camera: _BaseCameraModel,
+    image_width: int,
+    image_height: int,
+) -> Tensor:
+    """Build the image-point grid for a camera or sensor model.
 
-    Args:
-        pixel_coords: Pixel coordinates [..., N, 2] as (x, y) - already at pixel centers
-        cam_centers: Camera centers for each ray [..., N, 3]
-        R_cam_to_world: Rotation matrices for each ray [..., N, 3, 3]
-        Ks: Camera intrinsics for each ray [..., N, 3, 3]
-        means_dtype: Data type for computation
+    For pixel-based cameras (pinhole, fisheye, ftheta), returns pixel-center
+    coordinates ``(x+0.5, y+0.5)``.  Designed to be extended for other sensor
+    models (e.g. lidar) that use different image-point conventions.
 
     Returns:
-        ray_o: [..., N, 3] - Ray origins
-        ray_d: [..., N, 3] - Normalized ray directions
+        pixel_coords: [P, 2] where P = image_width * image_height.
     """
-    # Extract camera intrinsics
-    fx = Ks[..., 0, 0]
-    fy = Ks[..., 1, 1]
-    cx = Ks[..., 0, 2]
-    cy = Ks[..., 1, 2]
+    from gsplat.cuda._torch_lidars import _RowOffsetStructuredSpinningLidarModel
 
-    # Extract pixel coordinates
-    px = pixel_coords[..., 0]
-    py = pixel_coords[..., 1]
+    device = camera.focal_lengths.device
 
-    # Compute ray directions in camera space
-    ray_d_cam = torch.stack(
-        [
-            (px - cx) / fx,
-            (py - cy) / fy,
-            torch.ones_like(px, dtype=means_dtype),
-        ],
-        dim=-1,
-    )  # [..., N, 3]
+    if isinstance(camera, _RowOffsetStructuredSpinningLidarModel):
+        # Lidar image points are (azimuth, elevation) in scaled-angle space.
+        # Image layout: width = n_columns (azimuth), height = n_rows (elevation).
+        n_rows, n_cols = camera.params.n_rows, camera.params.n_columns
+        row_idx = torch.arange(n_rows, device=device)
+        col_idx = torch.arange(n_cols, device=device)
+        ri, ci = torch.meshgrid(row_idx, col_idx, indexing="ij")
+        # element_to_image_point uses raw sensor angles (no modulo on elevation)
+        # to match the CUDA kernel's element_to_image_point exactly.
+        img_pts = camera.element_to_image_point(
+            ri, ci
+        )  # (n_rows, n_cols, 2) = (height, width, 2)
+        pixel_coords = img_pts.reshape(-1, 2)  # [P, 2]
+    else:
+        px = torch.arange(image_width, device=device, dtype=torch.float32) + 0.5
+        py = torch.arange(image_height, device=device, dtype=torch.float32) + 0.5
+        grid_x, grid_y = torch.meshgrid(px, py, indexing="xy")
+        pixel_coords = torch.stack(
+            [grid_x.reshape(-1), grid_y.reshape(-1)], dim=-1
+        )  # [P, 2]
 
-    # Normalize ray directions
-    ray_d_cam = _safe_normalize(ray_d_cam)  # [..., N, 3]
+    return pixel_coords
 
-    # Transform rays to world space: R @ v
-    ray_d = torch.matmul(R_cam_to_world, ray_d_cam[..., None]).squeeze(-1)  # [..., 3]
 
-    return cam_centers, ray_d
+def _generate_rays(
+    camera: _BaseCameraModel,
+    image_width: int,
+    image_height: int,
+    viewmats: Tensor,  # [I, 4, 4]
+    viewmats_rs: Optional[Tensor] = None,  # [I, 4, 4]
+) -> Tensor:
+    """Generate rays for every pixel from a camera or sensor model.
+
+    Uses the ``_BaseCameraModel`` abstraction so that any supported camera
+    model (pinhole, fisheye, ftheta, lidar, ...) is handled uniformly via
+    ``image_point_to_world_ray_shutter_pose``.
+
+    Args:
+        camera: Camera or sensor model instance.
+        image_width: Image width in pixels (or sensor elements for lidar).
+        image_height: Image height in pixels (or sensor elements for lidar).
+        viewmats: Camera view matrices (world-to-camera). [I, 4, 4]
+        viewmats_rs: Optional end-of-frame view matrices for rolling shutter. [I, 4, 4]
+
+    Returns:
+        rays: [I, P, 6] where P = image_width * image_height.
+              Each ray is ``(origin_x, origin_y, origin_z, dir_x, dir_y, dir_z)``.
+    """
+    I = viewmats.shape[0]
+
+    pixel_coords = _generate_image_points(camera, image_width, image_height)
+    pixel_coords = pixel_coords.unsqueeze(0).expand(I, -1, -1)  # [I, P, 2]
+
+    pose_start = _viewmat_to_pose(viewmats)  # [I, 7]
+    if viewmats_rs is not None:
+        pose_end = _viewmat_to_pose(viewmats_rs)  # [I, 7]
+    else:
+        pose_end = pose_start
+
+    ray_o, ray_d, _valid = camera.image_point_to_world_ray_shutter_pose(
+        pixel_coords,
+        pose_start,
+        pose_end,
+    )  # ray_o: [I, P, 3], ray_d: [I, P, 3]
+
+    return torch.cat([ray_o, ray_d], dim=-1)  # [I, P, 6]
 
 
 def _compute_gaussian_transform(
@@ -220,17 +253,13 @@ def accumulate_eval3d(
     scales: Tensor,  # [..., N, 3]
     opacities: Tensor,  # [..., N]
     colors: Tensor,  # [..., N, channels]
-    viewmats: Tensor,  # [..., C, 4, 4]
-    Ks: Tensor,  # [..., C, 3, 3]
     gaussian_ids: Tensor,  # [M]
     pixel_ids: Tensor,  # [M]
     image_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
     flatten_idx: Tensor,  # [M] - index in original flatten_ids
-    rs_type: RollingShutterType = RollingShutterType.GLOBAL,  # Rolling shutter type
-    rays: Optional[Tensor] = None,  # [..., C, P, 6]
-    viewmats_rs: Optional[Tensor] = None,  # [..., 4, 4] - optional for rolling shutter
+    rays: Tensor,  # [I, P, 6]
     base_transmittance: Optional[
         Tensor
     ] = None,  # [I, image_height, image_width] - base transmittance for batched accumulation
@@ -239,8 +268,9 @@ def accumulate_eval3d(
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """Alpha compositing with ray-based 3D Gaussian evaluation in Pure PyTorch.
 
-    Similar to accumulate(), but computes Gaussian responses in 3D world space
-    by casting rays from the camera through each pixel.
+    Computes Gaussian responses in 3D world space using pre-computed rays.
+    Rays must be generated by the caller (e.g. pinhole projection or lidar
+    sensor model) so that this function is camera-model-agnostic.
 
     .. warning::
         This function requires the `nerfacc` package to be installed.
@@ -251,16 +281,13 @@ def accumulate_eval3d(
         scales: Gaussian scales. [..., N, 3]
         opacities: Gaussian opacities. [..., N]
         colors: Gaussian colors. [..., N, channels]
-        viewmats: Camera view matrices (start pose for rolling shutter). [..., 4, 4]
-        Ks: Camera intrinsics. [..., 3, 3]
         gaussian_ids: Gaussian indices for intersections. [M]
         pixel_ids: Pixel indices (row-major) for intersections. [M]
         image_ids: Image indices for intersections. [M]
         image_width: Image width.
         image_height: Image height.
         flatten_idx: Index in original flatten_ids [M]
-        rs_type: Rolling shutter type
-        viewmats_rs: Optional end pose for rolling shutter. [..., 4, 4]
+        rays: Pre-computed rays (origin + direction). [I, P, 6]
         base_transmittance: Optional base transmittance for batched accumulation.
                            Shape: [I, image_height, image_width]. If provided,
                            this is used as the starting transmittance for filtering.
@@ -295,48 +322,11 @@ def accumulate_eval3d(
     quats_flat = quats.reshape(B, N, 4)
     scales_flat = scales.reshape(B, N, 3)
 
-    # 2. Get pixel coordinates for all M intersections
-    pixel_coords = torch.stack(
-        [
-            (pixel_ids % image_width).float() + 0.5,  # pixel center x
-            (pixel_ids // image_width).float() + 0.5,  # pixel center y
-        ],
-        dim=-1,
-    )  # [M, 2]
-
-    if rays is None:
-        # Create focal_lengths and principal_points tensors out of Ks[image_ids]
-        # Ks[image_ids]: [M, 3, 3]
-        Ks_selected = Ks[image_ids]  # [M, 3, 3]
-        focal_lengths = Ks_selected[:, [0, 1], [0, 1]]  # [M, 2], fx and fy
-        principal_points = Ks_selected[:, [0, 1], [2, 2]]  # [M, 2], cx and cy
-        camera = _PerfectPinholeCameraModel(
-            focal_lengths, principal_points, image_width, image_height, rs_type
-        )
-
-        pose_start = _viewmat_to_pose(viewmats[image_ids])
-        if viewmats_rs is None:
-            pose = pose_start
-        else:
-            relative_time = camera.shutter_relative_frame_time(pixel_coords)  # [M, 1]
-            pose_end = _viewmat_to_pose(viewmats_rs[image_ids])
-            pose = _interpolate_shutter_pose(pose_start, pose_end, relative_time)
-
-        pose_q = pose[..., 3:]
-
-        # Extract rotation and camera world position from pose
-        R_cam_to_world = _quat_to_rotmat(_quat_inverse(pose_q))
-        cam_centers = _pose_camera_world_position(pose)
-
-        # 4. Generate rays from pixels
-        ray_o, ray_d = _generate_rays_from_pixels(
-            pixel_coords, cam_centers, R_cam_to_world, Ks[image_ids], means.dtype
-        )  # [M, 3, 1]
-    else:
-        ray_indices = image_ids * image_height * image_width + pixel_ids
-        rays_flat = rays.reshape(I * P, 6)
-        ray_o = rays_flat[ray_indices, :3]
-        ray_d = rays_flat[ray_indices, 3:]
+    # 2. Look up pre-computed rays for each intersection
+    ray_indices = image_ids * image_height * image_width + pixel_ids
+    rays_flat = rays.reshape(I * P, 6)
+    ray_o = rays_flat[ray_indices, :3]
+    ray_d = rays_flat[ray_indices, 3:]
 
     # 5. Compute Gaussian transform to map Gaussians to world space
     iscl_rot = _compute_gaussian_transform(quats_flat, scales_flat)  # [B, N, 3, 3]
@@ -517,6 +507,7 @@ def _rasterize_to_pixels_eval3d(
     return_sample_counts: bool = False,
     use_hit_distance: bool = False,
     return_normals: bool = False,  # Whether to compute normals
+    lidar_coeffs=None,  # Optional lidar tiling structure for ray generation and tile iteration
 ):
     """PyTorch reference implementation of rasterize_to_pixels_eval3d().
 
@@ -599,7 +590,23 @@ def _rasterize_to_pixels_eval3d(
     if rays is not None:
         rays_exp = rays.reshape(I, image_height * image_width, 6)
     else:
-        rays_exp = None
+        cam_model = "lidar" if lidar_coeffs is not None else "pinhole"
+        camera = _BaseCameraModel.create(
+            width=image_width,
+            height=image_height,
+            camera_model=cam_model,
+            focal_lengths=Ks_exp[:, [0, 1], [0, 1]],  # [I, 2]
+            principal_points=Ks_exp[:, [0, 1], [2, 2]],  # [I, 2]
+            rs_type=rs_type,
+            lidar_coeffs=lidar_coeffs,
+        )
+        rays_exp = _generate_rays(
+            camera,
+            image_width,
+            image_height,
+            viewmats_exp,
+            viewmats_rs_exp,
+        )
 
     # Decode flatten_ids and create properly ordered (gs_id, pix_id, img_id) lists for nerfacc
     # nerfacc requires: sorted by pixel_id first, then by depth within each pixel
@@ -701,21 +708,40 @@ def _rasterize_to_pixels_eval3d(
                     # batch_num_gauss = number of Gaussians in this batch slice for this tile
                     batch_num_gauss = local_end - local_start
 
-                    # Pixels in this tile (vectorized)
-                    py_start = ty * tile_size
-                    py_end = min(py_start + tile_size, image_height)
-                    px_start = tx * tile_size
-                    px_end = min(px_start + tile_size, image_width)
+                    # Pixels in this tile
+                    if lidar_coeffs is not None:
+                        # Lidar tiling: each tile contains specific (row, col)
+                        # elements from tiles_to_elements_map.
+                        # Image layout: width=n_columns (azimuth), height=n_rows (elevation).
+                        # pixel_id = elevation * image_width + azimuth
+                        tile_local_idx = ty * tile_width + tx
+                        elem_offset = lidar_coeffs.tiling.tiles_pack_info[
+                            tile_local_idx, 0
+                        ].item()
+                        elem_count = lidar_coeffs.tiling.tiles_pack_info[
+                            tile_local_idx, 1
+                        ].item()
+                        elements = lidar_coeffs.tiling.tiles_to_elements_map[
+                            elem_offset : elem_offset + elem_count
+                        ]  # (count, 2) with (azimuth_idx, elevation_idx)
+                        elem_az = elements[:, 0]
+                        elem_el = elements[:, 1]
+                        pix_ids_in_tile = (elem_el * image_width + elem_az).long()
+                    else:
+                        py_start = ty * tile_size
+                        py_end = min(py_start + tile_size, image_height)
+                        px_start = tx * tile_size
+                        px_end = min(px_start + tile_size, image_width)
 
-                    # Vectorized pixel ID generation
-                    py_grid, px_grid = torch.meshgrid(
-                        torch.arange(py_start, py_end, device=device),
-                        torch.arange(px_start, px_end, device=device),
-                        indexing="ij",
-                    )
-                    pix_ids_in_tile = (
-                        py_grid.flatten() * image_width + px_grid.flatten()
-                    )
+                        # Vectorized pixel ID generation for camera tiles
+                        py_grid, px_grid = torch.meshgrid(
+                            torch.arange(py_start, py_end, device=device),
+                            torch.arange(px_start, px_end, device=device),
+                            indexing="ij",
+                        )
+                        pix_ids_in_tile = (
+                            py_grid.flatten() * image_width + px_grid.flatten()
+                        )
                     num_pixels = len(pix_ids_in_tile)
 
                     # Create flatten_ids indices for this batch
@@ -771,18 +797,14 @@ def _rasterize_to_pixels_eval3d(
             scales,
             opacities_exp,
             colors_exp,
-            viewmats_exp,
-            Ks_exp,
             batch_gs_ids,
             batch_pix_ids,
             batch_img_ids,
             image_width,
             image_height,
             batch_flatten_idx,
-            rs_type,
             rays_exp,
-            viewmats_rs_exp,
-            base_transmittance=transmittances,  # Pass current transmittance
+            base_transmittance=transmittances,
             use_hit_distance=use_hit_distance,
             return_normals=return_normals,
         )

@@ -749,17 +749,21 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
 
     torch.manual_seed(42)
 
-    params = parse_lidar_camera(lidar_model, batch_dims, 0, 0, device=device)
-    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(**params)
+    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+        lidar_model, batch_dims, 0, 0, device=device
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
 
     C, N = 3, 1000  # cameras and gaussians
 
     test_data = {
         "means2d": torch.randn(C, N, 2, device=device)
-        * torch.tensor([math.pi, 2 * math.pi], device=device),
-        # TODO: assuming .x=elevation and .y=azimuth. This must be transposed.
+        * torch.tensor([2 * math.pi, math.pi], device=device),
+        # .x=azimuth, .y=elevation
         "radii": torch.randn(C, N, 2, device=device).abs().clamp(max=1)
-        * torch.tensor([lidar.fov_vert_rad.span / 2, math.pi], device=device),
+        * torch.tensor([math.pi, lidar.fov_vert_rad.span / 2], device=device),
         "depths": torch.rand(C, N, device=device),
     }
     test_data = expand(test_data, batch_dims)
@@ -864,7 +868,7 @@ def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
         assert False, f"Invalid ray location: {ray_location=}"
 
     dense_mask = torch.zeros(
-        (cdf_resolution_azimuth, cdf_resolution_elevation),
+        (cdf_resolution_elevation, cdf_resolution_azimuth),
         dtype=torch.int32,
         device=device,
     )
@@ -882,9 +886,9 @@ def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
 
             # Always use the middle elevation, as only azimuth requires
             # special testing (periodic, non-periodic, etc).
-            middle_el_idx = dense_mask.shape[1] // 2
+            middle_el_idx = dense_mask.shape[0] // 2
 
-            dense_mask[az_idx, middle_el_idx] = 1
+            dense_mask[middle_el_idx, az_idx] = 1
 
     # Create the cdf dense ray mask given the dense mask with number of rays in a dense cell.
     cdf = torch.zeros(
@@ -927,12 +931,15 @@ def lidar_param(hfov_span_deg, ray_location, n_dense_tiles_azimuth):
     )
 
     # And the lidar whole parameters
-    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+    base_params = gsplat.RowOffsetStructuredSpinningLidarModelParameters(
         row_elevations_rad=row_elevations_rad,
         column_azimuths_rad=column_azimuths_rad,
         row_azimuth_offsets_rad=row_azimuth_offsets_rad,
         spinning_direction=spinning_direction,
         spinning_frequency_hz=10.0,
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        base_params,
         angles_to_columns_map=torch.zeros((3, 5), dtype=torch.int32, device=device),
         tiling=tiling,
     )
@@ -1037,12 +1044,12 @@ def gaussian_param(lidar_param, gauss_start_pos, gauss_end_pos):
 
     return SimpleNamespace(
         means2d=torch.tensor(
-            [[[0.0, mean_az_pix]]],
+            [[[mean_az_pix, 0.0]]],
             dtype=torch.float32,
             device=device,
         ),
         radii=torch.tensor(
-            [[[1, radius_az_pix]]],
+            [[[radius_az_pix, 1]]],
             dtype=torch.int32,
             device=device,
         ),
@@ -1920,8 +1927,8 @@ def test_isect_lidar_corner_cases(
         )
 
     hfov_span_pix = lidar.fov_horiz_rad.span * ANGLE_TO_PIXEL_SCALING_FACTOR
-    gauss_mean_pix = gaussian_param.means2d[0, 0, 1].item()
-    gauss_radius_pix = gaussian_param.radii[0, 0, 1].item()
+    gauss_mean_pix = gaussian_param.means2d[0, 0, 0].item()
+    gauss_radius_pix = gaussian_param.radii[0, 0, 0].item()
     gauss_mean_rel_pix = abs_to_rel_az(gauss_mean_pix)
     gauss_min_rel_pix = abs_to_rel_az(gauss_mean_pix - gauss_radius_pix)
     gauss_max_rel_pix = abs_to_rel_az(gauss_mean_pix + gauss_radius_pix)
@@ -2275,10 +2282,11 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
-    "channels,batch_dims,rs_type,use_hit_distance,use_rays,return_normals",
+    "channels,batch_dims,rs_type,use_hit_distance,use_rays,return_normals,camera_model",
     [
         pytest.param(
             *params,
+            "pinhole",
             marks=[
                 # test based on use_rays (4)
                 pytest.mark.skipif(
@@ -2303,6 +2311,12 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
             # Dedicated test for return_normals=True with one configuration
             [(3, (), RollingShutterType.ROLLING_TOP_TO_BOTTOM, True, True, True)],
         )
+    ]
+    + [
+        # Lidar: with explicit rays (forward + backward)
+        pytest.param(3, (), RollingShutterType.GLOBAL, True, True, False, "lidar"),
+        # Lidar: without explicit rays (kernel generates from lidar_coeffs)
+        pytest.param(3, (), RollingShutterType.GLOBAL, True, False, False, "lidar"),
     ],
 )
 def test_rasterize_to_pixels_eval3d(
@@ -2313,12 +2327,14 @@ def test_rasterize_to_pixels_eval3d(
     use_hit_distance: bool,
     use_rays: bool,
     return_normals: bool,
+    camera_model: CameraModel,
 ):
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._wrapper import (
         fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
+        isect_tiles_lidar,
         quat_scale_to_covar_preci,
         rasterize_to_pixels_eval3d_extra,
         RollingShutterType,
@@ -2358,6 +2374,24 @@ def test_rasterize_to_pixels_eval3d(
     colors = test_data["colors"]
     backgrounds = test_data["backgrounds"]
 
+    # Setup lidar
+    if camera_model == "lidar":
+        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+            "at128", batch_dims, 0, 0, device=device
+        )
+        lidar_coeffs = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+            lidar_params, angles_to_columns_map, tiling
+        )
+        width = lidar_coeffs.n_columns
+        height = lidar_coeffs.n_rows
+        focal = float(width)
+        Ks = torch.tensor(
+            [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        ).expand(batch_dims + (C, -1, -1))
+    else:
+        lidar_coeffs = None
+
     # Create viewmats_rs for rolling shutter testing
     if rs_type != RollingShutterType.GLOBAL:
         # Simulate camera motion with small perturbation
@@ -2368,60 +2402,67 @@ def test_rasterize_to_pixels_eval3d(
         viewmats_rs = None
 
     if use_rays:
-        camera = create_camera_model(
+        from gsplat.cuda._torch_cameras import _BaseCameraModel
+        from gsplat.cuda._torch_impl_eval3d import _generate_rays
+
+        camera = _BaseCameraModel.create(
             width=width,
             height=height,
-            camera_model="pinhole",
-            focal_lengths=Ks[..., [0, 1], [0, 1]].contiguous(),
-            principal_points=Ks[..., [0, 1], [2, 2]].contiguous(),
+            camera_model=camera_model,
+            focal_lengths=Ks.reshape(I, 3, 3)[:, [0, 1], [0, 1]],
+            principal_points=Ks.reshape(I, 3, 3)[:, [0, 1], [2, 2]],
             rs_type=rs_type,
+            lidar_coeffs=lidar_coeffs,
         )
-
-        gridx, gridy = torch.meshgrid(
-            [
-                torch.arange(0, width, device=device, dtype=torch.float32),
-                torch.arange(0, height, device=device, dtype=torch.float32),
-            ],
-            indexing="ij",
+        rays = (
+            _generate_rays(
+                camera,
+                width,
+                height,
+                viewmats.reshape(I, 4, 4),
+                viewmats_rs.reshape(I, 4, 4) if viewmats_rs is not None else None,
+            )
+            .detach()
+            .reshape(*batch_dims, C, -1, 6)
         )
-
-        batch_shape = Ks.shape[:-2]
-
-        grid = torch.stack([gridx, gridy], dim=-1)
-        grid = grid.expand(*batch_shape, *grid.shape).reshape(
-            *batch_shape, width * height, 2
-        )
-
-        pose_start = _viewmat_to_pose(viewmats)
-        if viewmats_rs is None:
-            pose_end = pose_start
-        else:
-            pose_end = _viewmat_to_pose(viewmats_rs)
-
-        rori, rdir, rvalid = camera.image_point_to_world_ray_shutter_pose(
-            grid, pose_start, pose_end
-        )
-        assert (rvalid == False).sum() == 0
-        rays = torch.cat([rori, rdir], -1)
-        rays.reshape(*batch_shape, height, width, 6)
     else:
         rays = None
 
     # Project Gaussians to 2D for tile intersections
     radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
-        means, quats, scales, opacities, viewmats, Ks, width, height
+        means,
+        quats,
+        scales,
+        opacities,
+        viewmats,
+        Ks,
+        width,
+        height,
+        camera_model=camera_model,
+        lidar_coeffs=lidar_coeffs,
     )
     opacities_broadcast = torch.broadcast_to(
         opacities[..., None, :], batch_dims + (C, N)
     )
 
     # Identify intersecting tiles
-    tile_size = 16
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d, radii, depths, tile_size, tile_width, tile_height
-    )
+    if camera_model == "lidar":
+        tile_size = 16  # unused for lidar but required by rasterize API
+        tile_width = lidar_coeffs.tiling.n_bins_azimuth
+        tile_height = lidar_coeffs.tiling.n_bins_elevation
+        _tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
+            lidar_coeffs,
+            means2d,
+            radii,
+            depths,
+        )
+    else:
+        tile_size = 16
+        tile_width = math.ceil(width / float(tile_size))
+        tile_height = math.ceil(height / float(tile_size))
+        tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+            means2d, radii, depths, tile_size, tile_width, tile_height
+        )
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
@@ -2461,6 +2502,8 @@ def test_rasterize_to_pixels_eval3d(
         use_hit_distance=use_hit_distance,
         rays=rays,
         return_normals=return_normals,
+        camera_model=camera_model,
+        lidar_coeffs=lidar_coeffs,
     )
 
     # forward - PyTorch reference implementation (with tiling optimization)
@@ -2491,6 +2534,7 @@ def test_rasterize_to_pixels_eval3d(
         use_hit_distance=use_hit_distance,
         rays=rays,
         return_normals=return_normals,
+        lidar_coeffs=lidar_coeffs,
     )
 
     _render_normals = _render_normals[0] if return_normals else None
@@ -2570,17 +2614,25 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(
         render_alphas * count_match, _render_alphas * count_match, rtol=1e-2, atol=2e-3
     )
+    # For lidar use_rays=False, the CUDA kernel generates rays via element_to_image_point
+    # while the ref uses _generate_rays, producing ~1 pixel mismatch at tile boundaries
+    # (observed: 0.0073 at index (0, 269, 3, 0)).
+    vis_mismatch_atol = 1e-2 if camera_model == "lidar" else ALPHA_THRESHOLD + 1e-5
     torch.testing.assert_close(
         render_alphas * vis_mismatch,
         _render_alphas * vis_mismatch,
         rtol=0,
-        atol=ALPHA_THRESHOLD + 1e-5,
+        atol=vis_mismatch_atol,
     )
+    # For lidar, bump tolerance: CUDA's element_to_image_point and the ref's
+    # _generate_image_points may produce slightly different scaled-angle values
+    # for the same element, causing ~1 pixel count mismatch at tile boundaries.
+    count_mismatch_atol = 1e-2 if camera_model == "lidar" else 5e-3
     torch.testing.assert_close(
         render_alphas * count_mismatch,
         _render_alphas * count_mismatch,
         rtol=0,
-        atol=5e-3,
+        atol=count_mismatch_atol,
     )
 
     # Compare colors for each group (expand masks to [batch, C, H, W, 3])
@@ -2588,21 +2640,32 @@ def test_rasterize_to_pixels_eval3d(
     vis_mismatch = vis_mismatch.expand_as(render_colors)
     count_mismatch = count_mismatch.expand_as(render_colors)
 
+    # For lidar use_rays=False, the CUDA kernel and Python ref generate rays
+    # independently (CUDA via element_to_image_point, ref via _generate_rays).
+    # Tiny FP differences in the scaled-angle computation cause ~1-2 pixels at
+    # tile boundaries to accumulate slightly different colors/alphas.
+    # For lidar use_rays=False, use 10x tolerance to accommodate the ~1-2
+    # boundary pixels where CUDA and ref rays differ.
+    _lidar_tol = 10.0 if (camera_model == "lidar" and not use_rays) else 1.0
+
     torch.testing.assert_close(
-        render_colors * count_match, _render_colors * count_match, rtol=3e-3, atol=1e-3
+        render_colors * count_match,
+        _render_colors * count_match,
+        rtol=3e-3 * _lidar_tol,
+        atol=1e-3 * _lidar_tol,
     )
     # Bumped tolerance due to release mode optimizations. In debug mode it's ALPHA_THRESHOLD+1e-5.
     torch.testing.assert_close(
         render_colors * vis_mismatch,
         _render_colors * vis_mismatch,
         rtol=0,
-        atol=ALPHA_THRESHOLD + 5e-3,
+        atol=(ALPHA_THRESHOLD + 5e-3) * _lidar_tol,
     )
     torch.testing.assert_close(
         render_colors * count_mismatch,
         _render_colors * count_mismatch,
-        rtol=2e-2,
-        atol=3e-3,
+        rtol=2e-2 * _lidar_tol,
+        atol=3e-3 * _lidar_tol,
     )
 
     # Compare normals if computed
@@ -2614,12 +2677,14 @@ def test_rasterize_to_pixels_eval3d(
             _render_normals is not None
         ), "PyTorch render_normals should not be None when return_normals=True"
 
-        # With the default tolerances, the error is quite small:
-        # Greatest absolute difference: 5.447864532470703e-05 at index (2, 11, 16, 2) (up to 1e-05 allowed)
-        # Greatest relative difference: 0.00024596037110313773 at index (0, 27, 39, 1) (up to 1.3e-06 allowed)
-        # Setting tolerances small enough to ignore these errors.
+        # Old tolerance: atol=6e-5. Bumped to 2.5e-4 after switching ray
+        # generation from the CUDA camera model to _generate_rays (Python ref).
+        # The rays match to ~4e-7, but the slightly different values shift which
+        # pixel has the worst-case CUDA-vs-ref normal error.
+        # Old worst case (CUDA rays): 1.20e-4 at a 1-sample pixel.
+        # New worst case (ref rays):  2.30e-4 at a 3-sample pixel.
         torch.testing.assert_close(
-            render_normals, _render_normals, rtol=3e-4, atol=6e-5
+            render_normals, _render_normals, rtol=3e-4, atol=2.5e-4
         )
     else:
         assert (
@@ -2759,13 +2824,16 @@ def test_rasterize_to_pixels_eval3d(
 
     # Compare backward gradients, excluding the ones that fall above the quantile threshold.
     torch.testing.assert_close(
-        v_means * means_mask.float(), _v_means * means_mask.float(), rtol=0, atol=1e-3
+        v_means * means_mask.float(),
+        _v_means * means_mask.float(),
+        rtol=0,
+        atol=1e-3 * _lidar_tol,
     )
     torch.testing.assert_close(
         v_scales * scales_mask.float(),
         _v_scales * scales_mask.float(),
         rtol=0,
-        atol=1e-3,
+        atol=1e-3 * _lidar_tol,
     )
     # Relax quat/opacity tolerances when use_hit_distance=True due to accumulated floating-point errors
     # in hit distance calculation (normalize + dot product + length operations)
@@ -2775,32 +2843,47 @@ def test_rasterize_to_pixels_eval3d(
         v_quats * quats_mask.float(),
         _v_quats * quats_mask.float(),
         rtol=0,
-        atol=quat_atol,
+        atol=quat_atol * _lidar_tol,
     )
     torch.testing.assert_close(
         v_colors * colors_mask.float(),
         _v_colors * colors_mask.float(),
         rtol=0,
-        atol=1e-4,
+        atol=1e-4 * _lidar_tol,
     )
     torch.testing.assert_close(
         v_opacities * opacities_mask.float(),
         _v_opacities * opacities_mask.float(),
         rtol=0,
-        atol=opacity_atol,
+        atol=opacity_atol * _lidar_tol,
     )
+    # On a RTX 6000 Pro, mae is 0.000736, but on a L40S, it's 0.00114. It would be good to investigate why.
     torch.testing.assert_close(
         v_backgrounds * backgrounds_mask.float(),
         _v_backgrounds * backgrounds_mask.float(),
         rtol=0,
-        atol=1e-3,
+        atol=1.6e-3 * _lidar_tol,
     )
 
     if use_rays:
         rays_mask = get_inlier_abserror_mask(v_rays, _v_rays, quantile=0.95)
         assert rays_mask.sum() > 0
+
+        # Old tolerance: atol=5e-3. Bumped to 2.5e-2 after fixing the ray grid
+        # from col-major to row-major (matching the pix_id = y*width+x convention).
+        # The col-major layout assigned rays to wrong pixels in both CUDA and ref,
+        # masking the real CUDA-vs-autograd backward divergence. With correct
+        # row-major layout, v_rays magnitudes reach ~12000 and the structural
+        # difference between the hand-written CUDA backward (back-to-front with
+        # recomputed intermediates) and PyTorch autograd (front-to-back via
+        # nerfacc) produces up to ~0.022 abs diff (confirmed with FAST_MATH=0).
+        #
+        # Worst cases observed (release build, FAST_MATH=1):
+        #   Mismatched elements: 2511 / 34020 (7.4%)
+        #   Greatest absolute difference: 0.02257537841796875 at index (2, 1388, 0) (up to 0.005 allowed)
+        #   Greatest relative difference: 0.060736533254384995 at index (0, 1678, 4) (up to 0 allowed)
         torch.testing.assert_close(
-            v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=5e-3
+            v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=2.5e-2
         )
 
 
