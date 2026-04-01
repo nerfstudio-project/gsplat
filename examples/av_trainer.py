@@ -548,11 +548,17 @@ def train(
         strategy_state = strategy.initialize_state()
         print(f"MCMC strategy enabled: cap_max={cap_max}")
 
-    # --- Learning rate schedule: exponential decay to 1% for means ---
+    # --- Learning rate schedule ---
+    # Exponential decay for means (to 1% of initial, same as simple_trainer.py)
+    # Cosine annealing for all other parameters (decays to 0 over training)
     schedulers = [
         torch.optim.lr_scheduler.ExponentialLR(
             optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
         ),
+    ] + [
+        torch.optim.lr_scheduler.CosineAnnealingLR(optimizers[name], T_max=max_steps)
+        for name in optimizers
+        if name != "means"
     ]
 
     N = params["means"].shape[0]
