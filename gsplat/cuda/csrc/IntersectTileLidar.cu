@@ -71,12 +71,14 @@ bool has_any_rays_in_tile(
     return num_rays > 0;
 }
 
-constexpr struct { __device__ float operator()(float x) const { return floorf(x); } } RoundFloor;
-constexpr struct { __device__ float operator()(float x) const { return ceilf(x); }  } RoundCeil;
+struct RoundFloorFn { __device__ float operator()(float x) const { return floorf(x); } };
+struct RoundCeilFn  { __device__ float operator()(float x) const { return ceilf(x); }  };
+constexpr RoundFloorFn RoundFloor;
+constexpr RoundCeilFn  RoundCeil;
 
 namespace {
-    template <auto RoundFn>
-    __device__ int sample_dense_az(float pix_az, float fov_span_pix_az, int cdf_resolution)
+    template <typename RoundFn_t>
+    __device__ int sample_dense_az(RoundFn_t RoundFn, float pix_az, float fov_span_pix_az, int cdf_resolution)
     {
         // NOTE: need to use proper fdiv instead of the approximation enabled with -use_fast_math
         // So that if pix_az == fov_span_pix_az, the index is exactly cdf_resolution.
@@ -87,8 +89,8 @@ namespace {
         return idx;
     }
 
-    template <auto RoundFn>
-    __device__ int sample_dense_el(float pix_el, float fov_span_pix_el, int cdf_resolution)
+    template <typename RoundFn_t>
+    __device__ int sample_dense_el(RoundFn_t RoundFn, float pix_el, float fov_span_pix_el, int cdf_resolution)
     {
         int idx = static_cast<int>(RoundFn(__fdiv_rn(pix_el, fov_span_pix_el) * cdf_resolution));
         assert(0 <= idx);
@@ -96,8 +98,8 @@ namespace {
         return idx;
     }
 
-    template <auto RoundFn>
-    __device__ int sample_tile_az(float pix_az, float fov_span_pix_az, int n_bins)
+    template <typename RoundFn_t>
+    __device__ int sample_tile_az(RoundFn_t RoundFn, float pix_az, float fov_span_pix_az, int n_bins)
     {
         int idx = static_cast<int>(RoundFn(__fdiv_rn(pix_az, fov_span_pix_az) * n_bins));
         assert(0 <= idx);
@@ -223,8 +225,8 @@ __global__ void intersect_tile_lidar_kernel(
     const int n_bins_az = (int)lidar.n_bins_azimuth;
 
     // Sample elevation (shared by A and B).
-    const int min_dense_el = sample_dense_el<RoundFloor>(beg_el, fov_span_pix_el, raycdf_size_el);
-    const int max_dense_el = sample_dense_el<RoundCeil>(end_el, fov_span_pix_el, raycdf_size_el);
+    const int min_dense_el = sample_dense_el(RoundFloor, beg_el, fov_span_pix_el, raycdf_size_el);
+    const int max_dense_el = sample_dense_el(RoundCeil, end_el, fov_span_pix_el, raycdf_size_el);
     if (min_dense_el >= max_dense_el)
     {
         if (first_pass)
@@ -243,16 +245,16 @@ __global__ void intersect_tile_lidar_kernel(
                                 (int)lidar.n_bins_elevation);
 
     // Sample A azimuth.
-    const int begA_dense = sample_dense_az<RoundFloor>(begA_pix_az, fov_span_pix_az, raycdf_size_az);
-    const int endA_dense = sample_dense_az<RoundCeil>(endA_pix_az, fov_span_pix_az, raycdf_size_az);
+    const int begA_dense = sample_dense_az(RoundFloor, begA_pix_az, fov_span_pix_az, raycdf_size_az);
+    const int endA_dense = sample_dense_az(RoundCeil, endA_pix_az, fov_span_pix_az, raycdf_size_az);
     const bool has_raysA = has_any_rays_in_tile(lidar, raycdf_size_el, raycdf_size_az,
                                                 min_dense_el, max_dense_el, begA_dense, endA_dense);
 
     int begA_tile = 0, endA_tile = 0;
     if(has_raysA)
     {
-        begA_tile = sample_tile_az<RoundFloor>(begA_pix_az, fov_span_pix_az, n_bins_az);
-        endA_tile = sample_tile_az<RoundCeil>(endA_pix_az, fov_span_pix_az, n_bins_az);
+        begA_tile = sample_tile_az(RoundFloor, begA_pix_az, fov_span_pix_az, n_bins_az);
+        endA_tile = sample_tile_az(RoundCeil, endA_pix_az, fov_span_pix_az, n_bins_az);
     }
 
     // Sample B azimuth -- only exists for underflows or overflows.
@@ -264,14 +266,14 @@ __global__ void intersect_tile_lidar_kernel(
         const float begB_pix_az = min(max(underflows ? (beg_az + full_circle_pix) : 0.f, 0.f), fov_span_pix_az);
         const float endB_pix_az = min(max(underflows ? full_circle_pix : (end_az - full_circle_pix), 0.f), fov_span_pix_az);
 
-        const int begB_dense = sample_dense_az<RoundFloor>(begB_pix_az, fov_span_pix_az, raycdf_size_az);
-        const int endB_dense = sample_dense_az<RoundCeil>(endB_pix_az, fov_span_pix_az, raycdf_size_az);
+        const int begB_dense = sample_dense_az(RoundFloor, begB_pix_az, fov_span_pix_az, raycdf_size_az);
+        const int endB_dense = sample_dense_az(RoundCeil, endB_pix_az, fov_span_pix_az, raycdf_size_az);
         has_raysB = has_any_rays_in_tile(lidar, raycdf_size_el, raycdf_size_az,
                                          min_dense_el, max_dense_el, begB_dense, endB_dense);
         if(has_raysB)
         {
-            begB_tile = sample_tile_az<RoundFloor>(begB_pix_az, fov_span_pix_az, n_bins_az);
-            endB_tile = sample_tile_az<RoundCeil>(endB_pix_az, fov_span_pix_az, n_bins_az);
+            begB_tile = sample_tile_az(RoundFloor, begB_pix_az, fov_span_pix_az, n_bins_az);
+            endB_tile = sample_tile_az(RoundCeil, endB_pix_az, fov_span_pix_az, n_bins_az);
         }
     }
 
