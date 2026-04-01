@@ -29,8 +29,17 @@ class _FakeDomain:
     def __init__(self):
         self.calls = []
 
-    def push_range(self, message=None, **kwargs):
-        self.calls.append(("push", message, kwargs))
+    def get_event_attributes(self, **kwargs):
+        return kwargs
+
+    def push_range(self, attrs):
+        self.calls.append(
+            (
+                "push",
+                attrs["message"],
+                {k: v for k, v in attrs.items() if k != "message"},
+            )
+        )
 
     def pop_range(self):
         self.calls.append(("pop", None, {}))

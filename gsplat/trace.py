@@ -79,7 +79,12 @@ else:
             self._kwargs = kwargs
 
         def __enter__(self):
-            _DOMAIN.push_range(message=self._name, **self._kwargs)
+            # Older nvtx builds (i.e. 0.2.13) can expose a broken
+            # Domain.push_range(kwargs) path even though the documented API accepts
+            # `message=` and other keyword attributes. Build the EventAttributes
+            # explicitly and use the low-level fast path for compatibility.
+            attrs = _DOMAIN.get_event_attributes(message=self._name, **self._kwargs)
+            _DOMAIN.push_range(attrs)
             return None
 
         def __exit__(self, exc_type, exc_val, exc_tb):
@@ -93,6 +98,10 @@ else:
         return _Trace(name, **kwargs)
 
     def trace_push(name: str, **kwargs: Any) -> None:
-        _DOMAIN.push_range(message=name, **kwargs)
+        # Avoid the kwargs-based Domain.push_range() path for compatibility with
+        # older nvtx builds (i.e. 0.2.13) whose compiled bindings only accept a
+        # positional EventAttributes object.
+        attrs = _DOMAIN.get_event_attributes(message=name, **kwargs)
+        _DOMAIN.push_range(attrs)
 
     trace_pop = _DOMAIN.pop_range
