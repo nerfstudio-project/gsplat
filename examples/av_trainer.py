@@ -40,6 +40,7 @@ import torch.nn.functional as F
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import gsplat
+from gsplat.strategy import MCMCStrategy
 
 
 # ---------------------------------------------------------------------------
@@ -372,17 +373,28 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
-def create_optimizer(params: torch.nn.ParameterDict, lr: float) -> torch.optim.Adam:
-    """Set up Adam optimizer with per-parameter learning rates."""
-    return torch.optim.Adam(
-        [
-            {"params": [params["means"]], "lr": lr * 0.032},
-            {"params": [params["scales"]], "lr": lr},
-            {"params": [params["quats"]], "lr": lr * 0.2},
-            {"params": [params["opacities"]], "lr": lr * 10},
-            {"params": [params["colors"]], "lr": lr * 0.5},
-        ]
-    )
+def create_optimizers(
+    params: torch.nn.ParameterDict, lr: float
+) -> dict[str, torch.optim.Adam]:
+    """Set up per-parameter Adam optimizers.
+
+    MCMC strategy requires one optimizer per parameter key so it can
+    add/remove Gaussians and update optimizer state accordingly.
+    """
+    lr_map = {
+        "means": lr * 0.032,
+        "scales": lr,
+        "quats": lr * 0.2,
+        "opacities": lr * 10,
+        "colors": lr * 0.5,
+    }
+    return {
+        name: torch.optim.Adam(
+            [{"params": params[name], "lr": lr_map[name], "name": name}],
+            eps=1e-15,
+        )
+        for name in lr_map
+    }
 
 
 def log_training_step(
@@ -441,6 +453,9 @@ def train(
     log_every: int,
     eval_every: int,
     result_dir: str,
+    use_mcmc: bool = False,
+    cap_max: int = 500_000,
+    save_model: bool = True,
 ) -> tuple[list[float], list[dict]]:
     """Train Gaussians on a multi-camera driving scene.
 
@@ -474,7 +489,30 @@ def train(
     # --- Load data and initialize model ---
     scene = load_scene(scene_path, device=device)
     params = init_gaussians_from_lidar(scene, device=device)
-    optimizer = create_optimizer(params, lr)
+    optimizers = create_optimizers(params, lr)
+
+    # --- MCMC strategy (optional) ---
+    strategy = None
+    strategy_state = None
+    if use_mcmc:
+        strategy = MCMCStrategy(
+            cap_max=cap_max,
+            noise_lr=5e5,
+            refine_start_iter=500,
+            refine_stop_iter=int(max_steps * 0.8),
+            refine_every=100,
+            verbose=True,
+        )
+        strategy.check_sanity(params, optimizers)
+        strategy_state = strategy.initialize_state()
+        print(f"MCMC strategy enabled: cap_max={cap_max}")
+
+    # --- Learning rate schedule: exponential decay to 1% for means ---
+    schedulers = [
+        torch.optim.lr_scheduler.ExponentialLR(
+            optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
+        ),
+    ]
 
     N = params["means"].shape[0]
     H, W = scene.H, scene.W
@@ -527,10 +565,27 @@ def train(
         )
 
         # Backward pass and parameter update
-        optimizer.zero_grad()
+        for opt in optimizers.values():
+            opt.zero_grad()
         total_loss.backward()
-        optimizer.step()
+        for opt in optimizers.values():
+            opt.step()
+        for sched in schedulers:
+            sched.step()
         losses_history.append(total_loss.item())
+
+        # MCMC: relocate dead Gaussians, add new ones, inject noise
+        if strategy is not None:
+            strategy.step_post_backward(
+                params,
+                optimizers,
+                strategy_state,
+                step,
+                info={},
+                lr=schedulers[0].get_last_lr()[0],
+            )
+
+        N = len(params["means"])  # may change with MCMC
 
         # Periodic logging and evaluation
         if step % log_every == 0:
@@ -564,6 +619,11 @@ def train(
     }
     with open(os.path.join(result_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
+    if save_model:
+        model_path = os.path.join(result_dir, "model.pt")
+        torch.save({k: v.detach().cpu() for k, v in params.items()}, model_path)
+        print(f"Model saved to {model_path} ({N} Gaussians)")
+
     print(f"\nDone: {max_steps} steps in {elapsed:.1f}s")
     print(f"Results saved to {result_dir}/")
 
@@ -615,6 +675,22 @@ def main() -> None:
         default="results/av_pandaset",
         help="output directory for renders, stats, and summary (default: results/av_pandaset)",
     )
+    parser.add_argument(
+        "--no-save-model",
+        action="store_true",
+        help="disable saving trained Gaussian parameters to model.pt",
+    )
+    parser.add_argument(
+        "--mcmc",
+        action="store_true",
+        help="enable MCMC densification strategy: adaptively add/remove Gaussians",
+    )
+    parser.add_argument(
+        "--cap-max",
+        type=int,
+        default=500_000,
+        help="maximum number of Gaussians when using --mcmc (default: 500000)",
+    )
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -629,6 +705,9 @@ def main() -> None:
         log_every=args.log_every,
         eval_every=args.eval_every,
         result_dir=args.result_dir,
+        use_mcmc=args.mcmc,
+        cap_max=args.cap_max,
+        save_model=not args.no_save_model,
     )
 
 
