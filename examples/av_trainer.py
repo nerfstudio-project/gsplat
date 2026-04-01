@@ -87,8 +87,16 @@ def load_scene(path: str, device: str = "cuda") -> SimpleNamespace:
     return scene
 
 
+SH_C0 = 0.28209479177387814
+
+
+def rgb_to_sh(rgb: torch.Tensor) -> torch.Tensor:
+    """Convert RGB in [0, 1] to 0th-order SH coefficient."""
+    return (rgb - 0.5) / SH_C0
+
+
 def init_gaussians_from_lidar(
-    scene: SimpleNamespace, device: str = "cuda"
+    scene: SimpleNamespace, device: str = "cuda", sh_degree: int = 0
 ) -> torch.nn.ParameterDict:
     """Initialize one Gaussian per training-frame LiDAR point.
 
@@ -119,9 +127,18 @@ def init_gaussians_from_lidar(
             "opacities": torch.nn.Parameter(
                 torch.logit(torch.full((N,), 0.1, device=device))
             ),
-            "colors": torch.nn.Parameter(intensities.expand(-1, 3).clamp(0, 1).clone()),
         }
     )
+    if sh_degree > 0:
+        K = (sh_degree + 1) ** 2
+        sh0 = rgb_to_sh(intensities.expand(-1, 3).clamp(0, 1)).unsqueeze(1)
+        shN = torch.zeros(N, K - 1, 3, device=device)
+        params["sh0"] = torch.nn.Parameter(sh0)
+        params["shN"] = torch.nn.Parameter(shN)
+    else:
+        params["colors"] = torch.nn.Parameter(
+            intensities.expand(-1, 3).clamp(0, 1).clone()
+        )
     return params
 
 
@@ -211,6 +228,7 @@ def render_gaussians(
     W: int,
     H: int,
     render_mode: str = "RGB",
+    sh_degree_to_use: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rasterize Gaussians into a single camera view.
 
@@ -231,18 +249,23 @@ def render_gaussians(
         renders: [1, H, W, C] rendered output (C=3 for RGB, C=4 for RGB+ED).
         alphas: [1, H, W, 1] accumulated opacity per pixel.
     """
+    if "sh0" in params:
+        colors = torch.cat([params["sh0"], params["shN"]], dim=1)
+    else:
+        colors = params["colors"]
+
     renders, alphas, _ = gsplat.rasterization(
         params["means"],
         F.normalize(params["quats"], dim=-1),
-        torch.exp(params["scales"]),  # post-activation scales
-        torch.sigmoid(params["opacities"]),  # post-activation opacities
-        params["colors"],
+        torch.exp(params["scales"]),
+        torch.sigmoid(params["opacities"]),
+        colors,
         viewmat,
         K,
         W,
         H,
         camera_model="pinhole",
-        sh_degree=None,
+        sh_degree=sh_degree_to_use,
         packed=True,
         render_mode=render_mode,
     )
@@ -332,6 +355,7 @@ def evaluate(
     W: int,
     H: int,
     renders_dir: str | None = None,
+    sh_degree: int | None = None,
 ) -> float:
     """Render test views and compute mean PSNR.
 
@@ -352,7 +376,9 @@ def evaluate(
                 gt_t = scene.images[tfid, tci].unsqueeze(0)
                 vm_t = scene.viewmats[tfid, tci].unsqueeze(0)
                 K_t = scene.Ks[tci]
-                rd, _ = render_gaussians(params, vm_t, K_t, W, H)
+                rd, _ = render_gaussians(
+                    params, vm_t, K_t, W, H, sh_degree_to_use=sh_degree
+                )
                 psnrs.append(compute_psnr(rd[0].clamp(0, 1), gt_t[0]))
 
                 if renders_dir is not None:
@@ -386,8 +412,12 @@ def create_optimizers(
         "scales": lr,
         "quats": lr * 0.2,
         "opacities": lr * 10,
-        "colors": lr * 0.5,
     }
+    if "sh0" in params:
+        lr_map["sh0"] = lr * 0.5
+        lr_map["shN"] = lr * 0.5 / 20
+    else:
+        lr_map["colors"] = lr * 0.5
     return {
         name: torch.optim.Adam(
             [{"params": params[name], "lr": lr_map[name], "name": name}],
@@ -422,6 +452,7 @@ def run_evaluation(
     renders_dir: str,
     stats_dir: str,
     is_last_step: bool,
+    sh_degree: int | None = None,
 ) -> dict:
     """Run evaluation and save checkpoint JSON. Returns checkpoint dict."""
     elapsed = time.time() - start_time
@@ -435,7 +466,15 @@ def run_evaluation(
     }
     if test_frame_ids:
         save_dir = renders_dir if is_last_step else None
-        mean_psnr = evaluate(params, scene, test_frame_ids, W, H, renders_dir=save_dir)
+        mean_psnr = evaluate(
+            params,
+            scene,
+            test_frame_ids,
+            W,
+            H,
+            renders_dir=save_dir,
+            sh_degree=sh_degree,
+        )
         checkpoint["mean_psnr"] = mean_psnr
         print(
             f"  Eval PSNR: {mean_psnr:.2f} dB "
@@ -455,6 +494,8 @@ def train(
     result_dir: str,
     use_mcmc: bool = False,
     cap_max: int = 500_000,
+    sh_degree: int = 0,
+    sh_degree_interval: int = 1000,
     save_model: bool = True,
 ) -> tuple[list[float], list[dict]]:
     """Train Gaussians on a multi-camera driving scene.
@@ -488,7 +529,7 @@ def train(
 
     # --- Load data and initialize model ---
     scene = load_scene(scene_path, device=device)
-    params = init_gaussians_from_lidar(scene, device=device)
+    params = init_gaussians_from_lidar(scene, device=device, sh_degree=sh_degree)
     optimizers = create_optimizers(params, lr)
 
     # --- MCMC strategy (optional) ---
@@ -543,8 +584,15 @@ def train(
         viewmat = scene.viewmats[idxframe, idxcam].unsqueeze(0)  # [1, 4, 4]
         K = scene.Ks[idxcam]  # [1, 3, 3]
 
+        # Progressive SH schedule
+        sh_degree_to_use = (
+            min(step // sh_degree_interval, sh_degree) if sh_degree > 0 else None
+        )
+
         # Forward pass: rasterize Gaussians into this view
-        renders, alphas = render_gaussians(params, viewmat, K, W, H, "RGB+ED")
+        renders, alphas = render_gaussians(
+            params, viewmat, K, W, H, "RGB+ED", sh_degree_to_use=sh_degree_to_use
+        )
         rgb_render = renders[..., :3]  # [1, H, W, 3]
         depth_render = renders[0, :, :, 3]  # [H, W]
 
@@ -604,6 +652,7 @@ def train(
                 renders_dir,
                 stats_dir,
                 is_last_step=(step == max_steps - 1),
+                sh_degree=sh_degree_to_use,
             )
             checkpoints.append(ckpt)
 
@@ -676,6 +725,18 @@ def main() -> None:
         help="output directory for renders, stats, and summary (default: results/av_pandaset)",
     )
     parser.add_argument(
+        "--sh-degree",
+        type=int,
+        default=0,
+        help="spherical harmonics degree (0 = flat RGB, 3 = full SH; default: 0)",
+    )
+    parser.add_argument(
+        "--sh-degree-interval",
+        type=int,
+        default=1000,
+        help="progressively enable one more SH band every N steps (default: 1000)",
+    )
+    parser.add_argument(
         "--no-save-model",
         action="store_true",
         help="disable saving trained Gaussian parameters to model.pt",
@@ -707,6 +768,8 @@ def main() -> None:
         result_dir=args.result_dir,
         use_mcmc=args.mcmc,
         cap_max=args.cap_max,
+        sh_degree=args.sh_degree,
+        sh_degree_interval=args.sh_degree_interval,
         save_model=not args.no_save_model,
     )
 
