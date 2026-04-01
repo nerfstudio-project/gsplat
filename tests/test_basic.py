@@ -2759,13 +2759,13 @@ def test_rasterize_to_pixels_eval3d(
 
     # Compare backward gradients, excluding the ones that fall above the quantile threshold.
     torch.testing.assert_close(
-        v_means * means_mask.float(), _v_means * means_mask.float(), rtol=0, atol=4e-2
+        v_means * means_mask.float(), _v_means * means_mask.float(), rtol=0, atol=1e-3
     )
     torch.testing.assert_close(
         v_scales * scales_mask.float(),
         _v_scales * scales_mask.float(),
         rtol=0,
-        atol=5e-2,
+        atol=1e-3,
     )
     # Relax quat/opacity tolerances when use_hit_distance=True due to accumulated floating-point errors
     # in hit distance calculation (normalize + dot product + length operations)
@@ -2793,14 +2793,14 @@ def test_rasterize_to_pixels_eval3d(
         v_backgrounds * backgrounds_mask.float(),
         _v_backgrounds * backgrounds_mask.float(),
         rtol=0,
-        atol=1.6e-2,
+        atol=1e-3,
     )
 
     if use_rays:
         rays_mask = get_inlier_abserror_mask(v_rays, _v_rays, quantile=0.95)
         assert rays_mask.sum() > 0
         torch.testing.assert_close(
-            v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=4e-2
+            v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=5e-3
         )
 
 
