@@ -115,17 +115,27 @@ def get_build_parameters():
             extra_cflags += ["/O2", "-DNDEBUG"]
             extra_cuda_cflags += ["-O2", "-DNDEBUG"]
     else:
-        extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
-
+        if DEBUG:
+            extra_cflags += ["-g", "-O0", "-Wall"]
+            extra_cuda_cflags += [
+                "-lineinfo",
+                # nvcc intercepts bare -Werror as its own --Werror flag, so
+                # pass it via -Xcompiler instead of --forward-unknown-opts.
+                "-Xcompiler=-Werror",
+                "--Werror",
+                "all-warnings",
+            ]
+        else:
+            extra_cflags += ["-O3", "-DNDEBUG"]
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
-
-    extra_cuda_cflags += ["-lineinfo"] if DEBUG else []
 
     # Silencing of warnings
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
     extra_cuda_cflags += ["-diag-suppress", "20012,186"]
     if not os.name == "nt":
-        extra_cflags += ["-Wno-sign-compare", "-Wno-attributes"]
+        extra_cflags += ["-Wno-attributes"]
+        # #pragma unroll is standard CUDA idiom but unknown to gcc
+        extra_cflags += ["-Wno-unknown-pragmas"]
 
     if BUILD_2DGS is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
@@ -183,6 +193,10 @@ def get_build_parameters():
 
     if sys.platform != "win32":
         extra_cuda_cflags += extra_cflags
+
+    # Add -Werror after the copy so it reaches gcc but not nvcc (see DEBUG block above).
+    if DEBUG and sys.platform != "win32":
+        extra_cflags += ["-Werror"]
 
     if NUM_CHANNELS is not None:
         # nvcc has a bug where you need to escape the commas in macro values defined with -D.

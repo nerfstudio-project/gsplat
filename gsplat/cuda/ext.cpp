@@ -122,12 +122,12 @@ TORCH_LIBRARY(gsplat, m) {
                            double max_angle,
                            std::array<double, 3> linear_cde) {
                 std::array<float, FThetaPolynomialDegree> pixeldist_to_angle_poly_f;
-                for (auto i = 0; i < FThetaPolynomialDegree; ++i)
+                for (size_t i = 0; i < FThetaPolynomialDegree; ++i)
                     pixeldist_to_angle_poly_f[i] =
                         static_cast<float>(pixeldist_to_angle_poly[i]);
 
                 std::array<float, FThetaPolynomialDegree> angle_to_pixeldist_poly_f;
-                for (auto i = 0; i < FThetaPolynomialDegree; ++i)
+                for (size_t i = 0; i < FThetaPolynomialDegree; ++i)
                     angle_to_pixeldist_poly_f[i] =
                         static_cast<float>(angle_to_pixeldist_poly[i]);
 
@@ -168,7 +168,7 @@ TORCH_LIBRARY(gsplat, m) {
             ) {
                 std::array<double, FThetaPolynomialDegree>
                     pixeldist_to_angle_poly;
-                for (int i = 0; i < FThetaPolynomialDegree; ++i) {
+                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
                     pixeldist_to_angle_poly[i] =
                         static_cast<double>(self->pixeldist_to_angle_poly[i]);
                 }
@@ -177,7 +177,7 @@ TORCH_LIBRARY(gsplat, m) {
             [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self,
                const std::array<double, FThetaPolynomialDegree>
                    &pixeldist_to_angle_poly) {
-                for (int i = 0; i < FThetaPolynomialDegree; ++i) {
+                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
                     self->pixeldist_to_angle_poly[i] =
                         static_cast<float>(pixeldist_to_angle_poly[i]);
                 }
@@ -189,7 +189,7 @@ TORCH_LIBRARY(gsplat, m) {
             ) {
                 std::array<double, FThetaPolynomialDegree>
                     angle_to_pixeldist_poly;
-                for (int i = 0; i < FThetaPolynomialDegree; ++i) {
+                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
                     angle_to_pixeldist_poly[i] =
                         static_cast<double>(self->angle_to_pixeldist_poly[i]);
                 }
@@ -198,7 +198,7 @@ TORCH_LIBRARY(gsplat, m) {
             [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self,
                const std::array<double, FThetaPolynomialDegree>
                    &angle_to_pixeldist_poly) {
-                for (int i = 0; i < FThetaPolynomialDegree; ++i) {
+                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
                     self->angle_to_pixeldist_poly[i] =
                         static_cast<float>(angle_to_pixeldist_poly[i]);
                 }
