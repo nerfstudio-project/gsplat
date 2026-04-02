@@ -298,10 +298,49 @@ class TestBivariatePolyEvaluationCUDA:
             result = self._eval_cuda(coeffs, order, [0.0], [0.0])
             assert result[0].item() == pytest.approx(coeffs[0], abs=1e-5)
 
+    def test_cubic_poly(self):
+        """Order 3: f(x,y) = x^3 (cubic monomial)."""
+        # Order 3 layout: block0 has 4 coeffs (inner_order=3, x^0..x^3)
+        # x^3 → coeffs[3] = 1.0, rest zero → f = x^3 * y^0 = x^3
+        coeffs = [0.0] * num_coeffs_for_order(3)  # 10 coeffs
+        coeffs[3] = 1.0  # x^3 in first block
+        result = self._eval_cuda(coeffs, 3, [2.0, -1.0, 0.5], [0.0, 0.0, 0.0])
+        assert result[0].item() == pytest.approx(8.0, abs=1e-4)
+        assert result[1].item() == pytest.approx(-1.0, abs=1e-4)
+        assert result[2].item() == pytest.approx(0.125, abs=1e-4)
+
+    def test_cubic_mixed(self):
+        """Order 3: f(x,y) = x^2*y."""
+        # block0 (inner_order=3): x^0..x^3 → outer_coeffs[0], multiplied by y^0
+        # block1 (inner_order=2): x^0..x^2 → outer_coeffs[1], multiplied by y^1
+        # For x^2*y: need outer_coeffs[1] = x^2, so block1's x^2 coeff = 1.0
+        # block1 starts at index 4, x^2 is at offset 2 → coeffs[6] = 1.0
+        coeffs = [0.0] * num_coeffs_for_order(3)
+        coeffs[6] = 1.0
+        result = self._eval_cuda(coeffs, 3, [3.0], [2.0])
+        assert result[0].item() == pytest.approx(18.0, abs=1e-3)
+
+    def test_quartic_poly(self):
+        """Order 4: f(x,y) = x^4."""
+        coeffs = [0.0] * num_coeffs_for_order(4)  # 15 coeffs
+        coeffs[4] = 1.0  # x^4 in first block
+        result = self._eval_cuda(coeffs, 4, [2.0, -1.0], [0.0, 0.0])
+        assert result[0].item() == pytest.approx(16.0, abs=1e-3)
+        assert result[1].item() == pytest.approx(1.0, abs=1e-4)
+
+    def test_quintic_poly(self):
+        """Order 5 (MAX_ORDER): f(x,y) = x^5."""
+        coeffs = [0.0] * num_coeffs_for_order(5)  # 21 coeffs
+        coeffs[5] = 1.0  # x^5 in first block
+        result = self._eval_cuda(coeffs, 5, [2.0, -1.0, 0.5], [0.0, 0.0, 0.0])
+        assert result[0].item() == pytest.approx(32.0, abs=1e-2)
+        assert result[1].item() == pytest.approx(-1.0, abs=1e-4)
+        assert result[2].item() == pytest.approx(0.03125, abs=1e-4)
+
     def test_cross_validate_against_python_reference(self):
-        """Compare CUDA results to Python reference for many random inputs."""
+        """Compare CUDA results to Python reference for many random inputs (orders 0-5)."""
         torch.manual_seed(42)
-        for order in range(5):
+        for order in range(6):  # 0 through 5 (MAX_ORDER)
             n = num_coeffs_for_order(order)
             coeffs = torch.randn(n).tolist()
             x_vals = (torch.rand(50) * 2 - 1).tolist()  # [-1, 1]
@@ -312,6 +351,26 @@ class TestBivariatePolyEvaluationCUDA:
                 assert cuda_result[i].item() == pytest.approx(
                     ref, abs=1e-4
                 ), f"Mismatch at order={order}, i={i}: CUDA={cuda_result[i].item()}, ref={ref}"
+
+    def test_precision_padded_vs_reference(self):
+        """Zero-padded CUDA evaluation should match exact-order Python reference.
+
+        This validates that padding lower-order polynomials to MAX_ORDER=5 (21 coeffs)
+        doesn't degrade precision — the core invariant of the zero-padding approach.
+        """
+        torch.manual_seed(99)
+        for order in range(6):
+            n = num_coeffs_for_order(order)
+            coeffs = torch.randn(n).tolist()
+            x_vals = (torch.rand(30) * 2 - 1).tolist()
+            y_vals = (torch.rand(30) * 2 - 1).tolist()
+            cuda_result = self._eval_cuda(coeffs, order, x_vals, y_vals)
+            for i in range(len(x_vals)):
+                ref = ref_eval_bivariate_poly(coeffs, order, x_vals[i], y_vals[i])
+                assert cuda_result[i].item() == pytest.approx(ref, abs=1e-5), (
+                    f"Precision loss at order={order}, i={i}: "
+                    f"CUDA={cuda_result[i].item()}, ref={ref}"
+                )
 
 
 # ===========================================================================
@@ -486,6 +545,58 @@ class TestDistortCameraRaysCUDA:
                 assert result[i, j].item() == pytest.approx(
                     ref[j], abs=1e-5
                 ), f"Mismatch at ray {i}, component {j}"
+
+    @pytest.mark.parametrize("order", [2, 3, 4, 5])
+    def test_cross_validate_higher_orders(self, order):
+        """Cross-validate CUDA vs Python for random higher-order polynomials."""
+        torch.manual_seed(42 + order)
+        n = num_coeffs_for_order(order)
+        # Small random perturbation around identity to keep rays well-behaved
+        h = make_identity_horizontal_poly(order)
+        v = make_identity_vertical_poly(order)
+        # Add small random higher-order terms
+        for i in range(n):
+            h[i] += torch.randn(1).item() * 0.01
+            v[i] += torch.randn(1).item() * 0.01
+
+        rays_list = []
+        for _ in range(20):
+            r = torch.randn(3)
+            r[2] = abs(r[2]) + 0.5
+            rays_list.append(r.tolist())
+
+        h_order = ref_compute_order(len(h))
+        v_order = ref_compute_order(len(v))
+        result = self._distort_cuda(rays_list, h, v, h_inv=h, v_inv=v)
+        for i, ray in enumerate(rays_list):
+            ref = ref_distort_camera_ray(tuple(ray), h, v, h_order, v_order)
+            for j in range(3):
+                assert result[i, j].item() == pytest.approx(ref[j], abs=1e-4), (
+                    f"Mismatch at order={order}, ray {i}, component {j}: "
+                    f"CUDA={result[i, j].item()}, ref={ref[j]}"
+                )
+
+    @pytest.mark.parametrize("order", [2, 3, 4, 5])
+    def test_identity_higher_orders(self, order):
+        """Identity polynomials at higher orders should preserve ray direction."""
+        h = make_identity_horizontal_poly(order)
+        v = make_identity_vertical_poly(order)
+        rays = [
+            [0.3, 0.4, 0.8],
+            [0.1, 0.0, 1.0],
+            [0.0, 0.2, 0.9],
+            [-0.3, 0.2, 0.7],
+            [0.5, -0.3, 0.6],
+        ]
+        result = self._distort_cuda(rays, h, v, h_inv=h, v_inv=v)
+        for i, ray in enumerate(rays):
+            length = math.sqrt(sum(c**2 for c in ray))
+            expected = [c / length for c in ray]
+            for j in range(3):
+                assert result[i, j].item() == pytest.approx(expected[j], abs=1e-5), (
+                    f"Order {order}: component {j} mismatch for ray {ray}: "
+                    f"got {result[i, j].item()}, expected {expected[j]}"
+                )
 
     def test_cross_validate_nonidentity_poly(self):
         """Cross-validate CUDA vs Python for non-identity polynomials."""
@@ -776,6 +887,30 @@ class TestCameraWithExternalDistortion:
         assert valid.all()
         assert not torch.isnan(img_pts).any()
 
+    @pytest.mark.parametrize("order", [3, 4, 5])
+    def test_higher_order_roundtrip(self, order):
+        """Identity polynomial at orders 3-5: project -> unproject should recover direction."""
+        h = make_identity_horizontal_poly(order)
+        v = make_identity_vertical_poly(order)
+        params = make_params(h_poly=h, v_poly=v, h_inv=h, v_inv=v)
+        cam = self._create_pinhole_camera(external_distortion_coeffs=params)
+
+        rays = torch.tensor(
+            [[[0.05, 0.03, 1.0], [0.0, 0.0, 1.0], [-0.05, 0.05, 1.0]]],
+            dtype=torch.float32,
+            device="cuda",
+        )
+
+        img_pts, valid_proj = cam.camera_ray_to_image_point(rays)
+        assert valid_proj.all(), f"Projection failed at order {order}"
+
+        rays_back, valid_unproj = cam.image_point_to_camera_ray(img_pts)
+        assert valid_unproj.all(), f"Unprojection failed at order {order}"
+
+        rays_norm = rays / rays.norm(dim=-1, keepdim=True)
+        rays_back_norm = rays_back / rays_back.norm(dim=-1, keepdim=True)
+        torch.testing.assert_close(rays_norm, rays_back_norm, atol=1e-4, rtol=1e-4)
+
 
 # ===========================================================================
 # 6. Integration tests through the full rendering pipeline (3DGUT)
@@ -853,7 +988,7 @@ class TestRenderingWithExternalDistortion:
             linear_cde=(9.9968284e-01, 1.8735906e-05, 1.7659619e-05),
         )
 
-        renders, alphas, meta = rasterization(
+        renders, alphas, _meta = rasterization(
             means=test_data["means"],
             quats=test_data["quats"],
             scales=test_data["scales"],
@@ -875,7 +1010,7 @@ class TestRenderingWithExternalDistortion:
 
     def test_no_external_distortion(self, test_data):
         """Rendering with external_distortion_coeffs=None should succeed."""
-        renders, alphas = self._render(test_data, external_distortion_coeffs=None)
+        renders, _alphas = self._render(test_data, external_distortion_coeffs=None)
         C = test_data["Ks"].shape[0]
         assert renders.shape == (C, test_data["height"], test_data["width"], 3)
         assert not torch.isnan(renders).any()
@@ -927,7 +1062,7 @@ class TestRenderingWithExternalDistortion:
             h_inv=make_zero_poly(1),
             v_inv=make_zero_poly(1),
         )
-        renders, alphas = self._render(
+        renders, _alphas = self._render(
             test_data, external_distortion_coeffs=zero_params
         )
         assert not torch.isnan(renders).any()
@@ -939,7 +1074,7 @@ class TestRenderingWithExternalDistortion:
         v = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
 
         params = make_params(h_poly=h, v_poly=v, h_inv=h, v_inv=v)
-        renders, alphas = self._render(test_data, external_distortion_coeffs=params)
+        renders, _alphas = self._render(test_data, external_distortion_coeffs=params)
         assert renders.shape == (
             test_data["Ks"].shape[0],
             test_data["height"],
@@ -948,6 +1083,21 @@ class TestRenderingWithExternalDistortion:
         )
         assert not torch.isnan(renders).any()
 
+    def test_order5_rendering(self, test_data):
+        """Order-5 (MAX_ORDER) identity polynomial through full rendering pipeline."""
+        h = make_identity_horizontal_poly(5)
+        v = make_identity_vertical_poly(5)
+        params = make_params(h_poly=h, v_poly=v, h_inv=h, v_inv=v)
+        renders, _alphas = self._render(test_data, external_distortion_coeffs=params)
+        assert renders.shape == (
+            test_data["Ks"].shape[0],
+            test_data["height"],
+            test_data["width"],
+            3,
+        )
+        assert not torch.isnan(renders).any()
+        assert not torch.isinf(renders).any()
+
     def test_backward_reference_poly(self, test_data):
         """Rendering with BACKWARD reference polynomial should succeed."""
         params = make_params(
@@ -955,5 +1105,5 @@ class TestRenderingWithExternalDistortion:
             v_poly=make_identity_vertical_poly(),
             ref_poly=ExternalDistortionReferencePolynomial.BACKWARD,
         )
-        renders, alphas = self._render(test_data, external_distortion_coeffs=params)
+        renders, _alphas = self._render(test_data, external_distortion_coeffs=params)
         assert not torch.isnan(renders).any()
