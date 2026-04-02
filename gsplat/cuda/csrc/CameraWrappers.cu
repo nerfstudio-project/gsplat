@@ -255,26 +255,17 @@ template <typename CameraModel>
 void PyBaseCameraModel<CameraModel>::init_external_distortion(
     const gsplat::extdist::BivariateWindshieldModelParameters& params)
 {
-    // Store the params to keep tensors alive (they own the GPU data)
-    m_ext_dist_params_storage = params;
-    auto& stored = *m_ext_dist_params_storage;
-
-    // Ensure tensors are contiguous and on CUDA
-    stored.horizontal_poly = stored.horizontal_poly.contiguous().cuda();
-    stored.vertical_poly = stored.vertical_poly.contiguous().cuda();
-    stored.horizontal_poly_inverse = stored.horizontal_poly_inverse.contiguous().cuda();
-    stored.vertical_poly_inverse = stored.vertical_poly_inverse.contiguous().cuda();
-
-    // Build the host-side device params (contains raw pointers into the tensor data)
-    gsplat::extdist::BivariateWindshieldModelDeviceParams host_params(stored);
-
-    // Allocate device memory and copy
-    gsplat::extdist::BivariateWindshieldModelDeviceParams* d_params;
+    // Construct host-side device params — copies tensor data into std::array members
+    // via pad_tensor_coefficients later.
+    m_ext_dist_device_params = gsplat::extdist::BivariateWindshieldModelDeviceParams(params);
+    // Allocate persistent device copy for CameraWrapper camera objects that outlive kernel execution.
+    gsplat::extdist::BivariateWindshieldModelDeviceParams* d_params = nullptr;
     C10_CUDA_CHECK(cudaMalloc(&d_params, sizeof(gsplat::extdist::BivariateWindshieldModelDeviceParams)));
-    C10_CUDA_CHECK(cudaMemcpy(d_params, &host_params,
-                          sizeof(gsplat::extdist::BivariateWindshieldModelDeviceParams),
+    C10_CUDA_CHECK(cudaMemcpy(d_params, &m_ext_dist_device_params,
+                          sizeof(gsplat::extdist::BivariateWindshieldModelDeviceParams), 
                           cudaMemcpyHostToDevice));
-    m_dev_ext_dist_params.reset(d_params);
+    m_dev_ext_dist.reset(d_params);
+    m_has_ext_dist = true;
 }
 
 /**

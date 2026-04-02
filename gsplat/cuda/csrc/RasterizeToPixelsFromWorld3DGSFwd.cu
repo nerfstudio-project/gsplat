@@ -75,7 +75,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
     const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
     const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
-    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
+    __grid_constant__ const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
