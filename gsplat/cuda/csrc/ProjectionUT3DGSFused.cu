@@ -246,6 +246,14 @@ __global__ void projection_ut_3dgs_fused_kernel(
     mat2 covar2d_inv = glm::inverse(covar2d);
 
     float extend = 3.33f;
+    // Note: the optimizations from StopThePop (https://arxiv.org/pdf/2402.00525) give identical
+    // results when the Gaussian's contribution is evaluated in 2D from the projected 2D Gaussian.
+    // However, with UT, the Gaussian's contribution is evaluated in 3D by intersecting the ray
+    // with the 3D Gaussian.  As a result, the 2D culling criteria uses an approximation of what the
+    // projected Gaussian would look like.  Therefore, this 2D-based culling can eliminate Gaussians
+    // which would have a contribution in the 3D space and produce slightly different results,
+    // especially with very non-linear projections / distortions.  Using these optimizations is
+    // therefore a compromise between performance and quality, which is still reasonable for most cases.
     if (opacities != nullptr) {
         float opacity = opacities[bid * N + gid];
         opacity *= compensation;
