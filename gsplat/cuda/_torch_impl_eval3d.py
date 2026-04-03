@@ -43,7 +43,6 @@ from ._wrapper import RollingShutterType
 from ._constants import (
     ALPHA_THRESHOLD,
     TRANSMITTANCE_THRESHOLD,
-    MAX_KERNEL_DENSITY_CUTOFF,
 )
 
 
@@ -380,9 +379,7 @@ def accumulate_eval3d(
 
     # 9. Filter out low-contribution Gaussians (explicit masking)
     # CUDA: if (alpha < 1.f / 255.f) continue;
-    valid_mask = (alphas >= ALPHA_THRESHOLD) & (
-        max_response > MAX_KERNEL_DENSITY_CUTOFF
-    )
+    valid_mask = alphas >= ALPHA_THRESHOLD
 
     # Apply filter to all arrays early to reduce memory usage
     alphas = alphas[valid_mask]
