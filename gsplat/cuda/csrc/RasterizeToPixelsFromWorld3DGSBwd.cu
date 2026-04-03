@@ -407,7 +407,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
                 vis = __expf(power);
                 alpha = min(MAX_ALPHA, opac * vis);
-                if (power > 0.f || alpha < 1.f / 255.f) {
+                if (power > 0.f || alpha < ALPHA_THRESHOLD) {
                     valid = false;
                 }
 
