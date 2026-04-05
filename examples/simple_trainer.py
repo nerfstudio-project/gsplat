@@ -283,6 +283,7 @@ def create_splats_with_optimizers(
     device: str = "cuda",
     world_rank: int = 0,
     world_size: int = 1,
+    cap_max: Optional[int] = None,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
     if init_type == "sfm" or init_type == "lidar":
         points = torch.from_numpy(parser.points).float()
@@ -307,26 +308,71 @@ def create_splats_with_optimizers(
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
-    params = [
-        # name, value, lr
-        ("means", torch.nn.Parameter(points), means_lr * scene_scale),
-        ("scales", torch.nn.Parameter(scales), scales_lr),
-        ("quats", torch.nn.Parameter(quats), quats_lr),
-        ("opacities", torch.nn.Parameter(opacities), opacities_lr),
-    ]
+    # To solve the memory issue we want to allocate the buffers now.
+    if cap_max is not None and cap_max > N:
+        buf_size = cap_max
 
-    if feature_dim is None:
-        # color is SH coefficients.
-        colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
-        colors[:, 0, :] = rgb_to_sh(rgbs)
-        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), sh0_lr))
-        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), shN_lr))
+        points_buf = torch.zeros((buf_size, 3))
+        points_buf[:N] = points
+
+        scales_buf = torch.zeros((buf_size, 3))
+        scales_buf[:N] = scales
+
+        quats_buf = torch.zeros((buf_size, 4))
+        quats_buf[:N] = quats
+
+        opacities_buf = torch.zeros((buf_size,))
+        opacities_buf[:N] = opacities
+
+        params = [
+            ("means", torch.nn.Parameter(points_buf), means_lr * scene_scale),
+            ("scales", torch.nn.Parameter(scales_buf), scales_lr),
+            ("quats", torch.nn.Parameter(quats_buf), quats_lr),
+            ("opacities", torch.nn.Parameter(opacities_buf), opacities_lr),
+        ]
+        
+        if feature_dim is None:
+            # color is SH coefficients.
+            colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
+            colors[:, 0, :] = rgb_to_sh(rgbs)
+
+
+        if feature_dim is None:
+            K_sh = (sh_degree + 1) ** 2
+            # color is SH coefficients.
+            colors_buf = torch.zeros((buf_size, K_sh, 3))
+            colors_buf[:N] = colors
+            params.append(("sh0", torch.nn.Parameter(colors_buf[:, :1, :]), sh0_lr))
+            params.append(("shN", torch.nn.Parameter(colors_buf[:, 1:, :]), shN_lr))
+        else:
+            # features will be used for appearance and view-dependent shading
+            features_buf = torch.zeros((buf_size, feature_dim))
+            features_buf[:N] = torch.rand(N, feature_dim)
+            params.append(("features", torch.nn.Parameter(features_buf), sh0_lr))
+            colors_logit_buf = torch.zeros((buf_size, 3))
+            colors_logit_buf[:N] = torch.logit(rgbs)
+            params.append(("colors", torch.nn.Parameter(colors_logit_buf), sh0_lr))
     else:
-        # features will be used for appearance and view-dependent shading
-        features = torch.rand(N, feature_dim)  # [N, feature_dim]
-        params.append(("features", torch.nn.Parameter(features), sh0_lr))
-        colors = torch.logit(rgbs)  # [N, 3]
-        params.append(("colors", torch.nn.Parameter(colors), sh0_lr))
+        # Original path — no pre-allocation
+        # name, value, lr
+        params = [
+            ("means", torch.nn.Parameter(points), means_lr * scene_scale),
+            ("scales", torch.nn.Parameter(scales), scales_lr),
+            ("quats", torch.nn.Parameter(quats), quats_lr),
+            ("opacities", torch.nn.Parameter(opacities), opacities_lr),
+        ]
+
+        if feature_dim is None:
+            # color is SH coefficients.
+            colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
+            colors[:, 0, :] = rgb_to_sh(rgbs)
+            params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), sh0_lr))
+            params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), shN_lr))
+        else:
+            features = torch.rand(N, feature_dim)  # [N, feature_dim]
+            params.append(("features", torch.nn.Parameter(features), sh0_lr))
+            colors = torch.logit(rgbs)  # [N, 3]
+            params.append(("colors", torch.nn.Parameter(colors), sh0_lr))
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
@@ -345,7 +391,6 @@ def create_splats_with_optimizers(
         name: optimizer_class(
             [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
             eps=1e-15 / math.sqrt(BS),
-            # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
             fused=True,
         )
@@ -455,6 +500,11 @@ class Runner:
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
+        # We need to pass cap_max when using when using MCMC
+        preallocate_cap = None
+        if isinstance(cfg.strategy, MCMCStrategy) and cfg.strategy.preallocate:
+            preallocate_cap = cfg.strategy.cap_max
+
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
             init_type=cfg.init_type,
@@ -477,8 +527,8 @@ class Runner:
             device=self.device,
             world_rank=world_rank,
             world_size=world_size,
+            cap_max=preallocate_cap,
         )
-        print("Model initialized. Number of GS:", len(self.splats["means"]))
 
         # Densification Strategy
         self.cfg.strategy.check_sanity(self.splats, self.optimizers)
@@ -488,9 +538,37 @@ class Runner:
                 scene_scale=self.scene_scale
             )
         elif isinstance(self.cfg.strategy, MCMCStrategy):
-            self.strategy_state = self.cfg.strategy.initialize_state()
+            if cfg.strategy.preallocate:
+                n_initial = len(self.parser.points) // world_size
+                self.strategy_state = self.cfg.strategy.initialize_state(
+                    n_initial=n_initial
+                )
+                # Build active-slice params (views into the pre-allocated buffers)
+                # and rewire each optimizer to track the active slice instead of the
+                # full cap_max-sized tensor so that optimizer.step() only touches
+                # the n_initial live Gaussians at startup.
+                active_params = {
+                    name: torch.nn.Parameter(
+                        self.splats[name].data[:n_initial],
+                        requires_grad=self.splats[name].requires_grad,
+                    )
+                    for name in self.splats.keys()
+                }
+                for name, opt in self.optimizers.items():
+                    if name not in active_params:
+                        continue
+                    full_param = self.splats[name]
+                    for group in opt.param_groups:
+                        for i, p in enumerate(group["params"]):
+                            if p is full_param:
+                                group["params"][i] = active_params[name]
+                self.strategy_state["active_params"] = active_params
+            else:
+                self.strategy_state = self.cfg.strategy.initialize_state()
         else:
             assert_never(self.cfg.strategy)
+
+        print("Model initialized. Number of GS:", self.n_gaussians)
 
         # Compression Strategy
         self.compression_method = None
@@ -607,6 +685,16 @@ class Runner:
         # Track if Gaussians are frozen (for controller distillation)
         self._gaussians_frozen = False
 
+    @property
+    def n_gaussians(self) -> int:
+        """Return the number of active Gaussians."""
+        if (
+            isinstance(self.cfg.strategy, MCMCStrategy)
+            and self.cfg.strategy.preallocate
+        ):
+            return len(self.strategy_state["active_params"]["means"])
+        return len(self.splats["means"])
+
     def freeze_gaussians(self):
         """Freeze all Gaussian parameters for controller distillation.
 
@@ -636,25 +724,32 @@ class Runner:
         exposure: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
-        means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-        # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
-        scales = torch.exp(self.splats["scales"])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+        # When preallocating, active_params is already sized to n_active — no slicing needed.
+        if (
+            isinstance(self.cfg.strategy, MCMCStrategy)
+            and self.cfg.strategy.preallocate
+        ):
+            p = self.strategy_state["active_params"]
+        else:
+            p = self.splats
+
+        means = p["means"]  # [N, 3]
+        quats = p["quats"]  # [N, 4]
+        scales = torch.exp(p["scales"])  # [N, 3]
+        opacities = torch.sigmoid(p["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
-                features=self.splats["features"],
+                features=p["features"],
                 embed_ids=image_ids,
                 dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
                 sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
             )
-            colors = colors + self.splats["colors"]
+            colors = colors + p["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+            colors = torch.cat([p["sh0"], p["shN"]], 1)  # [N, K, 3]
 
         if rasterize_mode is None:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -985,7 +1080,7 @@ class Runner:
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
-                self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
+                self.writer.add_scalar("train/num_GS", self.n_gaussians, step)
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
@@ -1003,19 +1098,39 @@ class Runner:
 
             # save checkpoint before updating the model
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
-                mem = torch.cuda.max_memory_allocated() / 1024**3
+                mem_allocated = torch.cuda.memory_allocated() / 1024**3
+                mem_reserved = torch.cuda.memory_reserved() / 1024**3
+                mem_max = torch.cuda.max_memory_allocated() / 1024**3
+                
+                prealloc_mode = "enabled" if (isinstance(cfg.strategy, MCMCStrategy) and cfg.strategy.preallocate) else "disabled"
+                
                 stats = {
-                    "mem": mem,
-                    "ellipse_time": time.time() - global_tic,
-                    "num_GS": len(self.splats["means"]),
+                    "mem_allocated_GB": round(mem_allocated, 4),
+                    "mem_reserved_GB": round(mem_reserved, 4),
+                    "mem_peak_GB": round(mem_max, 4),
+                    "ellipse_time": round(time.time() - global_tic, 2),
+                    "num_GS": self.n_gaussians,
+                    "preallocation": prealloc_mode,
                 }
-                print("Step: ", step, stats)
+                print(f"\n{'='*60}")
+                print(f"Step {step} - Memory Report ({prealloc_mode.upper()})")
+                print(f"{'='*60}")
+                print(f"  Current Allocated: {mem_allocated:.4f} GB")
+                print(f"  Reserved by CUDA:  {mem_reserved:.4f} GB")
+                print(f"  Peak Allocated:    {mem_max:.4f} GB")
+                print(f"  Gaussians:         {self.n_gaussians:,}")
+                print(f"  Training Time:     {time.time() - global_tic:.2f}s")
+                print(f"{'='*60}\n")
                 with open(
                     f"{self.stats_dir}/train_step{step:04d}_rank{self.world_rank}.json",
                     "w",
                 ) as f:
                     json.dump(stats, f)
                 data = {"step": step, "splats": self.splats.state_dict()}
+                if (
+                    isinstance(cfg.strategy, MCMCStrategy)
+                    and cfg.strategy.preallocate):
+                    data["n_active"] = self.strategy_state["n_active"]
                 if cfg.pose_opt:
                     if world_size > 1:
                         data["pose_adjust"] = self.pose_adjust.module.state_dict()
@@ -1231,7 +1346,7 @@ class Runner:
             stats.update(
                 {
                     "ellipse_time": ellipse_time,
-                    "num_GS": len(self.splats["means"]),
+                    "num_GS": self.n_gaussians,
                 }
             )
             if cfg.use_color_correction_metric:
@@ -1419,7 +1534,7 @@ class Runner:
             rasterize_mode=render_tab_state.rasterize_mode,
             camera_model=render_tab_state.camera_model,
         )  # [1, H, W, 3]
-        render_tab_state.total_gs_count = len(self.splats["means"])
+        render_tab_state.total_gs_count = self.n_gaussians
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
 
         if render_tab_state.render_mode == "rgb":
@@ -1491,6 +1606,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         ]
         for k in runner.splats.keys():
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+        if "n_active" in ckpts[0]:
+            runner.strategy_state["n_active"] = ckpts[0]["n_active"]
         if runner.post_processing_module is not None:
             pp_state = ckpts[0].get("post_processing")
             if pp_state is not None:
