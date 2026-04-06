@@ -1736,7 +1736,6 @@ class _RasterizeToPixels(torch.autograd.Function):
             masks,
             width,
             height,
-            tile_size,
             isect_offsets,
             flatten_ids,
         )
