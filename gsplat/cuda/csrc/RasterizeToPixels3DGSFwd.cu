@@ -331,9 +331,18 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const uint32_t grid_w = tile_offsets.size(-1);
     const uint32_t n_isects = flatten_ids.size(0);
 
-    // Each block covers a tile on the image. In total there are
-    // I * grid_height * grid_width blocks.
-    dim3 grid = {I, grid_h, grid_w};
+#ifdef BUILD_EXPERIMENTAL_TILE_SIZE
+    constexpr uint32_t TILE_SIZE = 8;
+    constexpr uint32_t CTA_SIZE = 32;
+#else
+    constexpr uint32_t TILE_SIZE = 16;
+    constexpr uint32_t CTA_SIZE = 64;
+#endif
+
+    const dim3 threads = dim3{CTA_SIZE, 1, 1};
+    const dim3 grid = {I, grid_h, grid_w};
+    const int64_t shmem_size =
+        CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 
     const int32_t channels = colors.size(-1);
     TORCH_CHECK(SupportedChannels::contains(channels),
@@ -342,15 +351,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
 
     auto launch_kernel = [&]<typename ChannelsT>() {
         constexpr uint32_t CDIM = ChannelsT::value;
-#ifdef BUILD_EXPERIMENTAL_TILE_SIZE
-        constexpr uint32_t TILE_SIZE = 8
-        constexpr uint32_t CTA_SIZE = 32
-#else
-        constexpr uint32_t TILE_SIZE = 16
-        constexpr uint32_t CTA_SIZE = 64
 
-        const int64_t shmem_size =
-            cta_size * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
         if (cudaFuncSetAttribute(
                 rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -371,7 +372,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
             : nullptr;        
 
         rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
-            <<<grid, dim3{cta_size, 1, 1}, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
                 N,
                 n_isects,
                 packed,
