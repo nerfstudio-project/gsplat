@@ -198,6 +198,167 @@ def depth_l1_loss(
 
 
 # ---------------------------------------------------------------------------
+# LiDAR losses
+# ---------------------------------------------------------------------------
+
+
+def _validate_lidar_shapes(
+    pred: Tensor, gt: Tensor, mask: Tensor | None, name: str
+) -> None:
+    """Validate that pred and gt have compatible shapes before flattening."""
+    if pred.shape != gt.shape:
+        raise ValueError(
+            f"{name}: pred shape {pred.shape} != gt shape {gt.shape}. "
+            "Shapes must match before flattening."
+        )
+    if mask is not None and mask.shape != pred.shape:
+        raise ValueError(
+            f"{name}: mask shape {mask.shape} != pred shape {pred.shape}. "
+            "Mask must have the same shape as pred/gt."
+        )
+
+
+def lidar_distance_loss(
+    pred_distance: Tensor,
+    gt_distance: Tensor,
+    valid_mask: Tensor | None = None,
+) -> Tensor:
+    """L1 loss on LiDAR hit distance (direct distance space, not disparity).
+
+    Unlike :func:`depth_l1_loss` which operates in inverse-depth (disparity)
+    space, this computes a direct L1 on the rendered distance along each LiDAR
+    ray vs. the measured ground-truth distance.  This is the standard loss used
+    by gsplat's ``camera_model="lidar"`` rendering path.
+
+    Args:
+        pred_distance: Predicted hit distance per ray, ``[..., 1]`` or ``[...]``.
+        gt_distance: Ground-truth measured distance per ray, same shape.
+        valid_mask: Optional boolean mask for valid (non-dropped, non-invalid)
+            rays.  When provided, only masked elements contribute to the loss.
+
+    Returns:
+        Scalar L1 distance loss.
+    """
+    _validate_lidar_shapes(
+        pred_distance, gt_distance, valid_mask, "lidar_distance_loss"
+    )
+    pred = pred_distance.reshape(-1)
+    gt = gt_distance.reshape(-1)
+    if valid_mask is not None:
+        mask = valid_mask.reshape(-1).bool()
+        pred = pred[mask]
+        gt = gt[mask]
+    if pred.numel() == 0:
+        return pred.sum()  # differentiable zero
+    return F.l1_loss(pred, gt)
+
+
+def lidar_intensity_loss(
+    pred_intensity: Tensor,
+    gt_intensity: Tensor,
+    valid_mask: Tensor | None = None,
+) -> Tensor:
+    """L1 loss on LiDAR return intensity.
+
+    Compares rendered intensity (from ``extra_signals``) against measured
+    ground-truth intensity for each valid LiDAR ray.
+
+    Args:
+        pred_intensity: Predicted intensity per ray, ``[..., 1]`` or ``[...]``.
+        gt_intensity: Ground-truth intensity per ray, same shape.
+        valid_mask: Optional boolean mask for valid rays.
+
+    Returns:
+        Scalar L1 intensity loss.
+    """
+    _validate_lidar_shapes(
+        pred_intensity, gt_intensity, valid_mask, "lidar_intensity_loss"
+    )
+    pred = pred_intensity.reshape(-1)
+    gt = gt_intensity.reshape(-1)
+    if valid_mask is not None:
+        mask = valid_mask.reshape(-1).bool()
+        pred = pred[mask]
+        gt = gt[mask]
+    if pred.numel() == 0:
+        return pred.sum()  # differentiable zero
+    return F.l1_loss(pred, gt)
+
+
+def lidar_raydrop_loss(
+    pred_raydrop: Tensor,
+    gt_raydrop: Tensor,
+    valid_mask: Tensor | None = None,
+) -> Tensor:
+    """Binary cross-entropy loss on LiDAR ray-drop prediction.
+
+    Supervises the predicted probability that a LiDAR ray was "dropped"
+    (returned no measurement) against the ground-truth drop mask.
+
+    Args:
+        pred_raydrop: Predicted raydrop logits per ray, ``[..., 1]`` or ``[...]``.
+        gt_raydrop: Ground-truth raydrop labels (0 or 1), same shape.
+        valid_mask: Optional boolean mask for valid rays (excludes invalid rays
+            but keeps dropped rays, since those are the positive class).
+
+    Returns:
+        Scalar BCE loss.
+    """
+    _validate_lidar_shapes(pred_raydrop, gt_raydrop, valid_mask, "lidar_raydrop_loss")
+    pred = pred_raydrop.reshape(-1)
+    gt = gt_raydrop.reshape(-1).float()
+    if valid_mask is not None:
+        mask = valid_mask.reshape(-1).bool()
+        pred = pred[mask]
+        gt = gt[mask]
+    if pred.numel() == 0:
+        return pred.sum()  # differentiable zero
+    return F.binary_cross_entropy_with_logits(pred, gt)
+
+
+def lidar_background_loss(
+    pred_opacity: Tensor,
+    background_mask: Tensor,
+    valid_mask: Tensor | None = None,
+) -> Tensor:
+    """BCE loss penalizing Gaussian opacity on background/sky LiDAR rays.
+
+    Encourages the model to keep opacity low along LiDAR rays that correspond
+    to sky or background (no physical surface), preventing floater artifacts
+    in empty space.
+
+    Args:
+        pred_opacity: Predicted accumulated opacity per ray, ``[..., 1]`` or ``[...]``.
+            Values should be in ``[0, 1]``.
+        background_mask: Boolean mask where True = background/sky ray.
+        valid_mask: Optional boolean mask for valid (non-invalid, non-dropped) rays.
+
+    Returns:
+        Scalar BCE loss.
+    """
+    if pred_opacity.shape != background_mask.shape:
+        raise ValueError(
+            f"lidar_background_loss: pred_opacity shape {pred_opacity.shape} != "
+            f"background_mask shape {background_mask.shape}."
+        )
+    if valid_mask is not None and valid_mask.shape != pred_opacity.shape:
+        raise ValueError(
+            f"lidar_background_loss: valid_mask shape {valid_mask.shape} != "
+            f"pred_opacity shape {pred_opacity.shape}."
+        )
+    pred = pred_opacity.reshape(-1).clamp(0, 1)
+    # Target: 0 for background rays (want low opacity), 1 for foreground
+    target = (~background_mask.reshape(-1).bool()).float()
+    if valid_mask is not None:
+        mask = valid_mask.reshape(-1).bool()
+        pred = pred[mask]
+        target = target[mask]
+    if pred.numel() == 0:
+        return pred.sum()  # differentiable zero
+    return F.binary_cross_entropy(pred, target)
+
+
+# ---------------------------------------------------------------------------
 # Total variation
 # ---------------------------------------------------------------------------
 
