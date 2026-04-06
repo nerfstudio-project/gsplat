@@ -92,7 +92,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
         masks,
         image_width,
         image_height,
-        tile_size,
         tile_offsets,
         flatten_ids,
         renders,
