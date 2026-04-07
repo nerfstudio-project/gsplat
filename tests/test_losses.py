@@ -14,6 +14,10 @@ from gsplat.losses import (
     create_ssim_window,
     depth_l1_loss,
     l1_loss,
+    lidar_background_loss,
+    lidar_distance_loss,
+    lidar_intensity_loss,
+    lidar_raydrop_loss,
     mse_loss,
     opacity_reg_loss,
     scale_reg_loss,
@@ -197,6 +201,143 @@ class TestDepthL1Loss:
         gt = torch.tensor([4.0])
         loss = depth_l1_loss(pred, gt, scene_scale=1.0)
         assert torch.isclose(loss, torch.tensor(0.25))
+
+
+# ---------------------------------------------------------------------------
+# LiDAR losses
+# ---------------------------------------------------------------------------
+
+
+class TestLidarDistanceLoss:
+    def test_identical_distances(self):
+        d = torch.rand(100).clamp(min=0.1)
+        assert torch.isclose(lidar_distance_loss(d, d), torch.tensor(0.0), atol=1e-6)
+
+    def test_positive_for_different(self):
+        pred = torch.tensor([1.0, 2.0, 4.0])
+        gt = torch.tensor([2.0, 3.0, 1.0])
+        assert lidar_distance_loss(pred, gt).item() > 0.0
+
+    def test_known_value(self):
+        pred = torch.tensor([1.0, 3.0])
+        gt = torch.tensor([2.0, 5.0])
+        # L1: (|1-2| + |3-5|) / 2 = 1.5
+        assert torch.isclose(lidar_distance_loss(pred, gt), torch.tensor(1.5))
+
+    def test_valid_mask(self):
+        pred = torch.tensor([1.0, 100.0, 3.0])
+        gt = torch.tensor([2.0, 200.0, 5.0])
+        mask = torch.tensor([True, False, True])
+        # Only indices 0 and 2: (|1-2| + |3-5|) / 2 = 1.5
+        assert torch.isclose(
+            lidar_distance_loss(pred, gt, valid_mask=mask), torch.tensor(1.5)
+        )
+
+    def test_empty_mask_returns_zero(self):
+        pred = torch.tensor([1.0, 2.0])
+        gt = torch.tensor([3.0, 4.0])
+        mask = torch.tensor([False, False])
+        # F.l1_loss on empty tensors returns 0
+        loss = lidar_distance_loss(pred, gt, valid_mask=mask)
+        assert torch.isfinite(loss)
+
+    def test_gradient_flows(self):
+        pred = torch.tensor([1.0, 3.0], requires_grad=True)
+        gt = torch.tensor([2.0, 5.0])
+        lidar_distance_loss(pred, gt).backward()
+        assert pred.grad is not None
+        assert torch.all(torch.isfinite(pred.grad))
+
+    def test_nd_shapes(self):
+        pred = torch.rand(2, 64, 1)
+        gt = torch.rand(2, 64, 1)
+        loss = lidar_distance_loss(pred, gt)
+        assert loss.ndim == 0
+
+
+class TestLidarIntensityLoss:
+    def test_identical_intensities(self):
+        x = torch.rand(100)
+        assert torch.isclose(lidar_intensity_loss(x, x), torch.tensor(0.0), atol=1e-6)
+
+    def test_positive_for_different(self):
+        pred = torch.tensor([0.1, 0.5, 0.9])
+        gt = torch.tensor([0.2, 0.3, 0.8])
+        assert lidar_intensity_loss(pred, gt).item() > 0.0
+
+    def test_valid_mask(self):
+        pred = torch.tensor([0.1, 999.0, 0.3])
+        gt = torch.tensor([0.2, 0.0, 0.5])
+        mask = torch.tensor([True, False, True])
+        expected = F.l1_loss(torch.tensor([0.1, 0.3]), torch.tensor([0.2, 0.5]))
+        assert torch.isclose(
+            lidar_intensity_loss(pred, gt, valid_mask=mask), expected
+        )
+
+    def test_gradient_flows(self):
+        pred = torch.tensor([0.5, 0.8], requires_grad=True)
+        gt = torch.tensor([0.3, 0.9])
+        lidar_intensity_loss(pred, gt).backward()
+        assert pred.grad is not None
+
+
+class TestLidarRaydropLoss:
+    def test_perfect_prediction(self):
+        # Large positive logit for dropped=1, large negative for dropped=0
+        pred = torch.tensor([10.0, -10.0])
+        gt = torch.tensor([1.0, 0.0])
+        loss = lidar_raydrop_loss(pred, gt)
+        assert loss.item() < 0.01
+
+    def test_wrong_prediction_high_loss(self):
+        pred = torch.tensor([-10.0, 10.0])
+        gt = torch.tensor([1.0, 0.0])
+        loss = lidar_raydrop_loss(pred, gt)
+        assert loss.item() > 5.0
+
+    def test_valid_mask(self):
+        pred = torch.tensor([10.0, 0.0, -10.0])
+        gt = torch.tensor([1.0, 1.0, 0.0])
+        mask = torch.tensor([True, False, True])
+        loss = lidar_raydrop_loss(pred, gt, valid_mask=mask)
+        # Only indices 0, 2: perfect predictions
+        assert loss.item() < 0.01
+
+    def test_gradient_flows(self):
+        pred = torch.tensor([0.0, 0.0], requires_grad=True)
+        gt = torch.tensor([1.0, 0.0])
+        lidar_raydrop_loss(pred, gt).backward()
+        assert pred.grad is not None
+
+
+class TestLidarBackgroundLoss:
+    def test_correct_foreground_opacity(self):
+        # High opacity on foreground rays, low on background
+        pred_opacity = torch.tensor([0.99, 0.99, 0.01, 0.01])
+        bg_mask = torch.tensor([False, False, True, True])
+        loss = lidar_background_loss(pred_opacity, bg_mask)
+        assert loss.item() < 0.1
+
+    def test_wrong_opacity_high_loss(self):
+        # High opacity on background rays
+        pred_opacity = torch.tensor([0.01, 0.01, 0.99, 0.99])
+        bg_mask = torch.tensor([False, False, True, True])
+        loss = lidar_background_loss(pred_opacity, bg_mask)
+        assert loss.item() > 1.0
+
+    def test_valid_mask(self):
+        pred_opacity = torch.tensor([0.99, 0.5, 0.01])
+        bg_mask = torch.tensor([False, False, True])
+        mask = torch.tensor([True, False, True])
+        loss = lidar_background_loss(pred_opacity, bg_mask, valid_mask=mask)
+        # Only indices 0 (fg, high opacity=good) and 2 (bg, low opacity=good)
+        assert loss.item() < 0.1
+
+    def test_gradient_flows(self):
+        pred = torch.tensor([0.5, 0.5], requires_grad=True)
+        bg_mask = torch.tensor([False, True])
+        lidar_background_loss(pred, bg_mask).backward()
+        assert pred.grad is not None
 
 
 # ---------------------------------------------------------------------------
