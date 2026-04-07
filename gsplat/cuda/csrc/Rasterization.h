@@ -224,7 +224,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
-    const uint32_t tile_size,
     // camera
     const at::Tensor viewmats0,               // [..., C, 4, 4]
     const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
