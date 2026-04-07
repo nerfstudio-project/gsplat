@@ -5,7 +5,7 @@ Train on an NCore v4 Capture
 
 The :code:`examples/simple_trainer.py` script supports training a
 `3D Gaussian Splatting <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_
-model on an `NCore v4 <https://docs.nvidia.com/ncore/>`_ capture.
+model on an `NCore v4 <https://nvidia.github.io/ncore/>`_ capture.
 Point ``--data-dir`` at the sequence meta-JSON file and set ``--data-type ncore``:
 
 .. code-block:: bash
