@@ -32,10 +32,102 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
-// Evaluate spherical harmonics bases at unit direction for high orders using
-// approach described by Efficient Spherical Harmonic Evaluation, Peter-Pike
-// Sloan, JCGT 2013 See https://jcgt.org/published/0002/02/06/ for reference
-// implementation
+// ============================================================
+// SNUGBOX + AccuTile helper functions
+// (ported from test_viewer/src/cuda/Intersect.cu)
+// ============================================================
+
+__device__ inline float2 accutile_ellipse_intersection(
+    float A, float B, float C, float disc, float t, float2 p,
+    bool isY, float coord
+) {
+    float p_u   = isY ? p.y : p.x;
+    float p_v   = isY ? p.x : p.y;
+    float coeff = isY ? A : C;
+
+    float h         = coord - p_u;
+    float sqrt_term = sqrtf(disc * h * h + t * coeff);
+
+    return {(-B * h - sqrt_term) / coeff + p_v, (-B * h + sqrt_term) / coeff + p_v};
+}
+
+__device__ inline uint32_t accutile_process_tiles(
+    float A, float B, float C, float disc, float t, float2 p,
+    float2 bbox_min, float2 bbox_max, float2 bbox_argmin, float2 bbox_argmax,
+    int2 rect_min, int2 rect_max,
+    uint32_t tile_size, uint32_t tile_width, bool isY,
+    int64_t iid_enc, uint32_t tile_n_bits, int64_t depth_id_enc,
+    uint32_t flatten_idx, int64_t *isect_ids, int32_t *flatten_ids,
+    int64_t *cur_idx
+) {
+    float BLOCK = (float)tile_size;
+
+    if (isY) {
+        rect_min    = {rect_min.y, rect_min.x};
+        rect_max    = {rect_max.y, rect_max.x};
+        bbox_min    = {bbox_min.y, bbox_min.x};
+        bbox_max    = {bbox_max.y, bbox_max.x};
+        bbox_argmin = {bbox_argmin.y, bbox_argmin.x};
+        bbox_argmax = {bbox_argmax.y, bbox_argmax.x};
+    }
+
+    uint32_t tiles_count = 0;
+    float2 intersect_min_line, intersect_max_line;
+    float ellipse_min, ellipse_max;
+    float min_line, max_line;
+
+    intersect_max_line = {bbox_max.y, bbox_min.y};
+
+    min_line = rect_min.x * BLOCK;
+    if (bbox_min.x <= min_line) {
+        intersect_min_line = accutile_ellipse_intersection(A, B, C, disc, t, p, isY, min_line);
+    } else {
+        intersect_min_line = intersect_max_line;
+    }
+
+#pragma unroll 1
+    for (int u = rect_min.x; u < rect_max.x; ++u) {
+        max_line = min_line + BLOCK;
+        if (max_line <= bbox_max.x) {
+            intersect_max_line = accutile_ellipse_intersection(A, B, C, disc, t, p, isY, max_line);
+        }
+
+        if (min_line <= bbox_argmin.y && bbox_argmin.y < max_line) {
+            ellipse_min = bbox_min.y;
+        } else {
+            ellipse_min = min(intersect_min_line.x, intersect_max_line.x);
+        }
+
+        if (min_line <= bbox_argmax.y && bbox_argmax.y < max_line) {
+            ellipse_max = bbox_max.y;
+        } else {
+            ellipse_max = max(intersect_min_line.y, intersect_max_line.y);
+        }
+
+        int min_tile_v = max(rect_min.y, min(rect_max.y, (int)(ellipse_min / BLOCK)));
+        int max_tile_v = min(rect_max.y, max(rect_min.y, (int)(ellipse_max / BLOCK + 1)));
+
+        tiles_count += max_tile_v - min_tile_v;
+
+        if (isect_ids != nullptr) {
+#pragma unroll 1
+            for (int v = min_tile_v; v < max_tile_v; v++) {
+                int64_t tile_id       = isY ? (int64_t)(u * tile_width + v) : (int64_t)(v * tile_width + u);
+                isect_ids[*cur_idx]   = iid_enc | (tile_id << 32) | depth_id_enc;
+                flatten_ids[*cur_idx] = static_cast<int32_t>(flatten_idx);
+                ++(*cur_idx);
+            }
+        }
+
+        intersect_min_line = intersect_max_line;
+        min_line           = max_line;
+    }
+    return tiles_count;
+}
+
+// ============================================================
+// Main intersection kernel
+// ============================================================
 
 template <typename scalar_t>
 __global__ void intersect_tile_kernel(
@@ -52,6 +144,8 @@ __global__ void intersect_tile_kernel(
     const scalar_t *__restrict__ means2d,            // [..., N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [..., N, 2] or [nnz, 2]
     const scalar_t *__restrict__ depths,             // [..., N] or [nnz]
+    const float *__restrict__ conics,                // [..., N, 3] or [nnz, 3]  (Sigma^{-1} upper tri)
+    const float *__restrict__ opacities,             // [..., N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [..., N] or [nnz]
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -78,65 +172,130 @@ __global__ void intersect_tile_kernel(
         return;
     }
 
-    vec2 mean2d = glm::make_vec2(means2d + 2 * idx);
+    float2 mean2d = {(float)means2d[2 * idx], (float)means2d[2 * idx + 1]};
 
-    float tile_radius_x = radius_x / static_cast<float>(tile_size);
-    float tile_radius_y = radius_y / static_cast<float>(tile_size);
-    float tile_x = mean2d.x / static_cast<float>(tile_size);
-    float tile_y = mean2d.y / static_cast<float>(tile_size);
+    int64_t iid_enc      = 0;
+    int64_t depth_id_enc = 0;
+    if (!first_pass) {
+        int64_t iid;
+        if (packed) {
+            // parallelize over nnz
+            iid = image_ids[idx];
+        } else {
+            // parallelize over I * N
+            iid = idx / N;
+        }
+        iid_enc = iid << (32 + tile_n_bits);
 
-    // tile_min is inclusive, tile_max is exclusive
-    uint2 tile_min, tile_max;
-    tile_min.x = min(max(0, (uint32_t)floor(tile_x - tile_radius_x)), tile_width);
-    tile_min.y =
-        min(max(0, (uint32_t)floor(tile_y - tile_radius_y)), tile_height);
-    tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius_x)), tile_width);
-    tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius_y)), tile_height);
+        // tolerance for negative depth
+        int32_t depth_i32 = *(int32_t *)&(depths[idx]);  // Bit-level reinterpret
+        depth_id_enc = static_cast<uint32_t>(depth_i32);  // Zero-extend to 64-bit
+    }
 
-    if (first_pass) {
-        // first pass only writes out tiles_per_gauss
-        tiles_per_gauss[idx] = static_cast<int32_t>(
-            (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
+    if (conics != nullptr && opacities != nullptr) {
+        // AccuTile: conservative ellipse intersection using the full 2x2 inverse covariance.
+        // conic = (a, b, c) = upper triangle of Sigma^{-1}
+        // Quadratic form: a*dx^2 + 2*b*dx*dy + c*dy^2
+        const float A = conics[idx * 3];
+        const float B = conics[idx * 3 + 1];
+        const float C = conics[idx * 3 + 2];
+
+        // disc = B^2 - A*C = -(det Sigma^{-1})
+        float disc = B * B - A * C;
+
+        // Opacity-aware isocontour level: alpha = opacity * exp(-0.5 * q) >= ALPHA_THRESHOLD
+        // => q <= 2 * ln(opacity / ALPHA_THRESHOLD). Cap at GAUSSIAN_EXTEND^2 (same as the gsplat radius budget).
+        const float opacity = opacities[idx];
+        float t = fminf(GAUSSIAN_EXTEND * GAUSSIAN_EXTEND, 2.0f * __logf(opacity / ALPHA_THRESHOLD));
+
+        // SNUGBOX: tight axis-aligned bounding box of the ellipse
+        float neg_t_over_disc = -t / disc;
+        float x_extent = sqrtf(neg_t_over_disc * C);
+        float y_extent = sqrtf(neg_t_over_disc * A);
+
+        float2 bbox_min = {mean2d.x - x_extent, mean2d.y - y_extent};
+        float2 bbox_max = {mean2d.x + x_extent, mean2d.y + y_extent};
+
+        float Bx_over_C    = B * x_extent / C;
+        float By_over_A    = B * y_extent / A;
+        float2 bbox_argmin = {mean2d.y + Bx_over_C, mean2d.x + By_over_A};
+        float2 bbox_argmax = {mean2d.y - Bx_over_C, mean2d.x - By_over_A};
+
+        float tile_size_f = (float)tile_size;
+        int2 rect_min = {max(0, min((int)tile_width,  (int)(bbox_min.x / tile_size_f))),
+                         max(0, min((int)tile_height, (int)(bbox_min.y / tile_size_f)))};
+        int2 rect_max = {max(0, min((int)tile_width,  (int)(bbox_max.x / tile_size_f + 1.f))),
+                         max(0, min((int)tile_height, (int)(bbox_max.y / tile_size_f + 1.f)))};
+
+        int y_span = rect_max.y - rect_min.y;
+        int x_span = rect_max.x - rect_min.x;
+        if (y_span * x_span == 0) {
+            if (first_pass) tiles_per_gauss[idx] = 0;
+            return;
+        }
+
+        bool isY = y_span < x_span;
+        int64_t cur_idx = first_pass ? 0 : ((idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1]);
+
+        uint32_t count = accutile_process_tiles(
+            A, B, C, disc, t, mean2d,
+            bbox_min, bbox_max, bbox_argmin, bbox_argmax,
+            rect_min, rect_max,
+            tile_size, tile_width, isY,
+            iid_enc, tile_n_bits, depth_id_enc, idx,
+            first_pass ? nullptr : isect_ids,
+            first_pass ? nullptr : flatten_ids,
+            &cur_idx
         );
-        return;
-    }
 
-    int64_t iid; // image id
-    if (packed) {
-        // parallelize over nnz
-        iid = image_ids[idx];
+        if (first_pass) {
+            tiles_per_gauss[idx] = static_cast<int32_t>(count);
+        }
     } else {
-        // parallelize over I * N
-        iid = idx / N;
-    }
-    const int64_t iid_enc = iid << (32 + tile_n_bits);
+        // AABB fallback: used when conics/opacities are not available (e.g. 2DGS).
+        float tile_radius_x = radius_x / static_cast<float>(tile_size);
+        float tile_radius_y = radius_y / static_cast<float>(tile_size);
+        float tile_x = mean2d.x / static_cast<float>(tile_size);
+        float tile_y = mean2d.y / static_cast<float>(tile_size);
 
-    // tolerance for negative depth
-    int32_t depth_i32 = *(int32_t *)&(depths[idx]);  // Bit-level reinterpret
-    int64_t depth_id_enc = static_cast<uint32_t>(depth_i32);  // Zero-extend to 64-bit
-    // int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
-    
-    int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
-    for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
-        for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
-            int64_t tile_id = i * tile_width + j;
-            // e.g. tile_n_bits = 22:
-            // image id (10 bits) | tile id (22 bits) | depth (32 bits)
-            isect_ids[cur_idx] = iid_enc | (tile_id << 32) | depth_id_enc;
-            // the flatten index in [I * N] or [nnz]
-            flatten_ids[cur_idx] = static_cast<int32_t>(idx);
-            ++cur_idx;
+        // tile_min is inclusive, tile_max is exclusive
+        int2 tile_min, tile_max;
+        tile_min.x = min(max(0, (int32_t)floor(tile_x - tile_radius_x)), tile_width);
+        tile_min.y = min(max(0, (int32_t)floor(tile_y - tile_radius_y)), tile_height);
+        tile_max.x = min(max(0, (int32_t)ceil(tile_x + tile_radius_x)), tile_width);
+        tile_max.y = min(max(0, (int32_t)ceil(tile_y + tile_radius_y)), tile_height);
+
+        if (first_pass) {
+            tiles_per_gauss[idx] = static_cast<int32_t>(
+                (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
+            );
+            return;
+        }
+
+        int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
+        for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
+            for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+                int64_t tile_id = i * tile_width + j;
+                // e.g. tile_n_bits = 22:
+                // image id (10 bits) | tile id (22 bits) | depth (32 bits)
+                isect_ids[cur_idx] = iid_enc | (tile_id << 32) | depth_id_enc;
+                // the flatten index in [I * N] or [nnz]
+                flatten_ids[cur_idx] = static_cast<int32_t>(idx);
+                ++cur_idx;
+            }
         }
     }
 }
 
 void launch_intersect_tile_kernel(
     // inputs
-    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
-    const at::Tensor depths,                     // [..., N] or [nnz]
-    const at::optional<at::Tensor> image_ids,    // [nnz]
-    const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const at::Tensor means2d,                           // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                             // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                            // [..., N] or [nnz]
+    const at::optional<at::Tensor> conics,              // [..., N, 3] or [nnz, 3] 
+    const at::optional<at::Tensor> opacities,           // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,           // [nnz]
+    const at::optional<at::Tensor> gaussian_ids,        // [nnz]
     const uint32_t I,
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -201,6 +360,12 @@ void launch_intersect_tile_kernel(
                     means2d.const_data_ptr<scalar_t>(),
                     radii.const_data_ptr<int32_t>(),
                     depths.const_data_ptr<scalar_t>(),
+                    conics.has_value()
+                        ? conics.value().const_data_ptr<float>()
+                        : nullptr,
+                    opacities.has_value()
+                        ? opacities.value().const_data_ptr<float>()
+                        : nullptr,
                     cum_tiles_per_gauss.has_value()
                         ? cum_tiles_per_gauss.value().const_data_ptr<int64_t>()
                         : nullptr,

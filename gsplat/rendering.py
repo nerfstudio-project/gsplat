@@ -1117,6 +1117,8 @@ def rasterization(
             n_images=I,
             image_ids=image_ids,
             gaussian_ids=gaussian_ids,
+            conics=None if with_ut else conics,
+            opacities=None if with_ut else opacities,
         )
 
     # print("rank", world_rank, "Before isect_offset_encode")
@@ -1530,6 +1532,8 @@ def _rasterization(
             n_images=I,
             image_ids=image_ids,
             gaussian_ids=gaussian_ids,
+            conics=None if with_ut else conics,
+            opacities=None if with_ut else opacities,
         )
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))

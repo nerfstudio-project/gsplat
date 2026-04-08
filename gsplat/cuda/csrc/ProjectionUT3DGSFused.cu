@@ -245,7 +245,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     // compute the inverse of the 2d covariance
     mat2 covar2d_inv = glm::inverse(covar2d);
 
-    float extend = 3.33f;
+    float extend = GAUSSIAN_EXTEND;
     // Note: the optimizations from StopThePop (https://arxiv.org/pdf/2402.00525) give identical
     // results when the Gaussian's contribution is evaluated in 2D from the projected 2D Gaussian.
     // However, with UT, the Gaussian's contribution is evaluated in 3D by intersecting the ray
@@ -264,7 +264,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
         }
         // Compute opacity-aware bounding box.
         // https://arxiv.org/pdf/2402.00525 Section B.2
-        extend = min(extend, sqrt(2.0f * __logf(opacity / ALPHA_THRESHOLD)));
+        extend = min(GAUSSIAN_EXTEND, sqrt(2.0f * __logf(opacity / ALPHA_THRESHOLD)));
     }
 
     // compute tight rectangular bounding box (non differentiable)

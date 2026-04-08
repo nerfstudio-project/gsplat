@@ -29,11 +29,13 @@ namespace gsplat {
 
 void launch_intersect_tile_kernel(
     // inputs
-    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
-    const at::Tensor depths,                     // [..., N] or [nnz]
-    const at::optional<at::Tensor> image_ids,    // [nnz]
-    const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const at::Tensor means2d,                           // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                             // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                            // [..., N] or [nnz]
+    const at::optional<at::Tensor> conics,              // [..., N, 3] or [nnz, 3]
+    const at::optional<at::Tensor> opacities,           // [..., N] or [nnz]      
+    const at::optional<at::Tensor> image_ids,           // [nnz]
+    const at::optional<at::Tensor> gaussian_ids,        // [nnz]
     const uint32_t I,
     const uint32_t tile_size,
     const uint32_t tile_width,

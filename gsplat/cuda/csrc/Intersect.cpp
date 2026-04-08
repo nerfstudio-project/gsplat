@@ -31,11 +31,13 @@
 namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
-    const at::Tensor &means2d,                    // [..., N, 2] or [nnz, 2]
-    const at::Tensor &radii,                      // [..., N, 2] or [nnz, 2]
-    const at::Tensor &depths,                     // [..., N] or [nnz]
-    const at::optional<at::Tensor> &image_ids,    // [nnz]
-    const at::optional<at::Tensor> &gaussian_ids, // [nnz]
+    const at::Tensor &means2d,                           // [..., N, 2] or [nnz, 2]
+    const at::Tensor &radii,                             // [..., N, 2] or [nnz, 2]
+    const at::Tensor &depths,                            // [..., N] or [nnz]
+    const at::optional<at::Tensor> &conics,              // [..., N, 3] or [nnz, 3] 
+    const at::optional<at::Tensor> &opacities,           // [..., N] or [nnz]        
+    const at::optional<at::Tensor> &image_ids,           // [nnz]
+    const at::optional<at::Tensor> &gaussian_ids,        // [nnz]
     int64_t I,
     int64_t tile_size,
     int64_t tile_width,
@@ -47,6 +49,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     CHECK_INPUT(means2d);
     CHECK_INPUT(radii);
     CHECK_INPUT(depths);
+    if (conics.has_value()) { CHECK_INPUT(conics.value()); }
+    if (opacities.has_value()) { CHECK_INPUT(opacities.value()); }
 
     auto opt = depths.options();
     uint32_t n_elements = means2d.numel() / 2;
@@ -83,6 +87,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             means2d,
             radii,
             depths,
+            conics, // at::optional, AccuTile when provided, AABB fallback otherwise
+            opacities, // at::optional
             packed ? image_ids : c10::nullopt,
             packed ? gaussian_ids : c10::nullopt,
             I,
@@ -120,6 +126,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             means2d,
             radii,
             depths,
+            conics, // at::optional, AccuTile when provided, AABB fallback otherwise
+            opacities, // at::optional
             packed ? image_ids : c10::nullopt,
             packed ? gaussian_ids : c10::nullopt,
             I,

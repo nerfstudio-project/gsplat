@@ -72,6 +72,8 @@ enum CameraModelType {
 
 #define N_THREADS_PACKED 256
 #define ALPHA_THRESHOLD (1.f / 255.f)
+// GAUSSIAN_EXTEND determines where the gaussian is truncated in standard deviations."
+#define GAUSSIAN_EXTEND 3.33f
 // MAX_ALPHA and TRANSMITTANCE_THRESHOLD are chosen so that the equivalent of
 // a maximal opacity Gaussian has to be rasterized twice to reach the threshold,
 // without getting the transmittance too small for numerical stability of

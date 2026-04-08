@@ -200,19 +200,19 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     // check if the points are in the image region
     float radius_x, radius_y;
     if (valid) {
-        float extend = 3.33f;
+        float extend = GAUSSIAN_EXTEND;
         if (opacities != nullptr) {
             float opacity = opacities[bid * N + gid];
             if (compensations != nullptr) {
                 // we assume compensation term will be applied later on.
                 opacity *= compensation;
-            }    
+            }
             if (opacity < ALPHA_THRESHOLD) {
                 valid = false;
             }
             // Compute opacity-aware bounding box.
             // https://arxiv.org/pdf/2402.00525 Section B.2
-            extend = min(extend, sqrt(2.0f * __logf(opacity / ALPHA_THRESHOLD)));
+            extend = min(GAUSSIAN_EXTEND, sqrt(2.0f * __logf(opacity / ALPHA_THRESHOLD)));
         }
         
         // compute tight rectangular bounding box (non differentiable)
