@@ -127,7 +127,7 @@ class Config:
     # Initial scale of GS
     init_scale: float = 0.1
     # Weight for SSIM loss
-    ssim_lambda: float = 0.2
+    ssim_lambda: float = 0.1
 
     # Near plane clipping distance
     near_plane: float = 0.01
@@ -153,11 +153,11 @@ class Config:
     # LR for 3D point positions
     means_lr: float = 1.6e-4
     # LR for Gaussian scale factors
-    scales_lr: float = 4e-3
+    scales_lr: float = 5e-3
     # LR for alpha blending weights
-    opacities_lr: float = 4e-2
+    opacities_lr: float = 5e-2
     # LR for orientation (quaternions)
-    quats_lr: float = 8e-4
+    quats_lr: float = 1e-3
     # LR for SH band 0 (brightness)
     sh0_lr: float = 2.5e-3
     # LR for higher-order SH (detail)
@@ -166,7 +166,7 @@ class Config:
     # Opacity regularization
     opacity_reg: float = 0.02
     # Scale regularization
-    scale_reg: float = 0.01
+    scale_reg: float = 0.005
 
     # Enable appearance optimization. (experimental)
     app_opt: bool = False
@@ -247,7 +247,7 @@ class Config:
     # Learning rate for deferred features (per-Gaussian features in splats)
     deferred_features_lr: float = 15e-3
     # Learning rate for deferred MLP
-    deferred_mlp_lr: float = 72e-5
+    deferred_mlp_lr: float = 68e-5
     # Enable exponential decay for deferred features LR (ends at deferred_features_lr_decay_final of initial value)
     deferred_features_lr_decay: bool = True
     # Final multiplier for deferred features LR decay (e.g., 0.01 means LR ends at 1% of initial)
