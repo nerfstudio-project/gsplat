@@ -44,16 +44,15 @@ device = torch.device("cuda:0")
 
 @pytest.fixture
 def gaussians(
+    C: int,
+    N: int,
     batch_dims: Tuple[int, ...],
     per_view_color: bool,
     sh_degree: Optional[int],
     render_mode: RenderMode,
     extra_signals_info: Optional[tuple],
 ):
-    N = 10_000
-
     gaussians = SimpleNamespace()
-    gaussians.C = 3
     gaussians.means = torch.rand(batch_dims + (N, 3), device=device)
     gaussians.quats = torch.randn(batch_dims + (N, 4), device=device)
     gaussians.scales = torch.rand(batch_dims + (N, 3), device=device)
@@ -65,12 +64,10 @@ def gaussians(
         gaussians.colors = None
     elif per_view_color:
         if sh_degree is None:
-            gaussians.colors = torch.rand(
-                batch_dims + (gaussians.C, N, 3), device=device
-            )
+            gaussians.colors = torch.rand(batch_dims + (C, N, 3), device=device)
         else:
             gaussians.colors = torch.rand(
-                batch_dims + (gaussians.C, N, (sh_degree + 1) ** 2, 3), device=device
+                batch_dims + (C, N, (sh_degree + 1) ** 2, 3), device=device
             )
     else:
         if sh_degree is None:
@@ -90,13 +87,13 @@ def gaussians(
         if per_view_color:
             if gaussians.extra_signals_sh_degree is None:
                 gaussians.extra_signals = torch.rand(
-                    batch_dims + (gaussians.C, N, extra_signals_size), device=device
+                    batch_dims + (C, N, extra_signals_size), device=device
                 )
             else:
                 gaussians.extra_signals = torch.rand(
                     batch_dims
                     + (
-                        gaussians.C,
+                        C,
                         N,
                         (gaussians.extra_signals_sh_degree + 1) ** 2,
                         extra_signals_size,
@@ -124,7 +121,7 @@ def gaussians(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
-    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed",
+    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed,C,N",
     [
         pytest.param(
             *params,
@@ -164,6 +161,8 @@ def gaussians(
                 ["pinhole"],  # camera_model
                 [None],  # extra_signals_info
                 [False],  # distributed
+                [3],  # C (number of cameras)
+                [10_000],  # N (number of gaussians)
             ),
             # 3DGUT
             product(
@@ -181,6 +180,8 @@ def gaussians(
                     (3, 3),
                 ],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
                 [False],  # distributed
+                [3],  # C (number of cameras)
+                [10_000],  # N (number of gaussians)
             ),
             # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
             # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
@@ -197,6 +198,8 @@ def gaussians(
                 ["pinhole"],  # camera_model
                 [None, (None, 20)],  # extra_signals_info — (None,20) triggers padding
                 [False],  # distributed
+                [3],  # C (number of cameras)
+                [10_000],  # N (number of gaussians)
             ),
             # Distributed rendering (single-rank): exercises the all-gather /
             # scatter code path.  Constraints: batch_dims=(), no per_view_color.
@@ -211,6 +214,8 @@ def gaussians(
                 ["pinhole"],  # camera_model
                 [None],  # extra_signals_info
                 [True],  # distributed
+                [3],  # C (number of cameras)
+                [10_000],  # N (number of gaussians)
             ),
         )
     ],
@@ -226,6 +231,8 @@ def test_rasterization(
     camera_model: str,
     extra_signals_info: Optional[tuple],
     distributed: bool,
+    C: int,
+    N: int,
     gaussians: SimpleNamespace,
 ):
     if distributed and not torch.distributed.is_initialized():
@@ -252,8 +259,8 @@ def test_rasterization(
     Ks = torch.tensor(
         [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
         device=device,
-    ).expand(batch_dims + (gaussians.C, -1, -1))
-    viewmats = torch.eye(4, device=device).expand(batch_dims + (gaussians.C, -1, -1))
+    ).expand(batch_dims + (C, -1, -1))
+    viewmats = torch.eye(4, device=device).expand(batch_dims + (C, -1, -1))
 
     renders, alphas, meta = rasterization(
         means=gaussians.means,
@@ -284,7 +291,7 @@ def test_rasterization(
         expected_channels += 1
     assert renders.shape == (
         *batch_dims,
-        gaussians.C,
+        C,
         height,
         width,
         expected_channels,
