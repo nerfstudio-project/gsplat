@@ -23,6 +23,7 @@ pytest <THIS_PY_FILE> -s
 """
 
 from itertools import product, chain
+from types import SimpleNamespace
 from typing import Optional, Tuple
 
 import gsplat
@@ -39,6 +40,86 @@ from gsplat.rendering import (
 from gsplat.cuda._constants import ALPHA_THRESHOLD
 
 device = torch.device("cuda:0")
+
+
+@pytest.fixture
+def gaussians(
+    batch_dims: Tuple[int, ...],
+    per_view_color: bool,
+    sh_degree: Optional[int],
+    render_mode: RenderMode,
+    extra_signals_info: Optional[tuple],
+):
+    N = 10_000
+
+    gaussians = SimpleNamespace()
+    gaussians.C = 3
+    gaussians.means = torch.rand(batch_dims + (N, 3), device=device)
+    gaussians.quats = torch.randn(batch_dims + (N, 4), device=device)
+    gaussians.scales = torch.rand(batch_dims + (N, 3), device=device)
+    gaussians.opacities = torch.rand(batch_dims + (N,), device=device)
+
+    # Depth-only modes with no SH and no per_view_color pass colors=None.
+    # (per_view_color and sh_degree combos are already filtered by skipif above.)
+    if not render_mode_has_color(render_mode):
+        gaussians.colors = None
+    elif per_view_color:
+        if sh_degree is None:
+            gaussians.colors = torch.rand(
+                batch_dims + (gaussians.C, N, 3), device=device
+            )
+        else:
+            gaussians.colors = torch.rand(
+                batch_dims + (gaussians.C, N, (sh_degree + 1) ** 2, 3), device=device
+            )
+    else:
+        if sh_degree is None:
+            gaussians.colors = torch.rand(batch_dims + (N, 3), device=device)
+        else:
+            gaussians.colors = torch.rand(
+                batch_dims + (N, (sh_degree + 1) ** 2, 3), device=device
+            )
+
+    if extra_signals_info is None:
+        gaussians.extra_signals_sh_degree = None
+        gaussians.extra_signals = None
+    else:
+        gaussians.extra_signals_sh_degree = extra_signals_info[0]
+        extra_signals_size = extra_signals_info[1]
+
+        if per_view_color:
+            if gaussians.extra_signals_sh_degree is None:
+                gaussians.extra_signals = torch.rand(
+                    batch_dims + (gaussians.C, N, extra_signals_size), device=device
+                )
+            else:
+                gaussians.extra_signals = torch.rand(
+                    batch_dims
+                    + (
+                        gaussians.C,
+                        N,
+                        (gaussians.extra_signals_sh_degree + 1) ** 2,
+                        extra_signals_size,
+                    ),
+                    device=device,
+                )
+        else:
+            if gaussians.extra_signals_sh_degree is None:
+                gaussians.extra_signals = torch.rand(
+                    batch_dims + (N, extra_signals_size), device=device
+                )
+            else:
+                gaussians.extra_signals = torch.rand(
+                    batch_dims
+                    + (
+                        N,
+                        (gaussians.extra_signals_sh_degree + 1) ** 2,
+                        extra_signals_size,
+                    ),
+                    device=device,
+                )
+
+    return gaussians
 
 
 # Only 3dgs is being tested as per default args with_ut==False and with_eval3d==False
@@ -147,67 +228,13 @@ def test_rasterization(
     camera_model: str,
     extra_signals_info: Optional[tuple],
     distributed: bool,
-    dist_init,
+    gaussians: SimpleNamespace,
 ):
     if distributed and not torch.distributed.is_initialized():
         pytest.skip("distributed process group not initialized")
     from gsplat.rendering import _rasterization, rasterization
 
     torch.manual_seed(42)
-
-    C, N = 3, 10_000
-    means = torch.rand(batch_dims + (N, 3), device=device)
-    quats = torch.randn(batch_dims + (N, 4), device=device)
-    scales = torch.rand(batch_dims + (N, 3), device=device)
-    opacities = torch.rand(batch_dims + (N,), device=device)
-    # Depth-only modes with no SH and no per_view_color pass colors=None.
-    # (per_view_color and sh_degree combos are already filtered by skipif above.)
-    if not render_mode_has_color(render_mode):
-        colors = None
-    elif per_view_color:
-        if sh_degree is None:
-            colors = torch.rand(batch_dims + (C, N, 3), device=device)
-        else:
-            colors = torch.rand(
-                batch_dims + (C, N, (sh_degree + 1) ** 2, 3), device=device
-            )
-    else:
-        if sh_degree is None:
-            colors = torch.rand(batch_dims + (N, 3), device=device)
-        else:
-            colors = torch.rand(
-                batch_dims + (N, (sh_degree + 1) ** 2, 3), device=device
-            )
-
-    if extra_signals_info is None:
-        extra_signals_sh_degree = None
-        extra_signals = None
-    else:
-        extra_signals_sh_degree = extra_signals_info[0]
-        extra_signals_size = extra_signals_info[1]
-
-        if per_view_color:
-            if extra_signals_sh_degree is None:
-                extra_signals = torch.rand(
-                    batch_dims + (C, N, extra_signals_size), device=device
-                )
-            else:
-                extra_signals = torch.rand(
-                    batch_dims
-                    + (C, N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size),
-                    device=device,
-                )
-        else:
-            if extra_signals_sh_degree is None:
-                extra_signals = torch.rand(
-                    batch_dims + (N, extra_signals_size), device=device
-                )
-            else:
-                extra_signals = torch.rand(
-                    batch_dims
-                    + (N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size),
-                    device=device,
-                )
 
     if camera_model == "lidar":
         # This test consumes randomness before lidar setup, so fix the lidar
@@ -229,15 +256,15 @@ def test_rasterization(
     Ks = torch.tensor(
         [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
         device=device,
-    ).expand(batch_dims + (C, -1, -1))
-    viewmats = torch.eye(4, device=device).expand(batch_dims + (C, -1, -1))
+    ).expand(batch_dims + (gaussians.C, -1, -1))
+    viewmats = torch.eye(4, device=device).expand(batch_dims + (gaussians.C, -1, -1))
 
     renders, alphas, meta = rasterization(
-        means=means,
-        quats=quats,
-        scales=scales,
-        opacities=opacities,
-        colors=colors,
+        means=gaussians.means,
+        quats=gaussians.quats,
+        scales=gaussians.scales,
+        opacities=gaussians.opacities,
+        colors=gaussians.colors,
         viewmats=viewmats,
         Ks=Ks,
         width=width,
@@ -249,8 +276,8 @@ def test_rasterization(
         with_ut=with_ut,
         camera_model=camera_model,
         lidar_coeffs=lidar,
-        extra_signals=extra_signals,
-        extra_signals_sh_degree=extra_signals_sh_degree,
+        extra_signals=gaussians.extra_signals,
+        extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
         distributed=distributed,
     )
 
@@ -259,14 +286,20 @@ def test_rasterization(
         expected_channels += 3
     if render_mode_has_depth_channel(render_mode):
         expected_channels += 1
-    assert renders.shape == (*batch_dims, C, height, width, expected_channels)
+    assert renders.shape == (
+        *batch_dims,
+        gaussians.C,
+        height,
+        width,
+        expected_channels,
+    )
 
     _renders, _alphas, _meta = _rasterization(
-        means=means,
-        quats=quats,
-        scales=scales,
-        opacities=opacities,
-        colors=colors,
+        means=gaussians.means,
+        quats=gaussians.quats,
+        scales=gaussians.scales,
+        opacities=gaussians.opacities,
+        colors=gaussians.colors,
         viewmats=viewmats,
         Ks=Ks,
         width=width,
@@ -277,15 +310,15 @@ def test_rasterization(
         with_ut=with_ut,
         camera_model=camera_model,
         lidar_coeffs=lidar,
-        extra_signals=extra_signals,
-        extra_signals_sh_degree=extra_signals_sh_degree,
+        extra_signals=gaussians.extra_signals,
+        extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
     )
 
     rtol = 1e-4
     atol = 1e-4
 
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
-    if extra_signals is not None:
+    if gaussians.extra_signals is not None:
         torch.testing.assert_close(
             meta["render_extra_signals"],
             _meta["render_extra_signals"],
