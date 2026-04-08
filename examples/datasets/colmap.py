@@ -16,8 +16,9 @@
 
 import json
 import os
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from collections import defaultdict
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import imageio.v2 as imageio
@@ -91,6 +92,84 @@ def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
     return resized_dir
 
 
+def _colmap_image_rel_key(name: str) -> Tuple[str, str]:
+    """Directory (posix, relative to image root) + filename stem for cross-extension matching."""
+    rel = name.replace("\\", "/").lstrip("/")
+    p = PurePosixPath(rel)
+    parent = "" if p.parent == PurePosixPath(".") else p.as_posix()
+    return (parent, p.stem)
+
+
+_EXT_PREF_ORDER = (".png", ".webp", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
+
+
+def _build_stem_parent_groups(
+    image_files: List[str],
+) -> Dict[Tuple[str, str], List[str]]:
+    """Group files under image_dir by (parent dir, basename stem). Multiple extensions allowed."""
+    groups: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+    for f in image_files:
+        groups[_colmap_image_rel_key(f)].append(f)
+    return {k: sorted(dict.fromkeys(v)) for k, v in groups.items()}
+
+
+def _pick_from_duplicate_stems(
+    colmap_name: str, candidates: List[str]
+) -> str:
+    """Choose one file when several share the same parent+stem (e.g. .JPG and .png)."""
+    if len(candidates) == 1:
+        return candidates[0]
+    norm = colmap_name.replace("\\", "/")
+    col_base = PurePosixPath(norm).name
+    col_base_cf = col_base.casefold()
+    col_ext = PurePosixPath(col_base).suffix.casefold()
+
+    exact_cf = [
+        c
+        for c in candidates
+        if PurePosixPath(c.replace("\\", "/")).name.casefold() == col_base_cf
+    ]
+    if len(exact_cf) == 1:
+        return exact_cf[0]
+
+    by_ext = [
+        c
+        for c in candidates
+        if PurePosixPath(c.replace("\\", "/")).suffix.casefold() == col_ext
+    ]
+    if len(by_ext) == 1:
+        return by_ext[0]
+
+    def pref_key(p: str) -> Tuple[int, str]:
+        suff = PurePosixPath(p.replace("\\", "/")).suffix.casefold()
+        try:
+            i = _EXT_PREF_ORDER.index(suff)
+        except ValueError:
+            i = len(_EXT_PREF_ORDER)
+        return (i, p.casefold())
+
+    return sorted(candidates, key=pref_key)[0]
+
+
+def _resolve_factor_image_relpath(
+    colmap_name: str,
+    factor_groups: Dict[Tuple[str, str], List[str]],
+    image_dir: str,
+) -> str:
+    """Resolve COLMAP image name to a relative path inside image_dir."""
+    key = _colmap_image_rel_key(colmap_name)
+    if key in factor_groups:
+        return _pick_from_duplicate_stems(colmap_name, factor_groups[key])
+    norm = colmap_name.replace("\\", "/")
+    direct = os.path.join(image_dir, *norm.split("/"))
+    if os.path.isfile(direct):
+        return os.path.relpath(direct, image_dir)
+    raise ValueError(
+        f"No matching image in {image_dir!r} for COLMAP image {colmap_name!r} "
+        f"(expected directory+basename key {key!r})."
+    )
+
+
 class Parser:
     """COLMAP parser."""
 
@@ -101,6 +180,7 @@ class Parser:
         normalize: bool = False,
         test_every: int = 8,
         load_exposure: bool = False,
+        native_images_factor: bool = False,
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -226,17 +306,25 @@ class Parser:
             if not os.path.exists(d):
                 raise ValueError(f"Image folder {d} does not exist.")
 
-        # Downsampled images may have different names vs images used for COLMAP,
-        # so we need to map between the two sorted lists of files.
-        colmap_files = sorted(_get_rel_paths(colmap_image_dir))
+        # Pair each COLMAP image name with the factor-resolution file by (parent dir, basename stem).
+        # Zipping sorted full directory listings breaks when images/ has extra files, different
+        # extensions, or any count/order mismatch vs COLMAP.
         image_files = sorted(_get_rel_paths(image_dir))
-        if factor > 1 and os.path.splitext(image_files[0])[1].lower() == ".jpg":
+        if (
+            factor > 1
+            and not native_images_factor
+            and len(image_files) > 0
+            and os.path.splitext(image_files[0])[1].lower() == ".jpg"
+        ):
             image_dir = _resize_image_folder(
                 colmap_image_dir, image_dir + "_png", factor=factor
             )
             image_files = sorted(_get_rel_paths(image_dir))
-        colmap_to_image = dict(zip(colmap_files, image_files))
-        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+        factor_groups = _build_stem_parent_groups(image_files)
+        image_paths = [
+            os.path.join(image_dir, _resolve_factor_image_relpath(n, factor_groups, image_dir))
+            for n in image_names
+        ]
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)

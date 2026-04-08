@@ -72,6 +72,10 @@ class Config:
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
     data_factor: int = 4
+    # If True, load RGB from images_{data_factor} on disk as-is (any supported extension).
+    # If False and that folder contains JPEGs, full-res images/ are resized into
+    # images_{data_factor}_png (original gsplat behavior).
+    native_images_factor: bool = False
     # Directory to save results
     result_dir: str = "results/garden"
     # Every N images there is a test image
@@ -209,7 +213,7 @@ class Config:
     # Save training images to tensorboard
     tb_save_image: bool = False
 
-    lpips_net: Literal["vgg", "alex"] = "alex"
+    lpips_net: Literal["vgg", "alex"] = "vgg"
 
     # 3DGUT (uncented transform + eval 3D)
     with_ut: bool = False
@@ -370,6 +374,7 @@ class Runner:
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
             load_exposure=cfg.load_exposure,
+            native_images_factor=cfg.native_images_factor,
         )
         self.trainset = Dataset(
             self.parser,
@@ -534,9 +539,8 @@ class Runner:
                 net_type="alex", normalize=True
             ).to(self.device)
         elif cfg.lpips_net == "vgg":
-            # The 3DGS official repo uses lpips vgg, which is equivalent with the following:
             self.lpips = LearnedPerceptualImagePatchSimilarity(
-                net_type="vgg", normalize=False
+                net_type="vgg", normalize=True
             ).to(self.device)
         else:
             raise ValueError(f"Unknown LPIPS network: {cfg.lpips_net}")
