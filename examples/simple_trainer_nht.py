@@ -127,7 +127,7 @@ class Config:
     # Initial scale of GS
     init_scale: float = 0.1
     # Weight for SSIM loss
-    ssim_lambda: float = 0.1
+    ssim_lambda: float = 0.2
 
     # Near plane clipping distance
     near_plane: float = 0.01
