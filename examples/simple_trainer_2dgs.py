@@ -62,6 +62,10 @@ class Config:
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
     data_factor: int = 4
+    # If True, load RGB from images_{data_factor} on disk as-is (any supported extension).
+    # If False and that folder contains JPEGs, full-res images/ are resized into
+    # images_{data_factor}_png (original gsplat behavior).
+    native_images_factor: bool = False
     # Directory to save results
     result_dir: str = "results/garden"
     # Every N images there is a test image
@@ -182,6 +186,9 @@ class Config:
     # Model for splatting.
     model_type: Literal["2dgs", "2dgs-inria"] = "2dgs"
 
+    # LPIPS network to use for evaluation
+    lpips_net: Literal["vgg", "alex"] = "vgg"
+
     # Dump information to tensorboard every this steps
     tb_every: int = 100
     # Save training images to tensorboard
@@ -295,6 +302,7 @@ class Runner:
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
+            native_images_factor=cfg.native_images_factor,
         )
         self.trainset = Dataset(
             self.parser,
@@ -388,9 +396,16 @@ class Runner:
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
-        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True).to(
-            self.device
-        )
+        if cfg.lpips_net == "alex":
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="alex", normalize=True
+            ).to(self.device)
+        elif cfg.lpips_net == "vgg":
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="vgg", normalize=True
+            ).to(self.device)
+        else:
+            raise ValueError(f"Unknown LPIPS network: {cfg.lpips_net}")
 
         # Viewer
         if not self.cfg.disable_viewer:
