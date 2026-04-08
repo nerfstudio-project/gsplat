@@ -294,15 +294,25 @@ elif $do_ssh; then
     shell_args+=(/usr/sbin/sshd -D -e)
 else
     if $do_sanitize; then
-        shell_args+=(/usr/local/cuda/bin/compute-sanitizer /usr/local/venv/bin/pytest)
+        shell_args+=(
+            /bin/bash
+            -lc
+            'libs/install.sh geometry && exec /usr/local/cuda/bin/compute-sanitizer /usr/local/venv/bin/pytest "$@"'
+            bash
+        )
         if $do_verbose; then
             shell_args+=(-sv)
         fi
         run_args+=(-e DEBUG=1) # it's helpful for triggering asserts and full symbol info
         run_args+=(--privileged) # compute-sanitizer sometimes segfaults if not running on privileged container
     else
-        # We want to run pytest, possibly with users' parameters
-        shell_args+=(pytest)
+        # Install the geometry package; pass tests/ and libs/geometry/functional on the pytest CLI when mirroring CI.
+        shell_args+=(
+            /bin/bash
+            -lc
+            'libs/install.sh geometry && exec pytest "$@"'
+            bash
+        )
         if $do_verbose; then
             shell_args+=(-sv) # show C++ build as it happens
         fi
