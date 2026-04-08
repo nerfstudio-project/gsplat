@@ -43,6 +43,41 @@ device = torch.device("cuda:0")
 
 
 @pytest.fixture
+def sensor_model(
+    C: int,
+    batch_dims: Tuple[int, ...],
+    camera_model: str,
+):
+    sensor_model = SimpleNamespace()
+
+    if camera_model == "lidar":
+        # This test consumes randomness before lidar setup, so fix the lidar
+        # param seed explicitly to keep the preprocessing cache reusable.
+        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+            "at128", batch_dims, 0, 0, device=device, seed=42
+        )
+        sensor_model.lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(lidar_params, angles_to_columns_map, tiling)
+        sensor_model.width = sensor_model.lidar.n_columns
+        sensor_model.height = sensor_model.lidar.n_rows
+        focal = sensor_model.width
+    else:
+        sensor_model.width, sensor_model.height = 300, 200
+        focal = 300.0
+        sensor_model.lidar = None
+
+    sensor_model.Ks = torch.tensor(
+        [
+            [focal, 0.0, sensor_model.width / 2.0],
+            [0.0, focal, sensor_model.height / 2.0],
+            [0.0, 0.0, 1.0],
+        ],
+        device=device,
+    ).expand(batch_dims + (C, -1, -1))
+    sensor_model.viewmats = torch.eye(4, device=device).expand(batch_dims + (C, -1, -1))
+    return sensor_model
+
+
+@pytest.fixture
 def gaussians(
     C: int,
     N: int,
@@ -233,6 +268,7 @@ def test_rasterization(
     distributed: bool,
     C: int,
     N: int,
+    sensor_model: SimpleNamespace,
     gaussians: SimpleNamespace,
 ):
     if distributed and not torch.distributed.is_initialized():
@@ -241,44 +277,23 @@ def test_rasterization(
 
     torch.manual_seed(42)
 
-    if camera_model == "lidar":
-        # This test consumes randomness before lidar setup, so fix the lidar
-        # param seed explicitly to keep the preprocessing cache reusable.
-        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
-            "at128", batch_dims, 0, 0, device=device, seed=42
-        )
-        lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(lidar_params, angles_to_columns_map, tiling)
-        width = lidar.n_columns
-        height = lidar.n_rows
-        focal = width
-    else:
-        width, height = 300, 200
-        focal = 300.0
-        lidar = None
-
-    Ks = torch.tensor(
-        [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
-        device=device,
-    ).expand(batch_dims + (C, -1, -1))
-    viewmats = torch.eye(4, device=device).expand(batch_dims + (C, -1, -1))
-
     renders, alphas, meta = rasterization(
         means=gaussians.means,
         quats=gaussians.quats,
         scales=gaussians.scales,
         opacities=gaussians.opacities,
         colors=gaussians.colors,
-        viewmats=viewmats,
-        Ks=Ks,
-        width=width,
-        height=height,
+        viewmats=sensor_model.viewmats,
+        Ks=sensor_model.Ks,
+        width=sensor_model.width,
+        height=sensor_model.height,
         sh_degree=sh_degree,
         render_mode=render_mode,
         packed=packed,
         with_eval3d=with_eval3d,
         with_ut=with_ut,
         camera_model=camera_model,
-        lidar_coeffs=lidar,
+        lidar_coeffs=sensor_model.lidar,
         extra_signals=gaussians.extra_signals,
         extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
         distributed=distributed,
@@ -292,8 +307,8 @@ def test_rasterization(
     assert renders.shape == (
         *batch_dims,
         C,
-        height,
-        width,
+        sensor_model.height,
+        sensor_model.width,
         expected_channels,
     )
 
@@ -303,16 +318,16 @@ def test_rasterization(
         scales=gaussians.scales,
         opacities=gaussians.opacities,
         colors=gaussians.colors,
-        viewmats=viewmats,
-        Ks=Ks,
-        width=width,
-        height=height,
+        viewmats=sensor_model.viewmats,
+        Ks=sensor_model.Ks,
+        width=sensor_model.width,
+        height=sensor_model.height,
         sh_degree=sh_degree,
         render_mode=render_mode,
         with_eval3d=with_eval3d,
         with_ut=with_ut,
         camera_model=camera_model,
-        lidar_coeffs=lidar,
+        lidar_coeffs=sensor_model.lidar,
         extra_signals=gaussians.extra_signals,
         extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
     )
