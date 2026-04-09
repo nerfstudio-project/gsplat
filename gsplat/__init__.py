@@ -45,6 +45,7 @@ from .cuda._wrapper import (
     has_3dgut,
     has_adam,
     has_camera_wrappers,
+    has_losses,
     has_reloc,
     RowOffsetStructuredSpinningLidarModelParameters,
     RowOffsetStructuredSpinningLidarModelParametersExt,
@@ -62,6 +63,9 @@ from .rendering import (
 from .losses import (
     create_ssim_window,
     depth_l1_loss,
+    gaussian_density_reg,
+    gaussian_scale_reg,
+    gaussian_z_scale_reg,
     l1_loss,
     lidar_background_loss,
     lidar_distance_loss,
@@ -69,11 +73,13 @@ from .losses import (
     lidar_raydrop_loss,
     mse_loss,
     opacity_reg_loss,
+    out_of_bound_loss,
     scale_reg_loss,
     ssim_loss,
     torch_ssim_loss,
     total_variation_loss,
 )
+from .losses_fused import FusedGaussianLosses
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
 from .cuda._lidar import (
@@ -124,7 +130,13 @@ all = [
     "has_3dgut",
     "has_adam",
     "has_camera_wrappers",
+    "has_losses",
     "has_reloc",
+    "FusedGaussianLosses",
+    "gaussian_scale_reg",
+    "gaussian_density_reg",
+    "gaussian_z_scale_reg",
+    "out_of_bound_loss",
     "RowOffsetStructuredSpinningLidarModelParameters",
     "RowOffsetStructuredSpinningLidarModelParametersExt",
     "compute_lidar_angles_to_columns_map",
