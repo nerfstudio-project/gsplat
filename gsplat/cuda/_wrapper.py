@@ -203,6 +203,15 @@ def has_reloc():
     return hasattr(torch.ops.gsplat, "relocation")
 
 
+def has_losses():
+    try:
+        from ._backend import _C  # noqa: F401
+
+        return hasattr(torch.ops.gsplat, "gaussian_losses_fwd")
+    except (ImportError, AttributeError):
+        return False
+
+
 def create_camera_model(
     camera_model: str,
     width: Optional[int] = None,
