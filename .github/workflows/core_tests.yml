@@ -28,6 +28,6 @@ jobs:
           pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
           BUILD_NO_CUDA=1 pip install .
       - name: Code Formatting Check
-        run: lint/format-code.sh --check
+        run: lint/format-code.sh --check --full
       - name: Run Tests.
         run: pytest tests/
