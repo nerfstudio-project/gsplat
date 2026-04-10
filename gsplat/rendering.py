@@ -93,6 +93,20 @@ def render_mode_has_only_color(mode: RenderMode) -> bool:
     return not render_mode_has_depth_channel(mode) and render_mode_has_color(mode)
 
 
+def _validate_3dgut_rasterize_mode(
+    rasterize_mode: RasterizeMode,
+    *,
+    with_ut: bool,
+    with_eval3d: bool,
+) -> None:
+    if rasterize_mode != "classic" and (with_ut or with_eval3d):
+        raise ValueError(
+            "3DGUT rendering only supports rasterize_mode='classic'. "
+            f"Got rasterize_mode='{rasterize_mode}' with "
+            f"with_ut={with_ut} and with_eval3d={with_eval3d}."
+        )
+
+
 def normalize_features_layout(
     features: Tensor,
     batch_dims: tuple,
@@ -544,6 +558,10 @@ def rasterization(
     """
     meta = {}
     has_color = render_mode_has_color(render_mode)
+
+    _validate_3dgut_rasterize_mode(
+        rasterize_mode, with_ut=with_ut, with_eval3d=with_eval3d
+    )
 
     if colors is None and has_color:
         raise ValueError(
@@ -1413,6 +1431,10 @@ def _rasterization(
         height = lidar_coeffs.n_rows
 
     has_color = render_mode_has_color(render_mode)
+
+    _validate_3dgut_rasterize_mode(
+        rasterize_mode, with_ut=with_ut, with_eval3d=with_eval3d
+    )
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
