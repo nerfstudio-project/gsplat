@@ -33,10 +33,23 @@ The current tests that will be triggered by PR:
 - `.github/workflows/core_tests.yml`: Black formating. Pytests.
 - `.github/workflows/doc.yml`: Doc build.
 
-Because we check for black formatting, it is recommend to run black before commit in the code:
+Because we check code formatting in CI, it is recommend to run the formatting
+script before committing code:
 
 ```bash
-black . gsplat/ tests/ examples/ profiling/
+lint/format-code.sh
+```
+
+To check formatting without modifying files, use:
+
+```bash
+lint/format-code.sh --check
+```
+
+After cloning the repository, run the bootstrap script to initialize it for development, including the pre-commit formatting hook:
+
+```bash
+./bootstrap.sh
 ```
 
 Since there is no GPU supported on github workflow container, we don't test against those cuda unit tests under `tests/` in PR. So it is recommended to check test pass locally before committing:
