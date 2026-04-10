@@ -239,7 +239,9 @@ def lidar_distance_loss(
     Returns:
         Scalar L1 distance loss.
     """
-    _validate_lidar_shapes(pred_distance, gt_distance, valid_mask, "lidar_distance_loss")
+    _validate_lidar_shapes(
+        pred_distance, gt_distance, valid_mask, "lidar_distance_loss"
+    )
     pred = pred_distance.reshape(-1)
     gt = gt_distance.reshape(-1)
     if valid_mask is not None:
@@ -269,7 +271,9 @@ def lidar_intensity_loss(
     Returns:
         Scalar L1 intensity loss.
     """
-    _validate_lidar_shapes(pred_intensity, gt_intensity, valid_mask, "lidar_intensity_loss")
+    _validate_lidar_shapes(
+        pred_intensity, gt_intensity, valid_mask, "lidar_intensity_loss"
+    )
     pred = pred_intensity.reshape(-1)
     gt = gt_intensity.reshape(-1)
     if valid_mask is not None:

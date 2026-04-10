@@ -323,15 +323,12 @@ class RowOffsetStructuredSpinningLidarModelParameters(
             start=float(start_rad), span=float(span_rad), direction=spinning_direction
         )
 
-    def elements_to_sensor_angles(
-        self, elements: Tensor
-    ) -> Tensor:
+    def elements_to_sensor_angles(self, elements: Tensor) -> Tensor:
         """elements: [..., 2] with [0]=azimuth index, [1]=elevation index."""
         elem_az = elements[..., 0]
         elem_el = elements[..., 1]
         azimuth = normalize_azimuth(
-            self.column_azimuths_rad[elem_az]
-            + self.row_azimuth_offsets_rad[elem_el]
+            self.column_azimuths_rad[elem_az] + self.row_azimuth_offsets_rad[elem_el]
         )
         elevation = normalize_elevation(self.row_elevations_rad[elem_el])
         return torch.stack([azimuth, elevation], dim=-1)
@@ -430,7 +427,6 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
             a2cmap_resfactor
             == self.angles_to_columns_map.shape[1] / self.column_azimuths_rad.shape[0]
         )
-
 
 
 # --------------------- Computation of angles_to_columns_map ---------------------------
@@ -578,14 +574,20 @@ def compute_angles_to_columns_map(
     elem_el = elements[..., 1]
     raw_elevation = lidar.row_elevations_rad[elem_el]
     raw_azimuth = (
-        lidar.column_azimuths_rad[elem_az]
-        + lidar.row_azimuth_offsets_rad[elem_el]
+        lidar.column_azimuths_rad[elem_az] + lidar.row_azimuth_offsets_rad[elem_el]
     )
-    raw_azimuth = torch.where(raw_azimuth > torch.pi, raw_azimuth - 2 * torch.pi, raw_azimuth)
-    raw_azimuth = torch.where(raw_azimuth <= -torch.pi, raw_azimuth + 2 * torch.pi, raw_azimuth)
+    raw_azimuth = torch.where(
+        raw_azimuth > torch.pi, raw_azimuth - 2 * torch.pi, raw_azimuth
+    )
+    raw_azimuth = torch.where(
+        raw_azimuth <= -torch.pi, raw_azimuth + 2 * torch.pi, raw_azimuth
+    )
     sensor_angles = torch.stack([raw_azimuth, raw_elevation], dim=-1).reshape(-1, 2)
 
-    assert sensor_angles.shape == (lidar.n_rows * lidar.n_columns, 2), sensor_angles.shape
+    assert sensor_angles.shape == (
+        lidar.n_rows * lidar.n_columns,
+        2,
+    ), sensor_angles.shape
 
     # Now convert the sensor angles to unit rays.
     sensor_rays = sensor_angles_to_rays(lidar, sensor_angles)
@@ -631,7 +633,9 @@ def angles_to_dense_ray_mask_cdf(
     normalized_azimuth = relative_angles[..., 0] / parameters.fov_horiz_rad.span
     normalized_elevation = relative_angles[..., 1] / parameters.fov_vert_rad.span
 
-    elevations_indices = uniform_quantization(normalized_elevation, resolution_elevation)
+    elevations_indices = uniform_quantization(
+        normalized_elevation, resolution_elevation
+    )
     azimuths_indices = uniform_quantization(normalized_azimuth, resolution_azimuth)
     indices = azimuths_indices + elevations_indices * resolution_azimuth
 
@@ -670,16 +674,18 @@ def angles_to_tile_indices(
 
     relative_angles = relative_sensor_angles(parameters, angles)
 
-    normalized_azimuth = relative_angles[..., 0] / parameters.fov_horiz_rad.span * n_bins_azimuth
-    normalized_elevation = relative_angles[..., 1] / parameters.fov_vert_rad.span * resolution
+    normalized_azimuth = (
+        relative_angles[..., 0] / parameters.fov_horiz_rad.span * n_bins_azimuth
+    )
+    normalized_elevation = (
+        relative_angles[..., 1] / parameters.fov_vert_rad.span * resolution
+    )
 
     # compute the azimuth tile indices directly
     azimuths_indices = normalized_azimuth.int() % n_bins_azimuth
 
     # remap the elevations
-    elevations_indices_cdf = torch.clamp(
-        normalized_elevation, 0, resolution - 1
-    ).int()
+    elevations_indices_cdf = torch.clamp(normalized_elevation, 0, resolution - 1).int()
     elevations_indices = cdf_elevation[elevations_indices_cdf].int()
 
     # NOTE: tile indices are row-major: tile_id = elevation * n_bins_azimuth + azimuth
@@ -759,8 +765,7 @@ def compute_histogram_equalization(
     ranges_azimuth = (-fov_eps_rad, parameters.fov_horiz_rad.span + fov_eps_rad)
     ranges_elevation = (-fov_eps_rad, parameters.fov_vert_rad.span + fov_eps_rad)
     assert torch.all(
-        (angles_el >= ranges_elevation[0])
-        & (angles_el <= ranges_elevation[1])
+        (angles_el >= ranges_elevation[0]) & (angles_el <= ranges_elevation[1])
     ), f"elevations are out of bounds, {angles_el.min()} < {ranges_elevation[0]},  {angles_el.max()} > {ranges_elevation[1]}"
 
     assert torch.all(

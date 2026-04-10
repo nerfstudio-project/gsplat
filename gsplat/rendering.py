@@ -867,7 +867,9 @@ def rasterization(
         if extra_signals is not None:
             feature_list.append(extra_signals)
         if feature_list:
-            with trace_range("concat-features") if len(feature_list) > 1 else nullcontext():
+            with trace_range("concat-features") if len(
+                feature_list
+            ) > 1 else nullcontext():
                 proj_features = (
                     torch.cat(feature_list, dim=-1)
                     if len(feature_list) > 1

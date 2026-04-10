@@ -744,8 +744,12 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
 
     torch.manual_seed(42)
 
-    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(lidar_model, batch_dims, 0, 0, device=device)
-    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(lidar_params, angles_to_columns_map, tiling)
+    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+        lidar_model, batch_dims, 0, 0, device=device
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
 
     C, N = 3, 1000  # cameras and gaussians
 
@@ -2276,7 +2280,8 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
     "channels,batch_dims,rs_type,use_hit_distance,use_rays,return_normals,camera_model",
     [
         pytest.param(
-            *params, "pinhole",
+            *params,
+            "pinhole",
             marks=[
                 # test based on use_rays (4)
                 pytest.mark.skipif(
@@ -2406,17 +2411,30 @@ def test_rasterize_to_pixels_eval3d(
             rs_type=rs_type,
             lidar_coeffs=lidar_coeffs,
         )
-        rays = _generate_rays(
-            camera, width, height,
-            viewmats.reshape(I, 4, 4),
-            viewmats_rs.reshape(I, 4, 4) if viewmats_rs is not None else None,
-        ).detach().reshape(*batch_dims, C, -1, 6)
+        rays = (
+            _generate_rays(
+                camera,
+                width,
+                height,
+                viewmats.reshape(I, 4, 4),
+                viewmats_rs.reshape(I, 4, 4) if viewmats_rs is not None else None,
+            )
+            .detach()
+            .reshape(*batch_dims, C, -1, 6)
+        )
     else:
         rays = None
 
     # Project Gaussians to 2D for tile intersections
     radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
-        means, quats, scales, opacities, viewmats, Ks, width, height,
+        means,
+        quats,
+        scales,
+        opacities,
+        viewmats,
+        Ks,
+        width,
+        height,
         camera_model=camera_model,
         lidar_coeffs=lidar_coeffs,
     )
@@ -2430,7 +2448,10 @@ def test_rasterize_to_pixels_eval3d(
         tile_width = lidar_coeffs.tiling.n_bins_azimuth
         tile_height = lidar_coeffs.tiling.n_bins_elevation
         _tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
-            lidar_coeffs, means2d, radii, depths,
+            lidar_coeffs,
+            means2d,
+            radii,
+            depths,
         )
     else:
         tile_size = 16
@@ -2625,8 +2646,10 @@ def test_rasterize_to_pixels_eval3d(
     _lidar_tol = 10.0 if (camera_model == "lidar" and not use_rays) else 1.0
 
     torch.testing.assert_close(
-        render_colors * count_match, _render_colors * count_match,
-        rtol=3e-3 * _lidar_tol, atol=1e-3 * _lidar_tol,
+        render_colors * count_match,
+        _render_colors * count_match,
+        rtol=3e-3 * _lidar_tol,
+        atol=1e-3 * _lidar_tol,
     )
     # Bumped tolerance due to release mode optimizations. In debug mode it's ALPHA_THRESHOLD+1e-5.
     torch.testing.assert_close(
@@ -2807,8 +2830,10 @@ def test_rasterize_to_pixels_eval3d(
 
     # Compare backward gradients, excluding the ones that fall above the quantile threshold.
     torch.testing.assert_close(
-        v_means * means_mask.float(), _v_means * means_mask.float(),
-        rtol=0, atol=1e-3 * _lidar_tol,
+        v_means * means_mask.float(),
+        _v_means * means_mask.float(),
+        rtol=0,
+        atol=1e-3 * _lidar_tol,
     )
     torch.testing.assert_close(
         v_scales * scales_mask.float(),

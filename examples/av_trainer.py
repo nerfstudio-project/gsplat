@@ -316,9 +316,7 @@ def compute_loss(
     loss_depth = torch.tensor(0.0, device=device)
     if idxframe in scene.lidar_by_frame:
         lidar_pts = scene.lidar_by_frame[idxframe]  # [M, 3] world
-        py, px, gt_depth = project_lidar_to_camera(
-            lidar_pts, viewmat[0], K[0], H, W
-        )
+        py, px, gt_depth = project_lidar_to_camera(lidar_pts, viewmat[0], K[0], H, W)
         if len(py) > 0:
             pred_depth = depth_render[py, px]
             loss_depth = gsplat.losses.depth_l1_loss(
@@ -378,15 +376,14 @@ def evaluate(
                 gt_t = scene.images[tfid, tci].unsqueeze(0)
                 vm_t = scene.viewmats[tfid, tci].unsqueeze(0)
                 K_t = scene.Ks[tci]
-                rd, _ = render_gaussians(params, vm_t, K_t, W, H,
-                                         sh_degree_to_use=sh_degree)
+                rd, _ = render_gaussians(
+                    params, vm_t, K_t, W, H, sh_degree_to_use=sh_degree
+                )
                 psnrs.append(compute_psnr(rd[0].clamp(0, 1), gt_t[0]))
 
                 if renders_dir is not None:
                     gt_np = (gt_t[0].cpu().numpy() * 255).astype(np.uint8)
-                    rd_np = (rd[0].clamp(0, 1).cpu().numpy() * 255).astype(
-                        np.uint8
-                    )
+                    rd_np = (rd[0].clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
                     canvas = np.concatenate([gt_np, rd_np], axis=1)
                     cam_name = scene.camera_names[tci]
                     imageio.imwrite(
@@ -470,8 +467,13 @@ def run_evaluation(
     if test_frame_ids:
         save_dir = renders_dir if is_last_step else None
         mean_psnr = evaluate(
-            params, scene, test_frame_ids, W, H,
-            renders_dir=save_dir, sh_degree=sh_degree,
+            params,
+            scene,
+            test_frame_ids,
+            W,
+            H,
+            renders_dir=save_dir,
+            sh_degree=sh_degree,
         )
         checkpoint["mean_psnr"] = mean_psnr
         print(
@@ -535,9 +537,12 @@ def train(
     strategy_state = None
     if use_mcmc:
         strategy = MCMCStrategy(
-            cap_max=cap_max, noise_lr=5e5,
-            refine_start_iter=500, refine_stop_iter=int(max_steps * 0.8),
-            refine_every=100, verbose=True,
+            cap_max=cap_max,
+            noise_lr=5e5,
+            refine_start_iter=500,
+            refine_stop_iter=int(max_steps * 0.8),
+            refine_every=100,
+            verbose=True,
         )
         strategy.check_sanity(params, optimizers)
         strategy_state = strategy.initialize_state()
@@ -586,7 +591,9 @@ def train(
         K = scene.Ks[idxcam]  # [1, 3, 3]
 
         # Progressive SH schedule
-        sh_degree_to_use = min(step // sh_degree_interval, sh_degree) if sh_degree > 0 else None
+        sh_degree_to_use = (
+            min(step // sh_degree_interval, sh_degree) if sh_degree > 0 else None
+        )
 
         # Forward pass: rasterize Gaussians into this view
         renders, alphas = render_gaussians(
@@ -597,8 +604,18 @@ def train(
 
         # Compute composite loss (L1 + SSIM + depth + regularization + sky)
         total_loss = compute_loss(
-            params, rgb_render, depth_render, alphas, rgb_gt,
-            scene, idxframe, viewmat, K, H, W, device,
+            params,
+            rgb_render,
+            depth_render,
+            alphas,
+            rgb_gt,
+            scene,
+            idxframe,
+            viewmat,
+            K,
+            H,
+            W,
+            device,
         )
 
         # Backward pass and parameter update
@@ -614,8 +631,12 @@ def train(
         # MCMC: relocate dead Gaussians, add new ones, inject noise
         if strategy is not None:
             strategy.step_post_backward(
-                params, optimizers, strategy_state, step,
-                info={}, lr=schedulers[0].get_last_lr()[0],
+                params,
+                optimizers,
+                strategy_state,
+                step,
+                info={},
+                lr=schedulers[0].get_last_lr()[0],
             )
 
         N = len(params["means"])  # may change with MCMC
@@ -625,9 +646,18 @@ def train(
             log_training_step(step, max_steps, total_loss, start_time)
         if step % eval_every == 0 or step == max_steps - 1:
             ckpt = run_evaluation(
-                params, scene, test_frame_ids, W, H,
-                step, total_loss, start_time, N,
-                renders_dir, stats_dir, is_last_step=(step == max_steps - 1),
+                params,
+                scene,
+                test_frame_ids,
+                W,
+                H,
+                step,
+                total_loss,
+                start_time,
+                N,
+                renders_dir,
+                stats_dir,
+                is_last_step=(step == max_steps - 1),
                 sh_degree=sh_degree_to_use,
             )
             checkpoints.append(ckpt)
@@ -671,43 +701,61 @@ def main() -> None:
         help="path to the npz scene file (images, intrinsics, poses, LiDAR)",
     )
     parser.add_argument(
-        "--max-steps", type=int, default=15000,
+        "--max-steps",
+        type=int,
+        default=15000,
         help="number of training iterations (default: 15000)",
     )
     parser.add_argument(
-        "--lr", type=float, default=0.005,
+        "--lr",
+        type=float,
+        default=0.005,
         help="base learning rate; per-param LRs are scaled from this (default: 0.005)",
     )
     parser.add_argument(
-        "--log-every", type=int, default=3000,
+        "--log-every",
+        type=int,
+        default=3000,
         help="print training stats every N steps (default: 3000)",
     )
     parser.add_argument(
-        "--eval-every", type=int, default=3000,
+        "--eval-every",
+        type=int,
+        default=3000,
         help="evaluate PSNR on held-out test views every N steps (default: 3000)",
     )
     parser.add_argument(
-        "--result-dir", type=str, default="results/av_pandaset",
+        "--result-dir",
+        type=str,
+        default="results/av_pandaset",
         help="output directory for renders, stats, and summary (default: results/av_pandaset)",
     )
     parser.add_argument(
-        "--sh-degree", type=int, default=0,
+        "--sh-degree",
+        type=int,
+        default=0,
         help="spherical harmonics degree (0 = flat RGB, 3 = full SH; default: 0)",
     )
     parser.add_argument(
-        "--sh-degree-interval", type=int, default=1000,
+        "--sh-degree-interval",
+        type=int,
+        default=1000,
         help="progressively enable one more SH band every N steps (default: 1000)",
     )
     parser.add_argument(
-        "--no-save-model", action="store_true",
+        "--no-save-model",
+        action="store_true",
         help="disable saving trained Gaussian parameters to model.pt",
     )
     parser.add_argument(
-        "--mcmc", action="store_true",
+        "--mcmc",
+        action="store_true",
         help="enable MCMC densification strategy: adaptively add/remove Gaussians",
     )
     parser.add_argument(
-        "--cap-max", type=int, default=500_000,
+        "--cap-max",
+        type=int,
+        default=500_000,
         help="maximum number of Gaussians when using --mcmc (default: 500000)",
     )
     args = parser.parse_args()

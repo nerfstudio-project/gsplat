@@ -59,14 +59,11 @@ if not _ENABLED:
     def trace_range(name: str, **kwargs: Any) -> ContextManager[None]:
         return nullcontext()
 
-
     def trace_push(name: str, **kwargs: Any) -> None:
         return None
 
-
     def trace_pop() -> None:
         return None
-
 
     def trace_function(name: str, **kwargs: Any) -> Callable[[_F], _F]:
         def decorator(fn: _F) -> _F:
@@ -75,6 +72,7 @@ if not _ENABLED:
         return decorator
 
 else:
+
     class _Trace(ContextDecorator):
         def __init__(self, name: str, **kwargs: Any):
             self._name = name
@@ -93,10 +91,8 @@ else:
             _DOMAIN.pop_range()
             return False
 
-
     def trace_range(name: str, **kwargs: Any) -> ContextManager[None]:
         return _Trace(name, **kwargs)
-
 
     def trace_function(name: str, **kwargs: Any) -> Callable[[_F], _F]:
         return _Trace(name, **kwargs)

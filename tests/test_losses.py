@@ -270,9 +270,7 @@ class TestLidarIntensityLoss:
         gt = torch.tensor([0.2, 0.0, 0.5])
         mask = torch.tensor([True, False, True])
         expected = F.l1_loss(torch.tensor([0.1, 0.3]), torch.tensor([0.2, 0.5]))
-        assert torch.isclose(
-            lidar_intensity_loss(pred, gt, valid_mask=mask), expected
-        )
+        assert torch.isclose(lidar_intensity_loss(pred, gt, valid_mask=mask), expected)
 
     def test_gradient_flows(self):
         pred = torch.tensor([0.5, 0.8], requires_grad=True)

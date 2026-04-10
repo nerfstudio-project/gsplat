@@ -45,12 +45,15 @@ def lidar_sample_tileid(
     norm_az = rel_pix[..., 0] / fov_span_pix_az
     norm_el = rel_pix[..., 1] / fov_span_pix_el
 
-    idxdense_az = round_fn(norm_az * lidar.tiling.cdf_resolution_azimuth).to(dtype=torch.int32)
-    idxdense_el = round_fn(norm_el * lidar.tiling.cdf_resolution_elevation).to(dtype=torch.int32)
+    idxdense_az = round_fn(norm_az * lidar.tiling.cdf_resolution_azimuth).to(
+        dtype=torch.int32
+    )
+    idxdense_el = round_fn(norm_el * lidar.tiling.cdf_resolution_elevation).to(
+        dtype=torch.int32
+    )
 
     assert torch.all(
-        (0 <= idxdense_el)
-        & (idxdense_el <= lidar.tiling.cdf_resolution_elevation)
+        (0 <= idxdense_el) & (idxdense_el <= lidar.tiling.cdf_resolution_elevation)
     )
     assert torch.all(idxdense_el < lidar.tiling.cdf_elevation.shape[0])
 
@@ -191,7 +194,9 @@ def _isect_tiles_lidar(
     # normal:      A = [beg, end),    B = empty
 
     begA_az = torch.where(full_cover | underflows, 0, beg_az)
-    endA_az = torch.where(full_cover, fov_span_pix_az, torch.where(overflows, full_circle_pix, end_az))
+    endA_az = torch.where(
+        full_cover, fov_span_pix_az, torch.where(overflows, full_circle_pix, end_az)
+    )
     begB_az = torch.where(underflows & ~full_cover, beg_az + full_circle_pix, 0)
     endB_az = torch.where(
         overflows & ~full_cover,
@@ -214,6 +219,7 @@ def _isect_tiles_lidar(
 
     def clamp_el(v):
         return torch.clamp(v, 0, fov_span_pix_el)
+
     begA_rel_pix = torch.stack([clamp_az(begA_az), clamp_el(beg_el)], dim=-1)
     endA_rel_pix = torch.stack([clamp_az(endA_az), clamp_el(end_el)], dim=-1)
     begB_rel_pix = torch.stack([clamp_az(begB_az), clamp_el(beg_el)], dim=-1)
@@ -229,12 +235,9 @@ def _isect_tiles_lidar(
         idxdense_az = s.idxdense[..., 0]
         idx_az = s.idx[..., 0]
         assert torch.all(
-            (0 <= idxdense_az)
-            & (idxdense_az <= lidar.tiling.cdf_resolution_azimuth)
+            (0 <= idxdense_az) & (idxdense_az <= lidar.tiling.cdf_resolution_azimuth)
         )
-        assert torch.all(
-            (0 <= idx_az) & (idx_az <= lidar.tiling.n_bins_azimuth)
-        )
+        assert torch.all((0 <= idx_az) & (idx_az <= lidar.tiling.n_bins_azimuth))
 
     # Elevation ranges of Regions A and B must be the same.
     begA_idx_el = begA_sample.idx[..., 1]

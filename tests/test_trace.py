@@ -33,7 +33,13 @@ class _FakeDomain:
         return kwargs
 
     def push_range(self, attrs):
-        self.calls.append(("push", attrs["message"], {k: v for k, v in attrs.items() if k != "message"}))
+        self.calls.append(
+            (
+                "push",
+                attrs["message"],
+                {k: v for k, v in attrs.items() if k != "message"},
+            )
+        )
 
     def pop_range(self):
         self.calls.append(("pop", None, {}))
