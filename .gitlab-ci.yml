@@ -28,6 +28,10 @@ workflow:
       auto_cancel:
         on_new_commit: none
 
+stages:
+  - lint
+  - test
+
 default:
   image: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
   tags:
@@ -54,7 +58,13 @@ default:
     - CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1)
     - echo "Determined CUDA Architecture ${CUDA_ARCH}"
 
+code-format:
+  stage: lint
+  script:
+    - lint/format-code.sh --check
+
 test:
+  stage: test
   variables:
     VERBOSE: 1
     DEBUG: 1
