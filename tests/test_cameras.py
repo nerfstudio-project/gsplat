@@ -42,7 +42,10 @@ if _C is None:
 from gsplat.cuda._wrapper import has_camera_wrappers
 
 if not has_camera_wrappers():
-    pytest.skip("Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)", allow_module_level=True)
+    pytest.skip(
+        "Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)",
+        allow_module_level=True,
+    )
 
 from gsplat._helper import expand_named_params
 from gsplat.cuda._torch_cameras import (  # PyTorch reference
@@ -479,9 +482,7 @@ def parse_lidar_camera(
             # Add small noise, but make sure it's not larger than the spacing between each row.
         )
         + (
-            torch.rand(
-                n_rows, dtype=torch.float32, device=device, generator=generator
-            )
+            torch.rand(n_rows, dtype=torch.float32, device=device, generator=generator)
             - 0.5
         )
         * (elevation_span / (n_rows - 1))

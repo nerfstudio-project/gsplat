@@ -56,7 +56,9 @@ def sensor_model(
         lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
             "at128", batch_dims, 0, 0, device=device, seed=42
         )
-        sensor_model.lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(lidar_params, angles_to_columns_map, tiling)
+        sensor_model.lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+            lidar_params, angles_to_columns_map, tiling
+        )
         sensor_model.width = sensor_model.lidar.n_columns
         sensor_model.height = sensor_model.lidar.n_rows
         focal = sensor_model.width

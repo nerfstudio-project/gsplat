@@ -166,7 +166,9 @@ def _read_zip_central_directory(
 
 
 def _extract_file_from_zip(
-    url: str, local_header_offset: int, compressed_size: int,
+    url: str,
+    local_header_offset: int,
+    compressed_size: int,
     token: str | None = None,
 ) -> bytes:
     """Extract a single file from a remote zip via range request."""
@@ -229,21 +231,21 @@ def download_scene_from_hf(
         # Show available scenes for debugging
         top_dirs = sorted(
             set(
-                e[0].split("/")[1] if e[0].startswith("pandaset/") else e[0].split("/")[0]
+                e[0].split("/")[1]
+                if e[0].startswith("pandaset/")
+                else e[0].split("/")[0]
                 for e in entries
                 if "/" in e[0]
             )
         )
-        raise ValueError(
-            f"Scene '{scene_id}' not found. Available: {top_dirs[:10]}..."
-        )
+        raise ValueError(f"Scene '{scene_id}' not found. Available: {top_dirs[:10]}...")
 
     scene_dir = os.path.join(output_dir, scene_id)
     os.makedirs(scene_dir, exist_ok=True)
 
     assert scene_prefix is not None
     for i, (name, offset, comp_size) in enumerate(scene_entries):
-        rel_path = name[len(scene_prefix):]
+        rel_path = name[len(scene_prefix) :]
         out_path = os.path.join(scene_dir, rel_path)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
@@ -263,9 +265,7 @@ def download_scene_from_hf(
 # ---------------------------------------------------------------------------
 
 
-def load_camera_images(
-    scene_dir: str, camera: str, frame_ids: list[int]
-) -> np.ndarray:
+def load_camera_images(scene_dir: str, camera: str, frame_ids: list[int]) -> np.ndarray:
     """Load camera images for given frames. Returns [N, H, W, 3] uint8."""
     images = []
     cam_dir = os.path.join(scene_dir, "camera", camera)
@@ -369,14 +369,18 @@ def convert_scene(
 ) -> None:
     """Convert a PandaSet scene directory to npz."""
     all_frame_ids = get_frame_ids(scene_dir)
-    print(f"Scene has {len(all_frame_ids)} frames: {all_frame_ids[0]}..{all_frame_ids[-1]}")
+    print(
+        f"Scene has {len(all_frame_ids)} frames: {all_frame_ids[0]}..{all_frame_ids[-1]}"
+    )
 
     # Apply frame selection
     if include_frame_ids is not None:
         frame_ids = [f for f in include_frame_ids if f in all_frame_ids]
         missing = set(include_frame_ids) - set(all_frame_ids)
         if missing:
-            print(f"  Warning: requested frame IDs not found in scene: {sorted(missing)}")
+            print(
+                f"  Warning: requested frame IDs not found in scene: {sorted(missing)}"
+            )
     else:
         frame_ids = list(all_frame_ids)
 
@@ -414,7 +418,9 @@ def convert_scene(
                 f"  Warning: non-uniform scaling detected "
                 f"(scale_x={scale_x:.3f}, scale_y={scale_y:.3f})"
             )
-        print(f"Target resolution: {target_w}x{target_h} ({downsample_factor}x downsample)")
+        print(
+            f"Target resolution: {target_w}x{target_h} ({downsample_factor}x downsample)"
+        )
     else:
         target_w, target_h = orig_w, orig_h
         downsample_factor = 1
@@ -494,9 +500,7 @@ def convert_scene(
         test_indices = np.linspace(0, n_frames - 1, n_test_frames + 2, dtype=int)[1:-1]
         is_test = np.zeros(n_frames, dtype=bool)
         is_test[test_indices] = True
-    print(
-        f"Train/test split: {(~is_test).sum()} train, {is_test.sum()} test"
-    )
+    print(f"Train/test split: {(~is_test).sum()} train, {is_test.sum()} test")
 
     # Build npz dict
     npz_data = {
@@ -529,9 +533,7 @@ def convert_scene(
         npz_data["lidar_spinning_frequency_hz"] = np.float32(
             sensor["spinning_frequency_hz"]
         )
-        npz_data["lidar_spinning_direction"] = np.array(
-            sensor["spinning_direction"]
-        )
+        npz_data["lidar_spinning_direction"] = np.array(sensor["spinning_direction"])
         print(
             f"  Pandar64: {sensor['n_rows']} beams x {sensor['n_columns']} columns, "
             f"{sensor['spinning_frequency_hz']} Hz {sensor['spinning_direction']}"

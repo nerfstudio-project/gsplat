@@ -73,7 +73,9 @@ def _generate_image_points(
         ri, ci = torch.meshgrid(row_idx, col_idx, indexing="ij")
         # element_to_image_point uses raw sensor angles (no modulo on elevation)
         # to match the CUDA kernel's element_to_image_point exactly.
-        img_pts = camera.element_to_image_point(ri, ci)  # (n_rows, n_cols, 2) = (height, width, 2)
+        img_pts = camera.element_to_image_point(
+            ri, ci
+        )  # (n_rows, n_cols, 2) = (height, width, 2)
         pixel_coords = img_pts.reshape(-1, 2)  # [P, 2]
     else:
         px = torch.arange(image_width, device=device, dtype=torch.float32) + 0.5
@@ -122,7 +124,9 @@ def _generate_rays(
         pose_end = pose_start
 
     ray_o, ray_d, _valid = camera.image_point_to_world_ray_shutter_pose(
-        pixel_coords, pose_start, pose_end,
+        pixel_coords,
+        pose_start,
+        pose_end,
     )  # ray_o: [I, P, 3], ray_d: [I, P, 3]
 
     return torch.cat([ray_o, ray_d], dim=-1)  # [I, P, 6]
@@ -152,7 +156,9 @@ def _compute_gaussian_transform(
 
     # Build the transform in float64, then cast back, to avoid fp32 rounding
     # pushing marginal eval3d samples across the alpha threshold.
-    build_dtype = torch.float64 if quats_flat.dtype == torch.float32 else quats_flat.dtype
+    build_dtype = (
+        torch.float64 if quats_flat.dtype == torch.float32 else quats_flat.dtype
+    )
     M_preci_half = _quat_scale_to_preci_half(
         quats_flat.to(build_dtype), scales_flat.to(build_dtype)
     ).to(quats_flat.dtype)
@@ -598,8 +604,11 @@ def _rasterize_to_pixels_eval3d(
             lidar_coeffs=lidar_coeffs,
         )
         rays_exp = _generate_rays(
-            camera, image_width, image_height,
-            viewmats_exp, viewmats_rs_exp,
+            camera,
+            image_width,
+            image_height,
+            viewmats_exp,
+            viewmats_rs_exp,
         )
 
     # Decode flatten_ids and create properly ordered (gs_id, pix_id, img_id) lists for nerfacc
@@ -709,16 +718,18 @@ def _rasterize_to_pixels_eval3d(
                         # Image layout: width=n_columns (azimuth), height=n_rows (elevation).
                         # pixel_id = elevation * image_width + azimuth
                         tile_local_idx = ty * tile_width + tx
-                        elem_offset = lidar_coeffs.tiling.tiles_pack_info[tile_local_idx, 0].item()
-                        elem_count = lidar_coeffs.tiling.tiles_pack_info[tile_local_idx, 1].item()
+                        elem_offset = lidar_coeffs.tiling.tiles_pack_info[
+                            tile_local_idx, 0
+                        ].item()
+                        elem_count = lidar_coeffs.tiling.tiles_pack_info[
+                            tile_local_idx, 1
+                        ].item()
                         elements = lidar_coeffs.tiling.tiles_to_elements_map[
                             elem_offset : elem_offset + elem_count
                         ]  # (count, 2) with (azimuth_idx, elevation_idx)
                         elem_az = elements[:, 0]
                         elem_el = elements[:, 1]
-                        pix_ids_in_tile = (
-                            elem_el * image_width + elem_az
-                        ).long()
+                        pix_ids_in_tile = (elem_el * image_width + elem_az).long()
                     else:
                         py_start = ty * tile_size
                         py_end = min(py_start + tile_size, image_height)

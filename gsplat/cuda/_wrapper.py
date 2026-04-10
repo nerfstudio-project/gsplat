@@ -649,12 +649,16 @@ def isect_tiles(
     n_images: Optional[int] = None,
     image_ids: Optional[Tensor] = None,
     gaussian_ids: Optional[Tensor] = None,
-    conics: Optional[Tensor] = None,  # [..., N, 3] or [nnz, 3], enables AccuTile when provided
-    opacities: Optional[Tensor] = None,  # [..., N] or [nnz], enables AccuTile when provided
+    conics: Optional[
+        Tensor
+    ] = None,  # [..., N, 3] or [nnz, 3], enables AccuTile when provided
+    opacities: Optional[
+        Tensor
+    ] = None,  # [..., N] or [nnz], enables AccuTile when provided
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Maps projected Gaussians to intersecting tiles.
 
-    When `conics` and `opacities` are provided the kernel uses conservative ellipse intersection (AccuTile/SNUGBOX), 
+    When `conics` and `opacities` are provided the kernel uses conservative ellipse intersection (AccuTile/SNUGBOX),
     skipping tiles that the opacity-thresholded ellipse does not touch. When either is `None` the kernel falls back to the original axis-aligned bounding box.
 
     Args:
@@ -1712,6 +1716,7 @@ def fully_fused_projection_with_ut(
     if not calc_compensations:
         compensations = None
     return radii, means2d, depths, conics, compensations
+
 
 class _RasterizeToPixels(torch.autograd.Function):
     """Rasterize gaussians"""

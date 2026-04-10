@@ -89,9 +89,7 @@ class _SpinningLidarModel(_LidarModel):
     ) -> bool:
         return torch.abs(end_angle - start_angle) >= scale * 2 * math.pi
 
-    def relative_sensor_angles(
-        self, angles: Tensor, *, scale: float = 1
-    ) -> Tensor:
+    def relative_sensor_angles(self, angles: Tensor, *, scale: float = 1) -> Tensor:
         angles_az = angles[..., 0]
         angles_el = angles[..., 1]
         rel_azimuth = self.relative_angle(
@@ -108,9 +106,7 @@ class _SpinningLidarModel(_LidarModel):
 
         return torch.stack([rel_azimuth, rel_elevation], dim=-1)
 
-    def valid_sensor_angles(
-        self, angles: Tensor, *, scale: float = 1
-    ) -> Tensor:
+    def valid_sensor_angles(self, angles: Tensor, *, scale: float = 1) -> Tensor:
         angles_az = angles[..., 0]
         angles_el = angles[..., 1]
         # Account for accumulated numerical errors via some epsilon in FOV check (1x eps on the start of the FOV)
