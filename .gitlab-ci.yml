@@ -34,13 +34,36 @@ stages:
 
 default:
   image: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+  interruptible: true
+
+code-format:
+  stage: lint
+
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+
+  tags:
+    - type/docker
+    - os/linux
+    - arch/x86_64
+
+  script:
+    - lint/format-code.sh --check
+
+test:
+  stage: test
+
+  variables:
+    VERBOSE: 1
+    DEBUG: 1
+    CCACHE_STATSLOG: $CI_BUILDS_DIR/ccache_stats.log
+
   tags:
     - type/docker
     - os/linux
     - arch/x86_64
     - gpu
 
-  interruptible: true
   before_script:
     - nvidia-smi -L
     - nvidia-smi
@@ -57,18 +80,6 @@ default:
     # (only log result, not used to tweak build / test settings)
     - CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1)
     - echo "Determined CUDA Architecture ${CUDA_ARCH}"
-
-code-format:
-  stage: lint
-  script:
-    - lint/format-code.sh --check
-
-test:
-  stage: test
-  variables:
-    VERBOSE: 1
-    DEBUG: 1
-    CCACHE_STATSLOG: $CI_BUILDS_DIR/ccache_stats.log
 
   script:
     # Load some envvars that depend on gitlab variables
