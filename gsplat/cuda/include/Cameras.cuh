@@ -354,12 +354,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 
         if (external_distortion_params != nullptr) {
             distorted_ray = gsplat::extdist::BivariateWindshieldModel::distort_camera_ray(
-                cam_ray,
-                external_distortion_params->horizontal_poly_ptr,
-                external_distortion_params->vertical_poly_ptr,
-                external_distortion_params->horizontal_poly_order,
-                external_distortion_params->vertical_poly_order
-            );
+                cam_ray, external_distortion_params->horizontal_poly.data(), external_distortion_params->vertical_poly.data());
         }
         
         return derived->camera_ray_to_image_point_impl(distorted_ray, margin_factor);
@@ -371,13 +366,8 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         auto cam_ray = derived->image_point_to_camera_ray_impl(image_point);
         
         if (cam_ray.valid_flag && external_distortion_params != nullptr) {
-            cam_ray.ray_dir = gsplat::extdist::BivariateWindshieldModel::distort_camera_ray(
-                cam_ray.ray_dir,
-                external_distortion_params->horizontal_poly_inverse_ptr,
-                external_distortion_params->vertical_poly_inverse_ptr,
-                external_distortion_params->horizontal_poly_inverse_order,
-                external_distortion_params->vertical_poly_inverse_order
-            );
+            cam_ray.ray_dir = gsplat::extdist::BivariateWindshieldModel::undistort_camera_ray(
+                cam_ray.ray_dir, external_distortion_params->horizontal_poly_inverse.data(), external_distortion_params->vertical_poly_inverse.data());
         }
         
         return cam_ray;
@@ -546,6 +536,7 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
 
     __device__ PerfectPinholeCameraModel(Parameters const &parameters)
         : Base(parameters.external_distortion_params),
+
           parameters(parameters) {}
 
     Parameters parameters;
@@ -619,6 +610,7 @@ struct OpenCVPinholeCameraModel
         float stop_undistortion_square_error_px2 = 1e-12
     )
         : Base(parameters.external_distortion_params),
+
           parameters(parameters),
           undistortion_stop_square_error_px2(stop_undistortion_square_error_px2
           ) {}
@@ -977,7 +969,8 @@ struct OpenCVFisheyeCameraModel
     __host__ __device__ OpenCVFisheyeCameraModel(
         Parameters const &parameters, float min_2d_norm = 1e-6f
     )
-        : Base(parameters.external_distortion_params), parameters(parameters), min_2d_norm(min_2d_norm) {
+        : Base(parameters.external_distortion_params),
+ parameters(parameters), min_2d_norm(min_2d_norm) {
         // initialize ninth-degree odd-only forward polynomial (mapping angles
         // to normalized distances) theta + k1*theta^3 + k2*theta^5 + k3*theta^7
         // + k4*theta^9
@@ -1193,7 +1186,8 @@ public:
     __host__ __device__ FThetaCameraModel(
         Parameters const& parameters, float min_2d_norm = 1e-6f
     )
-        : Base(parameters.external_distortion_params), parameters(parameters), min_2d_norm(min_2d_norm), dreference_poly{} {
+        : Base(parameters.external_distortion_params),
+ parameters(parameters), min_2d_norm(min_2d_norm), dreference_poly{} {
 
         auto const dist = parameters.dist;
 
