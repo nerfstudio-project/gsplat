@@ -149,10 +149,12 @@ RUN --mount=type=tmpfs,target=/tmp \
 
     # Examples
     packages=(
+        "nvidia-ncore==18.6.0"
         "torchvision==0.24.1"
         "git+https://github.com/brandonyzhao/pycolmap@a2a5671b0f6ab641957dd4c5a78cabcf220c28ee"
         "viser==1.0.24"
         "git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787"
+        "scipy==1.17.1"
         "scikit-learn==1.8.0"
         "torchmetrics[image]==1.8.2"
         "tyro==1.0.8"
