@@ -71,7 +71,6 @@ torch::Tensor eval_bivariate_poly_wrapper(
 
     // Pad coefficients to MAX_ORDER layout and pass by value as kernel arg (constant memory)
     auto padded = pad_tensor_coefficients(poly_coeffs);
-
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(x.device().index());
 
     int threads = 256;

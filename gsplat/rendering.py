@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2024-2025 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -562,7 +562,6 @@ def rasterization(
     _validate_3dgut_rasterize_mode(
         rasterize_mode, with_ut=with_ut, with_eval3d=with_eval3d
     )
-
     if colors is None and has_color:
         raise ValueError(
             f"colors must be provided when render_mode='{render_mode}' includes RGB. "
@@ -1071,7 +1070,6 @@ def rasterization(
             conics = reshape_view(C, conics, N_world)
             opacities = reshape_view(C, opacities, N_world)
         trace_pop()  # dist-scatter
-
     # Append depth channel to proj_features if needed.
     # Layout is [proj_features(D+E) | depth(1)], with depth always last.
     # In depth-only modes proj_features may not be set yet (no colors, no extra_signals).

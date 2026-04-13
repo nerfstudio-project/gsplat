@@ -23,7 +23,6 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal, assert_never
 
-from ._wrapper import RollingShutterType
 from ._math import (
     _safe_normalize,
     _rotmat_to_quat,

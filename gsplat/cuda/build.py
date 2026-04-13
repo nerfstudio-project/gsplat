@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2025-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -134,15 +134,15 @@ def get_build_parameters():
         else:
             extra_cflags += ["/O2", "-DNDEBUG"]
             extra_cuda_cflags += ["-O2", "-DNDEBUG"]
-
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
 
     # Silencing of warnings
-    extra_cflags += ["-Wno-attributes"]
-    # #pragma unroll is standard CUDA idiom but unknown to gcc
-    extra_cflags += ["-Wno-unknown-pragmas"]
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
     extra_cuda_cflags += ["-diag-suppress", "20012,186"]
+    if sys.platform != "win32":
+        extra_cflags += ["-Wno-attributes"]
+        # #pragma unroll is standard CUDA idiom but unknown to gcc
+        extra_cflags += ["-Wno-unknown-pragmas"]
 
     if BUILD_2DGS is not None:
         extra_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
