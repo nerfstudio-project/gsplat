@@ -39,14 +39,15 @@ namespace gsplat::extdist {
 __global__ void eval_bivariate_poly_kernel(
     const float* __restrict__ x,
     const float* __restrict__ y,
-    std::array<float, BivariateWindshieldModelParameters::MAX_COEFFS> poly_coeffs,
+    const float* __restrict__ poly_coeffs,
+    int32_t order,
     float* __restrict__ result,
     int64_t N)
 {
     int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N) return;
 
-    result[idx] = gsplat::extdist::eval_bivariate_poly(poly_coeffs.data(), x[idx], y[idx]);
+    result[idx] = gsplat::extdist::eval_bivariate_poly(poly_coeffs, order, x[idx], y[idx]);
 }
 
 torch::Tensor eval_bivariate_poly_wrapper(
@@ -57,20 +58,19 @@ torch::Tensor eval_bivariate_poly_wrapper(
 {
     TORCH_CHECK(x.is_cuda(), "x must be a CUDA tensor");
     TORCH_CHECK(y.is_cuda(), "y must be a CUDA tensor");
+    TORCH_CHECK(poly_coeffs.is_cuda(), "poly_coeffs must be a CUDA tensor");
     TORCH_CHECK(x.dtype() == torch::kFloat32, "x must be float32");
     TORCH_CHECK(y.dtype() == torch::kFloat32, "y must be float32");
     TORCH_CHECK(poly_coeffs.dtype() == torch::kFloat32, "poly_coeffs must be float32");
     TORCH_CHECK(x.numel() == y.numel(), "x and y must have same number of elements");
     TORCH_CHECK(x.is_contiguous(), "x must be contiguous");
     TORCH_CHECK(y.is_contiguous(), "y must be contiguous");
+    TORCH_CHECK(poly_coeffs.is_contiguous(), "poly_coeffs must be contiguous");
 
     int64_t N = x.numel();
     auto result = torch::empty_like(x);
 
     if (N == 0) return result;
-
-    // Pad coefficients to MAX_ORDER layout and pass by value as kernel arg (constant memory)
-    auto padded = pad_tensor_coefficients(poly_coeffs);
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(x.device().index());
 
@@ -80,7 +80,8 @@ torch::Tensor eval_bivariate_poly_wrapper(
     eval_bivariate_poly_kernel<<<blocks, threads, 0, stream>>>(
         x.data_ptr<float>(),
         y.data_ptr<float>(),
-        padded,
+        poly_coeffs.data_ptr<float>(),
+        order,
         result.data_ptr<float>(),
         N);
 
@@ -97,9 +98,11 @@ torch::Tensor eval_bivariate_poly_wrapper(
 
 __global__ void distort_camera_rays_kernel(
     const float* __restrict__ rays,        // [N, 3]
-    BivariateWindshieldModelDeviceParams params,
+    const float* __restrict__ h_poly,
+    const float* __restrict__ v_poly,
+    int32_t h_order,
+    int32_t v_order,
     float* __restrict__ result,            // [N, 3]
-    bool inverse,
     int64_t N)
 {
     int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -107,11 +110,8 @@ __global__ void distort_camera_rays_kernel(
 
     glm::fvec3 ray(rays[idx * 3 + 0], rays[idx * 3 + 1], rays[idx * 3 + 2]);
 
-    glm::fvec3 distorted = inverse
-        ? BivariateWindshieldModel::undistort_camera_ray(
-            ray, params.horizontal_poly_inverse.data(), params.vertical_poly_inverse.data())
-        : BivariateWindshieldModel::distort_camera_ray(
-            ray, params.horizontal_poly.data(), params.vertical_poly.data());
+    glm::fvec3 distorted = BivariateWindshieldModel::distort_camera_ray(
+        ray, h_poly, v_poly, h_order, v_order);
 
     result[idx * 3 + 0] = distorted.x;
     result[idx * 3 + 1] = distorted.y;
@@ -134,8 +134,18 @@ torch::Tensor distort_camera_rays(
 
     if (N == 0) return result;
 
-    // Construct device params — pads and copies tensor data into std::array members
-    BivariateWindshieldModelDeviceParams device_params(params);
+    // Select forward or inverse polynomials
+    const torch::Tensor& h_poly = inverse ? params.horizontal_poly_inverse : params.horizontal_poly;
+    const torch::Tensor& v_poly = inverse ? params.vertical_poly_inverse : params.vertical_poly;
+
+    TORCH_CHECK(h_poly.is_cuda(), "horizontal polynomial must be a CUDA tensor");
+    TORCH_CHECK(v_poly.is_cuda(), "vertical polynomial must be a CUDA tensor");
+
+    auto h_poly_contig = h_poly.contiguous();
+    auto v_poly_contig = v_poly.contiguous();
+
+    int32_t h_order = compute_order(h_poly_contig.size(-1));
+    int32_t v_order = compute_order(v_poly_contig.size(-1));
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(rays.device().index());
 
@@ -144,9 +154,11 @@ torch::Tensor distort_camera_rays(
 
     distort_camera_rays_kernel<<<blocks, threads, 0, stream>>>(
         rays_contig.data_ptr<float>(),
-        device_params,
+        h_poly_contig.data_ptr<float>(),
+        v_poly_contig.data_ptr<float>(),
+        h_order,
+        v_order,
         result.data_ptr<float>(),
-        inverse,
         N);
 
     cudaError_t err = cudaGetLastError();

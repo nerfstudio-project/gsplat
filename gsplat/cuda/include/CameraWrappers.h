@@ -212,33 +212,20 @@ protected:
     void init_external_distortion(const extdist::BivariateWindshieldModelParameters& params);
 
     /**
-     * @brief Whether external distortion is enabled.
-     */
-    bool has_ext_dist() const { return m_has_ext_dist; }
-
-    /**
-     * @brief Get host-side external distortion device params (by-value, for kernel arg passing).
-     */
-    const extdist::BivariateWindshieldModelDeviceParams& ext_dist_device_params() const {
-        return m_ext_dist_device_params;
-    }
-
-    /**
-     * @brief Get persistent device pointer to external distortion params (for camera construction kernels).
+     * @brief Get pointer to device-side external distortion params (or nullptr).
      */
     const extdist::BivariateWindshieldModelDeviceParams* dev_ext_dist_params() const {
-        return m_dev_ext_dist.get();
+        return m_dev_ext_dist_params.get();
     }
 
 private:
     std::unique_ptr<CameraModel, CudaDeleter> m_dev_cameras;
+    std::unique_ptr<extdist::BivariateWindshieldModelDeviceParams, CudaDeleter> m_dev_ext_dist_params;
 
     torch::Tensor m_focal_lengths;
     torch::Tensor m_principal_points;
-
-    extdist::BivariateWindshieldModelDeviceParams m_ext_dist_device_params;
-    std::unique_ptr<extdist::BivariateWindshieldModelDeviceParams, CudaDeleter> m_dev_ext_dist;
-    bool m_has_ext_dist = false;
+    // Keep external distortion tensors alive (they own the data pointed to by device params)
+    std::optional<extdist::BivariateWindshieldModelParameters> m_ext_dist_params_storage;
 };
 
 /**
