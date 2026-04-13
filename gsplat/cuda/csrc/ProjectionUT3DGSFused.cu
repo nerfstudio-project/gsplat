@@ -62,7 +62,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     // uncented transform
     const UnscentedTransformParameters ut_params,    
     // sensor model parameters
-    const typename SensorModel::KernelParameters sensor_model_params,
+    __grid_constant__ const typename SensorModel::KernelParameters sensor_model_params,
     // outputs
     int32_t *__restrict__ radii,         // [B, C, N, 2]
     scalar_t *__restrict__ means2d,      // [B, C, N, 2]
