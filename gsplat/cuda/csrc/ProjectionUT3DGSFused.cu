@@ -67,7 +67,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
     const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
     const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_coeffs,
-    __grid_constant__ const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
+    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params, // external distortion parameters
     // outputs
     int32_t *__restrict__ radii,         // [B, C, N, 2]
     scalar_t *__restrict__ means2d,      // [B, C, N, 2]
@@ -147,7 +147,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
+            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
                 &external_distortion_device_params.value() : nullptr;
             PerfectPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
@@ -168,7 +168,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
             if (thin_prism_coeffs != nullptr) {
                 cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + bid * C * 4 + cid * 4);
             }
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
+            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
                 &external_distortion_device_params.value() : nullptr;
             OpenCVPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
@@ -184,7 +184,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
         if (radial_coeffs != nullptr) {
             cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + bid * C * 4 + cid * 4);
         }
-        cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
+        cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
             &external_distortion_device_params.value() : nullptr;
         OpenCVFisheyeCameraModel camera_model(cm_params);
         image_gaussian_return =

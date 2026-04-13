@@ -83,36 +83,21 @@ def num_coeffs_for_order(order: int) -> int:
 
 
 def make_identity_horizontal_poly(order: int = 1) -> list:
-    """Identity polynomial that maps (phi, theta) -> phi for any order 0-5.
+    """Order-1 identity polynomial that maps (phi, theta) -> phi.
 
-    The bivariate polynomial coefficient layout groups by descending inner order:
-      block 0: inner_order=N  (N+1 coeffs, polynomial in x) → outer_coeffs[0]
-      block 1: inner_order=N-1 (N coeffs) → outer_coeffs[1]
-      ...
-    Result = outer_coeffs[0] + outer_coeffs[1]*y + ...
-
-    For f(x,y) = x: we need outer_coeffs[0] = x, so coeffs[1] = 1.0 (x^1 term
-    in the first block), everything else zero.
+    For order 1: f(phi, theta) = c0 + c1*phi + c2*theta = phi  =>  [0, 1, 0]
     """
-    n = num_coeffs_for_order(order)
-    coeffs = [0.0] * n
-    if order >= 1:
-        coeffs[1] = 1.0
-    return coeffs
+    assert order == 1, "Only order-1 identity is implemented"
+    return [0.0, 1.0, 0.0]
 
 
 def make_identity_vertical_poly(order: int = 1) -> list:
-    """Identity polynomial that maps (phi, theta) -> theta for any order 0-5.
+    """Order-1 identity polynomial that maps (phi, theta) -> theta.
 
-    For f(x,y) = y: we need outer_coeffs[1] = 1 (constant in x), so the first
-    coefficient of the second block must be 1.0. The second block starts at
-    index (order + 1).
+    For order 1: f(phi, theta) = c0 + c1*phi + c2*theta = theta  =>  [0, 0, 1]
     """
-    n = num_coeffs_for_order(order)
-    coeffs = [0.0] * n
-    if order >= 1:
-        coeffs[order + 1] = 1.0
-    return coeffs
+    assert order == 1, "Only order-1 identity is implemented"
+    return [0.0, 0.0, 1.0]
 
 
 def make_zero_poly(order: int = 1) -> list:
