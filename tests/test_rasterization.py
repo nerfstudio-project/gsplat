@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2024-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2024-2025 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,9 +26,9 @@ from itertools import product, chain
 from types import SimpleNamespace
 from typing import Optional, Tuple
 
+import gsplat
 import pytest
 import torch
-import gsplat
 
 from tests.test_cameras import parse_lidar_camera
 from gsplat.rendering import (
@@ -272,6 +272,7 @@ def test_rasterization(
     N: int,
     sensor_model: SimpleNamespace,
     gaussians: SimpleNamespace,
+    dist_init,
 ):
     if distributed and not torch.distributed.is_initialized():
         pytest.skip("distributed process group not initialized")
