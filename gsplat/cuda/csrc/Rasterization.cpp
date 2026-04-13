@@ -29,7 +29,6 @@
 #include "Ops.h"
 #include "Rasterization.h"
 #include "Cameras.h"
-#include "MacroUtils.h"
 
 namespace gsplat {
 
@@ -85,35 +84,22 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     last_ids_dims.append({image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_3dgs_fwd_kernel<N>(                         \
-            means2d,                                                           \
-            conics,                                                            \
-            colors,                                                            \
-            opacities,                                                         \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_size,                                                         \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            renders,                                                           \
-            alphas,                                                            \
-            last_ids                                                           \
-        );                                                                     \
-        break;
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
+    launch_rasterize_to_pixels_3dgs_fwd_kernel(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+        renders,
+        alphas,
+        last_ids
+    );
 
     return std::make_tuple(renders, alphas, last_ids);
 }
@@ -161,8 +147,6 @@ rasterize_to_pixels_3dgs_bwd(
         CHECK_INPUT(masks.value());
     }
 
-    uint32_t channels = colors.size(-1);
-
     at::Tensor v_means2d = at::zeros_like(means2d);
     at::Tensor v_conics = at::zeros_like(conics);
     at::Tensor v_colors = at::zeros_like(colors);
@@ -172,41 +156,28 @@ rasterize_to_pixels_3dgs_bwd(
         v_means2d_abs = at::zeros_like(means2d);
     }
 
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_3dgs_bwd_kernel<N>(                         \
-            means2d,                                                           \
-            conics,                                                            \
-            colors,                                                            \
-            opacities,                                                         \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_size,                                                         \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            render_alphas,                                                     \
-            last_ids,                                                          \
-            v_render_colors,                                                   \
-            v_render_alphas,                                                   \
-            absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt, \
-            v_means2d,                                                         \
-            v_conics,                                                          \
-            v_colors,                                                          \
-            v_opacities                                                        \
-        );                                                                     \
-        break;
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
+    launch_rasterize_to_pixels_3dgs_bwd_kernel(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+        render_alphas,
+        last_ids,
+        v_render_colors,
+        v_render_alphas,
+        absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt,
+        v_means2d,
+        v_conics,
+        v_colors,
+        v_opacities
+    );
 
     return std::make_tuple(
         v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities
@@ -379,40 +350,27 @@ rasterize_to_pixels_2dgs_fwd(
     render_median_dims.append({image_height, image_width, 1});
     at::Tensor render_median = at::empty(render_median_dims, opt);
 
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_2dgs_fwd_kernel<N>(                         \
-            means2d,                                                           \
-            ray_transforms,                                                    \
-            colors,                                                            \
-            opacities,                                                         \
-            normals,                                                           \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_size,                                                         \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            renders,                                                           \
-            alphas,                                                            \
-            render_normals,                                                    \
-            render_distort,                                                    \
-            render_median,                                                     \
-            last_ids,                                                          \
-            median_ids                                                         \
-        );                                                                     \
-        break;
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
+    launch_rasterize_to_pixels_2dgs_fwd_kernel(
+        means2d,
+        ray_transforms,
+        colors,
+        opacities,
+        normals,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+        renders,
+        alphas,
+        render_normals,
+        render_distort,
+        render_median,
+        last_ids,
+        median_ids
+    );
 
     return std::make_tuple(
         renders,
@@ -489,8 +447,6 @@ rasterize_to_pixels_2dgs_bwd(
         CHECK_INPUT(masks.value());
     }
 
-    uint32_t channels = colors.size(-1);
-
     at::Tensor v_means2d = at::zeros_like(means2d);
     at::Tensor v_ray_transforms = at::zeros_like(ray_transforms);
     at::Tensor v_colors = at::zeros_like(colors);
@@ -502,50 +458,37 @@ rasterize_to_pixels_2dgs_bwd(
     }
     at::Tensor v_densify = at::zeros_like(densify);
 
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_2dgs_bwd_kernel<N>(                         \
-            means2d,                                                           \
-            ray_transforms,                                                    \
-            colors,                                                            \
-            opacities,                                                         \
-            normals,                                                           \
-            densify,                                                           \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_size,                                                         \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            render_colors,                                                     \
-            render_alphas,                                                     \
-            last_ids,                                                          \
-            median_ids,                                                        \
-            v_render_colors,                                                   \
-            v_render_alphas,                                                   \
-            v_render_normals,                                                  \
-            v_render_distort,                                                  \
-            v_render_median,                                                   \
-            absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt, \
-            v_means2d,                                                         \
-            v_ray_transforms,                                                  \
-            v_colors,                                                          \
-            v_opacities,                                                       \
-            v_normals,                                                         \
-            v_densify                                                          \
-        );                                                                     \
-        break;
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
+    launch_rasterize_to_pixels_2dgs_bwd_kernel(
+        means2d,
+        ray_transforms,
+        colors,
+        opacities,
+        normals,
+        densify,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+        render_colors,
+        render_alphas,
+        last_ids,
+        median_ids,
+        v_render_colors,
+        v_render_alphas,
+        v_render_normals,
+        v_render_distort,
+        v_render_median,
+        absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt,
+        v_means2d,
+        v_ray_transforms,
+        v_colors,
+        v_opacities,
+        v_normals,
+        v_densify
+    );
 
     return std::make_tuple(
         v_means2d_abs,
@@ -732,52 +675,39 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     last_ids_shape.append({C, image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_shape, opt.dtype(at::kInt));
 
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel<N>(              \
-            means,                                                             \
-            quats,                                                             \
-            scales,                                                            \
-            colors,                                                            \
-            opacities,                                                         \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_size,                                                         \
-            viewmats0,                                                         \
-            viewmats1,                                                         \
-            Ks,                                                                \
-            camera_model,                                                      \
-            ut_params,                                                         \
-            rs_type,                                                           \
-            rays,                                                              \
-            radial_coeffs,                                                     \
-            tangential_coeffs,                                                 \
-            thin_prism_coeffs,                                                 \
-            ftheta_coeffs,                                                     \
-            lidar_coeffs,                                                      \
-            external_distortion_params,                                        \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            use_hit_distance,                                                  \
-            renders,                                                           \
-            alphas,                                                            \
-            last_ids,                                                          \
-            sample_counts,                                                     \
-            normals                                                            \
-        );                                                                     \
-        break;
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
+    launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        viewmats0,
+        viewmats1,
+        Ks,
+        camera_model,
+        ut_params,
+        rs_type,
+        rays,
+        radial_coeffs,
+        tangential_coeffs,
+        thin_prism_coeffs,
+        ftheta_coeffs,
+        lidar_coeffs,
+        external_distortion_params,
+        tile_offsets,
+        flatten_ids,
+        use_hit_distance,
+        renders,
+        alphas,
+        last_ids,
+        sample_counts,
+        normals
+    );
 
     return std::make_tuple(renders, alphas, last_ids);
 };
@@ -924,8 +854,6 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
         CHECK_CONTIGUOUS(params->vertical_poly_inverse);
     }
 
-    uint32_t channels = colors.size(-1);
-
     at::Tensor v_means = at::zeros_like(means);
     at::Tensor v_quats = at::zeros_like(quats);
     at::Tensor v_scales = at::zeros_like(scales);
@@ -933,58 +861,45 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
     at::Tensor v_opacities = at::zeros_like(opacities);
     at::optional<at::Tensor> v_rays = rays.has_value() ? at::optional<at::Tensor>(at::zeros_like(rays.value())) : at::optional<at::Tensor>();
     
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel<N>(              \
-            means,                                                             \
-            quats,                                                             \
-            scales,                                                            \
-            colors,                                                            \
-            opacities,                                                         \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_size,                                                         \
-            viewmats0,                                                         \
-            viewmats1,                                                         \
-            Ks,                                                                \
-            camera_model,                                                     \
-            ut_params,                                                        \
-            rs_type,                                                       \
-            rays,                                                              \
-            radial_coeffs,                                                    \
-            tangential_coeffs,                                                \
-            thin_prism_coeffs,                                               \
-            ftheta_coeffs,                                                     \
-            lidar_coeffs,                                                      \
-            external_distortion_params,                                        \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            use_hit_distance,                                                  \
-            render_alphas,                                                     \
-            last_ids,                                                          \
-            v_render_colors,                                                   \
-            v_render_alphas,                                                   \
-            v_render_normals,                                                  \
-            v_means,                                                           \
-            v_quats,                                                           \
-            v_scales,                                                          \
-            v_colors,                                                          \
-            v_opacities,                                                       \
-            v_rays                                                             \
-        );                                                                     \
-        break;
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
+    launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        viewmats0,
+        viewmats1,
+        Ks,
+        camera_model,
+        ut_params,
+        rs_type,
+        rays,
+        radial_coeffs,
+        tangential_coeffs,
+        thin_prism_coeffs,
+        ftheta_coeffs,
+        lidar_coeffs,
+        external_distortion_params,
+        tile_offsets,
+        flatten_ids,
+        use_hit_distance,
+        render_alphas,
+        last_ids,
+        v_render_colors,
+        v_render_alphas,
+        v_render_normals,
+        v_means,
+        v_quats,
+        v_scales,
+        v_colors,
+        v_opacities,
+        v_rays
+    );
 
     return std::make_tuple(
         v_means, v_quats, v_scales, v_colors, v_opacities, v_rays
