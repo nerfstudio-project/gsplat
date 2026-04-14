@@ -383,6 +383,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             background_render_dot += backgrounds[k] * v_render_c[k];
         }
     }
+    // Per-pixel coefficient for the v_alpha terms that are independent of the
+    // cross-batch running state (T, render_accum_dot, normal_accum_dot).
+    // These terms depend only on per-Gaussian alpha (through ra) and this
+    // per-pixel constant, so they need no correction in a parallel-batch scheme.
+    const float v_alpha_ind_coeff = v_render_a - background_render_dot;
 
     vec3 v_ray_o = {0.f, 0.f, 0.f};
     vec3 v_ray_d = {0.f, 0.f, 0.f};
@@ -545,12 +550,15 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     normal_render_dot = glm::dot(normal, v_render_n);
                 }
 
-                float v_alpha = rgb_render_dot * T - render_accum_dot * ra;
-
-                v_alpha += T_final * ra * v_render_a;
-                if (backgrounds != nullptr) {
-                    v_alpha += -T_final * ra * background_render_dot;
-                }
+                // v_alpha decomposes into recurrent terms (depend on running
+                // T / render_accum_dot / normal_accum_dot that carry across
+                // batches) and an independent term (depends only on per-Gaussian
+                // alpha and per-pixel constants).  Keeping them separate makes
+                // the cross-batch dependency explicit for future parallel-batch
+                // work — the independent term needs no correction when batches
+                // are resolved out of order.
+                float v_alpha = rgb_render_dot * T - render_accum_dot * ra
+                              + T_final * ra * v_alpha_ind_coeff;
                 if (v_render_normals != nullptr) {
                     v_alpha += normal_render_dot * T - normal_accum_dot * ra;
                 }
