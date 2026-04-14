@@ -704,10 +704,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     if (external_distortion_params.has_value()) {
         const auto& params = external_distortion_params.value();
         TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
-        CHECK_INPUT(params->horizontal_poly);
-        CHECK_INPUT(params->vertical_poly);
-        CHECK_INPUT(params->horizontal_poly_inverse);
-        CHECK_INPUT(params->vertical_poly_inverse);
+        CHECK_CONTIGUOUS(params->horizontal_poly);
+        CHECK_CONTIGUOUS(params->vertical_poly);
+        CHECK_CONTIGUOUS(params->horizontal_poly_inverse);
+        CHECK_CONTIGUOUS(params->vertical_poly_inverse);
     }
 
     if (sample_counts.has_value()) {
@@ -918,10 +918,10 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
     if (external_distortion_params.has_value()) {
         const auto& params = external_distortion_params.value();
         TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
-        CHECK_INPUT(params->horizontal_poly);
-        CHECK_INPUT(params->vertical_poly);
-        CHECK_INPUT(params->horizontal_poly_inverse);
-        CHECK_INPUT(params->vertical_poly_inverse);
+        CHECK_CONTIGUOUS(params->horizontal_poly);
+        CHECK_CONTIGUOUS(params->vertical_poly);
+        CHECK_CONTIGUOUS(params->horizontal_poly_inverse);
+        CHECK_CONTIGUOUS(params->vertical_poly_inverse);
     }
 
     uint32_t channels = colors.size(-1);
