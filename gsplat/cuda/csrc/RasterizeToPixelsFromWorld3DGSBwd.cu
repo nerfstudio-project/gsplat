@@ -353,10 +353,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // this is the T AFTER the last gaussian in this pixel
     float T_final = 1.0f - render_alphas[pix_id];
     float T = T_final;
-    // the contribution from gaussians behind the current one
-    float buffer[CDIM] = {0.f};
-    // the contribution from gaussians behind the current one (for normals)
-    vec3 normal_buffer = {0.f, 0.f, 0.f};
+    float render_accum_dot = 0.f;
+    float normal_accum_dot = 0.f;
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = done ? last_ids[pix_id] : 0;
 
@@ -374,6 +372,14 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         v_render_n.x = v_render_normals[pix_id * 3 + 0];
         v_render_n.y = v_render_normals[pix_id * 3 + 1];
         v_render_n.z = v_render_normals[pix_id * 3 + 2];
+    }
+
+    float background_render_dot = 0.f;
+    if (backgrounds != nullptr) {
+#pragma unroll
+        for (uint32_t k = 0; k < CDIM; ++k) {
+            background_render_dot += backgrounds[k] * v_render_c[k];
+        }
     }
 
     vec3 v_ray_o = {0.f, 0.f, 0.f};
@@ -523,36 +529,28 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     normal = safe_normalize(unnormalized_flipped);
                 }
                 
-                // contribution from this pixel
-                float v_alpha = 0.f;
+                float rgb_render_dot = 0.f;
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    // For the last channel with use_hit_distance, use the per-pixel
-                    // local_hit_dist instead of per-Gaussian rgbs_batch (which is
-                    // shared memory and would race across pixels in the tile).
                     const float rgb_k = (use_hit_distance && k == CDIM - 1)
                         ? local_hit_dist
                         : rgbs_batch[t * CDIM + k];
-                    v_alpha += (rgb_k * T - buffer[k] * ra) *
-                               v_render_c[k];
+                    rgb_render_dot += rgb_k * v_render_c[k];
                 }
 
-                v_alpha += T_final * ra * v_render_a;
-                // contribution from background pixel
-                if (backgrounds != nullptr) {
-                    float accum = 0.f;
-#pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        accum += backgrounds[k] * v_render_c[k];
-                    }
-                    v_alpha += -T_final * ra * accum;
-                }
-                
-                // Add contribution from normals to v_alpha (product rule term)
-                // Forward: render_normals += normal * vis (where vis = alpha * T)
-                // So v_alpha_normals = dot(normal * T - normal_buffer * ra, v_render_n)
+                float normal_render_dot = 0.f;
                 if (v_render_normals != nullptr) {
-                    v_alpha += glm::dot(normal * T - normal_buffer * ra, v_render_n);
+                    normal_render_dot = glm::dot(normal, v_render_n);
+                }
+
+                float v_alpha = rgb_render_dot * T - render_accum_dot * ra;
+
+                v_alpha += T_final * ra * v_render_a;
+                if (backgrounds != nullptr) {
+                    v_alpha += -T_final * ra * background_render_dot;
+                }
+                if (v_render_normals != nullptr) {
+                    v_alpha += normal_render_dot * T - normal_accum_dot * ra;
                 }
 
                 // Add contribution from hit distance (if enabled)
@@ -632,17 +630,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     }
                 }
 
-#pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    const float rgb_k = (use_hit_distance && k == CDIM - 1)
-                        ? local_hit_dist
-                        : rgbs_batch[t * CDIM + k];
-                    buffer[k] += rgb_k * fac;
-                }
-                
-                // Update normal buffer (for product rule in next iterations)
+                render_accum_dot += rgb_render_dot * fac;
                 if (v_render_normals != nullptr) {
-                    normal_buffer += normal * fac;
+                    normal_accum_dot += normal_render_dot * fac;
                 }
             }
             warpSum<CDIM>(v_rgb_local, warp);
