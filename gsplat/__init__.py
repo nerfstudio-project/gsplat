@@ -91,7 +91,12 @@ from .losses import (
     torch_ssim_loss,
     total_variation_loss,
 )
-from .losses_fused import FusedGaussianLosses
+from .losses_fused import (
+    FusedCameraLosses,
+    FusedGaussianLosses,
+    FusedLidarLosses,
+    LossFlag,
+)
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
 from .cuda._lidar import (
@@ -156,7 +161,10 @@ __all__ = [
     "has_camera_wrappers",
     "has_losses",
     "has_reloc",
+    "FusedCameraLosses",
     "FusedGaussianLosses",
+    "FusedLidarLosses",
+    "LossFlag",
     "gaussian_scale_reg",
     "gaussian_density_reg",
     "gaussian_z_scale_reg",

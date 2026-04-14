@@ -23,6 +23,7 @@
 #include "Cameras.h"
 #include "ExternalDistortion.h"
 #include "csrc/Config.h"
+#include "csrc/LossFlags.h"
 #include "csrc/Null.h"
 #include "csrc/Rasterization.h"
 
@@ -34,10 +35,12 @@
 namespace gsplat
 {
 void register_adam_cuda_impl(torch::Library &m);
+void register_camera_losses_cuda_impl(torch::Library &m);
 void register_external_distortion_wrappers_cuda_impl(torch::Library &m);
 void register_gaussian_losses_cuda_impl(torch::Library &m);
 void register_intersect_cuda_impl(torch::Library &m);
 void register_intersect_privateuseone_impl(torch::Library &m);
+void register_lidar_losses_cuda_impl(torch::Library &m);
 void register_mcmc_perturb_cuda_impl(torch::Library &m);
 void register_projection_cuda_impl(torch::Library &m);
 void register_projection_privateuseone_impl(torch::Library &m);
@@ -95,6 +98,19 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
             return config;
         }
     );
+
+#if GSPLAT_BUILD_LOSSES
+    // Expose the per-ray loss flag bitmask values so Python consumers (the
+    // pure-PyTorch fallback in losses_fused.py and tests) read the compiled
+    // values rather than duplicating the literals. These honor any -D
+    // overrides applied at build time.
+    m.attr("LOSS_FLAG_RGB_LABEL")    = GSPLAT_LOSS_FLAG_RGB_LABEL;
+    m.attr("LOSS_FLAG_SKY_SEMANTIC") = GSPLAT_LOSS_FLAG_SKY_SEMANTIC;
+    m.attr("LOSS_FLAG_DROPPED")      = GSPLAT_LOSS_FLAG_DROPPED;
+    m.attr("LOSS_FLAG_INVALID")      = GSPLAT_LOSS_FLAG_INVALID;
+    m.attr("LOSS_FLAG_DIFIXED")      = GSPLAT_LOSS_FLAG_DIFIXED;
+    m.attr("LOSS_FLAG_SYNTHETIC")    = GSPLAT_LOSS_FLAG_SYNTHETIC;
+#endif
 }
 
 namespace
@@ -1261,6 +1277,27 @@ TORCH_LIBRARY(gsplat, m)
         "v_loss_z_scale, Tensor v_loss_oob, Tensor(a!) v_scales, Tensor(b!) v_densities, Tensor(c!) v_z_scales, "
         "Tensor(d!) v_positions) -> ()"
     );
+    m.def(
+        "camera_losses_fwd(Tensor flags, Tensor rgb_pred, Tensor rgb_gt, Tensor bg_pred, float rgb_factor, float "
+        "bg_factor, Tensor(a!) rgb_loss, Tensor(b!) bg_loss) -> ()"
+    );
+    m.def(
+        "camera_losses_bwd(Tensor flags, Tensor rgb_pred, Tensor rgb_gt, Tensor bg_pred, float rgb_factor, float "
+        "bg_factor, Tensor v_rgb_loss, Tensor v_bg_loss, Tensor(a!) v_rgb_pred, Tensor(b!) v_bg_pred) -> ()"
+    );
+    m.def(
+        "lidar_losses_fwd(Tensor flags, Tensor distance_pred, Tensor distance_gt, Tensor intensity_pred, Tensor "
+        "intensity_gt, Tensor raydrop_pred, Tensor raydrop_gt, Tensor bg_pred, float distance_factor, float "
+        "intensity_factor, float raydrop_factor, float bg_factor, Tensor(a!) distance_loss, Tensor(b!) "
+        "intensity_loss, Tensor(c!) raydrop_loss, Tensor(d!) bg_loss) -> ()"
+    );
+    m.def(
+        "lidar_losses_bwd(Tensor flags, Tensor distance_pred, Tensor distance_gt, Tensor intensity_pred, Tensor "
+        "intensity_gt, Tensor raydrop_pred, Tensor raydrop_gt, Tensor bg_pred, float distance_factor, float "
+        "intensity_factor, float raydrop_factor, float bg_factor, Tensor v_distance_loss, Tensor v_intensity_loss, "
+        "Tensor v_raydrop_loss, Tensor v_bg_loss, Tensor(a!) v_distance_pred, Tensor(b!) v_intensity_pred, "
+        "Tensor(c!) v_raydrop_pred, Tensor(d!) v_bg_pred) -> ()"
+    );
 #endif
 }
 
@@ -1294,6 +1331,8 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m)
 
 #if GSPLAT_BUILD_LOSSES
     gsplat::register_gaussian_losses_cuda_impl(m);
+    gsplat::register_camera_losses_cuda_impl(m);
+    gsplat::register_lidar_losses_cuda_impl(m);
 #endif
 }
 
