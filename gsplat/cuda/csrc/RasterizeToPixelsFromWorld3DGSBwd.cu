@@ -41,6 +41,17 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 
 namespace cg = cooperative_groups;
 
+// Pad CDIM to an odd number for shared memory indexing so that
+// rgbs_batch[thread * CDIM_PAD + k] avoids bank conflicts.
+// When CDIM is even, adjacent threads hit the same bank every
+// 32/gcd(CDIM,32) threads.  Making the stride odd guarantees
+// gcd(stride, 32) == 1 → zero conflicts across all 32 threads.
+template <uint32_t CDIM>
+constexpr uint32_t cdim_smem_stride()
+{
+    return (CDIM % 2 == 0) ? CDIM + 1 : CDIM;
+}
+
 template <uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const uint32_t B,
@@ -429,7 +440,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             assert(scale_batch[tr][0] > 0.f && scale_batch[tr][1] > 0.f && scale_batch[tr][2] > 0.f);
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
-                rgbs_batch[tr * CDIM + k] = colors[isect_id * CDIM + k];
+                rgbs_batch[tr * cdim_smem_stride<CDIM>() + k] = colors[isect_id * CDIM + k];
             }
         }
         // wait for other threads to collect the gaussians in batch
@@ -541,7 +552,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     const float rgb_k = (use_hit_distance && k == CDIM - 1)
                         ? local_hit_dist
-                        : rgbs_batch[t * CDIM + k];
+                        : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                     rgb_render_dot += rgb_k * v_render_c[k];
                 }
 
@@ -1013,7 +1024,7 @@ __global__ void rasterize_state_scan_bwd_kernel(
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k)
             {
-                rgbs_batch[tr * CDIM + k] = colors[isect_id * CDIM + k];
+                rgbs_batch[tr * cdim_smem_stride<CDIM>() + k] = colors[isect_id * CDIM + k];
             }
         }
         block.sync();
@@ -1081,7 +1092,7 @@ __global__ void rasterize_state_scan_bwd_kernel(
             {
                 const float rgb_k = (use_hit_distance && k == CDIM - 1)
                     ? local_hit_dist
-                    : rgbs_batch[t * CDIM + k];
+                    : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                 rgb_render_dot += rgb_k * v_render_c[k];
             }
             accum_render += rgb_render_dot * fac;
@@ -1539,7 +1550,7 @@ __global__ void rasterize_gradient_bwd_kernel(
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k)
             {
-                rgbs_batch[tr * CDIM + k] = colors[isect_id * CDIM + k];
+                rgbs_batch[tr * cdim_smem_stride<CDIM>() + k] = colors[isect_id * CDIM + k];
             }
         }
         block.sync();
@@ -1632,7 +1643,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 {
                     const float rgb_k = (use_hit_distance && k == CDIM - 1)
                         ? local_hit_dist
-                        : rgbs_batch[t * CDIM + k];
+                        : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                     rgb_render_dot += rgb_k * v_render_c[k];
                 }
 
@@ -1858,7 +1869,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
         int64_t shmem_size =
             tile_size * tile_size *
-            (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * CDIM);
+            (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * cdim_smem_stride<CDIM>());
 
         if (cudaFuncSetAttribute(
                 rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>,
@@ -1955,7 +1966,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             dim3 k1_grid = {I, tile_height, tile_width * max_chunks};
             int64_t k1_shmem =
                 pixels_per_tile *
-                (sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * CDIM);
+                (sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * cdim_smem_stride<CDIM>());
             if (cudaFuncSetAttribute(
                     rasterize_state_scan_bwd_kernel<CDIM, float>,
                     cudaFuncAttributeMaxDynamicSharedMemorySize,
