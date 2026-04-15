@@ -85,8 +85,8 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
           angles_to_columns_map(std::move(angles_to_columns_map)),
           n_bins_azimuth(n_bins_azimuth),
           n_bins_elevation(n_bins_elevation),
-          cdf_elevation(cdf_elevation),
-          cdf_dense_ray_mask(cdf_dense_ray_mask),
+          cdf_elevation(std::move(cdf_elevation)),
+          cdf_dense_ray_mask(std::move(cdf_dense_ray_mask)),
           tiles_pack_info(std::move(tiles_pack_info)),
           tiles_to_elements_map(std::move(tiles_to_elements_map))
     {}
