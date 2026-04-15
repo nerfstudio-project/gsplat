@@ -38,12 +38,12 @@ from datasets.traj import (
     generate_interpolated_path,
     generate_spiral_path,
 )
-from fused_ssim import fused_ssim
 from gsplat.losses import (
     depth_l1_loss,
     l1_loss,
     opacity_reg_loss,
     scale_reg_loss,
+    ssim_loss,
     total_variation_loss,
 )
 from torch import Tensor
@@ -918,17 +918,15 @@ class Runner:
                 # Exclude masked pixels (e.g. ego vehicle) from L1.
                 # For SSIM (patch-based), zero out both sides at masked locations
                 # so masked patches don't pull colors toward an arbitrary value.
-                l1loss = F.l1_loss(colors[masks], pixels[masks])
+                l1loss = l1_loss(colors[masks], pixels[masks]).mean()
                 colors_ssim = colors * masks[..., None]
                 pixels_ssim = pixels * masks[..., None]
             else:
-                l1loss = F.l1_loss(colors, pixels)
+                l1loss = l1_loss(colors, pixels).mean()
                 colors_ssim = colors
                 pixels_ssim = pixels
-            ssimloss = 1.0 - fused_ssim(
-                colors_ssim.permute(0, 3, 1, 2),
-                pixels_ssim.permute(0, 3, 1, 2),
-                padding="valid",
+            ssimloss = ssim_loss(
+                colors_ssim.permute(0, 3, 1, 2), pixels_ssim.permute(0, 3, 1, 2)
             )
             loss = torch.lerp(l1loss, ssimloss, cfg.ssim_lambda)
             if cfg.depth_loss:
