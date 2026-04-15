@@ -98,7 +98,6 @@ __global__ void rasterize_state_scan_bwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
     // fwd inputs
     const vec3 *__restrict__ means,           // [B, N, 3]
     const vec4 *__restrict__ quats,           // [B, N, 4]
@@ -116,8 +115,6 @@ __global__ void rasterize_state_scan_bwd_kernel(
     const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
     const scalar_t *__restrict__ Ks,        // [B, C, 3, 3]
     const CameraModelType camera_model_type,
-    // uncented transform
-    const UnscentedTransformParameters ut_params,    
     const ShutterType rs_type,
     const scalar_t *__restrict__ rays,              // [B, C, H, W, 6]
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
@@ -646,7 +643,6 @@ __global__ void rasterize_gradient_bwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
     // fwd inputs
     const vec3 *__restrict__ means,           // [B, N, 3]
     const vec4 *__restrict__ quats,           // [B, N, 4]
@@ -665,8 +661,6 @@ __global__ void rasterize_gradient_bwd_kernel(
     const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
     const scalar_t *__restrict__ Ks,        // [B, C, 3, 3]
     const CameraModelType camera_model_type,
-    // uncented transform
-    const UnscentedTransformParameters ut_params,
     const ShutterType rs_type,
     const scalar_t *__restrict__ rays,              // [B, C, H, W, 6]
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
@@ -1372,7 +1366,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
 
-    TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
     TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
     FThetaCameraDistortionDeviceParams ftheta_device_coeffs(*ftheta_coeffs);
     cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
@@ -1490,7 +1483,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         rasterize_state_scan_bwd_kernel<CDIM, float>
             <<<k1_grid, threads, k1_shmem,
                at::cuda::getCurrentCUDAStream()>>>(
-                B, C, N, n_isects, packed,
+                B, C, N, n_isects,
                 means_ptr, quats_ptr, scales_ptr,
                 colors_ptr, opacities_ptr,
                 masks_ptr,
@@ -1498,7 +1491,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 tile_width, tile_height,
                 viewmats0_ptr, viewmats1_ptr, Ks_ptr,
                 camera_model,
-                *ut_params, rs_type,
+                rs_type,
                 rays_ptr,
                 radial_ptr, tangential_ptr, thin_prism_ptr,
                 ftheta_device_coeffs, lidar_device_coeffs,
@@ -1542,7 +1535,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         rasterize_gradient_bwd_kernel<CDIM, float>
             <<<k2_grid, threads, shmem_size,
                at::cuda::getCurrentCUDAStream()>>>(
-                B, C, N, n_isects, packed,
+                B, C, N, n_isects,
                 means_ptr, quats_ptr, scales_ptr,
                 colors_ptr, opacities_ptr, backgrounds_ptr,
                 masks_ptr,
@@ -1550,7 +1543,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 tile_width, tile_height,
                 viewmats0_ptr, viewmats1_ptr, Ks_ptr,
                 camera_model,
-                *ut_params, rs_type,
+                rs_type,
                 rays_ptr,
                 radial_ptr, tangential_ptr, thin_prism_ptr,
                 ftheta_device_coeffs, lidar_device_coeffs,
