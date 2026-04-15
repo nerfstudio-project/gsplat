@@ -711,7 +711,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 // Number of batches per chunk. Each chunk is an independently-schedulable
 // unit of work in the gradient kernel. Smaller = more parallelism but more
 // temp memory and launch overhead.
-constexpr uint32_t CHUNK_BATCHES = 8;
+constexpr uint32_t CHUNK_BATCHES = 4;
 
 // Number of state floats per pixel per chunk: P, S_render, S_normal.
 constexpr uint32_t CHUNK_STATE_DIM = 3;
@@ -1109,48 +1109,100 @@ __global__ void rasterize_state_scan_bwd_kernel(
     }
 }
 
-// Kernel 1.5: resolve true per-chunk prologues from (P, S_render, S_normal).
-// Reads per-tile-per-pixel T_final from a separate buffer (written by K1)
-// to avoid needing lidar pixel mapping in the scan kernel.
+// Kernel 1.5: shared-memory-buffered prefix scan.
+//
+// Loads SCAN_TILE_CHUNKS chunks at a time (coalesced) into shared memory,
+// scans from shared memory (no global latency), writes back (coalesced).
+// This avoids the stride-768 global memory round-trips that caused 98.8%
+// no-eligible-warp stalls in the naive sequential scan.
+//
+// Grid: {num_tiles, 1, 1}. Block: {pixels_per_tile, 1, 1} = {256, 1, 1}.
+// Shared memory: SCAN_TILE_CHUNKS * pixels_per_tile * CHUNK_STATE_DIM floats.
+constexpr uint32_t SCAN_TILE_CHUNKS = 32;
+
 template <typename scalar_t>
 __global__ void rasterize_prologue_scan_kernel(
-    const scalar_t *__restrict__ t_final_buf, // [num_tiles * pixels_per_tile]
+    const scalar_t *__restrict__ t_final_buf,
     const uint32_t pixels_per_tile,
     scalar_t *__restrict__ chunk_PS,
     const uint32_t max_chunks_per_tile
 )
 {
     const uint32_t tile_linear = blockIdx.x;
-    const uint32_t pixel_in_tile = blockIdx.y * blockDim.x + threadIdx.x;
-    if (pixel_in_tile >= pixels_per_tile)
+    const uint32_t pixel = threadIdx.x;
+    if (pixel >= pixels_per_tile)
     {
         return;
     }
 
-    const float T_final = t_final_buf[tile_linear * pixels_per_tile + pixel_in_tile];
+    const float T_final =
+        t_final_buf[tile_linear * pixels_per_tile + pixel];
 
-    const uint32_t base =
-        tile_linear * max_chunks_per_tile * pixels_per_tile * CHUNK_STATE_DIM +
-        pixel_in_tile * CHUNK_STATE_DIM;
-    const uint32_t stride = pixels_per_tile * CHUNK_STATE_DIM;
+    // Global memory base for this tile. Layout: [tile][chunk][pixel][STATE_DIM]
+    const uint32_t tile_base =
+        tile_linear * max_chunks_per_tile * pixels_per_tile * CHUNK_STATE_DIM;
+    const uint32_t pixel_stride = pixels_per_tile * CHUNK_STATE_DIM;
+
+    // Shared memory: [SCAN_TILE_CHUNKS][pixels_per_tile][CHUNK_STATE_DIM]
+    extern __shared__ float shmem[];
 
     float exc_P = 1.0f;
     float exc_Sr = 0.0f;
     float exc_Sn = 0.0f;
-    for (uint32_t c = 0; c < max_chunks_per_tile; ++c)
+
+    for (uint32_t c_base = 0; c_base < max_chunks_per_tile;
+         c_base += SCAN_TILE_CHUNKS)
     {
-        const float Pc = chunk_PS[base + c * stride + 0];
-        const float Src = chunk_PS[base + c * stride + 1];
-        const float Snc = chunk_PS[base + c * stride + 2];
-        const float new_P = Pc * exc_P;
-        const float new_Sr = Src * exc_P + exc_Sr;
-        const float new_Sn = Snc * exc_P + exc_Sn;
-        chunk_PS[base + c * stride + 0] = exc_P * T_final;
-        chunk_PS[base + c * stride + 1] = exc_Sr * T_final;
-        chunk_PS[base + c * stride + 2] = exc_Sn * T_final;
-        exc_P = new_P;
-        exc_Sr = new_Sr;
-        exc_Sn = new_Sn;
+        const uint32_t c_end =
+            min(c_base + SCAN_TILE_CHUNKS, max_chunks_per_tile);
+        const uint32_t tile_count = c_end - c_base;
+
+        // ---- Coalesced load: all threads load their pixel for each chunk ----
+        for (uint32_t c = 0; c < tile_count; ++c)
+        {
+            const uint32_t g_idx =
+                tile_base + (c_base + c) * pixel_stride + pixel * CHUNK_STATE_DIM;
+            const uint32_t s_idx =
+                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
+            shmem[s_idx + 0] = chunk_PS[g_idx + 0];
+            shmem[s_idx + 1] = chunk_PS[g_idx + 1];
+            shmem[s_idx + 2] = chunk_PS[g_idx + 2];
+        }
+        __syncthreads();
+
+        // ---- Scan from shared memory (no global latency) ----
+        for (uint32_t c = 0; c < tile_count; ++c)
+        {
+            const uint32_t s_idx =
+                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
+            const float Pc = shmem[s_idx + 0];
+            const float Src = shmem[s_idx + 1];
+            const float Snc = shmem[s_idx + 2];
+            const float new_P = Pc * exc_P;
+            const float new_Sr = Src * exc_P + exc_Sr;
+            const float new_Sn = Snc * exc_P + exc_Sn;
+            // Write resolved prologue to shared memory.
+            shmem[s_idx + 0] = exc_P * T_final;
+            shmem[s_idx + 1] = exc_Sr * T_final;
+            shmem[s_idx + 2] = exc_Sn * T_final;
+            exc_P = new_P;
+            exc_Sr = new_Sr;
+            exc_Sn = new_Sn;
+        }
+        __syncthreads();
+
+        // ---- Coalesced write back ----
+        for (uint32_t c = 0; c < tile_count; ++c)
+        {
+            const uint32_t g_idx =
+                tile_base + (c_base + c) * pixel_stride + pixel * CHUNK_STATE_DIM;
+            const uint32_t s_idx =
+                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
+            chunk_PS[g_idx + 0] = shmem[s_idx + 0];
+            chunk_PS[g_idx + 1] = shmem[s_idx + 1];
+            chunk_PS[g_idx + 2] = shmem[s_idx + 2];
+        }
+        __syncthreads();
     }
 }
 
@@ -1934,12 +1986,23 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     v_render_c_ptr, v_render_n_ptr,
                     chunk_ptr, t_final_ptr, max_chunks);
 
-            // ---- Kernel 1.5: prologue scan ----
+            // ---- Kernel 1.5: prologue scan (shared-memory buffered) ----
             {
                 dim3 scan_grid = {num_tiles, 1, 1};
                 dim3 scan_threads = {pixels_per_tile, 1, 1};
+                int64_t scan_shmem =
+                    SCAN_TILE_CHUNKS * pixels_per_tile * CHUNK_STATE_DIM *
+                    sizeof(float);
+                if (cudaFuncSetAttribute(
+                        rasterize_prologue_scan_kernel<float>,
+                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                        scan_shmem) != cudaSuccess)
+                {
+                    AT_ERROR("Failed to set shmem for scan kernel (",
+                             scan_shmem, " bytes).");
+                }
                 rasterize_prologue_scan_kernel<float>
-                    <<<scan_grid, scan_threads, 0,
+                    <<<scan_grid, scan_threads, scan_shmem,
                        at::cuda::getCurrentCUDAStream()>>>(
                         t_final_ptr, pixels_per_tile,
                         chunk_ptr, max_chunks);
