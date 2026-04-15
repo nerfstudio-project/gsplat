@@ -693,6 +693,1022 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Two-kernel backward pass: state-scan kernel + gradient kernel.
+//
+// Kernel 1 (state scan): same CTA as the original kernel (256 threads,
+// 256 pixels). Processes all Gaussians state-only (geometry → alpha → state
+// update, NO gradient chain). Every CHUNK_BATCHES batches, writes the
+// per-pixel (T, render_accum_dot) to a temporary global buffer.
+//
+// Kernel 2 (gradient): expanded grid — one CTA (32 threads = 1 warp) per
+// (tile × pixel_group × chunk). Reads its chunk's starting prologue from
+// the temp buffer. Processes CHUNK_BATCHES batches of Gaussians with the
+// full gradient chain. Sub-batches are INDEPENDENT — no sequential
+// dependency between chunks.
+// ---------------------------------------------------------------------------
+
+// Number of batches per chunk. Each chunk is an independently-schedulable
+// unit of work in the gradient kernel. Smaller = more parallelism but more
+// temp memory and launch overhead.
+constexpr uint32_t CHUNK_BATCHES = 8;
+
+// Number of state floats per pixel per chunk: P, S_render, S_normal.
+constexpr uint32_t CHUNK_STATE_DIM = 3;
+
+// Kernel 1: per-chunk state computation. Expanded grid (tiles × chunks).
+// Each CTA processes CHUNK_BATCHES batches, state-only (no gradient chain),
+// starting from zero prologue (T=1, accum=0, normal_accum=0). Writes the
+// chunk's composed (P, S_render, S_normal) per pixel.
+//
+// chunk_PS layout: [num_tiles][max_chunks][pixels_per_tile][CHUNK_STATE_DIM]
+template <uint32_t CDIM, typename scalar_t>
+__global__ void rasterize_state_scan_bwd_kernel(
+    const uint32_t B,
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t n_isects,
+    const bool packed,
+    const vec3 *__restrict__ means,
+    const vec4 *__restrict__ quats,
+    const vec3 *__restrict__ scales,
+    const scalar_t *__restrict__ colors,
+    const scalar_t *__restrict__ opacities,
+    const bool *__restrict__ masks,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const scalar_t *__restrict__ viewmats0,
+    const scalar_t *__restrict__ viewmats1,
+    const scalar_t *__restrict__ Ks,
+    const CameraModelType camera_model_type,
+    const UnscentedTransformParameters ut_params,
+    const ShutterType rs_type,
+    const scalar_t *__restrict__ rays,
+    const scalar_t *__restrict__ radial_coeffs,
+    const scalar_t *__restrict__ tangential_coeffs,
+    const scalar_t *__restrict__ thin_prism_coeffs,
+    const FThetaCameraDistortionDeviceParams ftheta_device_coeffs,
+    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
+    __grid_constant__ const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
+    const int32_t *__restrict__ tile_offsets,
+    const int32_t *__restrict__ flatten_ids,
+    const bool use_hit_distance,
+    const scalar_t *__restrict__ render_alphas,
+    const int32_t *__restrict__ last_ids,
+    const scalar_t *__restrict__ v_render_colors,
+    const scalar_t *__restrict__ v_render_normals,
+    scalar_t *__restrict__ chunk_PS,
+    scalar_t *__restrict__ t_final_buf, // [num_tiles * pixels_per_tile]
+    const uint32_t max_chunks_per_tile
+)
+{
+    auto block = cg::this_thread_block();
+    const uint32_t iid = block.group_index().x;
+    const uint32_t tile_row = block.group_index().y;
+    const uint32_t combined_z = block.group_index().z;
+    const uint32_t tile_col = combined_z % tile_width;
+    const uint32_t chunk_id = combined_z / tile_width;
+    const uint32_t tile_id = tile_row * tile_width + tile_col;
+    const uint32_t tr = block.thread_rank();
+    const uint32_t block_size = block.size();
+
+    tile_offsets += iid * tile_height * tile_width;
+    render_alphas += iid * image_height * image_width;
+    last_ids += iid * image_height * image_width;
+    v_render_colors += iid * image_height * image_width * CDIM;
+    if (v_render_normals != nullptr)
+    {
+        v_render_normals += iid * image_height * image_width * 3;
+    }
+    if (masks != nullptr)
+    {
+        masks += iid * tile_height * tile_width;
+    }
+    if (rays != nullptr)
+    {
+        rays += iid * image_height * image_width * 6;
+    }
+
+    if (masks != nullptr && !masks[tile_id])
+    {
+        return;
+    }
+
+    const int32_t range_start = tile_offsets[tile_id];
+    const int32_t range_end =
+        (iid == B * C - 1) && (tile_id == tile_width * tile_height - 1)
+            ? n_isects
+            : tile_offsets[tile_id + 1];
+    const uint32_t num_batches =
+        (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t num_chunks =
+        (num_batches + CHUNK_BATCHES - 1) / CHUNK_BATCHES;
+    const uint32_t tile_linear = iid * tile_height * tile_width + tile_id;
+    const uint32_t pixels_per_tile = tile_size * tile_size;
+
+    if (chunk_id >= num_chunks)
+    {
+        // Identity: P=1, S_render=0, S_normal=0.
+        const uint32_t base = (tile_linear * max_chunks_per_tile + chunk_id) *
+                              pixels_per_tile * CHUNK_STATE_DIM +
+                              tr * CHUNK_STATE_DIM;
+        chunk_PS[base + 0] = 1.0f;
+        chunk_PS[base + 1] = 0.0f;
+        chunk_PS[base + 2] = 0.0f;
+        return;
+    }
+
+    // Pixel mapping (camera vs lidar — same as original kernel).
+    uint32_t i, j;
+    bool inside;
+    if (camera_model_type == CameraModelType::LIDAR)
+    {
+        assert(lidar_device_coeffs);
+        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
+        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
+        const int tile_element_id = tr;
+        if (tile_element_id < element_count)
+        {
+            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x;
+            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y;
+            inside = true;
+        }
+        else
+        {
+            i = 0;
+            j = 0;
+            inside = false;
+        }
+    }
+    else
+    {
+        i = tile_row * tile_size + block.thread_index().y;
+        j = tile_col * tile_size + block.thread_index().x;
+        inside = (i < image_height && j < image_width);
+    }
+
+    const int32_t pix_id =
+        min(i * image_width + j, image_width * image_height - 1);
+
+    // Ray generation (camera model or explicit rays — same as original kernel).
+    auto rs_params = RollingShutterParameters(
+        viewmats0 + iid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16);
+    WorldRay ray;
+    if (inside && rays == nullptr)
+    {
+        const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
+        const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
+        if (camera_model_type == CameraModelType::PINHOLE)
+        {
+            if (radial_coeffs == nullptr && tangential_coeffs == nullptr &&
+                thin_prism_coeffs == nullptr)
+            {
+                PerfectPinholeCameraModel::Parameters cm_params = {};
+                cm_params.resolution = {image_width, image_height};
+                cm_params.shutter_type = rs_type;
+                cm_params.principal_point = {principal_point.x, principal_point.y};
+                cm_params.focal_length = {focal_length.x, focal_length.y};
+                cm_params.external_distortion_params =
+                    external_distortion_device_params.has_value()
+                        ? &external_distortion_device_params.value()
+                        : nullptr;
+                ray = PerfectPinholeCameraModel(cm_params)
+                          .element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
+            else
+            {
+                OpenCVPinholeCameraModel<>::Parameters cm_params = {};
+                cm_params.resolution = {image_width, image_height};
+                cm_params.shutter_type = rs_type;
+                cm_params.principal_point = {principal_point.x, principal_point.y};
+                cm_params.focal_length = {focal_length.x, focal_length.y};
+                if (radial_coeffs != nullptr)
+                    cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + iid * 6);
+                if (tangential_coeffs != nullptr)
+                    cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + iid * 2);
+                if (thin_prism_coeffs != nullptr)
+                    cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
+                cm_params.external_distortion_params =
+                    external_distortion_device_params.has_value()
+                        ? &external_distortion_device_params.value()
+                        : nullptr;
+                ray = OpenCVPinholeCameraModel(cm_params)
+                          .element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
+        }
+        else if (camera_model_type == CameraModelType::FISHEYE)
+        {
+            OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = {principal_point.x, principal_point.y};
+            cm_params.focal_length = {focal_length.x, focal_length.y};
+            if (radial_coeffs != nullptr)
+                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
+            cm_params.external_distortion_params =
+                external_distortion_device_params.has_value()
+                    ? &external_distortion_device_params.value()
+                    : nullptr;
+            ray = OpenCVFisheyeCameraModel(cm_params)
+                      .element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else if (camera_model_type == CameraModelType::FTHETA)
+        {
+            FThetaCameraModel<>::Parameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = {principal_point.x, principal_point.y};
+            cm_params.dist = ftheta_device_coeffs;
+            cm_params.external_distortion_params =
+                external_distortion_device_params.has_value()
+                    ? &external_distortion_device_params.value()
+                    : nullptr;
+            ray = FThetaCameraModel(cm_params)
+                      .element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else if (camera_model_type == CameraModelType::LIDAR)
+        {
+            assert(lidar_device_coeffs);
+            ray = RowOffsetStructuredSpinningLidarModel(*lidar_device_coeffs)
+                      .element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else
+        {
+            assert(false);
+            return;
+        }
+    }
+    else
+    {
+        ray.valid_flag = false;
+        if (inside)
+        {
+            assert(rays != nullptr);
+            ray.ray_org = {rays[pix_id * 6 + 0], rays[pix_id * 6 + 1], rays[pix_id * 6 + 2]};
+            ray.ray_dir = {rays[pix_id * 6 + 3], rays[pix_id * 6 + 4], rays[pix_id * 6 + 5]};
+            ray.valid_flag = true;
+        }
+    }
+    const vec3 ray_o = ray.ray_org;
+    const vec3 ray_d = ray.ray_dir;
+    const bool pixel_valid = inside && ray.valid_flag;
+    const int32_t bin_final = pixel_valid ? last_ids[pix_id] : 0;
+
+    // Per-pixel gradients needed for the state recurrence.
+    float v_render_c[CDIM];
+#pragma unroll
+    for (uint32_t k = 0; k < CDIM; ++k)
+    {
+        v_render_c[k] = pixel_valid ? v_render_colors[pix_id * CDIM + k] : 0.f;
+    }
+    vec3 v_render_n = vec3(0.f);
+    if (v_render_normals != nullptr && pixel_valid)
+    {
+        v_render_n.x = v_render_normals[pix_id * 3 + 0];
+        v_render_n.y = v_render_normals[pix_id * 3 + 1];
+        v_render_n.z = v_render_normals[pix_id * 3 + 2];
+    }
+
+    extern __shared__ int s[];
+    vec4 *xyz_opacity_batch = reinterpret_cast<vec4 *>(s);
+    vec3 *scale_batch =
+        reinterpret_cast<vec3 *>(&xyz_opacity_batch[block_size]);
+    vec4 *quat_batch =
+        reinterpret_cast<vec4 *>(&scale_batch[block_size]);
+    float *rgbs_batch = (float *)&quat_batch[block_size];
+
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    const int32_t warp_bin_final =
+        cg::reduce(warp, bin_final, cg::greater<int>());
+
+    // Process this chunk with zero prologue.
+    float T = 1.0f;
+    float accum_render = 0.0f;
+    float accum_normal = 0.0f;
+    const uint32_t b_start = chunk_id * CHUNK_BATCHES;
+    const uint32_t b_end = min(b_start + CHUNK_BATCHES, num_batches);
+
+    for (uint32_t b = b_start; b < b_end; ++b)
+    {
+        block.sync();
+        const int32_t batch_end = range_end - 1 - block_size * b;
+        const int32_t batch_size =
+            min(static_cast<int32_t>(block_size), batch_end + 1 - range_start);
+        const int32_t idx = batch_end - static_cast<int32_t>(tr);
+
+        if (idx >= range_start)
+        {
+            const int32_t isect_id = flatten_ids[idx];
+            const int32_t isect_bid = isect_id / (C * N);
+            const int32_t isect_gid = isect_id % N;
+            const vec3 xyz = means[isect_bid * N + isect_gid];
+            const float opac = opacities[isect_id];
+            xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
+            scale_batch[tr] = scales[isect_bid * N + isect_gid];
+            quat_batch[tr] = quats[isect_bid * N + isect_gid];
+#pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k)
+            {
+                rgbs_batch[tr * CDIM + k] = colors[isect_id * CDIM + k];
+            }
+        }
+        block.sync();
+
+        for (uint32_t t = max(0, batch_end - warp_bin_final);
+             t < batch_size; ++t)
+        {
+            bool valid = pixel_valid;
+            if (batch_end - t > bin_final)
+            {
+                valid = false;
+            }
+            float ra = 1.0f;
+            float normal_render_dot = 0.f;
+            float local_hit_dist = 0.f;
+            if (valid)
+            {
+                const vec4 xyz_opac = xyz_opacity_batch[t];
+                const float opac = xyz_opac[3];
+                const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+                const vec3 scale = scale_batch[t];
+                const vec4 quat = quat_batch[t];
+                const mat3 R = quat_to_rotmat(quat);
+                const mat3 S_mat = mat3(
+                    1.0f / scale[0], 0.f, 0.f,
+                    0.f, 1.0f / scale[1], 0.f,
+                    0.f, 0.f, 1.0f / scale[2]);
+                const mat3 Mt = glm::transpose(R * S_mat);
+                const vec3 o_minus_mu = ray_o - xyz;
+                const vec3 gro = Mt * o_minus_mu;
+                const vec3 grd = Mt * ray_d;
+                const vec3 grd_n = safe_normalize(grd);
+                const vec3 gcrod = glm::cross(grd_n, gro);
+                const float grayDist = glm::dot(gcrod, gcrod);
+                const float power = -0.5f * grayDist;
+                const float vis = __expf(power);
+                float alpha = min(MAX_ALPHA, opac * vis);
+                if (power > 0.f || alpha < ALPHA_THRESHOLD)
+                {
+                    alpha = 0.f;
+                }
+                ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
+
+                if (use_hit_distance)
+                {
+                    const float hit_t = glm::dot(grd_n, -gro);
+                    const vec3 grds = scale * (grd_n * hit_t);
+                    local_hit_dist = glm::length(grds);
+                }
+                if (v_render_normals != nullptr)
+                {
+                    const vec3 unnormalized_normal = R[2];
+                    const bool flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
+                    const vec3 unnormalized_flipped =
+                        flipped ? -unnormalized_normal : unnormalized_normal;
+                    const vec3 normal = safe_normalize(unnormalized_flipped);
+                    normal_render_dot = glm::dot(normal, v_render_n);
+                }
+            }
+            T *= ra;
+            const float fac = (1.0f - 1.0f / ra) * T;
+            float rgb_render_dot = 0.f;
+#pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k)
+            {
+                const float rgb_k = (use_hit_distance && k == CDIM - 1)
+                    ? local_hit_dist
+                    : rgbs_batch[t * CDIM + k];
+                rgb_render_dot += rgb_k * v_render_c[k];
+            }
+            accum_render += rgb_render_dot * fac;
+            if (v_render_normals != nullptr)
+            {
+                accum_normal += normal_render_dot * fac;
+            }
+        }
+    }
+
+    // Write (P, S_render, S_normal) for this chunk.
+    const uint32_t base = (tile_linear * max_chunks_per_tile + chunk_id) *
+                          pixels_per_tile * CHUNK_STATE_DIM +
+                          tr * CHUNK_STATE_DIM;
+    chunk_PS[base + 0] = T;
+    chunk_PS[base + 1] = accum_render;
+    chunk_PS[base + 2] = accum_normal;
+
+    // Chunk 0 writes T_final for the scan kernel (works for both camera and lidar
+    // because K1 already resolved the correct pix_id via the proper pixel mapping).
+    if (chunk_id == 0)
+    {
+        t_final_buf[tile_linear * pixels_per_tile + tr] =
+            pixel_valid ? 1.0f - render_alphas[pix_id] : 1.0f;
+    }
+}
+
+// Kernel 1.5: resolve true per-chunk prologues from (P, S_render, S_normal).
+// Reads per-tile-per-pixel T_final from a separate buffer (written by K1)
+// to avoid needing lidar pixel mapping in the scan kernel.
+template <typename scalar_t>
+__global__ void rasterize_prologue_scan_kernel(
+    const scalar_t *__restrict__ t_final_buf, // [num_tiles * pixels_per_tile]
+    const uint32_t pixels_per_tile,
+    scalar_t *__restrict__ chunk_PS,
+    const uint32_t max_chunks_per_tile
+)
+{
+    const uint32_t tile_linear = blockIdx.x;
+    const uint32_t pixel_in_tile = blockIdx.y * blockDim.x + threadIdx.x;
+    if (pixel_in_tile >= pixels_per_tile)
+    {
+        return;
+    }
+
+    const float T_final = t_final_buf[tile_linear * pixels_per_tile + pixel_in_tile];
+
+    const uint32_t base =
+        tile_linear * max_chunks_per_tile * pixels_per_tile * CHUNK_STATE_DIM +
+        pixel_in_tile * CHUNK_STATE_DIM;
+    const uint32_t stride = pixels_per_tile * CHUNK_STATE_DIM;
+
+    float exc_P = 1.0f;
+    float exc_Sr = 0.0f;
+    float exc_Sn = 0.0f;
+    for (uint32_t c = 0; c < max_chunks_per_tile; ++c)
+    {
+        const float Pc = chunk_PS[base + c * stride + 0];
+        const float Src = chunk_PS[base + c * stride + 1];
+        const float Snc = chunk_PS[base + c * stride + 2];
+        const float new_P = Pc * exc_P;
+        const float new_Sr = Src * exc_P + exc_Sr;
+        const float new_Sn = Snc * exc_P + exc_Sn;
+        chunk_PS[base + c * stride + 0] = exc_P * T_final;
+        chunk_PS[base + c * stride + 1] = exc_Sr * T_final;
+        chunk_PS[base + c * stride + 2] = exc_Sn * T_final;
+        exc_P = new_P;
+        exc_Sr = new_Sr;
+        exc_Sn = new_Sn;
+    }
+}
+
+// Kernel 2: gradient pass. Same CTA structure and inner loop as the original
+// kernel but with: (1) chunk_id decoded from grid z, (2) initial state read
+// from chunk_states, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
+// via atomicAdd (multiple chunks per pixel).
+//
+// Grid: {I, tile_height, tile_width * max_chunks_per_tile}
+template <uint32_t CDIM, typename scalar_t>
+__global__ void rasterize_gradient_bwd_kernel(
+    const uint32_t B,
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t n_isects,
+    const bool packed,
+    const vec3 *__restrict__ means,
+    const vec4 *__restrict__ quats,
+    const vec3 *__restrict__ scales,
+    const scalar_t *__restrict__ colors,
+    const scalar_t *__restrict__ opacities,
+    const scalar_t *__restrict__ backgrounds,
+    const bool *__restrict__ masks,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const scalar_t *__restrict__ viewmats0,
+    const scalar_t *__restrict__ viewmats1,
+    const scalar_t *__restrict__ Ks,
+    const CameraModelType camera_model_type,
+    const UnscentedTransformParameters ut_params,
+    const ShutterType rs_type,
+    const scalar_t *__restrict__ rays,
+    const scalar_t *__restrict__ radial_coeffs,
+    const scalar_t *__restrict__ tangential_coeffs,
+    const scalar_t *__restrict__ thin_prism_coeffs,
+    const FThetaCameraDistortionDeviceParams ftheta_device_coeffs,
+    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
+    __grid_constant__ const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
+    const int32_t *__restrict__ tile_offsets,
+    const int32_t *__restrict__ flatten_ids,
+    const bool use_hit_distance,
+    const scalar_t *__restrict__ render_alphas,
+    const int32_t *__restrict__ last_ids,
+    const scalar_t *__restrict__ v_render_colors,
+    const scalar_t *__restrict__ v_render_alphas,
+    const scalar_t *__restrict__ v_render_normals,
+    vec3 *__restrict__ v_means,
+    vec4 *__restrict__ v_quats,
+    vec3 *__restrict__ v_scales,
+    scalar_t *__restrict__ v_colors,
+    scalar_t *__restrict__ v_opacities,
+    scalar_t *__restrict__ v_rays,
+    const scalar_t *__restrict__ chunk_states,
+    const uint32_t max_chunks_per_tile
+)
+{
+    // ---- Preamble: identical to K1 (chunk decode, pixel map, ray gen) ----
+    auto block = cg::this_thread_block();
+    const uint32_t iid = block.group_index().x;
+    const uint32_t tile_row = block.group_index().y;
+    const uint32_t combined_z = block.group_index().z;
+    const uint32_t tile_col = combined_z % tile_width;
+    const uint32_t chunk_id = combined_z / tile_width;
+    const uint32_t tile_id = tile_row * tile_width + tile_col;
+    const uint32_t tr = block.thread_rank();
+    const uint32_t block_size = block.size();
+
+    tile_offsets += iid * tile_height * tile_width;
+    render_alphas += iid * image_height * image_width;
+    last_ids += iid * image_height * image_width;
+    v_render_colors += iid * image_height * image_width * CDIM;
+    v_render_alphas += iid * image_height * image_width;
+    if (v_render_normals != nullptr)
+    {
+        v_render_normals += iid * image_height * image_width * 3;
+    }
+    if (backgrounds != nullptr)
+    {
+        backgrounds += iid * CDIM;
+    }
+    if (masks != nullptr)
+    {
+        masks += iid * tile_height * tile_width;
+    }
+    if (rays != nullptr)
+    {
+        rays += iid * image_height * image_width * 6;
+    }
+    if (v_rays != nullptr)
+    {
+        v_rays += iid * image_height * image_width * 6;
+    }
+
+    if (masks != nullptr && !masks[tile_id])
+    {
+        return;
+    }
+
+    const int32_t range_start = tile_offsets[tile_id];
+    const int32_t range_end =
+        (iid == B * C - 1) && (tile_id == tile_width * tile_height - 1)
+            ? n_isects
+            : tile_offsets[tile_id + 1];
+    const uint32_t num_batches =
+        (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t num_chunks =
+        (num_batches + CHUNK_BATCHES - 1) / CHUNK_BATCHES;
+    const uint32_t tile_linear = iid * tile_height * tile_width + tile_id;
+    const uint32_t pixels_per_tile = tile_size * tile_size;
+
+    if (chunk_id >= num_chunks)
+    {
+        return;
+    }
+
+    // Pixel mapping (camera vs lidar).
+    uint32_t i, j;
+    bool inside;
+    if (camera_model_type == CameraModelType::LIDAR)
+    {
+        assert(lidar_device_coeffs);
+        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
+        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
+        const int tile_element_id = tr;
+        if (tile_element_id < element_count)
+        {
+            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x;
+            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y;
+            inside = true;
+        }
+        else
+        {
+            i = 0;
+            j = 0;
+            inside = false;
+        }
+    }
+    else
+    {
+        i = tile_row * tile_size + block.thread_index().y;
+        j = tile_col * tile_size + block.thread_index().x;
+        inside = (i < image_height && j < image_width);
+    }
+
+    const int32_t pix_id =
+        min(i * image_width + j, image_width * image_height - 1);
+
+    // Ray generation (same as K1 / original kernel).
+    auto rs_params = RollingShutterParameters(
+        viewmats0 + iid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16);
+    WorldRay ray;
+    if (inside && rays == nullptr)
+    {
+        const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
+        const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
+        if (camera_model_type == CameraModelType::PINHOLE)
+        {
+            if (radial_coeffs == nullptr && tangential_coeffs == nullptr &&
+                thin_prism_coeffs == nullptr)
+            {
+                PerfectPinholeCameraModel::Parameters cm_params = {};
+                cm_params.resolution = {image_width, image_height};
+                cm_params.shutter_type = rs_type;
+                cm_params.principal_point = {principal_point.x, principal_point.y};
+                cm_params.focal_length = {focal_length.x, focal_length.y};
+                cm_params.external_distortion_params =
+                    external_distortion_device_params.has_value()
+                        ? &external_distortion_device_params.value()
+                        : nullptr;
+                ray = PerfectPinholeCameraModel(cm_params)
+                          .element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
+            else
+            {
+                OpenCVPinholeCameraModel<>::Parameters cm_params = {};
+                cm_params.resolution = {image_width, image_height};
+                cm_params.shutter_type = rs_type;
+                cm_params.principal_point = {principal_point.x, principal_point.y};
+                cm_params.focal_length = {focal_length.x, focal_length.y};
+                if (radial_coeffs != nullptr)
+                    cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + iid * 6);
+                if (tangential_coeffs != nullptr)
+                    cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + iid * 2);
+                if (thin_prism_coeffs != nullptr)
+                    cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
+                cm_params.external_distortion_params =
+                    external_distortion_device_params.has_value()
+                        ? &external_distortion_device_params.value()
+                        : nullptr;
+                ray = OpenCVPinholeCameraModel(cm_params)
+                          .element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
+        }
+        else if (camera_model_type == CameraModelType::FISHEYE)
+        {
+            OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = {principal_point.x, principal_point.y};
+            cm_params.focal_length = {focal_length.x, focal_length.y};
+            if (radial_coeffs != nullptr)
+                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
+            cm_params.external_distortion_params =
+                external_distortion_device_params.has_value()
+                    ? &external_distortion_device_params.value()
+                    : nullptr;
+            ray = OpenCVFisheyeCameraModel(cm_params)
+                      .element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else if (camera_model_type == CameraModelType::FTHETA)
+        {
+            FThetaCameraModel<>::Parameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = {principal_point.x, principal_point.y};
+            cm_params.dist = ftheta_device_coeffs;
+            cm_params.external_distortion_params =
+                external_distortion_device_params.has_value()
+                    ? &external_distortion_device_params.value()
+                    : nullptr;
+            ray = FThetaCameraModel(cm_params)
+                      .element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else if (camera_model_type == CameraModelType::LIDAR)
+        {
+            assert(lidar_device_coeffs);
+            ray = RowOffsetStructuredSpinningLidarModel(*lidar_device_coeffs)
+                      .element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
+        else
+        {
+            assert(false);
+            return;
+        }
+    }
+    else
+    {
+        ray.valid_flag = false;
+        if (inside)
+        {
+            assert(rays != nullptr);
+            ray.ray_org = {rays[pix_id * 6 + 0], rays[pix_id * 6 + 1], rays[pix_id * 6 + 2]};
+            ray.ray_dir = {rays[pix_id * 6 + 3], rays[pix_id * 6 + 4], rays[pix_id * 6 + 5]};
+            ray.valid_flag = true;
+        }
+    }
+    const vec3 ray_d = ray.ray_dir;
+    const vec3 ray_o = ray.ray_org;
+    const bool pixel_valid = inside && ray.valid_flag;
+    const int32_t bin_final = pixel_valid ? last_ids[pix_id] : 0;
+
+    // ---- Read chunk prologue from temp memory ----
+    const uint32_t cs_base = (tile_linear * max_chunks_per_tile + chunk_id) *
+                             pixels_per_tile * CHUNK_STATE_DIM +
+                             tr * CHUNK_STATE_DIM;
+    float T = chunk_states[cs_base + 0];
+    float render_accum_dot = chunk_states[cs_base + 1];
+    float normal_accum_dot = chunk_states[cs_base + 2];
+
+    const float T_final = pixel_valid ? 1.0f - render_alphas[pix_id] : 1.0f;
+
+    // ---- Per-pixel gradients (same as original kernel) ----
+    float v_render_c[CDIM];
+#pragma unroll
+    for (uint32_t k = 0; k < CDIM; ++k)
+    {
+        v_render_c[k] = pixel_valid ? v_render_colors[pix_id * CDIM + k] : 0.f;
+    }
+    const float v_render_a = pixel_valid ? v_render_alphas[pix_id] : 0.f;
+    vec3 v_render_n = vec3(0.f);
+    if (v_render_normals != nullptr && pixel_valid)
+    {
+        v_render_n.x = v_render_normals[pix_id * 3 + 0];
+        v_render_n.y = v_render_normals[pix_id * 3 + 1];
+        v_render_n.z = v_render_normals[pix_id * 3 + 2];
+    }
+    float background_render_dot = 0.f;
+    if (pixel_valid && backgrounds != nullptr)
+    {
+#pragma unroll
+        for (uint32_t k = 0; k < CDIM; ++k)
+        {
+            background_render_dot += backgrounds[k] * v_render_c[k];
+        }
+    }
+    const float v_alpha_ind_coeff = v_render_a - background_render_dot;
+
+    vec3 v_ray_o = {0.f, 0.f, 0.f};
+    vec3 v_ray_d = {0.f, 0.f, 0.f};
+
+    extern __shared__ int s_grad[];
+    int32_t *id_batch = (int32_t *)s_grad;
+    vec4 *xyz_opacity_batch =
+        reinterpret_cast<vec4 *>(&id_batch[block_size]);
+    vec3 *scale_batch =
+        reinterpret_cast<vec3 *>(&xyz_opacity_batch[block_size]);
+    vec4 *quat_batch =
+        reinterpret_cast<vec4 *>(&scale_batch[block_size]);
+    float *rgbs_batch = (float *)&quat_batch[block_size];
+
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    const int32_t warp_bin_final =
+        cg::reduce(warp, bin_final, cg::greater<int>());
+
+    // ---- Batch loop: same as original kernel, chunk-limited ----
+    const uint32_t b_start = chunk_id * CHUNK_BATCHES;
+    const uint32_t b_end = min(b_start + CHUNK_BATCHES, num_batches);
+
+    for (uint32_t b = b_start; b < b_end; ++b)
+    {
+        block.sync();
+        const int32_t batch_end = range_end - 1 - block_size * b;
+        const int32_t batch_size =
+            min(static_cast<int32_t>(block_size), batch_end + 1 - range_start);
+        const int32_t idx = batch_end - static_cast<int32_t>(tr);
+
+        if (idx >= range_start)
+        {
+            int32_t isect_id = flatten_ids[idx];
+            int32_t isect_bid = isect_id / (C * N);
+            int32_t isect_gid = isect_id % N;
+            id_batch[tr] = isect_id;
+            const vec3 xyz = means[isect_bid * N + isect_gid];
+            const float opac = opacities[isect_id];
+            xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
+            scale_batch[tr] = scales[isect_bid * N + isect_gid];
+            quat_batch[tr] = quats[isect_bid * N + isect_gid];
+            assert(glm::dot(quat_batch[tr], quat_batch[tr]) > 0.f);
+            assert(scale_batch[tr][0] > 0.f && scale_batch[tr][1] > 0.f && scale_batch[tr][2] > 0.f);
+#pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k)
+            {
+                rgbs_batch[tr * CDIM + k] = colors[isect_id * CDIM + k];
+            }
+        }
+        block.sync();
+
+        // ---- Inner loop: identical to original kernel ----
+        for (uint32_t t = max(0, batch_end - warp_bin_final);
+             t < batch_size; ++t)
+        {
+            bool valid = pixel_valid;
+            if (batch_end - t > bin_final)
+            {
+                valid = false;
+            }
+            float alpha, opac, vis;
+            mat3 R;
+            vec3 xyz, scale;
+            vec4 quat;
+            mat3 Mt;
+            vec3 o_minus_mu, gro, grd, grd_n, gcrod;
+            float local_hit_dist = 0.f;
+            if (valid)
+            {
+                const vec4 xyz_opac = xyz_opacity_batch[t];
+                opac = xyz_opac[3];
+                xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+                scale = scale_batch[t];
+                quat = quat_batch[t];
+                R = quat_to_rotmat(quat);
+                const mat3 S_mat = mat3(
+                    1.0f / scale[0], 0.f, 0.f,
+                    0.f, 1.0f / scale[1], 0.f,
+                    0.f, 0.f, 1.0f / scale[2]);
+                Mt = glm::transpose(R * S_mat);
+                o_minus_mu = ray_o - xyz;
+                gro = Mt * o_minus_mu;
+                grd = Mt * ray_d;
+                grd_n = safe_normalize(grd);
+                gcrod = glm::cross(grd_n, gro);
+                const float grayDist = glm::dot(gcrod, gcrod);
+                const float power = -0.5f * grayDist;
+                vis = __expf(power);
+                alpha = min(MAX_ALPHA, opac * vis);
+                if (power > 0.f || alpha < ALPHA_THRESHOLD)
+                {
+                    valid = false;
+                }
+                if (use_hit_distance)
+                {
+                    const float hit_t = glm::dot(grd_n, -gro);
+                    const vec3 grds = scale * (grd_n * hit_t);
+                    local_hit_dist = glm::length(grds);
+                }
+            }
+
+            if (!warp.any(valid))
+            {
+                continue;
+            }
+            float v_rgb_local[CDIM] = {0.f};
+            vec3 v_mean_local = {0.f, 0.f, 0.f};
+            vec3 v_scale_local = {0.f, 0.f, 0.f};
+            vec4 v_quat_local = {0.f, 0.f, 0.f, 0.f};
+            float v_opacity_local = 0.f;
+
+            vec3 normal = {0.f, 0.f, 0.f};
+            if (valid)
+            {
+                float ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
+                T *= ra;
+                const float fac = alpha * T;
+#pragma unroll
+                for (uint32_t k = 0; k < CDIM; ++k)
+                {
+                    v_rgb_local[k] = fac * v_render_c[k];
+                }
+
+                bool flipped = false;
+                if (v_render_normals != nullptr)
+                {
+                    const vec3 unnormalized_normal = R[2];
+                    flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
+                    const vec3 unnormalized_flipped =
+                        flipped ? -unnormalized_normal : unnormalized_normal;
+                    normal = safe_normalize(unnormalized_flipped);
+                }
+
+                float rgb_render_dot = 0.f;
+#pragma unroll
+                for (uint32_t k = 0; k < CDIM; ++k)
+                {
+                    const float rgb_k = (use_hit_distance && k == CDIM - 1)
+                        ? local_hit_dist
+                        : rgbs_batch[t * CDIM + k];
+                    rgb_render_dot += rgb_k * v_render_c[k];
+                }
+
+                float normal_render_dot = 0.f;
+                if (v_render_normals != nullptr)
+                {
+                    normal_render_dot = glm::dot(normal, v_render_n);
+                }
+
+                float v_alpha = rgb_render_dot * T - render_accum_dot * ra
+                              + T_final * ra * v_alpha_ind_coeff;
+                if (v_render_normals != nullptr)
+                {
+                    v_alpha += normal_render_dot * T - normal_accum_dot * ra;
+                }
+
+                vec3 v_grd_n_hit = vec3(0.f);
+                vec3 v_gro_hit = vec3(0.f);
+                if (use_hit_distance)
+                {
+                    const float v_depth = v_rgb_local[CDIM - 1];
+                    const float hit_t = glm::dot(grd_n, -gro);
+                    const vec3 grds = scale * (grd_n * hit_t);
+                    const float hit_dist_len = glm::length(grds);
+                    vec3 v_grds = vec3(0.f);
+                    if (hit_dist_len > 1e-8f)
+                    {
+                        v_grds = (grds / hit_dist_len) * v_depth;
+                    }
+                    const float v_hit_t = glm::dot(scale * grd_n, v_grds);
+                    v_grd_n_hit = (scale * hit_t) * v_grds;
+                    v_scale_local += (grd_n * hit_t) * v_grds;
+                    v_grd_n_hit += -gro * v_hit_t;
+                    v_gro_hit = -grd_n * v_hit_t;
+                }
+
+                if (opac * vis <= MAX_ALPHA)
+                {
+                    const float v_vis = opac * v_alpha;
+                    float v_gradDist = -0.5f * vis * v_vis;
+                    vec3 v_gcrod = 2.0f * v_gradDist * gcrod;
+                    vec3 v_grd_n = -glm::cross(v_gcrod, gro) + v_grd_n_hit;
+                    vec3 v_gro = glm::cross(v_gcrod, grd_n) + v_gro_hit;
+                    vec3 v_grd = safe_normalize_bw(grd, v_grd_n);
+                    mat3 v_Mt = glm::outerProduct(v_grd, ray_d) +
+                        glm::outerProduct(v_gro, o_minus_mu);
+                    vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
+
+                    v_mean_local += -v_o_minus_mu;
+                    v_ray_o += v_o_minus_mu;
+                    v_ray_d += glm::transpose(Mt) * v_grd;
+
+                    quat_scale_to_preci_half_vjp(
+                        quat, scale, R, glm::transpose(v_Mt),
+                        v_quat_local, v_scale_local);
+                    v_opacity_local = vis * v_alpha;
+
+                    if (v_render_normals != nullptr)
+                    {
+                        const vec3 v_normal_local = v_render_n * fac;
+                        const vec3 unnormalized_normal = R[2];
+                        const vec3 unnormalized_flipped =
+                            flipped ? -unnormalized_normal : unnormalized_normal;
+                        const vec3 v_unnormalized_flipped =
+                            safe_normalize_bw(unnormalized_flipped, v_normal_local);
+                        const vec3 v_unnormalized =
+                            flipped ? -v_unnormalized_flipped : v_unnormalized_flipped;
+                        const mat3 v_R = mat3(
+                            vec3(0.f, 0.f, 0.f),
+                            vec3(0.f, 0.f, 0.f),
+                            v_unnormalized);
+                        quat_to_rotmat_vjp(quat, v_R, v_quat_local);
+                    }
+                }
+
+                render_accum_dot += rgb_render_dot * fac;
+                if (v_render_normals != nullptr)
+                {
+                    normal_accum_dot += normal_render_dot * fac;
+                }
+            }
+            warpSum<CDIM>(v_rgb_local, warp);
+            warpSum(v_mean_local, warp);
+            warpSum(v_scale_local, warp);
+            warpSum(v_quat_local, warp);
+            warpSum(v_opacity_local, warp);
+            if (warp.thread_rank() == 0)
+            {
+                int32_t isect_id = id_batch[t];
+                int32_t isect_bid = isect_id / (C * N);
+                int32_t isect_gid = isect_id % N;
+                float *v_rgb_ptr = (float *)(v_colors) + CDIM * isect_id;
+#pragma unroll
+                for (uint32_t k = 0; k < CDIM; ++k)
+                {
+                    gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                }
+                float *v_mean_ptr = (float *)(v_means) + 3 * (isect_bid * N + isect_gid);
+                gpuAtomicAdd(v_mean_ptr, v_mean_local.x);
+                gpuAtomicAdd(v_mean_ptr + 1, v_mean_local.y);
+                gpuAtomicAdd(v_mean_ptr + 2, v_mean_local.z);
+                float *v_scale_ptr = (float *)(v_scales) + 3 * (isect_bid * N + isect_gid);
+                gpuAtomicAdd(v_scale_ptr, v_scale_local.x);
+                gpuAtomicAdd(v_scale_ptr + 1, v_scale_local.y);
+                gpuAtomicAdd(v_scale_ptr + 2, v_scale_local.z);
+                float *v_quat_ptr = (float *)(v_quats) + 4 * (isect_bid * N + isect_gid);
+                gpuAtomicAdd(v_quat_ptr, v_quat_local.x);
+                gpuAtomicAdd(v_quat_ptr + 1, v_quat_local.y);
+                gpuAtomicAdd(v_quat_ptr + 2, v_quat_local.z);
+                gpuAtomicAdd(v_quat_ptr + 3, v_quat_local.w);
+                gpuAtomicAdd(v_opacities + isect_id, v_opacity_local);
+            }
+        }
+    }
+
+    // v_rays: atomicAdd since multiple chunks contribute per pixel.
+    if (v_rays != nullptr && pixel_valid)
+    {
+        float *vr = (float *)(v_rays) + 6 * pix_id;
+        gpuAtomicAdd(vr + 0, v_ray_o.x);
+        gpuAtomicAdd(vr + 1, v_ray_o.y);
+        gpuAtomicAdd(vr + 2, v_ray_o.z);
+        gpuAtomicAdd(vr + 3, v_ray_d.x);
+        gpuAtomicAdd(vr + 4, v_ray_d.y);
+        gpuAtomicAdd(vr + 5, v_ray_d.z);
+    }
+}
+
 void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
@@ -802,6 +1818,167 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 shmem_size,
                 " bytes), try lowering tile_size."
             );
+        }
+
+        // Two-kernel dispatch for tiles with explicit rays (minimal prototype).
+        // Always use the three-kernel path.
+        {
+            const uint32_t pixels_per_tile = tile_size * tile_size;
+            const uint32_t num_tiles = I * tile_height * tile_width;
+
+            // Compute max batches per tile to size the temp buffer.
+            auto tile_off_cpu = tile_offsets.cpu();
+            const int32_t *tile_off_ptr = tile_off_cpu.const_data_ptr<int32_t>();
+            uint32_t max_range = 0;
+            for (uint32_t t = 0; t < num_tiles; ++t)
+            {
+                const int32_t start = tile_off_ptr[t];
+                const int32_t end =
+                    (t + 1 < num_tiles) ? tile_off_ptr[t + 1] : n_isects;
+                const uint32_t range = static_cast<uint32_t>(end - start);
+                if (range > max_range)
+                {
+                    max_range = range;
+                }
+            }
+            const uint32_t max_batches =
+                (max_range + pixels_per_tile - 1) / pixels_per_tile;
+            const uint32_t max_chunks =
+                (max_batches + CHUNK_BATCHES - 1) / CHUNK_BATCHES;
+
+            // Allocate temp buffer: [num_tiles][max_chunks][pixels_per_tile][CHUNK_STATE_DIM]
+            const int64_t chunk_state_numel =
+                static_cast<int64_t>(num_tiles) * max_chunks * pixels_per_tile *
+                CHUNK_STATE_DIM;
+            auto chunk_states = at::empty(
+                {chunk_state_numel}, means.options().dtype(at::kFloat));
+            chunk_states.zero_();
+
+            // Common kernel argument block.
+            const auto *means_ptr = reinterpret_cast<const vec3 *>(means.const_data_ptr<float>());
+            const auto *quats_ptr = reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>());
+            const auto *scales_ptr = reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>());
+            const auto *colors_ptr = colors.const_data_ptr<float>();
+            const auto *opacities_ptr = opacities.const_data_ptr<float>();
+            const auto *backgrounds_ptr = backgrounds.has_value()
+                ? backgrounds.value().const_data_ptr<float>() : nullptr;
+            const auto *masks_ptr = masks.has_value()
+                ? masks.value().const_data_ptr<bool>() : nullptr;
+            const auto *viewmats0_ptr = viewmats0.const_data_ptr<float>();
+            const auto *viewmats1_ptr = viewmats1.has_value()
+                ? viewmats1.value().const_data_ptr<float>() : nullptr;
+            const auto *Ks_ptr = Ks.const_data_ptr<float>();
+            const auto *rays_ptr = rays.has_value()
+                ? rays.value().const_data_ptr<float>() : nullptr;
+            const auto *radial_ptr = radial_coeffs.has_value()
+                ? radial_coeffs.value().const_data_ptr<float>() : nullptr;
+            const auto *tangential_ptr = tangential_coeffs.has_value()
+                ? tangential_coeffs.value().const_data_ptr<float>() : nullptr;
+            const auto *thin_prism_ptr = thin_prism_coeffs.has_value()
+                ? thin_prism_coeffs.value().const_data_ptr<float>() : nullptr;
+            const auto *tile_off_gpu = tile_offsets.const_data_ptr<int32_t>();
+            const auto *flatten_ptr = flatten_ids.const_data_ptr<int32_t>();
+            const auto *render_alphas_ptr = render_alphas.const_data_ptr<float>();
+            const auto *last_ids_ptr = last_ids.const_data_ptr<int32_t>();
+            const auto *v_render_c_ptr = v_render_colors.const_data_ptr<float>();
+            const auto *v_render_a_ptr = v_render_alphas.const_data_ptr<float>();
+            const auto *v_render_n_ptr = v_render_normals.has_value()
+                ? v_render_normals.value().const_data_ptr<float>() : nullptr;
+            auto *v_means_ptr = reinterpret_cast<vec3 *>(v_means.data_ptr<float>());
+            auto *v_quats_ptr = reinterpret_cast<vec4 *>(v_quats.data_ptr<float>());
+            auto *v_scales_ptr = reinterpret_cast<vec3 *>(v_scales.data_ptr<float>());
+            auto *v_colors_ptr = v_colors.data_ptr<float>();
+            auto *v_opacities_ptr = v_opacities.data_ptr<float>();
+            auto *v_rays_ptr = v_rays.has_value()
+                ? v_rays.value().data_ptr<float>() : nullptr;
+            auto *chunk_ptr = chunk_states.data_ptr<float>();
+
+            // T_final buffer for the scan kernel (avoids lidar pixel mapping in scan).
+            auto t_final = at::empty(
+                {static_cast<int64_t>(num_tiles * pixels_per_tile)},
+                means.options().dtype(at::kFloat));
+            auto *t_final_ptr = t_final.data_ptr<float>();
+
+            // ---- Kernel 1: state scan (expanded grid) ----
+            dim3 k1_grid = {I, tile_height, tile_width * max_chunks};
+            int64_t k1_shmem =
+                pixels_per_tile *
+                (sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * CDIM);
+            if (cudaFuncSetAttribute(
+                    rasterize_state_scan_bwd_kernel<CDIM, float>,
+                    cudaFuncAttributeMaxDynamicSharedMemorySize,
+                    k1_shmem) != cudaSuccess)
+            {
+                AT_ERROR("Failed to set shmem for state-scan kernel (",
+                         k1_shmem, " bytes).");
+            }
+            rasterize_state_scan_bwd_kernel<CDIM, float>
+                <<<k1_grid, threads, k1_shmem,
+                   at::cuda::getCurrentCUDAStream()>>>(
+                    B, C, N, n_isects, packed,
+                    means_ptr, quats_ptr, scales_ptr,
+                    colors_ptr, opacities_ptr,
+                    masks_ptr,
+                    image_width, image_height, tile_size,
+                    tile_width, tile_height,
+                    viewmats0_ptr, viewmats1_ptr, Ks_ptr,
+                    camera_model,
+                    *ut_params, rs_type,
+                    rays_ptr,
+                    radial_ptr, tangential_ptr, thin_prism_ptr,
+                    ftheta_device_coeffs, lidar_device_coeffs,
+                    external_distortion_device_params,
+                    tile_off_gpu, flatten_ptr,
+                    use_hit_distance,
+                    render_alphas_ptr, last_ids_ptr,
+                    v_render_c_ptr, v_render_n_ptr,
+                    chunk_ptr, t_final_ptr, max_chunks);
+
+            // ---- Kernel 1.5: prologue scan ----
+            {
+                dim3 scan_grid = {num_tiles, 1, 1};
+                dim3 scan_threads = {pixels_per_tile, 1, 1};
+                rasterize_prologue_scan_kernel<float>
+                    <<<scan_grid, scan_threads, 0,
+                       at::cuda::getCurrentCUDAStream()>>>(
+                        t_final_ptr, pixels_per_tile,
+                        chunk_ptr, max_chunks);
+            }
+
+            // ---- Kernel 2: gradient (expanded grid) ----
+            dim3 k2_grid = {I, tile_height, tile_width * max_chunks};
+            if (cudaFuncSetAttribute(
+                    rasterize_gradient_bwd_kernel<CDIM, float>,
+                    cudaFuncAttributeMaxDynamicSharedMemorySize,
+                    shmem_size) != cudaSuccess)
+            {
+                AT_ERROR("Failed to set shmem for gradient kernel (",
+                         shmem_size, " bytes).");
+            }
+            rasterize_gradient_bwd_kernel<CDIM, float>
+                <<<k2_grid, threads, shmem_size,
+                   at::cuda::getCurrentCUDAStream()>>>(
+                    B, C, N, n_isects, packed,
+                    means_ptr, quats_ptr, scales_ptr,
+                    colors_ptr, opacities_ptr, backgrounds_ptr,
+                    masks_ptr,
+                    image_width, image_height, tile_size,
+                    tile_width, tile_height,
+                    viewmats0_ptr, viewmats1_ptr, Ks_ptr,
+                    camera_model,
+                    *ut_params, rs_type,
+                    rays_ptr,
+                    radial_ptr, tangential_ptr, thin_prism_ptr,
+                    ftheta_device_coeffs, lidar_device_coeffs,
+                    external_distortion_device_params,
+                    tile_off_gpu, flatten_ptr,
+                    use_hit_distance,
+                    render_alphas_ptr, last_ids_ptr,
+                    v_render_c_ptr, v_render_a_ptr, v_render_n_ptr,
+                    v_means_ptr, v_quats_ptr, v_scales_ptr,
+                    v_colors_ptr, v_opacities_ptr, v_rays_ptr,
+                    chunk_ptr, max_chunks);
+            return;
         }
 
         rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>
