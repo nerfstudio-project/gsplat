@@ -347,7 +347,7 @@ void launch_projection_ut_3dgs_fused_kernel(
         }
     }();
 
-    cuda::std::visit([&](const auto& sensor_kernel_params) {
+    std::visit([&](const auto& sensor_kernel_params) {
         using SensorModelKernelParams = std::decay_t<decltype(sensor_kernel_params)>;
         using SensorModel = SensorModelFromKernelParams<SensorModelKernelParams>;
 
