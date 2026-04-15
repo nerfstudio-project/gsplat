@@ -34,6 +34,7 @@
 #include "Cameras.cuh"
 #include "Lidars.cuh"
 #include "Sensors.cuh"
+#include "Dispatch.h"
 #include "Ops.h"
 
 namespace gsplat {
@@ -347,10 +348,7 @@ void launch_projection_ut_3dgs_fused_kernel(
         }
     }();
 
-    std::visit([&](const auto& sensor_kernel_params) {
-        using SensorModelKernelParams = std::decay_t<decltype(sensor_kernel_params)>;
-        using SensorModel = SensorModelFromKernelParams<SensorModelKernelParams>;
-
+    auto launch_kernel = [&]<typename SensorModel>() {
         projection_ut_3dgs_fused_kernel<SensorModel, float>
             <<<grid,
             threads,
@@ -376,7 +374,7 @@ void launch_projection_ut_3dgs_fused_kernel(
                 global_z_order,
                 // uncented transform
                 *ut_params,
-                sensor_kernel_params,
+                std::get<typename SensorModel::KernelParameters>(sensor_model_params),
                 radii.data_ptr<int32_t>(),
                 means2d.data_ptr<float>(),
                 depths.data_ptr<float>(),
@@ -384,7 +382,11 @@ void launch_projection_ut_3dgs_fused_kernel(
                 compensations.has_value() ? compensations.value().data_ptr<float>()
                                           : nullptr
             );
-        }, sensor_model_params);
+    };
+    dispatch::dispatch(
+        dispatch::make_mapped_type_param<SensorModelFromKernelParamsMap>(sensor_model_params),
+        std::move(launch_kernel)
+    );
     }
 
 } // namespace gsplat
