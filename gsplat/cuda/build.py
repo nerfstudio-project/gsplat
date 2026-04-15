@@ -79,6 +79,10 @@ def get_build_parameters():
         for arch in os.listdir(os.path.join(CUDA_HOME, "targets")):
             if os.path.isdir(p := os.path.join(CUDA_HOME, "targets", arch, "include")):
                 extra_include_paths.append(p)
+                # In CCCL 3.0 (bundled with CUDA 13.0 and later) and later, the CCCL headers have
+                # been moved to the cccl subdirectory.
+                if os.path.isdir(p := os.path.join(CUDA_HOME, "targets", arch, "include", "cccl")):
+                    extra_include_paths.append(p)
 
     # Source files ------------------------------------
     sources = (
