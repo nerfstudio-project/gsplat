@@ -20,7 +20,7 @@
 // This header provides generic metaprogramming utilities for working with
 // compile-time type lists:
 //   - Represent lists of types                        (TypeList)
-//   - Convert a type list to a cuda::std::variant     (TypeListToVariant)
+//   - Convert a type list to a std::variant           (TypeListToVariant)
 //   - Concatenate type lists                          (TypeListCat)
 //   - Apply a template to each type in a list         (TypeListApply)
 //   - Compute cartesian products of templates × args  (CartesianProduct)
@@ -30,8 +30,8 @@
 
 #pragma once
 
-#include <cuda/std/type_traits>
-#include <cuda/std/variant>
+#include <type_traits>
+#include <variant>
 
 // ============================================================================
 // Generic type list utilities
@@ -41,13 +41,13 @@
 template <typename... Ts>
 struct TypeList {};
 
-// Convert a TypeList<A, B, C> to cuda::std::variant<A, B, C>.
+// Convert a TypeList<A, B, C> to std::variant<A, B, C>.
 template <typename TL>
 struct TypeListToVariantImpl;
 
 template <typename... Ts>
 struct TypeListToVariantImpl<TypeList<Ts...>> {
-    using type = cuda::std::variant<Ts...>;
+    using type = std::variant<Ts...>;
 };
 
 template <typename TL>
@@ -134,14 +134,14 @@ using CartesianProduct = typename CartesianProductImpl<Wrappers, ArgTypes>::type
 
 namespace gsplat {
 
-// Map TypeList<A, B, C> to cuda::std::variant<A::KernelParameters, B::KernelParameters, ...>.
+// Map TypeList<A, B, C> to std::variant<A::KernelParameters, B::KernelParameters, ...>.
 // Each type in the list must have a nested KernelParameters type.
 template <typename TL>
 struct TypeListToKernelParamsVariantImpl;
 
 template <typename... Ts>
 struct TypeListToKernelParamsVariantImpl<TypeList<Ts...>> {
-    using type = cuda::std::variant<typename Ts::KernelParameters...>;
+    using type = std::variant<typename Ts::KernelParameters...>;
 };
 
 template <typename TL>
@@ -164,7 +164,7 @@ template <typename KP, typename Head, typename... Tail>
 struct FindByKernelParamsImpl<KP, TypeList<Head, Tail...>>
     : std::conditional_t<
           std::is_same_v<KP, typename Head::KernelParameters>,
-          cuda::std::type_identity<Head>,
+          std::type_identity<Head>,
           FindByKernelParamsImpl<KP, TypeList<Tail...>>
       > {};
 

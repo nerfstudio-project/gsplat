@@ -21,7 +21,7 @@
 // Combines camera models (from Cameras.cuh) and lidar models (from Lidars.cuh)
 // into a single type list and variant.  The host-side kernel launch code
 // stores the runtime-selected sensor's KernelParameters in a
-// SensorModelKernelParamsVariant, then uses cuda::std::visit to dispatch
+// SensorModelKernelParamsVariant, then uses std::visit to dispatch
 // to a CUDA kernel specialized on the concrete sensor model type.
 //
 // The reverse mapping (SensorModelFromKernelParams) recovers the full sensor
@@ -45,7 +45,7 @@ using SensorModelFromKernelParams = gsplat::FindByKernelParams<KP, SensorModelTy
 inline auto to_sensor_model_kernel_params(
     const CameraModelKernelParamsVariant& camera_params
 ) -> SensorModelKernelParamsVariant {
-    return cuda::std::visit([](const auto& params) -> SensorModelKernelParamsVariant {
+    return std::visit([](const auto& params) -> SensorModelKernelParamsVariant {
         return params;
     }, camera_params);
 }

@@ -1559,7 +1559,7 @@ inline auto get_camera_model_kernel_params(
     const gsplat::extdist::ExternalDistortionModelKernelParamsVariant& external_distortion_kernel_params,
     Args... args
 ) -> CameraModelKernelParamsVariant {
-    return cuda::std::visit([&](const auto& distortion_kernel_params) -> CameraModelKernelParamsVariant {
+    return std::visit([&](const auto& distortion_kernel_params) -> CameraModelKernelParamsVariant {
         using DistortionKernelParams = std::decay_t<decltype(distortion_kernel_params)>;
         using DistortionModel = gsplat::extdist::DistortionModelFromKernelParams<DistortionKernelParams>;
         return typename SensorModel<DistortionModel>::KernelParameters{
