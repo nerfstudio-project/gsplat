@@ -19,23 +19,18 @@
 
 #include <algorithm>
 #include <array>
+#include <cuda/std/variant>
 
 #include "ExternalDistortion.h"
 #include "Common.h"
+#include "TypeList.h"
 
 // ---------------------------------------------------------------------------------------------
-
-// NOTE: Some of the device functions herein are marked GSPLAT_NOINLINE to prevent compilation
-// combinatorial explosion. e.g. eval_bivariate_poly and distort_camera_ray in ProjectionUT3DGSFused.cu:
-// - 7 sigma points (unrolled loop - inside world_gaussian_to_image_gaussian_unscented_transform_shutter_pose)
-// - 5 camera models
-// - N CUDA architectures/compute capability targets (e.g. 80, 86, 89, 90, 100, 120)
-// - Inlining into every context creates O(n³) register allocation complexity
 
 namespace gsplat::extdist
 {
 
-constexpr int32_t compute_order(int32_t num_coeffs) {
+ constexpr int32_t compute_order(int32_t num_coeffs) {
     // MAX_ORDER is so small we can just avoid math and use
     // (order+1)*(order+2)/2 = num_coeffs to inverse check equivalence.
     if (num_coeffs == 1) return 0;
@@ -49,7 +44,7 @@ constexpr int32_t compute_order(int32_t num_coeffs) {
 
 // Device-side polynomial evaluation — always iterates over MAX_ORDER.
 // Coefficients are expected in MAX_ORDER triangular layout (21 elements, zero-padded).
-inline __device__ GSPLAT_NOINLINE float eval_bivariate_poly(
+inline __device__ float eval_bivariate_poly(
     const float* poly_coeffs,
     float x,
     float y
@@ -124,7 +119,7 @@ inline std::array<float, BivariateWindshieldModelParameters::MAX_COEFFS> pad_ten
 // Device-side parameters for the bivariate windshield distortion model.
 // Stores polynomial coefficients as fixed-size arrays (zero-padded to MAX_ORDER layout).
 struct BivariateWindshieldModelDeviceParams {
-    inline __host__ __device__ BivariateWindshieldModelDeviceParams() {}
+    inline __host__ __device__ BivariateWindshieldModelDeviceParams() = default;
 
     inline __host__ BivariateWindshieldModelDeviceParams(const BivariateWindshieldModelParameters& params)
     : horizontal_poly(pad_tensor_coefficients(params.horizontal_poly))
@@ -144,9 +139,16 @@ struct BivariateWindshieldModelDeviceParams {
 // External Distortion Models
 
 struct BivariateWindshieldModel {
+    using KernelParameters = gsplat::extdist::BivariateWindshieldModelDeviceParams;
 
-    // Distort a camera ray using forward polynomials.
-    static __device__ GSPLAT_NOINLINE glm::fvec3 distort_camera_ray(
+    gsplat::extdist::BivariateWindshieldModelDeviceParams params;
+
+    __device__ BivariateWindshieldModel(const KernelParameters& device_params, int camera_index)
+        : params(device_params)
+    {
+    }
+
+    static __device__ glm::fvec3 distort_camera_ray(
         const glm::fvec3& ray,
         const float* horizontal_poly,
         const float* vertical_poly)
@@ -167,24 +169,47 @@ struct BivariateWindshieldModel {
         return glm::fvec3(x, y, z);
     }
 
-    // Undistort a camera ray using inverse polynomials.
-    static __device__ GSPLAT_NOINLINE glm::fvec3 undistort_camera_ray(
-        const glm::fvec3& ray,
-        const float* horizontal_poly_inverse,
-        const float* vertical_poly_inverse)
-    {
-        const float ray_length = glm::length(ray);
-        if (ray_length < 1e-6f) return ray;
+    // Distort a camera ray using forward polynomials.
+    __device__ glm::fvec3 distort_camera_ray(glm::fvec3 ray) const {
+        return distort_camera_ray(
+            ray,
+            params.horizontal_poly.data(),
+            params.vertical_poly.data()
+        );
+    }
 
-        const float phi = std::asin(std::clamp(ray.x / ray_length, -1.f, 1.f));
-        const float theta = std::asin(std::clamp(ray.y / ray_length, -1.f, 1.f));
-
-        const float x = std::sin(eval_bivariate_poly(horizontal_poly_inverse, phi, theta));
-        const float y = std::sin(eval_bivariate_poly(vertical_poly_inverse, phi, theta));
-        const float z = std::sqrt(1.f - std::min(x * x + y * y, 1.f)) * (ray.z < 0.f ? -1.f : 1.f);
-
-        return glm::fvec3(x, y, z);
+    __device__ glm::fvec3 undistort_camera_ray(glm::fvec3 ray) const {
+        return distort_camera_ray(
+            ray,
+            params.horizontal_poly_inverse.data(),
+            params.vertical_poly_inverse.data()
+        );
     }
 };
+
+struct EmptyExternalDistortionModel {
+    struct KernelParameters {};
+
+    __device__ EmptyExternalDistortionModel(const KernelParameters& kernel_parameters, int camera_index)
+    {
+    }
+
+    __device__ glm::fvec3 distort_camera_ray(glm::fvec3 ray) const {
+        return ray;
+    }
+
+    __device__ glm::fvec3 undistort_camera_ray(glm::fvec3 ray) const {
+        return ray;
+    }
+};
+
+// Type list of all external distortion models
+using ExternalDistortionModelTypes = TypeList<EmptyExternalDistortionModel, BivariateWindshieldModel>;
+
+using ExternalDistortionModelKernelParamsVariant = TypeListToKernelParamsVariant<ExternalDistortionModelTypes>;
+
+// Map a KernelParameters type back to its distortion model type.
+template <typename KP>
+using DistortionModelFromKernelParams = FindByKernelParams<KP, ExternalDistortionModelTypes>;
 
 } // namespace gsplat::extdist

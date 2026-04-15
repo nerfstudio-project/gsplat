@@ -71,6 +71,7 @@ torch::Tensor eval_bivariate_poly_wrapper(
 
     // Pad coefficients to MAX_ORDER layout and pass by value as kernel arg (constant memory)
     auto padded = pad_tensor_coefficients(poly_coeffs);
+
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(x.device().index());
 
     int threads = 256;
@@ -107,7 +108,7 @@ __global__ void distort_camera_rays_kernel(
     glm::fvec3 ray(rays[idx * 3 + 0], rays[idx * 3 + 1], rays[idx * 3 + 2]);
 
     glm::fvec3 distorted = inverse
-        ? BivariateWindshieldModel::undistort_camera_ray(
+        ? BivariateWindshieldModel::distort_camera_ray(
             ray, params.horizontal_poly_inverse.data(), params.vertical_poly_inverse.data())
         : BivariateWindshieldModel::distort_camera_ray(
             ray, params.horizontal_poly.data(), params.vertical_poly.data());
