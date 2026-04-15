@@ -2179,7 +2179,7 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
     )
 
     width = height = 32
-    tile_size = 16
+    tile_size = 8
     N = 1
     C = 1
     I = C
@@ -2450,7 +2450,7 @@ def test_rasterize_to_pixels_eval3d(
 
     # Identify intersecting tiles
     if camera_model == "lidar":
-        tile_size = 16  # unused for lidar but required by rasterize API
+        tile_size = 8  # unused for lidar but required by rasterize API (3DGUT kernel: TILE_SIZE=8)
         tile_width = lidar_coeffs.tiling.n_bins_azimuth
         tile_height = lidar_coeffs.tiling.n_bins_elevation
         _tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
@@ -2460,7 +2460,7 @@ def test_rasterize_to_pixels_eval3d(
             depths,
         )
     else:
-        tile_size = 16
+        tile_size = 8  # 3DGUT kernel: TILE_SIZE=8
         tile_width = math.ceil(width / float(tile_size))
         tile_height = math.ceil(height / float(tile_size))
         tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
@@ -2617,9 +2617,9 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(
         render_alphas * count_match, _render_alphas * count_match, rtol=1e-2, atol=2e-3
     )
-    # For lidar use_rays=False, the CUDA kernel generates rays via element_to_image_point
-    # while the ref uses _generate_rays, producing ~1 pixel mismatch at tile boundaries
-    # (observed: 0.0073 at index (0, 269, 3, 0)).
+    # For lidar, the CUDA kernel generates rays via element_to_image_point
+    # while the ref uses _generate_rays, producing ~1 pixel mismatch at tile
+    # boundaries (observed: 0.00392 at (1, 0, 566, 0)).
     vis_mismatch_atol = 1e-2 if camera_model == "lidar" else ALPHA_THRESHOLD + 1e-5
     torch.testing.assert_close(
         render_alphas * vis_mismatch,
@@ -3161,7 +3161,7 @@ def _render_alpha(data, quats, scales, means2d, radii, depths):
     C = data["viewmats"].shape[0]
     W, H = data["width"], data["height"]
 
-    tile_size = 16
+    tile_size = 8  # 3DGUT kernel: TILE_SIZE=8
     tw = math.ceil(W / tile_size)
     th = math.ceil(H / tile_size)
     _, iids, fids = isect_tiles(means2d, radii, depths, tile_size, tw, th)
@@ -3525,7 +3525,7 @@ def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data):
     scales_safe[1, 0] = 1.0
 
     # Tile intersection
-    tile_size = 16
+    tile_size = 8  # 3DGUT kernel: TILE_SIZE=8
     tw = math.ceil(W / tile_size)
     th = math.ceil(H / tile_size)
     _tpg, iids, fids = isect_tiles(means2d, radii, depths, tile_size, tw, th)
@@ -3742,7 +3742,7 @@ def test_backward_high_opacity_no_nan():
         H,
     )
 
-    tile_size = 16
+    tile_size = 8  # 3DGUT kernel: TILE_SIZE=8
     tw = math.ceil(W / tile_size)
     th = math.ceil(H / tile_size)
     _, iids, fids = isect_tiles(means2d, radii, depths, tile_size, tw, th)

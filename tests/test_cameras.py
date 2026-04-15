@@ -517,7 +517,9 @@ def parse_lidar_camera(
     angles_to_columns_map, tiling = _cached_lidar_preprocessing(
         lidar_params,
         n_bins_elevation=16,
-        max_pts_per_tile=16 * 16,
+        # 3DGUT compact-CTA kernel (CTA_SIZE=32, PIXELS_PER_THREAD=2) processes
+        # at most 64 elements per tile; matches NRE's cap in renderers.py.
+        max_pts_per_tile=8 * 8,
         resolution_elevation=1600,
         densification_factor_azimuth=8,
     )

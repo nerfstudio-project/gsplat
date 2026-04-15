@@ -49,7 +49,7 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 // Same architectural pattern as the 3DGS compact CTA:
 //   CTA_SIZE threads process a TILE_SIZE x TILE_SIZE tile,
 //   each thread handling PIXELS_PER_THREAD pixels in a vertical stride.
-// Shared memory per batch: CTA_SIZE * 80B = 5120B (vs 20480B with 256 threads).
+// Shared memory per batch: CTA_SIZE * 80B = 2560B (vs 20480B with 256 threads).
 
 template <uint32_t CDIM, uint32_t TILE_SIZE, uint32_t CTA_SIZE>
 __global__ void __launch_bounds__(CTA_SIZE)
@@ -559,6 +559,7 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 const float power = -0.5f * grayDist;
                 float max_response = __expf(power);
                 float alpha = min(MAX_ALPHA, opac * max_response);
+
                 if (alpha < ALPHA_THRESHOLD) {
                     continue;
                 }
