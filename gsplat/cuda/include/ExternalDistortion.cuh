@@ -19,7 +19,7 @@
 
 #include <algorithm>
 #include <array>
-#include <cuda/std/variant>
+#include <variant>
 
 #include "ExternalDistortion.h"
 #include "Common.h"
