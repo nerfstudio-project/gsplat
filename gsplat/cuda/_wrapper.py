@@ -1057,7 +1057,7 @@ def rasterize_to_pixels_eval3d(
     return colors, alphas
 
 
-@trace_function("render3D-fwd")
+@trace_function("raster3D-fwd")
 def rasterize_to_pixels_eval3d_extra(
     means: Tensor,  # [..., N, 3]
     quats: Tensor,  # [..., N, 4]
@@ -2001,7 +2001,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         return render_colors, render_alphas, last_ids, sample_counts, render_normals
 
     @staticmethod
-    @trace_function("render3D-bwd")
+    @trace_function("raster3D-bwd")
     def backward(
         ctx,
         v_render_colors: Tensor,  # [..., C, H, W, 3]
