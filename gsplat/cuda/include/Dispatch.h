@@ -130,6 +130,18 @@ struct MappedTypeParam {
     using Resolve = typename Map<T>::type;
 };
 
+// Factory function to construct a MappedTypeParam from an existing std::variant
+// without re-listing the variant's alternative types at the call site.
+//
+// Example:
+//   std::variant<FisheyeKP, PinholeKP> v = ...;
+//   auto param = make_mapped_type_param<KernelToModel>(v);
+//   // param is MappedTypeParam<KernelToModel, FisheyeKP, PinholeKP>{v}
+template <template<typename> class Map, typename... Types>
+MappedTypeParam<Map, Types...> make_mapped_type_param(const std::variant<Types...>& v) {
+    return MappedTypeParam<Map, Types...>{v};
+}
+
 
 
 namespace detail {
