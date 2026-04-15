@@ -291,7 +291,7 @@ def rasterization(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     packed: bool = True,
-    tile_size: int = 16,
+    tile_size: Optional[int] = None,
     backgrounds: Optional[Tensor] = None,
     render_mode: RenderMode = "RGB",
     sparse_grad: bool = False,
@@ -553,6 +553,11 @@ def rasterization(
 
     """
     meta = {}
+    # Resolve tile_size default based on rasterizer path. The 3DGUT kernel is
+    # compiled with TILE_SIZE=8; the 3DGS kernel is compiled with TILE_SIZE=16.
+    # Callers that don't specify tile_size get the path-correct default.
+    if tile_size is None:
+        tile_size = 8 if with_eval3d else 16
     has_color = render_mode_has_color(render_mode)
 
     _validate_3dgut_rasterize_mode(
@@ -1384,7 +1389,7 @@ def _rasterization(
     far_plane: float = 1e10,
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
-    tile_size: int = 16,
+    tile_size: Optional[int] = None,
     rays: Optional[
         Tensor
     ] = None,  # [..., C, H, W, 6] -> ox, oy, oz, dx*spread, dy*spread, dz*spread
@@ -1424,6 +1429,11 @@ def _rasterization(
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
     from gsplat.cuda._math import _quat_scale_to_covar_preci
+
+    # Resolve tile_size default based on rasterizer path. The 3DGUT kernel is
+    # compiled with TILE_SIZE=8; the 3DGS kernel is compiled with TILE_SIZE=16.
+    if tile_size is None:
+        tile_size = 8 if with_eval3d else 16
 
     if lidar_coeffs is not None:
         width = lidar_coeffs.n_columns
