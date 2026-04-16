@@ -248,6 +248,14 @@ class TestLidarDistanceLoss:
         assert pred.grad is not None
         assert torch.all(torch.isfinite(pred.grad))
 
+    def test_loss_fn_mse(self):
+        pred = torch.tensor([1.0, 3.0])
+        gt = torch.tensor([2.0, 5.0])
+        # MSE: ((1-2)^2 + (3-5)^2) / 2 = (1+4)/2 = 2.5
+        assert torch.isclose(
+            lidar_distance_loss(pred, gt, loss_fn="mse"), torch.tensor(2.5)
+        )
+
     def test_nd_shapes(self):
         pred = torch.rand(2, 64, 1)
         gt = torch.rand(2, 64, 1)
@@ -265,12 +273,26 @@ class TestLidarIntensityLoss:
         gt = torch.tensor([0.2, 0.3, 0.8])
         assert lidar_intensity_loss(pred, gt).item() > 0.0
 
+    def test_known_value_default_l1(self):
+        pred = torch.tensor([0.1, 0.3])
+        gt = torch.tensor([0.2, 0.5])
+        # Default L1: (|0.1-0.2| + |0.3-0.5|) / 2 = (0.1 + 0.2) / 2 = 0.15
+        assert torch.isclose(
+            lidar_intensity_loss(pred, gt), torch.tensor(0.15), atol=1e-6
+        )
+
     def test_valid_mask(self):
         pred = torch.tensor([0.1, 999.0, 0.3])
         gt = torch.tensor([0.2, 0.0, 0.5])
         mask = torch.tensor([True, False, True])
         expected = F.l1_loss(torch.tensor([0.1, 0.3]), torch.tensor([0.2, 0.5]))
         assert torch.isclose(lidar_intensity_loss(pred, gt, valid_mask=mask), expected)
+
+    def test_loss_fn_mse(self):
+        pred = torch.tensor([0.1, 0.3])
+        gt = torch.tensor([0.2, 0.5])
+        expected = F.mse_loss(pred, gt)
+        assert torch.isclose(lidar_intensity_loss(pred, gt, loss_fn="mse"), expected)
 
     def test_gradient_flows(self):
         pred = torch.tensor([0.5, 0.8], requires_grad=True)
@@ -280,29 +302,38 @@ class TestLidarIntensityLoss:
 
 
 class TestLidarRaydropLoss:
-    def test_perfect_prediction(self):
-        # Large positive logit for dropped=1, large negative for dropped=0
+    def test_confident_prediction_low_loss(self):
+        # Default is BCE-with-logits: pred are logits. Large positive → class 1,
+        # large negative → class 0.
         pred = torch.tensor([10.0, -10.0])
         gt = torch.tensor([1.0, 0.0])
         loss = lidar_raydrop_loss(pred, gt)
         assert loss.item() < 0.01
 
     def test_wrong_prediction_high_loss(self):
+        # Confident wrong logits → large BCE-with-logits loss
         pred = torch.tensor([-10.0, 10.0])
         gt = torch.tensor([1.0, 0.0])
         loss = lidar_raydrop_loss(pred, gt)
         assert loss.item() > 5.0
 
     def test_valid_mask(self):
-        pred = torch.tensor([10.0, 0.0, -10.0])
+        pred = torch.tensor([10.0, 99.0, -10.0])
         gt = torch.tensor([1.0, 1.0, 0.0])
         mask = torch.tensor([True, False, True])
         loss = lidar_raydrop_loss(pred, gt, valid_mask=mask)
-        # Only indices 0, 2: perfect predictions
+        # Only indices 0, 2: confident correct → near-zero
         assert loss.item() < 0.01
 
+    def test_loss_fn_mse(self):
+        pred = torch.tensor([0.0, 1.0])
+        gt = torch.tensor([1.0, 0.0])
+        # MSE: ((0-1)^2 + (1-0)^2) / 2 = 1.0
+        loss = lidar_raydrop_loss(pred, gt, loss_fn="mse")
+        assert torch.isclose(loss, torch.tensor(1.0))
+
     def test_gradient_flows(self):
-        pred = torch.tensor([0.0, 0.0], requires_grad=True)
+        pred = torch.tensor([0.5, 0.5], requires_grad=True)
         gt = torch.tensor([1.0, 0.0])
         lidar_raydrop_loss(pred, gt).backward()
         assert pred.grad is not None
@@ -310,32 +341,116 @@ class TestLidarRaydropLoss:
 
 class TestLidarBackgroundLoss:
     def test_correct_foreground_opacity(self):
-        # High opacity on foreground rays, low on background
+        # High opacity on foreground rays, low on background → small BCE
         pred_opacity = torch.tensor([0.99, 0.99, 0.01, 0.01])
         bg_mask = torch.tensor([False, False, True, True])
         loss = lidar_background_loss(pred_opacity, bg_mask)
-        assert loss.item() < 0.1
+        # BCE with confident-correct probabilities is small
+        assert loss.item() < 0.02
 
     def test_wrong_opacity_high_loss(self):
-        # High opacity on background rays
+        # High opacity on background rays → large BCE
         pred_opacity = torch.tensor([0.01, 0.01, 0.99, 0.99])
         bg_mask = torch.tensor([False, False, True, True])
         loss = lidar_background_loss(pred_opacity, bg_mask)
-        assert loss.item() > 1.0
+        # BCE with confident-wrong probabilities explodes
+        assert loss.item() > 3.0
 
     def test_valid_mask(self):
         pred_opacity = torch.tensor([0.99, 0.5, 0.01])
         bg_mask = torch.tensor([False, False, True])
         mask = torch.tensor([True, False, True])
         loss = lidar_background_loss(pred_opacity, bg_mask, valid_mask=mask)
-        # Only indices 0 (fg, high opacity=good) and 2 (bg, low opacity=good)
+        # Only indices 0 (fg, 0.99 vs 1) and 2 (bg, 0.01 vs 0) → very small BCE
+        assert loss.item() < 0.02
+
+    def test_loss_fn_bce_clipped(self):
+        pred = torch.tensor([0.99, 0.99, 0.01, 0.01])
+        bg_mask = torch.tensor([False, False, True, True])
+        # Should not NaN even with near-boundary values
+        loss = lidar_background_loss(pred, bg_mask, loss_fn="bce_clipped")
+        assert torch.isfinite(loss)
         assert loss.item() < 0.1
+
+    def test_loss_fn_mse(self):
+        pred = torch.tensor([0.99, 0.99, 0.01, 0.01])
+        bg_mask = torch.tensor([False, False, True, True])
+        # MSE: mean((0.99-1)^2, (0.99-1)^2, (0.01-0)^2, (0.01-0)^2) = 1e-4
+        loss = lidar_background_loss(pred, bg_mask, loss_fn="mse")
+        assert torch.isclose(loss, torch.tensor(1e-4), atol=1e-6)
+
+    def test_bce_clipped_is_smaller_than_bce_at_boundary(self):
+        # At the exact 0/1 boundary, raw BCE saturates to PyTorch's internal
+        # clamp (100.0 per F.binary_cross_entropy's log(0) guard), while
+        # bce_clipped clips pred further inside [0, 1] and produces a much
+        # smaller, numerically-useful gradient signal.
+        pred = torch.tensor([1.0, 0.0])
+        bg_mask = torch.tensor([True, False])  # target = [0.0, 1.0] — all wrong
+        bce_loss = lidar_background_loss(pred, bg_mask, loss_fn="bce")
+        bce_clipped_loss = lidar_background_loss(pred, bg_mask, loss_fn="bce_clipped")
+        assert torch.isfinite(bce_loss) and torch.isfinite(bce_clipped_loss)
+        # Raw BCE saturates at PyTorch's ~100 clamp; bce_clipped stays small.
+        assert bce_loss.item() > 50.0
+        assert bce_clipped_loss.item() < 20.0
+        assert bce_clipped_loss.item() < bce_loss.item()
 
     def test_gradient_flows(self):
         pred = torch.tensor([0.5, 0.5], requires_grad=True)
         bg_mask = torch.tensor([False, True])
         lidar_background_loss(pred, bg_mask).backward()
         assert pred.grad is not None
+
+
+# ---------------------------------------------------------------------------
+# Shared loss_fn behavior across LiDAR loss functions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["l1", "mse", "huber", "smooth_l1"])
+def test_distance_all_variants_finite(name):
+    pred = torch.rand(8)
+    gt = torch.rand(8)
+    loss = lidar_distance_loss(pred, gt, loss_fn=name)
+    assert loss.ndim == 0 and torch.isfinite(loss)
+
+
+def test_loss_fn_unknown_raises():
+    with pytest.raises(ValueError, match="Unknown loss_fn"):
+        lidar_distance_loss(torch.zeros(4), torch.zeros(4), loss_fn="xyz")
+
+
+def test_shape_mismatch_raises():
+    with pytest.raises(ValueError, match="shape"):
+        lidar_distance_loss(torch.zeros(4), torch.zeros(5))
+
+
+def test_mask_shape_mismatch_raises():
+    with pytest.raises(ValueError, match="shape"):
+        lidar_distance_loss(
+            torch.zeros(4), torch.zeros(4), valid_mask=torch.zeros(5).bool()
+        )
+
+
+def test_loss_fn_custom_callable():
+    # Real callable: 2×L1, unreduced
+    def my_loss(p, t):
+        return (p - t).abs() * 2.0
+
+    pred = torch.tensor([1.0, 3.0])
+    gt = torch.tensor([2.0, 5.0])
+    # mean(2*|1-2| + 2*|3-5|) / 2 = 3.0
+    assert torch.isclose(
+        lidar_distance_loss(pred, gt, loss_fn=my_loss), torch.tensor(3.0)
+    )
+
+
+def test_loss_fn_callable_wrong_shape_raises():
+    # A callable that incorrectly reduces to scalar should be caught.
+    def scalar_loss(p, t):
+        return F.l1_loss(p, t)  # default reduction='mean' → scalar
+
+    with pytest.raises(ValueError, match="per-element"):
+        lidar_distance_loss(torch.zeros(4), torch.zeros(4), loss_fn=scalar_loss)
 
 
 # ---------------------------------------------------------------------------

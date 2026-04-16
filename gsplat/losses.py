@@ -206,6 +206,70 @@ def depth_l1_loss(
 
 
 # ---------------------------------------------------------------------------
+# Loss function dispatch
+# ---------------------------------------------------------------------------
+
+# Registry mapping string names to per-element loss callables.
+# All callables accept (pred, target) and return unreduced per-element loss
+# tensors (same shape as pred).
+_LOSS_FN_REGISTRY: dict = {
+    "l1": lambda pred, target: F.l1_loss(pred, target, reduction="none"),
+    "mse": lambda pred, target: F.mse_loss(pred, target, reduction="none"),
+    "huber": lambda pred, target: F.huber_loss(
+        pred, target, reduction="none", delta=1.0
+    ),
+    "smooth_l1": lambda pred, target: F.smooth_l1_loss(
+        pred, target, reduction="none", beta=1.0
+    ),
+    "bce": lambda pred, target: F.binary_cross_entropy(pred, target, reduction="none"),
+    "bce_with_logits": lambda pred, target: F.binary_cross_entropy_with_logits(
+        pred, target, reduction="none"
+    ),
+    "bce_clipped": lambda pred, target: bce_clipped(pred, target),
+}
+
+
+def _resolve_loss_fn(loss_fn):
+    """Resolve a loss function from a string name or return a callable as-is.
+
+    Args:
+        loss_fn: Either a string key (``'l1'``, ``'mse'``, ``'bce'``,
+            ``'bce_clipped'``, ``'bce_with_logits'``, ``'huber'``,
+            ``'smooth_l1'``) or a callable ``(pred, target) -> Tensor``
+            returning unreduced per-element loss.
+
+    Returns:
+        A callable ``(pred, target) -> Tensor`` returning unreduced loss.
+    """
+    if callable(loss_fn):
+        return loss_fn
+    if loss_fn not in _LOSS_FN_REGISTRY:
+        raise ValueError(
+            f"Unknown loss_fn '{loss_fn}'. "
+            f"Available: {sorted(_LOSS_FN_REGISTRY.keys())}. "
+            f"Or pass a callable (pred, target) -> Tensor."
+        )
+    return _LOSS_FN_REGISTRY[loss_fn]
+
+
+def _apply_loss_fn(fn, pred: Tensor, target: Tensor) -> Tensor:
+    """Call *fn* and assert the result is an unreduced per-element tensor.
+
+    This catches common mistakes like passing ``F.l1_loss`` (which reduces to a
+    scalar by default) where the callers expect a per-element tensor they can
+    mean-reduce themselves.
+    """
+    out = fn(pred, target)
+    if out.shape != pred.shape:
+        raise ValueError(
+            "loss_fn must return a per-element tensor with the same shape as "
+            f"pred ({tuple(pred.shape)}), got shape {tuple(out.shape)}. Make "
+            "sure custom callables pass reduction='none' (or equivalent)."
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # LiDAR losses
 # ---------------------------------------------------------------------------
 
@@ -230,26 +294,30 @@ def lidar_distance_loss(
     pred_distance: Tensor,
     gt_distance: Tensor,
     valid_mask: Tensor | None = None,
+    loss_fn: str | Callable[[Tensor, Tensor], Tensor] = "l1",
 ) -> Tensor:
-    """L1 loss on LiDAR hit distance (direct distance space, not disparity).
+    """Per-element loss on LiDAR hit distance (direct distance space).
 
     Unlike :func:`depth_l1_loss` which operates in inverse-depth (disparity)
-    space, this computes a direct L1 on the rendered distance along each LiDAR
-    ray vs. the measured ground-truth distance.  This is the standard loss used
-    by gsplat's ``camera_model="lidar"`` rendering path.
+    space, this computes a direct loss on the rendered distance along each
+    LiDAR ray vs. the measured ground-truth distance.
 
     Args:
         pred_distance: Predicted hit distance per ray, ``[..., 1]`` or ``[...]``.
         gt_distance: Ground-truth measured distance per ray, same shape.
         valid_mask: Optional boolean mask for valid (non-dropped, non-invalid)
             rays.  When provided, only masked elements contribute to the loss.
+        loss_fn: Per-element loss function — a string name (``'l1'``,
+            ``'mse'``, ``'huber'``, ``'smooth_l1'``) or a callable
+            ``(pred, target) -> Tensor``.  Default ``'l1'``.
 
     Returns:
-        Scalar L1 distance loss.
+        Scalar distance loss (mean-reduced over valid elements).
     """
     _validate_lidar_shapes(
         pred_distance, gt_distance, valid_mask, "lidar_distance_loss"
     )
+    fn = _resolve_loss_fn(loss_fn)
     pred = pred_distance.reshape(-1)
     gt = gt_distance.reshape(-1)
     if valid_mask is not None:
@@ -258,15 +326,16 @@ def lidar_distance_loss(
         gt = gt[mask]
     if pred.numel() == 0:
         return pred.sum()  # differentiable zero
-    return F.l1_loss(pred, gt)
+    return _apply_loss_fn(fn, pred, gt).mean()
 
 
 def lidar_intensity_loss(
     pred_intensity: Tensor,
     gt_intensity: Tensor,
     valid_mask: Tensor | None = None,
+    loss_fn: str | Callable[[Tensor, Tensor], Tensor] = "l1",
 ) -> Tensor:
-    """L1 loss on LiDAR return intensity.
+    """Per-element loss on LiDAR return intensity.
 
     Compares rendered intensity (from ``extra_signals``) against measured
     ground-truth intensity for each valid LiDAR ray.
@@ -275,13 +344,16 @@ def lidar_intensity_loss(
         pred_intensity: Predicted intensity per ray, ``[..., 1]`` or ``[...]``.
         gt_intensity: Ground-truth intensity per ray, same shape.
         valid_mask: Optional boolean mask for valid rays.
+        loss_fn: Per-element loss function — a string name (``'l1'``,
+            ``'mse'``, ``'huber'``) or a callable.  Default ``'l1'``.
 
     Returns:
-        Scalar L1 intensity loss.
+        Scalar intensity loss (mean-reduced over valid elements).
     """
     _validate_lidar_shapes(
         pred_intensity, gt_intensity, valid_mask, "lidar_intensity_loss"
     )
+    fn = _resolve_loss_fn(loss_fn)
     pred = pred_intensity.reshape(-1)
     gt = gt_intensity.reshape(-1)
     if valid_mask is not None:
@@ -290,29 +362,36 @@ def lidar_intensity_loss(
         gt = gt[mask]
     if pred.numel() == 0:
         return pred.sum()  # differentiable zero
-    return F.l1_loss(pred, gt)
+    return _apply_loss_fn(fn, pred, gt).mean()
 
 
 def lidar_raydrop_loss(
     pred_raydrop: Tensor,
     gt_raydrop: Tensor,
     valid_mask: Tensor | None = None,
+    loss_fn: str | Callable[[Tensor, Tensor], Tensor] = "bce_with_logits",
 ) -> Tensor:
-    """Binary cross-entropy loss on LiDAR ray-drop prediction.
+    """Per-element loss on LiDAR ray-drop prediction.
 
-    Supervises the predicted probability that a LiDAR ray was "dropped"
-    (returned no measurement) against the ground-truth drop mask.
+    Supervises the predicted raydrop value against the ground-truth drop
+    mask for each valid LiDAR ray.
 
     Args:
-        pred_raydrop: Predicted raydrop logits per ray, ``[..., 1]`` or ``[...]``.
+        pred_raydrop: Predicted raydrop value per ray, ``[..., 1]`` or ``[...]``.
+            Interpretation depends on *loss_fn*: probabilities for ``'mse'``,
+            raw logits for ``'bce_with_logits'``.
         gt_raydrop: Ground-truth raydrop labels (0 or 1), same shape.
         valid_mask: Optional boolean mask for valid rays (excludes invalid rays
             but keeps dropped rays, since those are the positive class).
+        loss_fn: Per-element loss function — a string name
+            (``'bce_with_logits'``, ``'mse'``, ``'l1'``) or a callable.
+            Default ``'bce_with_logits'``.
 
     Returns:
-        Scalar BCE loss.
+        Scalar raydrop loss (mean-reduced over valid elements).
     """
     _validate_lidar_shapes(pred_raydrop, gt_raydrop, valid_mask, "lidar_raydrop_loss")
+    fn = _resolve_loss_fn(loss_fn)
     pred = pred_raydrop.reshape(-1)
     gt = gt_raydrop.reshape(-1).float()
     if valid_mask is not None:
@@ -321,15 +400,16 @@ def lidar_raydrop_loss(
         gt = gt[mask]
     if pred.numel() == 0:
         return pred.sum()  # differentiable zero
-    return F.binary_cross_entropy_with_logits(pred, gt)
+    return _apply_loss_fn(fn, pred, gt).mean()
 
 
 def lidar_background_loss(
     pred_opacity: Tensor,
     background_mask: Tensor,
     valid_mask: Tensor | None = None,
+    loss_fn: str | Callable[[Tensor, Tensor], Tensor] = "bce",
 ) -> Tensor:
-    """BCE loss penalizing Gaussian opacity on background/sky LiDAR rays.
+    """Per-element loss penalizing Gaussian opacity on background/sky LiDAR rays.
 
     Encourages the model to keep opacity low along LiDAR rays that correspond
     to sky or background (no physical surface), preventing floater artifacts
@@ -337,12 +417,18 @@ def lidar_background_loss(
 
     Args:
         pred_opacity: Predicted accumulated opacity per ray, ``[..., 1]`` or ``[...]``.
-            Values should be in ``[0, 1]``.
+            Values are clamped to ``[0, 1]`` before the loss computation, so
+            logits-based losses (``'bce_with_logits'``) are not supported here.
         background_mask: Boolean mask where True = background/sky ray.
         valid_mask: Optional boolean mask for valid (non-invalid, non-dropped) rays.
+        loss_fn: Per-element loss function — a string name (``'bce'``,
+            ``'bce_clipped'``, ``'mse'``, ``'l1'``) or a callable.  Default
+            ``'bce'``. Note: ``'bce'`` can produce +inf at the 0/1 boundary
+            even with the clamp; ``'bce_clipped'`` avoids this by clipping
+            internally and is recommended for numerical safety.
 
     Returns:
-        Scalar BCE loss.
+        Scalar background loss (mean-reduced over valid elements).
     """
     if pred_opacity.shape != background_mask.shape:
         raise ValueError(
@@ -354,6 +440,7 @@ def lidar_background_loss(
             f"lidar_background_loss: valid_mask shape {valid_mask.shape} != "
             f"pred_opacity shape {pred_opacity.shape}."
         )
+    fn = _resolve_loss_fn(loss_fn)
     pred = pred_opacity.reshape(-1).clamp(0, 1)
     # Target: 0 for background rays (want low opacity), 1 for foreground
     target = (~background_mask.reshape(-1).bool()).float()
@@ -363,7 +450,7 @@ def lidar_background_loss(
         target = target[mask]
     if pred.numel() == 0:
         return pred.sum()  # differentiable zero
-    return F.binary_cross_entropy(pred, target)
+    return _apply_loss_fn(fn, pred, target).mean()
 
 
 # ---------------------------------------------------------------------------
