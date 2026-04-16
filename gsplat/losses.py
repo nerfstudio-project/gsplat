@@ -134,6 +134,9 @@ def torch_ssim_loss(
     return ssim_map
 
 
+_ssim_window_cache: dict = {}
+
+
 def ssim_loss(
     img1: Tensor,
     img2: Tensor,
@@ -170,7 +173,12 @@ def ssim_loss(
         pass
 
     channel = img1.shape[1]
-    window = create_ssim_window(window_size, channel, device=img1.device).type_as(img1)
+    key = (window_size, channel, img1.device, img1.dtype)
+    if key not in _ssim_window_cache:
+        _ssim_window_cache[key] = create_ssim_window(
+            window_size, channel, device=img1.device
+        ).type_as(img1)
+    window = _ssim_window_cache[key]
     return 1.0 - torch_ssim_loss(img1, img2, window, window_size, channel).mean()
 
 
@@ -386,7 +394,7 @@ def total_variation_loss(x: Tensor) -> Tensor:
         idx2 = torch.arange(0, n_res - 1, device=x.device)
         x1 = x.index_select(i, idx1)
         x2 = x.index_select(i, idx2)
-        count = max(torch.prod(torch.tensor(x1.size()[1:]).float()).item(), 1.0)
+        count = max(float(math.prod(x1.size()[1:])), 1.0)
         tv = tv + torch.pow((x1 - x2), 2).sum() / count
     return tv / batch_size  # type: ignore[return-value]
 
