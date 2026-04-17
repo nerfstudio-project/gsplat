@@ -42,13 +42,16 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 
 namespace cg = cooperative_groups;
 
-// Pad CDIM to an odd number for shared memory indexing so that
-// rgbs_batch[thread * CDIM_PAD + k] avoids bank conflicts.
-// When CDIM is even, adjacent threads hit the same bank every
-// 32/gcd(CDIM,32) threads.  Making the stride odd guarantees
-// gcd(stride, 32) == 1 → zero conflicts across all 32 threads.
+// Pad CDIM to an odd stride when it would be even, so that the per-thread
+// STORE `rgbs_batch[tr * stride + k] = colors[...]` (K1 line ~453 / K2 line ~1030)
+// writes to distinct 32-bit banks across a warp.  With a stride S, the 32 lanes
+// in a warp land in banks (tr * S) mod 32 for tr in [0,32); that hits all 32
+// banks iff gcd(S, 32) == 1, i.e. S is odd.  The inner loop READ from a fixed
+// `t` and varying `k` is a broadcast-per-lane and is not the conflict site.
+// sizeof(float) == 4 → 32-bit banks; static_assert below pins that assumption.
 template <uint32_t CDIM>
 constexpr uint32_t cdim_smem_stride() {
+    static_assert(sizeof(float) == 4, "bank layout assumes 32-bit banks");
     return (CDIM % 2 == 0) ? CDIM + 1 : CDIM;
 }
 
@@ -450,6 +453,12 @@ __global__ void rasterize_state_scan_bwd_kernel(
             xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
             scale_batch[tr] = scales[isect_bid * N + isect_gid];
             quat_batch[tr] = quats[isect_bid * N + isect_gid];
+            // Projection kernel culls degenerate Gaussians (zero quaternion,
+            // zero scale) by setting radii = 0, preventing them from entering
+            // the intersection list. Mirror K2's asserts here so NaN from
+            // division-by-zero doesn't silently poison the scan state.
+            assert(glm::dot(quat_batch[tr], quat_batch[tr]) > 0.f);
+            assert(scale_batch[tr][0] > 0.f && scale_batch[tr][1] > 0.f && scale_batch[tr][2] > 0.f);
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 rgbs_batch[tr * cdim_smem_stride<CDIM>() + k] = colors[isect_id * CDIM + k];
@@ -1346,7 +1355,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     at::optional<at::Tensor> v_rays // [..., C, image_height, image_width, 6]
 ) {
     bool packed = opacities.dim() == 1;
-    assert (packed == false); // only support non-packed for now
+    TORCH_CHECK(!packed, "packed opacities are not supported in the 3DGS world-space backward");
 
     uint32_t N = packed ? 0 : means.size(-2);   // number of gaussians
     uint32_t B = means.numel() / (N * 3);       // number of batches
