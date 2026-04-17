@@ -538,7 +538,12 @@ __global__ void rasterize_state_scan_bwd_kernel(
 //
 // Grid: {num_tiles, 1, 1}. Block: {pixels_per_tile, 1, 1} = {256, 1, 1}.
 // Shared memory: SCAN_TILE_CHUNKS * pixels_per_tile * CHUNK_STATE_DIM floats.
-constexpr uint32_t SCAN_TILE_CHUNKS = 32;
+// 16 chunks × 256 pixels × 3 floats × 4B = 48 KiB — fits within the default
+// 48 KiB per-block shmem on every arch we target (no opt-in needed), and leaves
+// room for multiple blocks/SM to keep occupancy up.  (The old value of 32
+// required 96 KiB, which exceeded sm_75's 64 KiB cap and starved occupancy
+// on sm_86/sm_89 where the opt-in limit is 99-100 KiB.)
+constexpr uint32_t SCAN_TILE_CHUNKS = 16;
 
 template <typename scalar_t>
 __global__ void rasterize_prologue_scan_kernel(
