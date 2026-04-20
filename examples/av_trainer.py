@@ -1,28 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 """Multi-camera autonomous driving trainer with gsplat.
 
-Trains 3D Gaussians on a surround-view driving scene (6 pinhole cameras).
-Gaussians are initialized from LiDAR point clouds and optimized using:
-- L1 loss with sky masking (reduce_mean with non-sky mask)
-- SSIM loss for structural similarity
-- Depth supervision: LiDAR points projected into camera views provide
-  sparse GT depth via disparity-space L1 (depth_l1_loss)
-- gaussian_scale_reg and gaussian_density_reg for regularization
-- Sky-aware penalty using rasterization alpha output
+Trains 3D Gaussians on surround-view driving scenes using NCore v4 data
+(FTheta cameras + 3DGUT) or PandaSet NPZ (pinhole cameras). Follows the
+same patterns as simple_trainer.py for NCore dataset loading, with the
+addition of gsplat's native LiDAR rendering for geometric supervision.
 
-Each training step renders a single (frame, camera) pair, cycling
-through all views.
+See examples/AV_TRAINER.md for full documentation, arguments, and benchmarks.
 
-Usage:
-    python av_trainer.py --scene assets/test_pandaset.npz --max-steps 15000
-    python av_trainer.py --scene assets/test_pandaset.npz --max-steps 500
-
-Data format (npz):
-    images:             [N_frames, N_cams, H, W, 3] uint8
-    cam_intrinsics:     [N_cams, 4] float32 (fx, fy, cx, cy)
-    cam_to_worlds:      [N_frames, N_cams, 4, 4] float32
-    lidar_points:       [M, 4] float32 (x, y, z, intensity) in world coords
-    lidar_frame_indices:[M] int32
-    is_test:            [N_frames] bool
+Additions over simple_trainer.py:
+  - PandaSet NPZ loading (load_scene_npz)
+  - LiDAR rendering via gsplat (camera_model="lidar") with lidar_distance_loss
+  - Sky masking and sky penalty in loss
 """
 
 import argparse
@@ -30,6 +20,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import imageio
@@ -38,17 +29,17 @@ import torch
 import torch.nn.functional as F
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
 
 import gsplat
 from gsplat.strategy import MCMCStrategy
 
-
 # ---------------------------------------------------------------------------
-# Data loading
+# PandaSet NPZ loading
 # ---------------------------------------------------------------------------
 
 
-def load_scene(path: str, device: str = "cuda") -> SimpleNamespace:
+def load_scene_npz(path: str, device: str = "cuda") -> SimpleNamespace:
     """Load a scene from npz file and prepare per-camera tensors."""
     data = dict(np.load(path, allow_pickle=True))
 
@@ -74,49 +65,206 @@ def load_scene(path: str, device: str = "cuda") -> SimpleNamespace:
     scene.Ks[:, 0, 1, 2] = cam_intrinsics[:, 3]  # y principal point
     scene.Ks[:, 0, 2, 2] = 1.0
 
-    # Per-frame, per-camera viewmats
-    scene.viewmats = torch.linalg.inv(cam_to_worlds)  # [N_frames, N_cams, 4, 4]
-
-    # Build per-frame LiDAR point index for fast lookup
-    scene.lidar_by_frame = {}
-    for fi in range(scene.n_frames):
-        mask = scene.lidar_frame_indices == fi
-        if mask.any():
-            scene.lidar_by_frame[fi] = scene.lidar_points[mask, :3]
+    scene.viewmats = torch.linalg.inv(cam_to_worlds)
 
     return scene
 
 
+# ---------------------------------------------------------------------------
+# LiDAR rendering helpers (addition over simple_trainer.py)
+#
+# gsplat supports camera_model="lidar" for rasterizing Gaussians along
+# actual LiDAR rays. This section builds the structured LiDAR model
+# parameters and GT distance maps from NCore data.
+# ---------------------------------------------------------------------------
+
+
+def _build_lidar_renderer(ncore_lidar_model, device: str = "cuda"):
+    """Build gsplat LiDAR renderer params from NCore LiDAR model."""
+    from gsplat.cuda._lidar import (
+        RowOffsetStructuredSpinningLidarModelParameters as GsplatLidarParams,
+        SpinningDirection,
+        compute_angles_to_columns_map,
+        compute_tiling,
+    )
+    from gsplat.cuda._wrapper import (
+        RowOffsetStructuredSpinningLidarModelParametersExt,
+    )
+
+    spin_dir = (
+        SpinningDirection.CLOCKWISE
+        if ncore_lidar_model.spinning_direction in ("cw", "CLOCKWISE")
+        else SpinningDirection.COUNTER_CLOCKWISE
+    )
+    params = GsplatLidarParams(
+        row_elevations_rad=torch.from_numpy(ncore_lidar_model.row_elevations_rad)
+        .float()
+        .to(device),
+        column_azimuths_rad=torch.from_numpy(ncore_lidar_model.column_azimuths_rad)
+        .float()
+        .to(device),
+        row_azimuth_offsets_rad=torch.from_numpy(
+            ncore_lidar_model.row_azimuth_offsets_rad
+        )
+        .float()
+        .to(device),
+        spinning_frequency_hz=float(ncore_lidar_model.spinning_frequency_hz),
+        spinning_direction=spin_dir,
+    )
+    a2c_map = compute_angles_to_columns_map(params)
+    tiling = compute_tiling(params)
+    return RowOffsetStructuredSpinningLidarModelParametersExt(
+        params,
+        a2c_map.to(device),
+        tiling,
+    )
+
+
+def _load_ncore_lidar_gt(
+    lidar_sensor,
+    parser,
+    n_lidar: int,
+    n_rows: int,
+    n_columns: int,
+    device: str = "cuda",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build structured GT distance maps and viewmats for LiDAR rendering loss.
+
+    Uses parser._ncore_world_to_scene_poses() for coordinate frame consistency
+    with camera poses (world -> world_global -> scene).
+    """
+    import ncore.data
+
+    gt_dist = torch.full((n_lidar, n_rows, n_columns, 1), float("nan"), device=device)
+    valid = torch.zeros(
+        (n_lidar, n_rows, n_columns, 1), dtype=torch.bool, device=device
+    )
+    viewmats = torch.zeros((n_lidar, 4, 4), device=device)
+    viewmats_rs = torch.zeros(
+        (n_lidar, 4, 4), device=device
+    )  # end-of-frame for rolling shutter
+
+    for lfi in range(n_lidar):
+        me = lidar_sensor.get_frame_ray_bundle_model_element(lfi)
+        if me is None:
+            continue
+        dist = lidar_sensor.get_frame_ray_bundle_return_distance_m(lfi, return_index=0)
+        rows, cols = me[:, 0].astype(np.int64), me[:, 1].astype(np.int64)
+        gt_dist[lfi, rows, cols, 0] = torch.from_numpy(dist).float().to(device)
+        valid[lfi, rows, cols, 0] = True
+
+        # Start pose (mid-frame viewmat for rasterization)
+        T_start = lidar_sensor.get_frames_T_sensor_target(
+            "world",
+            lfi,
+            frame_timepoint=ncore.data.FrameTimepoint.START,
+        ).astype(np.float32)
+        T_start_scene = parser._ncore_world_to_scene_poses(
+            T_start.reshape(1, 4, 4)
+        ).reshape(4, 4)
+        viewmats[lfi] = torch.linalg.inv(
+            torch.from_numpy(T_start_scene).float().to(device)
+        )
+
+        # End pose (rolling shutter end-of-frame)
+        T_end = lidar_sensor.get_frames_T_sensor_target(
+            "world",
+            lfi,
+            frame_timepoint=ncore.data.FrameTimepoint.END,
+        ).astype(np.float32)
+        T_end_scene = parser._ncore_world_to_scene_poses(
+            T_end.reshape(1, 4, 4)
+        ).reshape(4, 4)
+        viewmats_rs[lfi] = torch.linalg.inv(
+            torch.from_numpy(T_end_scene).float().to(device)
+        )
+
+    return gt_dist, valid, viewmats, viewmats_rs
+
+
+def setup_lidar_renderer(
+    meta_json_path: str,
+    parser,
+    device: str,
+    duration_sec: float | None,
+    subsample: int,
+    weight: float,
+) -> SimpleNamespace | None:
+    """Build LiDAR renderer from NCore data for distance loss."""
+    from ncore.data.v4 import SequenceComponentGroupsReader, SequenceLoaderV4
+    from ncore.data import (
+        RowOffsetStructuredSpinningLidarModelParameters as NCoreLidarParams,
+    )
+
+    if not parser.lidar_ids:
+        return None
+
+    loader = SequenceLoaderV4(
+        SequenceComponentGroupsReader(
+            [Path(meta_json_path)],
+            open_consolidated=True,
+        )
+    )
+    lidar_sensor = loader.get_lidar_sensor(parser.lidar_ids[0])
+    lidar_model = lidar_sensor.model_parameters
+    if not isinstance(lidar_model, NCoreLidarParams):
+        return None
+
+    n_lidar = lidar_sensor.frames_count
+    if duration_sec is not None:
+        cam0 = loader.get_camera_sensor(parser.camera_ids[0])
+        cam_ts = cam0.frames_timestamps_us
+        start_us = cam_ts[0, 0]
+        stop_us = min(start_us + int(duration_sec * 1e6), cam_ts[-1, 1])
+        lidar_ts = lidar_sensor.frames_timestamps_us[:, 1]
+        n_lidar = min(n_lidar, int(np.searchsorted(lidar_ts, stop_us)) + 1)
+
+    lidar_coeffs = _build_lidar_renderer(lidar_model, device=device)
+    gt_dist, valid_mask, lidar_viewmats, lidar_viewmats_rs = _load_ncore_lidar_gt(
+        lidar_sensor,
+        parser,
+        n_lidar,
+        lidar_model.n_rows,
+        lidar_model.n_columns,
+        device,
+    )
+
+    n_valid = int(valid_mask[0].sum())
+    n_kept = n_valid // subsample
+    print(
+        f"  LiDAR renderer: {lidar_model.n_rows}x{lidar_model.n_columns}, "
+        f"{n_lidar} frames, {n_kept}/{n_valid} rays/frame (sub={subsample}), "
+        f"weight={weight}, rolling_shutter=True, far_plane=200m"
+    )
+    return SimpleNamespace(
+        coeffs=lidar_coeffs,
+        gt_distances=gt_dist,
+        valid_masks=valid_mask,
+        viewmats=lidar_viewmats,
+        viewmats_rs=lidar_viewmats_rs,
+        n_frames=n_lidar,
+        n_rows=lidar_model.n_rows,
+        n_columns=lidar_model.n_columns,
+        subsample=subsample,
+        loss_weight=weight,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gaussian initialization
+# ---------------------------------------------------------------------------
+
 SH_C0 = 0.28209479177387814
 
 
-def rgb_to_sh(rgb: torch.Tensor) -> torch.Tensor:
-    """Convert RGB in [0, 1] to 0th-order SH coefficient."""
-    return (rgb - 0.5) / SH_C0
-
-
-def init_gaussians_from_lidar(
-    scene: SimpleNamespace, device: str = "cuda", sh_degree: int = 0
+def init_gaussians(
+    points: torch.Tensor,
+    colors: torch.Tensor,
+    device: str = "cuda",
+    sh_degree: int = 0,
 ) -> torch.nn.ParameterDict:
-    """Initialize one Gaussian per training-frame LiDAR point.
-
-    LiDAR provides the only source of 3D geometry: each point becomes
-    a Gaussian centered at that world-space position.  Colors are
-    initialized from LiDAR intensity (grayscale, expanded to 3 channels).
-    No additional Gaussians are created during training — the set is
-    fixed at initialization.
-    """
-    train_mask = ~scene.is_test
-    train_frame_ids = torch.where(torch.from_numpy(train_mask))[0]
-
-    pts_mask = torch.zeros(len(scene.lidar_points), dtype=torch.bool, device=device)
-    for fid in train_frame_ids:
-        pts_mask |= scene.lidar_frame_indices == fid.item()
-
-    points = scene.lidar_points[pts_mask, :3]
-    intensities = scene.lidar_points[pts_mask, 3:4]
+    """Initialize Gaussians from point cloud (LiDAR or SfM)."""
     N = points.shape[0]
-
     params = torch.nn.ParameterDict(
         {
             "means": torch.nn.Parameter(points.clone()),
@@ -131,267 +279,115 @@ def init_gaussians_from_lidar(
     )
     if sh_degree > 0:
         K = (sh_degree + 1) ** 2
-        sh0 = rgb_to_sh(intensities.expand(-1, 3).clamp(0, 1)).unsqueeze(1)
+        sh0 = ((colors.clamp(0, 1) - 0.5) / SH_C0).unsqueeze(1)
         shN = torch.zeros(N, K - 1, 3, device=device)
         params["sh0"] = torch.nn.Parameter(sh0)
         params["shN"] = torch.nn.Parameter(shN)
     else:
-        params["colors"] = torch.nn.Parameter(
-            intensities.expand(-1, 3).clamp(0, 1).clone()
-        )
+        params["colors"] = torch.nn.Parameter(colors.clamp(0, 1).clone())
     return params
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Rendering helpers
 # ---------------------------------------------------------------------------
 
 
-def estimate_sky_mask(
-    image: torch.Tensor,
-    height_fraction: float = 0.4,
-    brightness_threshold: float = 0.85,
-) -> torch.Tensor:
-    """Estimate a binary sky mask from an RGB image using brightness.
-
-    Marks pixels in the upper portion of the image that exceed a
-    brightness threshold as sky.  Returns a bool mask [H, W].
-    """
+def estimate_sky_mask(image, height_fraction=0.4, brightness_threshold=0.85):
+    """Estimate sky mask from image brightness (addition over simple_trainer)."""
     H = image.shape[0]
     upper = int(H * height_fraction)
-    gray = image.mean(dim=-1)  # [H, W]
+    gray = image.mean(dim=-1)
     mask = torch.zeros_like(gray, dtype=torch.bool)
     mask[:upper] = gray[:upper] > brightness_threshold
     return mask
 
 
-def project_lidar_to_camera(
-    points_world: torch.Tensor,
-    viewmat: torch.Tensor,
-    K: torch.Tensor,
-    H: int,
-    W: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Project world-space LiDAR points into a camera, returning sparse GT depth.
-
-    Uses pinhole projection, which must match the camera_model used in
-    gsplat.rasterization().
-
-    Args:
-        points_world: [M, 3] LiDAR points in world coordinates.
-        viewmat: [4, 4] world-to-camera matrix.
-        K: [3, 3] camera intrinsics (pinhole: fx, fy, cx, cy).
-        H, W: image dimensions.
-
-    Returns:
-        pixel_y, pixel_x: [P] int pixel coordinates of valid projections.
-        gt_depth: [P] depth values in camera space.
-    """
-    # Transform to camera space
-    R = viewmat[:3, :3]  # [3, 3]
-    t = viewmat[:3, 3]  # [3]
-    pts_cam = (R @ points_world.T).T + t  # [M, 3]
-
-    # Keep points in front of camera
-    valid = pts_cam[:, 2] > 0.1
-    pts_cam = pts_cam[valid]
-
-    # Project to pixels
-    fx, fy = K[0, 0], K[1, 1]
-    cx, cy = K[0, 2], K[1, 2]
-    u = fx * pts_cam[:, 0] / pts_cam[:, 2] + cx
-    v = fy * pts_cam[:, 1] / pts_cam[:, 2] + cy
-
-    # Keep points within image bounds
-    in_bounds = (u >= 0) & (u < W) & (v >= 0) & (v < H)
-    u, v, depth = u[in_bounds], v[in_bounds], pts_cam[in_bounds, 2]
-
-    return v.long(), u.long(), depth
-
-
-def compute_psnr(pred: torch.Tensor, gt: torch.Tensor) -> float:
+def compute_psnr(pred, gt):
     mse = F.mse_loss(pred, gt).item()
-    if mse == 0:
-        return float("inf")
-    return -10.0 * np.log10(mse)
+    return float("inf") if mse == 0 else -10.0 * np.log10(mse)
 
 
-# ---------------------------------------------------------------------------
-# Forward pass and loss
-# ---------------------------------------------------------------------------
+def get_render_params(ncore_camera_data, camera_idx, device):
+    """Extract per-camera rendering params (same pattern as simple_trainer.rasterize_splats)."""
+    cam = ncore_camera_data[camera_idx]
+    kwargs = {
+        "camera_model": cam.camera_model,
+        "ftheta_coeffs": cam.ftheta_coeffs,
+    }
+    if cam.radial_coeffs is not None:
+        kwargs["radial_coeffs"] = (
+            torch.from_numpy(cam.radial_coeffs).to(device).unsqueeze(0)
+        )
+    if cam.tangential_coeffs is not None:
+        kwargs["tangential_coeffs"] = (
+            torch.from_numpy(cam.tangential_coeffs).to(device).unsqueeze(0)
+        )
+    if cam.thin_prism_coeffs is not None:
+        kwargs["thin_prism_coeffs"] = (
+            torch.from_numpy(cam.thin_prism_coeffs).to(device).unsqueeze(0)
+        )
+    return kwargs
 
 
-def render_gaussians(
-    params: torch.nn.ParameterDict,
-    viewmat: torch.Tensor,
-    K: torch.Tensor,
-    W: int,
-    H: int,
-    render_mode: str = "RGB",
-    sh_degree_to_use: int | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Rasterize Gaussians into a single camera view.
+def rasterize(
+    params,
+    viewmat,
+    K,
+    W,
+    H,
+    render_mode="RGB",
+    sh_degree_to_use=None,
+    camera_model="pinhole",
+    ftheta_coeffs=None,
+    radial_coeffs=None,
+    tangential_coeffs=None,
+    thin_prism_coeffs=None,
+):
+    """Rasterize Gaussians (matches simple_trainer.rasterize_splats pattern).
 
-    Applies post-activation transforms (exp for scales, sigmoid for opacities)
-    before passing to gsplat.rasterization with pinhole camera model.
-
-    Args:
-        params: ParameterDict with means, quats, scales, opacities, colors.
-        viewmat: [1, 4, 4] world-to-camera matrix.
-        K: [1, 3, 3] camera intrinsics.
-        W, H: image dimensions.
-        render_mode: "RGB" for color only, "RGB+ED" for color + expected depth.
-            ED (Expected Depth) is the alpha-weighted sum of depths, which is
-            differentiable w.r.t. opacities — needed for depth_l1_loss
-            supervision.  "D" (median depth) would not be differentiable.
-
-    Returns:
-        renders: [1, H, W, C] rendered output (C=3 for RGB, C=4 for RGB+ED).
-        alphas: [1, H, W, 1] accumulated opacity per pixel.
+    Returns (renders, alphas, info, activated_scales, activated_opacities).
+    Activations are computed once here to avoid redundant computation in loss.
     """
     if "sh0" in params:
         colors = torch.cat([params["sh0"], params["shN"]], dim=1)
     else:
         colors = params["colors"]
 
-    renders, alphas, _ = gsplat.rasterization(
+    # The unscented transform path is also required for pinhole cameras that
+    # carry non-zero distortion coefficients (OpenCV radial/tangential/thin
+    # prism); gsplat.rasterization otherwise asserts.
+    use_ut = camera_model in ("ftheta", "fisheye") or any(
+        c is not None
+        for c in (ftheta_coeffs, radial_coeffs, tangential_coeffs, thin_prism_coeffs)
+    )
+    packed = not use_ut
+
+    activated_scales = torch.exp(params["scales"])
+    activated_opacities = torch.sigmoid(params["opacities"])
+
+    renders, alphas, info = gsplat.rasterization(
         params["means"],
         F.normalize(params["quats"], dim=-1),
-        torch.exp(params["scales"]),
-        torch.sigmoid(params["opacities"]),
+        activated_scales,
+        activated_opacities,
         colors,
         viewmat,
         K,
         W,
         H,
-        camera_model="pinhole",
+        camera_model=camera_model,
         sh_degree=sh_degree_to_use,
-        packed=True,
+        packed=packed,
         render_mode=render_mode,
+        with_ut=use_ut,
+        with_eval3d=use_ut,
+        ftheta_coeffs=ftheta_coeffs,
+        radial_coeffs=radial_coeffs,
+        tangential_coeffs=tangential_coeffs,
+        thin_prism_coeffs=thin_prism_coeffs,
     )
-    return renders, alphas
-
-
-def compute_loss(
-    params: torch.nn.ParameterDict,
-    rgb_render: torch.Tensor,
-    depth_render: torch.Tensor,
-    alphas: torch.Tensor,
-    rgb_gt: torch.Tensor,
-    scene: SimpleNamespace,
-    idxframe: int,
-    viewmat: torch.Tensor,
-    K: torch.Tensor,
-    H: int,
-    W: int,
-    device: torch.device,
-) -> torch.Tensor:
-    """Compute composite training loss for a single rendered view.
-
-    Loss = 0.8 * L1 (sky-masked) + 0.2 * SSIM
-         + 0.01 * depth (LiDAR disparity L1)
-         + 0.005 * scale_reg + 0.005 * density_reg
-         + 0.001 * sky_penalty
-    """
-    # Sky mask from image brightness (upper image, bright pixels)
-    sky_mask = estimate_sky_mask(rgb_gt[0])  # [H, W] bool
-    non_sky = (~sky_mask).to(torch.int32).unsqueeze(0)  # [1, H, W] int
-
-    # Per-pixel L1 loss, masked to exclude sky pixels
-    per_pixel_l1 = gsplat.losses.l1_loss(rgb_render, rgb_gt).mean(dim=-1)
-    loss_l1 = gsplat.losses.reduce_mean(per_pixel_l1, mask=non_sky)
-
-    # Structural similarity (clamp to [0,1] — rasterizer may produce tiny negatives)
-    loss_ssim = gsplat.losses.ssim_loss(
-        rgb_render.clamp(0, 1).permute(0, 3, 1, 2),
-        rgb_gt.permute(0, 3, 1, 2),
-    )
-
-    # Depth supervision: LiDAR points are projected into the camera via
-    # pinhole math (project_lidar_to_camera), producing sparse GT depth
-    # at known pixels.  The rendered expected depth at those pixels is
-    # compared to the LiDAR GT using disparity-space L1 (depth_l1_loss),
-    # which weights nearby objects more heavily.  This does NOT use
-    # gsplat's LiDAR renderer — it only uses LiDAR as a depth reference.
-    loss_depth = torch.tensor(0.0, device=device)
-    if idxframe in scene.lidar_by_frame:
-        lidar_pts = scene.lidar_by_frame[idxframe]  # [M, 3] world
-        py, px, gt_depth = project_lidar_to_camera(lidar_pts, viewmat[0], K[0], H, W)
-        if len(py) > 0:
-            pred_depth = depth_render[py, px]
-            loss_depth = gsplat.losses.depth_l1_loss(
-                pred_depth.unsqueeze(0), gt_depth.unsqueeze(0)
-            )
-
-    # Sky penalty: penalize high opacity in sky regions
-    coverage = alphas[0, :, :, 0]  # [H, W], accumulated opacity
-    sky_penalty = (coverage * sky_mask.float()).mean()
-
-    # Gaussian regularization (post-activation values)
-    activated_scales = torch.exp(params["scales"])
-    activated_opacities = torch.sigmoid(params["opacities"])
-    loss_scale = gsplat.losses.gaussian_scale_reg(activated_scales).mean()
-    loss_density = gsplat.losses.gaussian_density_reg(activated_opacities).mean()
-
-    return (
-        0.8 * loss_l1
-        + 0.2 * loss_ssim
-        + 0.01 * loss_depth
-        + 0.005 * loss_scale
-        + 0.005 * loss_density
-        + 0.001 * sky_penalty
-    )
-
-
-# ---------------------------------------------------------------------------
-# Evaluation
-# ---------------------------------------------------------------------------
-
-
-def evaluate(
-    params: torch.nn.ParameterDict,
-    scene: SimpleNamespace,
-    test_frame_ids: list[int],
-    W: int,
-    H: int,
-    renders_dir: str | None = None,
-    sh_degree: int | None = None,
-) -> float:
-    """Render test views and compute mean PSNR.
-
-    Args:
-        params: ParameterDict with Gaussian parameters.
-        scene: SimpleNamespace from load_scene().
-        test_frame_ids: list of frame indices to evaluate.
-        W, H: image dimensions.
-        renders_dir: if not None, save side-by-side GT/render PNGs here.
-
-    Returns:
-        Mean PSNR in dB across all (frame, camera) test views.
-    """
-    psnrs = []
-    with torch.no_grad():
-        for tfid in test_frame_ids:
-            for tci in range(scene.n_cams):
-                gt_t = scene.images[tfid, tci].unsqueeze(0)
-                vm_t = scene.viewmats[tfid, tci].unsqueeze(0)
-                K_t = scene.Ks[tci]
-                rd, _ = render_gaussians(
-                    params, vm_t, K_t, W, H, sh_degree_to_use=sh_degree
-                )
-                psnrs.append(compute_psnr(rd[0].clamp(0, 1), gt_t[0]))
-
-                if renders_dir is not None:
-                    gt_np = (gt_t[0].cpu().numpy() * 255).astype(np.uint8)
-                    rd_np = (rd[0].clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
-                    canvas = np.concatenate([gt_np, rd_np], axis=1)
-                    cam_name = scene.camera_names[tci]
-                    imageio.imwrite(
-                        os.path.join(renders_dir, f"eval_f{tfid}_{cam_name}.png"),
-                        canvas,
-                    )
-
-    return float(np.mean(psnrs)) if psnrs else 0.0
+    return renders, alphas, info, activated_scales, activated_opacities
 
 
 # ---------------------------------------------------------------------------
@@ -399,14 +395,7 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
-def create_optimizers(
-    params: torch.nn.ParameterDict, lr: float
-) -> dict[str, torch.optim.Adam]:
-    """Set up per-parameter Adam optimizers.
-
-    MCMC strategy requires one optimizer per parameter key so it can
-    add/remove Gaussians and update optimizer state accordingly.
-    """
+def create_optimizers(params, lr):
     lr_map = {
         "means": lr * 0.032,
         "scales": lr,
@@ -427,64 +416,6 @@ def create_optimizers(
     }
 
 
-def log_training_step(
-    step: int, max_steps: int, total_loss: torch.Tensor, start_time: float
-) -> None:
-    """Print training progress: step, loss, throughput, GPU memory."""
-    elapsed = time.time() - start_time
-    mem_peak = torch.cuda.max_memory_allocated() / 1e6
-    print(
-        f"Step {step}/{max_steps} | loss={total_loss.item():.4f} | "
-        f"{max(1, step) / elapsed:.0f} it/s | {mem_peak:.0f} MB"
-    )
-
-
-def run_evaluation(
-    params: torch.nn.ParameterDict,
-    scene: SimpleNamespace,
-    test_frame_ids: list[int],
-    W: int,
-    H: int,
-    step: int,
-    total_loss: torch.Tensor,
-    start_time: float,
-    N: int,
-    renders_dir: str,
-    stats_dir: str,
-    is_last_step: bool,
-    sh_degree: int | None = None,
-) -> dict:
-    """Run evaluation and save checkpoint JSON. Returns checkpoint dict."""
-    elapsed = time.time() - start_time
-    mem_peak = torch.cuda.max_memory_allocated() / 1e6
-    checkpoint: dict = {
-        "step": step + 1,
-        "loss": total_loss.item(),
-        "elapsed_s": elapsed,
-        "gpu_peak_mb": mem_peak,
-        "num_gaussians": N,
-    }
-    if test_frame_ids:
-        save_dir = renders_dir if is_last_step else None
-        mean_psnr = evaluate(
-            params,
-            scene,
-            test_frame_ids,
-            W,
-            H,
-            renders_dir=save_dir,
-            sh_degree=sh_degree,
-        )
-        checkpoint["mean_psnr"] = mean_psnr
-        print(
-            f"  Eval PSNR: {mean_psnr:.2f} dB "
-            f"({len(test_frame_ids) * scene.n_cams} views)"
-        )
-    with open(os.path.join(stats_dir, f"step{step + 1:05d}.json"), "w") as f:
-        json.dump(checkpoint, f, indent=2)
-    return checkpoint
-
-
 def train(
     scene_path: str,
     max_steps: int,
@@ -493,32 +424,20 @@ def train(
     eval_every: int,
     result_dir: str,
     use_mcmc: bool = False,
-    cap_max: int = 500_000,
+    cap_max: int = 300_000,
     sh_degree: int = 0,
     sh_degree_interval: int = 1000,
     save_model: bool = True,
-) -> tuple[list[float], list[dict]]:
-    """Train Gaussians on a multi-camera driving scene.
-
-    High-level flow:
-        load scene → init Gaussians from LiDAR → create optimizer →
-        for each step: render view → compute loss → backward → update →
-        periodically evaluate on held-out test views.
-
-    Args:
-        scene_path: path to the npz scene file.
-        max_steps: number of training iterations.
-        lr: base learning rate.
-        log_every: print training stats every N steps.
-        eval_every: run evaluation on test views every N steps.
-        result_dir: directory for outputs (renders, stats, summary).
-
-    Returns:
-        (losses_history, checkpoints): per-step loss list and eval dicts.
-    """
-    if max_steps < 1:
-        raise ValueError(f"max_steps must be >= 1, got {max_steps}")
-
+    # NCore-specific
+    cameras: list[str] | None = None,
+    duration: float | None = None,
+    max_lidar: int = 150_000,
+    downscale: int = 1,
+    # LiDAR rendering (addition over simple_trainer)
+    lidar_render: bool = False,
+    lidar_render_subsample: int = 112,
+    lidar_render_weight: float = 0.0003,
+):
     device = torch.device("cuda:0")
     torch.cuda.reset_peak_memory_stats()
     os.makedirs(result_dir, exist_ok=True)
@@ -527,12 +446,138 @@ def train(
     os.makedirs(renders_dir, exist_ok=True)
     os.makedirs(stats_dir, exist_ok=True)
 
-    # --- Load data and initialize model ---
-    scene = load_scene(scene_path, device=device)
-    params = init_gaussians_from_lidar(scene, device=device, sh_degree=sh_degree)
+    # --- Detect data format and load ---
+    # NCore path follows simple_trainer.py: NCoreParser + NCoreDataset
+    is_ncore = (
+        scene_path.endswith(".json")
+        or scene_path.endswith(".zarr.itar")
+        or Path(scene_path).is_dir()
+    )
+
+    ncore_camera_data = None
+    lidar_r = None
+
+    if is_ncore:
+        from datasets.ncore import NCoreParser, NCoreDataset
+
+        parser = NCoreParser(
+            meta_json_path=scene_path,
+            factor=1.0 / downscale if downscale > 1 else 1.0,
+            test_every=8,
+            camera_ids=cameras or None,
+            duration_sec=duration,
+            max_lidar_points=max_lidar,
+        )
+        # Pre-stacking below requires every selected camera to share (W, H).
+        # Mixed-resolution surround-view rigs (e.g. wide 120fov + tele 30fov)
+        # would raise at torch.stack time; fail early with a clear message.
+        cam_sizes = {cid: parser.imsize_dict[cid] for cid in parser.camera_ids}
+        if len(set(cam_sizes.values())) > 1:
+            raise ValueError(
+                f"av_trainer requires uniform (W, H) across selected cameras; "
+                f"got {cam_sizes}. Pass a single camera via --cameras, or "
+                f"train per-camera."
+            )
+
+        trainset = NCoreDataset(parser, split="train")
+        valset = NCoreDataset(parser, split="val")
+
+        # Pre-load all frames into contiguous GPU tensors for fast training.
+        # simple_trainer.py uses DataLoader with lazy loading; we pre-load
+        # since av_trainer scenes are small enough to fit in GPU memory.
+        print(f"  Pre-loading {len(trainset)} train + {len(valset)} val frames...")
+        t0 = time.time()
+        train_raw = [trainset[i] for i in range(len(trainset))]
+        val_raw = [valset[i] for i in range(len(valset))]
+
+        def _stack_to_gpu(samples, dev):
+            images = torch.stack([d["image"] for d in samples]).float().to(dev) / 255.0
+            viewmats = torch.linalg.inv(
+                torch.stack([d["camtoworld"] for d in samples]).float().to(dev)
+            )
+            Ks = torch.stack([d["K"] for d in samples]).to(dev)
+            cam_idx = [d["camera_idx"] for d in samples]
+            masks = None
+            if "mask" in samples[0]:
+                masks = torch.stack([d["mask"] for d in samples]).to(dev)
+            return images, viewmats, Ks, cam_idx, masks
+
+        (
+            train_images,
+            train_viewmats,
+            train_Ks,
+            train_cam_idx,
+            train_masks,
+        ) = _stack_to_gpu(train_raw, device)
+        val_images, val_viewmats, val_Ks, val_cam_idx, _val_masks = _stack_to_gpu(
+            val_raw, device
+        )
+        # Pre-compute sky masks (deterministic function of GT images)
+        train_sky_masks = torch.stack(
+            [estimate_sky_mask(train_images[i]) for i in range(len(train_raw))]
+        ).to(device)
+        print(f"  Pre-loaded in {time.time() - t0:.1f}s")
+
+        # Per-camera render data (same as simple_trainer.ncore_camera_data)
+        ncore_camera_data = [
+            parser.camera_render_data[cam_id] for cam_id in parser.camera_ids
+        ]
+
+        # Gaussian init from LiDAR (same as simple_trainer init_type="lidar")
+        points = torch.from_numpy(parser.points).float().to(device)
+        colors = torch.from_numpy(parser.points_rgb).float().to(device) / 255.0
+        params = init_gaussians(points, colors, device, sh_degree)
+
+        first_cam = parser.camera_ids[0]
+        W, H = parser.imsize_dict[first_cam]
+        n_train = len(train_raw)
+        n_val = len(val_raw)
+
+        # LiDAR renderer (addition over simple_trainer)
+        if lidar_render:
+            lidar_r = setup_lidar_renderer(
+                scene_path,
+                parser,
+                device,
+                duration,
+                lidar_render_subsample,
+                lidar_render_weight,
+            )
+
+        print(
+            f"Device: {device} | NCore {parser.sequence_id} | "
+            f"{n_train} train, {n_val} val views, {W}x{H} | "
+            f"{len(parser.points)} init pts | {len(params['means'])} Gaussians"
+        )
+    else:
+        # PandaSet NPZ path (not in simple_trainer)
+        scene = load_scene_npz(scene_path, device=device)
+        train_mask = ~scene.is_test
+        train_frame_ids = torch.where(torch.from_numpy(train_mask))[0]
+        pts_mask = torch.zeros(len(scene.lidar_points), dtype=torch.bool, device=device)
+        for fid in train_frame_ids:
+            pts_mask |= scene.lidar_frame_indices == fid.item()
+        points = scene.lidar_points[pts_mask, :3]
+        intensities = scene.lidar_points[pts_mask, 3:4]
+        colors = intensities.expand(-1, 3)
+        params = init_gaussians(points, colors, device, sh_degree)
+        H, W = scene.H, scene.W
+        n_train = (
+            sum(1 for fi in range(scene.n_frames) if train_mask[fi]) * scene.n_cams
+        )
+        n_val = (
+            sum(1 for fi in range(scene.n_frames) if scene.is_test[fi]) * scene.n_cams
+        )
+        print(
+            f"Device: {device} | PandaSet | "
+            f"{n_train} train, {n_val} val views, {W}x{H} | "
+            f"{len(scene.lidar_points)} init pts | {len(params['means'])} Gaussians"
+        )
+
+    N = len(params["means"])
     optimizers = create_optimizers(params, lr)
 
-    # --- MCMC strategy (optional) ---
+    # MCMC (same as simple_trainer)
     strategy = None
     strategy_state = None
     if use_mcmc:
@@ -546,11 +591,9 @@ def train(
         )
         strategy.check_sanity(params, optimizers)
         strategy_state = strategy.initialize_state()
-        print(f"MCMC strategy enabled: cap_max={cap_max}")
+        print(f"MCMC: cap_max={cap_max}")
 
-    # --- Learning rate schedule ---
-    # Exponential decay for means (to 1% of initial, same as simple_trainer.py)
-    # Cosine annealing for all other parameters (decays to 0 over training)
+    # LR schedule (same as simple_trainer)
     schedulers = [
         torch.optim.lr_scheduler.ExponentialLR(
             optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
@@ -561,74 +604,175 @@ def train(
         if name != "means"
     ]
 
-    N = params["means"].shape[0]
-    H, W = scene.H, scene.W
-    train_mask = ~scene.is_test
-    train_views = [
-        (fi, ci)
-        for fi in range(scene.n_frames)
-        if train_mask[fi]
-        for ci in range(scene.n_cams)
-    ]
-    test_frame_ids = [i for i in range(scene.n_frames) if scene.is_test[i]]
-    n_views = len(train_views)
-
-    print(
-        f"Device: {device} | {scene.n_frames} frames, {scene.n_cams} cameras, "
-        f"{scene.H}x{scene.W} | {len(scene.lidar_points)} LiDAR pts | {N} Gaussians"
-    )
-
-    losses_history: list[float] = []
-    checkpoints: list[dict] = []
+    losses_history = []
+    checkpoints = []
     start_time = time.time()
 
     # --- Training loop ---
     for step in range(max_steps):
-        # Select training view (cycle through all frame-camera pairs)
-        idxframe, idxcam = train_views[step % n_views]
-        rgb_gt = scene.images[idxframe, idxcam].unsqueeze(0)  # [1, H, W, 3]
-        viewmat = scene.viewmats[idxframe, idxcam].unsqueeze(0)  # [1, 4, 4]
-        K = scene.Ks[idxcam]  # [1, 3, 3]
+        if is_ncore:
+            # Data access pattern: pre-loaded contiguous GPU tensors
+            idx = step % n_train
+            pixels = train_images[idx].unsqueeze(0)
+            viewmat = train_viewmats[idx].unsqueeze(0)
+            K = train_Ks[idx].unsqueeze(0)
+            mask = train_masks[idx] if train_masks is not None else None
+            camera_idx = train_cam_idx[idx]
 
-        # Progressive SH schedule
+            # Per-camera distortion (same as simple_trainer.rasterize_splats)
+            rp = get_render_params(ncore_camera_data, camera_idx, device)
+            cam_model = rp.pop("camera_model")
+        else:
+            # PandaSet: direct tensor indexing
+            fi, ci = divmod(step % n_train, scene.n_cams)
+            train_frames = [i for i in range(scene.n_frames) if not scene.is_test[i]]
+            fi = train_frames[fi % len(train_frames)]
+            pixels = scene.images[fi, ci].unsqueeze(0)
+            viewmat = scene.viewmats[fi, ci].unsqueeze(0)
+            K = scene.Ks[ci]
+            mask = None
+            cam_model = "pinhole"
+            rp = {}
+
+        height, width = pixels.shape[1], pixels.shape[2]
         sh_degree_to_use = (
             min(step // sh_degree_interval, sh_degree) if sh_degree > 0 else None
         )
 
-        # Forward pass: rasterize Gaussians into this view
-        renders, alphas = render_gaussians(
-            params, viewmat, K, W, H, "RGB+ED", sh_degree_to_use=sh_degree_to_use
-        )
-        rgb_render = renders[..., :3]  # [1, H, W, 3]
-        depth_render = renders[0, :, :, 3]  # [H, W]
-
-        # Compute composite loss (L1 + SSIM + depth + regularization + sky)
-        total_loss = compute_loss(
+        # Forward (matches simple_trainer pattern). PandaSet gets an extra depth
+        # channel ("RGB+ED") so sparse-LiDAR depth supervision below can sample it.
+        render_mode = "RGB" if is_ncore else "RGB+ED"
+        renders, alphas, info, act_scales, act_opacities = rasterize(
             params,
-            rgb_render,
-            depth_render,
-            alphas,
-            rgb_gt,
-            scene,
-            idxframe,
             viewmat,
             K,
-            H,
-            W,
-            device,
+            width,
+            height,
+            render_mode,
+            sh_degree_to_use=sh_degree_to_use,
+            camera_model=cam_model,
+            **rp,
         )
+        colors_render = renders[..., :3]
+        depths_render = None if is_ncore else renders[..., 3:4]
 
-        # Backward pass and parameter update
+        # Loss (similar to simple_trainer: L1 + SSIM)
+        # Addition: sky masking and ego mask support
+        sky_mask = train_sky_masks[idx] if is_ncore else estimate_sky_mask(pixels[0])
+        non_sky = (~sky_mask).to(torch.int32).unsqueeze(0)
+        if mask is not None:
+            non_sky = non_sky * mask.to(torch.int32).unsqueeze(0)
+
+        per_pixel_l1 = gsplat.losses.l1_loss(colors_render, pixels).mean(dim=-1)
+        l1loss = gsplat.losses.reduce_mean(per_pixel_l1, mask=non_sky)
+
+        ssimloss = gsplat.losses.ssim_loss(
+            colors_render.clamp(0, 1).permute(0, 3, 1, 2),
+            pixels.permute(0, 3, 1, 2),
+        )
+        loss = 0.8 * l1loss + 0.2 * ssimloss
+
+        # Regularization (same as simple_trainer, using pre-computed activations)
+        loss += 0.005 * gsplat.losses.gaussian_scale_reg(act_scales).mean()
+        loss += 0.005 * gsplat.losses.gaussian_density_reg(act_opacities).mean()
+
+        # Sky penalty (addition over simple_trainer)
+        coverage = alphas[0, :, :, 0]
+        loss += 0.001 * (coverage * sky_mask.float()).mean()
+
+        # LiDAR rendering loss (addition over simple_trainer)
+        if lidar_r is not None:
+            lfi = step % lidar_r.n_frames
+            lidar_vm = lidar_r.viewmats[lfi].unsqueeze(0)
+            lidar_vm_rs = lidar_r.viewmats_rs[lfi].unsqueeze(0)
+            lidar_K = torch.eye(3, device=device).unsqueeze(0)
+            N_gs = params["means"].shape[0]
+            dummy_colors = torch.zeros(N_gs, 3, device=device)
+
+            lidar_renders, _, _ = gsplat.rasterization(
+                params["means"],
+                F.normalize(params["quats"], dim=-1),
+                torch.exp(params["scales"]),
+                torch.sigmoid(params["opacities"]),
+                dummy_colors,
+                lidar_vm,
+                lidar_K,
+                lidar_r.n_columns,
+                lidar_r.n_rows,
+                camera_model="lidar",
+                lidar_coeffs=lidar_r.coeffs,
+                with_ut=True,
+                with_eval3d=True,
+                packed=False,
+                render_mode="RGB-Ed",  # expected hit distance (along-ray), not z-depth
+                global_z_order=False,  # spinning sensor: no single camera-Z axis
+                far_plane=200.0,
+                rolling_shutter=gsplat.RollingShutterType.ROLLING_LEFT_TO_RIGHT,
+                viewmats_rs=lidar_vm_rs,
+            )
+            pred_dist = lidar_renders[0, :, :, 3:4]
+            gt_dist = lidar_r.gt_distances[lfi]
+            lmask = lidar_r.valid_masks[lfi]
+            if lidar_r.subsample > 1:
+                valid_idx = lmask.reshape(-1).nonzero(as_tuple=True)[0]
+                keep = valid_idx[:: lidar_r.subsample]
+                sub_mask = torch.zeros_like(lmask.reshape(-1), dtype=torch.bool)
+                sub_mask[keep] = True
+                lmask = sub_mask.reshape(lmask.shape)
+            loss = loss + lidar_r.loss_weight * gsplat.losses.lidar_distance_loss(
+                pred_dist, gt_dist, valid_mask=lmask
+            )
+
+        # PandaSet: sparse LiDAR depth supervision via simple_trainer's pattern
+        # (project LiDAR points to the camera, sample rendered depth at those
+        # pixels, L1 in disparity). NCore uses native LiDAR rendering above.
+        if not is_ncore:
+            pts_mask = scene.lidar_frame_indices == fi
+            if pts_mask.any():
+                lidar_world = scene.lidar_points[pts_mask, :3]
+                ones = torch.ones_like(lidar_world[:, :1])
+                homog = torch.cat([lidar_world, ones], dim=-1)
+                pts_cam = (viewmat[0] @ homog.T).T[:, :3]
+                uv_hom = (K[0] @ pts_cam.T).T
+                uv = uv_hom[:, :2] / uv_hom[:, 2:3]
+                depth_gt = pts_cam[:, 2]
+                keep = (
+                    (uv[:, 0] >= 0)
+                    & (uv[:, 0] < width)
+                    & (uv[:, 1] >= 0)
+                    & (uv[:, 1] < height)
+                    & (depth_gt > 0)
+                )
+                uv = uv[keep]
+                depth_gt = depth_gt[keep]
+                if len(depth_gt) > 0:
+                    grid = torch.stack(
+                        [
+                            uv[:, 0] / (width - 1) * 2 - 1,
+                            uv[:, 1] / (height - 1) * 2 - 1,
+                        ],
+                        dim=-1,
+                    ).reshape(1, -1, 1, 2)
+                    depth_pred = F.grid_sample(
+                        depths_render.permute(0, 3, 1, 2),
+                        grid,
+                        align_corners=True,
+                    ).reshape(-1)
+                    loss = loss + 0.01 * gsplat.losses.depth_l1_loss(
+                        depth_pred, depth_gt
+                    )
+
+        # Backward (same as simple_trainer)
         for opt in optimizers.values():
             opt.zero_grad()
-        total_loss.backward()
+        loss.backward()
         for opt in optimizers.values():
             opt.step()
         for sched in schedulers:
             sched.step()
-        losses_history.append(total_loss.item())
+        losses_history.append(loss.item())
 
-        # MCMC: relocate dead Gaussians, add new ones, inject noise
+        # MCMC (same as simple_trainer)
         if strategy is not None:
             strategy.step_post_backward(
                 params,
@@ -638,31 +782,99 @@ def train(
                 info={},
                 lr=schedulers[0].get_last_lr()[0],
             )
+        N = len(params["means"])
 
-        N = len(params["means"])  # may change with MCMC
-
-        # Periodic logging and evaluation
+        # Logging
         if step % log_every == 0:
-            log_training_step(step, max_steps, total_loss, start_time)
-        if step % eval_every == 0 or step == max_steps - 1:
-            ckpt = run_evaluation(
-                params,
-                scene,
-                test_frame_ids,
-                W,
-                H,
-                step,
-                total_loss,
-                start_time,
-                N,
-                renders_dir,
-                stats_dir,
-                is_last_step=(step == max_steps - 1),
-                sh_degree=sh_degree_to_use,
+            elapsed = time.time() - start_time
+            mem_peak = torch.cuda.max_memory_allocated() / 1e6
+            print(
+                f"Step {step}/{max_steps} | loss={loss.item():.4f} | "
+                f"{max(1, step) / elapsed:.0f} it/s | {mem_peak:.0f} MB"
             )
+
+        # Evaluation
+        if (
+            eval_every > 0 and step > 0 and step % eval_every == 0
+        ) or step == max_steps - 1:
+            is_last = step == max_steps - 1
+            psnrs = []
+            with torch.no_grad():
+                if is_ncore:
+                    for vi in range(n_val):
+                        gt = val_images[vi].unsqueeze(0)
+                        vm = val_viewmats[vi].unsqueeze(0)
+                        Kv = val_Ks[vi].unsqueeze(0)
+                        ci = val_cam_idx[vi]
+                        erp = get_render_params(ncore_camera_data, ci, device)
+                        ecm = erp.pop("camera_model")
+                        val_h, val_w = gt.shape[1], gt.shape[2]
+                        rd, _, _, _, _ = rasterize(
+                            params,
+                            vm,
+                            Kv,
+                            val_w,
+                            val_h,
+                            sh_degree_to_use=sh_degree_to_use,
+                            camera_model=ecm,
+                            **erp,
+                        )
+                        psnrs.append(compute_psnr(rd[0].clamp(0, 1), gt[0]))
+                        if is_last and renders_dir:
+                            gt_np = (gt[0].cpu().numpy() * 255).astype(np.uint8)
+                            rd_np = (rd[0].clamp(0, 1).cpu().numpy() * 255).astype(
+                                np.uint8
+                            )
+                            canvas = np.concatenate([gt_np, rd_np], axis=1)
+                            cam_id, frame_idx = parser.frame_list[valset.indices[vi]]
+                            imageio.imwrite(
+                                os.path.join(
+                                    renders_dir, f"eval_f{frame_idx}_{cam_id}.png"
+                                ),
+                                canvas,
+                            )
+                else:
+                    test_ids = [i for i in range(scene.n_frames) if scene.is_test[i]]
+                    for tfid in test_ids:
+                        for tci in range(scene.n_cams):
+                            gt = scene.images[tfid, tci].unsqueeze(0)
+                            vm = scene.viewmats[tfid, tci].unsqueeze(0)
+                            Kv = scene.Ks[tci]
+                            rd, _, _, _, _ = rasterize(
+                                params, vm, Kv, W, H, sh_degree_to_use=sh_degree_to_use
+                            )
+                            psnrs.append(compute_psnr(rd[0].clamp(0, 1), gt[0]))
+                            if is_last and renders_dir:
+                                gt_np = (gt[0].cpu().numpy() * 255).astype(np.uint8)
+                                rd_np = (rd[0].clamp(0, 1).cpu().numpy() * 255).astype(
+                                    np.uint8
+                                )
+                                canvas = np.concatenate([gt_np, rd_np], axis=1)
+                                imageio.imwrite(
+                                    os.path.join(
+                                        renders_dir,
+                                        f"eval_f{tfid}_{scene.camera_names[tci]}.png",
+                                    ),
+                                    canvas,
+                                )
+
+            elapsed = time.time() - start_time
+            mem_peak = torch.cuda.max_memory_allocated() / 1e6
+            mean_psnr = float(np.mean(psnrs)) if psnrs else 0.0
+            ckpt = {
+                "step": step + 1,
+                "loss": loss.item(),
+                "elapsed_s": elapsed,
+                "gpu_peak_mb": mem_peak,
+                "num_gaussians": N,
+                "mean_psnr": mean_psnr,
+            }
+            print(f"  Eval PSNR: {mean_psnr:.2f} dB ({len(psnrs)} views)")
+            with open(os.path.join(stats_dir, f"step{step + 1:05d}.json"), "w") as f:
+                json.dump(ckpt, f, indent=2)
             checkpoints.append(ckpt)
 
-    # --- Summary ---
+    # Summary
     elapsed = time.time() - start_time
     summary = {
         "max_steps": max_steps,
@@ -681,7 +893,6 @@ def train(
 
     print(f"\nDone: {max_steps} steps in {elapsed:.1f}s")
     print(f"Results saved to {result_dir}/")
-
     return losses_history, checkpoints
 
 
@@ -690,81 +901,51 @@ def train(
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Train Gaussians on multi-camera autonomous driving data"
-    )
-    parser.add_argument(
+def main():
+    p = argparse.ArgumentParser(description="AV trainer with gsplat")
+    p.add_argument(
         "--scene",
         type=str,
         default=os.path.join(os.path.dirname(__file__), "../assets/test_pandaset.npz"),
-        help="path to the npz scene file (images, intrinsics, poses, LiDAR)",
+        help="NPZ file or NCore v4 JSON manifest",
     )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=15000,
-        help="number of training iterations (default: 15000)",
+    p.add_argument(
+        "--cameras", type=str, default=None, help="comma-separated camera IDs (NCore)"
     )
-    parser.add_argument(
-        "--lr",
-        type=float,
-        default=0.005,
-        help="base learning rate; per-param LRs are scaled from this (default: 0.005)",
+    p.add_argument(
+        "--duration", type=float, default=None, help="clip duration in seconds (NCore)"
     )
-    parser.add_argument(
-        "--log-every",
-        type=int,
-        default=3000,
-        help="print training stats every N steps (default: 3000)",
-    )
-    parser.add_argument(
+    p.add_argument("--max-lidar", type=int, default=150_000)
+    p.add_argument("--downscale", type=int, default=1)
+    p.add_argument("--max-steps", type=int, default=15000)
+    p.add_argument("--lr", type=float, default=0.005)
+    p.add_argument("--log-every", type=int, default=3000)
+    p.add_argument(
         "--eval-every",
         type=int,
-        default=3000,
-        help="evaluate PSNR on held-out test views every N steps (default: 3000)",
-    )
-    parser.add_argument(
-        "--result-dir",
-        type=str,
-        default="results/av_pandaset",
-        help="output directory for renders, stats, and summary (default: results/av_pandaset)",
-    )
-    parser.add_argument(
-        "--sh-degree",
-        type=int,
         default=0,
-        help="spherical harmonics degree (0 = flat RGB, 3 = full SH; default: 0)",
+        help="evaluate every N steps (0 = only at end)",
     )
-    parser.add_argument(
-        "--sh-degree-interval",
-        type=int,
-        default=1000,
-        help="progressively enable one more SH band every N steps (default: 1000)",
-    )
-    parser.add_argument(
-        "--no-save-model",
+    p.add_argument("--result-dir", type=str, default="results/av")
+    p.add_argument("--sh-degree", type=int, default=0)
+    p.add_argument("--sh-degree-interval", type=int, default=1000)
+    p.add_argument("--no-save-model", action="store_true")
+    p.add_argument("--mcmc", action="store_true")
+    p.add_argument("--cap-max", type=int, default=300_000)
+    # LiDAR rendering (addition over simple_trainer)
+    p.add_argument(
+        "--lidar-render",
         action="store_true",
-        help="disable saving trained Gaussian parameters to model.pt",
+        help="enable gsplat LiDAR rendering with distance loss",
     )
-    parser.add_argument(
-        "--mcmc",
-        action="store_true",
-        help="enable MCMC densification strategy: adaptively add/remove Gaussians",
-    )
-    parser.add_argument(
-        "--cap-max",
-        type=int,
-        default=500_000,
-        help="maximum number of Gaussians when using --mcmc (default: 500000)",
-    )
-    args = parser.parse_args()
+    p.add_argument("--lidar-render-subsample", type=int, default=112)
+    p.add_argument("--lidar-render-weight", type=float, default=0.0003)
+    args = p.parse_args()
 
     if not torch.cuda.is_available():
-        raise RuntimeError(
-            "CUDA device required. gsplat rasterization relies on CUDA kernels "
-            "and does not support CPU-only execution."
-        )
+        raise RuntimeError("CUDA required for gsplat rasterization.")
+
+    cameras_list = args.cameras.split(",") if args.cameras else None
     train(
         scene_path=args.scene,
         max_steps=args.max_steps,
@@ -777,6 +958,13 @@ def main() -> None:
         sh_degree=args.sh_degree,
         sh_degree_interval=args.sh_degree_interval,
         save_model=not args.no_save_model,
+        cameras=cameras_list,
+        duration=args.duration,
+        max_lidar=args.max_lidar,
+        downscale=args.downscale,
+        lidar_render=args.lidar_render,
+        lidar_render_subsample=args.lidar_render_subsample,
+        lidar_render_weight=args.lidar_render_weight,
     )
 
 
