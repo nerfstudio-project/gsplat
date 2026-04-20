@@ -383,10 +383,11 @@ void launch_projection_ut_3dgs_fused_kernel(
                                           : nullptr
             );
     };
-    dispatch::dispatch(
+    const bool dispatched = dispatch::dispatch(
         dispatch::make_mapped_type_param<SensorModelFromKernelParamsMap>(sensor_model_params),
         std::move(launch_kernel)
     );
+    TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
     }
 
 } // namespace gsplat
