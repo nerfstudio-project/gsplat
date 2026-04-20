@@ -296,7 +296,8 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
                 last_ids.data_ptr<int32_t>()
             );
     };
-    dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 
 } // namespace gsplat

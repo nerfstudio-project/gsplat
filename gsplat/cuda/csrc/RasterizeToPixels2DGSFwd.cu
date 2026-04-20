@@ -560,7 +560,8 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
                 median_ids.data_ptr<int32_t>()
             );
     };
-    dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 
 } // namespace gsplat
