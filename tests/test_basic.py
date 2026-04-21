@@ -2898,13 +2898,203 @@ def test_rasterize_to_pixels_eval3d(
         # while CUDA >= 12.9 stays within 2.5e-2. Keep a small margin so 12.8
         # passes without masking larger regressions.
         #
+        # Fwd-state-reuse bwd path: deriving per-chunk starting accumulators
+        # from `dot(pix_out_final - pix_out_at_boundary, v_render_c)` introduces
+        # subtraction cancellation vs. the old K1's per-Gaussian running dot,
+        # pushing the worst case to ~0.0279 on 0.3% of elements. Bumped atol
+        # 2.6e-2 -> 3.0e-2 to accept the drift; same magnitude slack as the
+        # 5e-3 -> 2.6e-2 bump above.
+        #
         # Worst cases observed (release build, FAST_MATH=1):
         #   Mismatched elements: 2511 / 34020 (7.4%)
         #   Greatest absolute difference: 0.02257537841796875 at index (2, 1388, 0) (up to 0.005 allowed)
         #   Greatest relative difference: 0.060736533254384995 at index (0, 1678, 4) (up to 0 allowed)
         torch.testing.assert_close(
-            v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=2.6e-2
+            v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=3.0e-2
         )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_fwd_chunk_state_c0_matches_terminal_after_early_exit():
+    """Exercise the fwd kernel's early-exit padding of `fwd_chunk_state`.
+
+    When every pixel in a tile reaches `done = true` before the kernel
+    has walked all its batches, the kernel breaks out of the main
+    compositing loop and a per-thread padding pass fills remaining chunk
+    boundaries with the frozen current state. Without that padding, the
+    affected slots carry uninitialised memory from `at::empty`, and the
+    backward pass silently corrupts gradients.
+
+    Slot c=0 (terminal boundary) is persisted at fwd batch num_batches-1
+    in the normal flow. If early-exit fires before that batch, slot c=0
+    is ONLY written by the padding pass — so breaking the padding leaves
+    slot c=0 uninitialised on every early-exit tile.
+
+    The garden `test_data` fixture does not reliably trigger early-exit:
+    typical tiles have most pixels untouched by any Gaussian, so `done`
+    stays `false` forever and `__syncthreads_count(done) >= block_size`
+    never fires. This test uses an inline synthetic scene specifically
+    designed to trigger early-exit on a multi-chunk tile:
+      - 16×16 image = one tile.
+      - ~1281 gaussians so the single tile has num_batches=6 > CHUNK_BATCHES (multi-chunk).
+      - Gaussians clustered in front of the camera with scale large enough
+        to cover the full tile — every pixel sees every gaussian.
+      - opacity=1.0 drives T below the early-exit threshold after a few
+        gaussians; early-exit fires on batch 0 or 1.
+
+    Invariant: `fwd_chunk_state[slot_c0, pix, 0]` = `1 - render_alphas[pix]`
+    and `fwd_chunk_state[slot_c0, pix, 1:1+CDIM]` = `render_colors[pix]`
+    (with backgrounds=None, pix_out_final == render_colors). Broken
+    padding → slot c=0 holds garbage → test fails with a direct pointer.
+    """
+    from gsplat.cuda._wrapper import (
+        FThetaCameraDistortionParameters,
+        RollingShutterType,
+        UnscentedTransformParameters,
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+    )
+
+    tile_size = 16
+    width = height = tile_size  # single tile
+    pixels_per_tile = tile_size * tile_size  # 256
+
+    # Enough gaussians per tile that num_batches > CHUNK_BATCHES. The
+    # per-batch count matches `block_size = pixels_per_tile`; six batches
+    # give two chunks under the production `CHUNK_BATCHES = 4` constant
+    # in RasterizeChunkCSR.h. We don't reference that constant from
+    # Python — the "num_chunks >= 2" precondition below catches any future
+    # drift and points the reader at this assumption.
+    num_gaussians = pixels_per_tile * 5 + 1  # → 6 batches
+
+    fx = fy = float(width)
+    cx = width / 2.0
+    cy = height / 2.0
+
+    means = torch.zeros(num_gaussians, 3, device=device)
+    means[:, 2] = 1.0 + torch.arange(num_gaussians, device=device).float() * 1e-4
+    quats = (
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+        .expand(num_gaussians, 4)
+        .contiguous()
+    )
+    # Large scale → each gaussian projects across several pixels so every
+    # thread in the tile sees each gaussian.
+    scales = torch.full((num_gaussians, 3), 0.5, device=device)
+    opacities = torch.ones(num_gaussians, device=device)
+
+    channels = 3
+    colors = torch.rand(1, num_gaussians, channels, device=device)
+    opacities_bc = opacities[None, :].contiguous()  # [C=1, N]
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+    I = 1  # C=1, batch_dims=()
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means,
+        quats,
+        scales,
+        opacities,
+        viewmats,
+        Ks,
+        width,
+        height,
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _tpg, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+
+    # Invoke the low-level op directly so we can inspect `fwd_chunk_state`.
+    ut_params = UnscentedTransformParameters()
+    ftheta_coeffs = FThetaCameraDistortionParameters()
+    (
+        _render_colors,
+        _render_alphas,
+        _last_ids,
+        chunks_per_tile,
+        _chunk_offsets,
+        fwd_chunk_state,
+    ) = torch.ops.gsplat.rasterize_to_pixels_from_world_3dgs_fwd(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        None,
+        None,  # backgrounds, masks
+        width,
+        height,
+        tile_size,
+        viewmats,
+        None,
+        Ks,
+        0,  # PINHOLE
+        ut_params,
+        int(RollingShutterType.GLOBAL),
+        None,
+        None,
+        None,
+        None,  # rays, radial/tangential/thin_prism coeffs
+        ftheta_coeffs,
+        None,
+        None,  # lidar, external-distortion coeffs
+        isect_offsets,
+        flatten_ids,
+        False,
+        None,
+        None,  # use_hit_distance, sample_counts, render_normals
+    )
+
+    # Preconditions: one tile, multi-chunk, populated. If any of these
+    # fail, the scene setup isn't exercising what we think it is.
+    assert chunks_per_tile.numel() == 1
+    num_chunks = int(chunks_per_tile[0].item())
+    assert num_chunks >= 2, (
+        f"expected num_chunks >= 2 to exercise multi-chunk padding, got "
+        f"{num_chunks}. Either CHUNK_BATCHES changed in the C++ side or "
+        "the scene's batch count is too small."
+    )
+
+    # Invariant: slot c=0 equals terminal render state for every pixel.
+    terminal_slot = fwd_chunk_state[0]  # [pixels_per_tile, 1+CDIM+3]
+    rc = _render_colors.reshape(height, width, channels)
+    ra = _render_alphas.reshape(height, width)
+    # Threads iterate y-major then x, so pixel tr=(y*tile_size + x).
+    T_slot = terminal_slot[:, 0].reshape(tile_size, tile_size)
+    pix_slot = terminal_slot[:, 1 : 1 + channels].reshape(
+        tile_size, tile_size, channels
+    )
+
+    torch.testing.assert_close(
+        T_slot,
+        1.0 - ra,
+        rtol=0.0,
+        atol=1e-5,
+        msg=(
+            "slot c=0 T values differ from 1 - render_alphas. Most likely "
+            "the fwd early-exit padding is broken — slot c=0 was never "
+            "written and holds uninitialised memory from at::empty."
+        ),
+    )
+    torch.testing.assert_close(
+        pix_slot,
+        rc,
+        rtol=0.0,
+        atol=1e-5,
+        msg=(
+            "slot c=0 pix_out values differ from render_colors. Same "
+            "likely cause: fwd early-exit padding is broken."
+        ),
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

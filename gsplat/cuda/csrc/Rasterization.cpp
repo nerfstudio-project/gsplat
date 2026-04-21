@@ -28,6 +28,7 @@
 #include "Common.h"
 #include "Ops.h"
 #include "Rasterization.h"
+#include "RasterizeChunkCSR.h"
 #include "Cameras.h"
 
 namespace gsplat {
@@ -594,7 +595,13 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 // 3DGS (from world)
 ////////////////////////////////////////////////////
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd_impl(
+// fwd impl returns (renders, alphas, last_ids, chunks_per_tile, chunk_offsets,
+// fwd_chunk_state). The last three comprise the CSR-packed chunk state that
+// the backward pass consumes to skip the duplicated K1-lite / K1.5' / K2
+// preamble work; they are lifted from the bwd impl (previously recomputed
+// every backward) and pinned in `ctx.save_for_backward` so fwd pays this cost
+// exactly once per iteration instead of once per backward.
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd_impl(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
     const at::Tensor quats,     // [..., N, 4]
@@ -675,6 +682,43 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     last_ids_shape.append({C, image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_shape, opt.dtype(at::kInt));
 
+    // --- CSR chunk structure + fwd persistence buffer ---------------------
+    // Compute (chunks_per_tile, chunk_offsets, total_chunks) here so both
+    // fwd and bwd share the same CSR layout. Previously bwd recomputed
+    // these on every backward; pulling them into fwd lets us reuse the
+    // result via `save_for_backward`. The shared helper lives in
+    // `RasterizeChunkCSR.h` (impl in bwd `.cu`).
+    const uint32_t tile_height = static_cast<uint32_t>(tile_offsets.size(-2));
+    const uint32_t tile_width = static_cast<uint32_t>(tile_offsets.size(-1));
+    int64_t batch_prod = 1;
+    for (size_t d = 0; d < batch_dims.size(); ++d) {
+        batch_prod *= batch_dims[d];
+    }
+    const uint32_t I = static_cast<uint32_t>(batch_prod) * C;  // number of images
+    const uint32_t num_tiles = I * tile_height * tile_width;
+    const uint32_t pixels_per_tile =
+        static_cast<uint32_t>(tile_size) * static_cast<uint32_t>(tile_size);
+    const int64_t n_isects = flatten_ids.size(0);
+
+    at::Tensor chunks_per_tile;
+    at::Tensor chunk_offsets;
+    int64_t total_chunks;
+    std::tie(chunks_per_tile, chunk_offsets, total_chunks) =
+        compute_chunk_csr(tile_offsets, n_isects, num_tiles, pixels_per_tile,
+                          opt);
+
+    // Persistence buffer storing, per (tile, chunk boundary, pixel), the
+    // cumulative fwd state (T, pix_out[CDIM], normal_out[3]) fp32. The bwd
+    // variants consume this in lieu of re-running the fwd walk for the
+    // first-chunk preamble. Use `at::empty`: slots for masked tiles and
+    // padded pixels are intentionally left unwritten (bwd matches fwd's
+    // mask-early-return and never reads those slots).
+    const int64_t state_dim =
+        /*T*/ 1 + static_cast<int64_t>(channels) + /*normal*/ 3;
+    at::Tensor fwd_chunk_state = at::empty(
+        {total_chunks, static_cast<int64_t>(pixels_per_tile), state_dim},
+        opt.dtype(at::kFloat));
+
     launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         means,
         quats,
@@ -702,17 +746,22 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
         tile_offsets,
         flatten_ids,
         use_hit_distance,
+        chunks_per_tile,
+        chunk_offsets,
+        total_chunks,
         renders,
         alphas,
         last_ids,
         sample_counts,
-        normals
+        normals,
+        fwd_chunk_state
     );
 
-    return std::make_tuple(renders, alphas, last_ids);
+    return std::make_tuple(renders, alphas, last_ids, chunks_per_tile,
+                           chunk_offsets, fwd_chunk_state);
 };
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd(
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor &means,     // [..., N, 3]
     const at::Tensor &quats,     // [..., N, 4]
@@ -818,7 +867,13 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
-    const at::optional<at::Tensor> v_render_normals // [..., C, image_height, image_width, 3]
+    const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
+    // CSR chunk structure (precomputed by fwd; threaded through save_for_backward)
+    const at::Tensor chunks_per_tile, // [num_tiles] int32
+    const at::Tensor chunk_offsets,   // [num_tiles + 1] int32
+    const int64_t total_chunks,       // scalar
+    // Per-chunk cumulative (T, pix_out, normal_out) persisted by the fwd pass.
+    const at::Tensor fwd_chunk_state  // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -832,6 +887,9 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
     CHECK_INPUT(last_ids);
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(chunks_per_tile);
+    CHECK_INPUT(chunk_offsets);
+    CHECK_INPUT(fwd_chunk_state);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
     }
@@ -893,6 +951,10 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
         v_render_colors,
         v_render_alphas,
         v_render_normals,
+        chunks_per_tile,
+        chunk_offsets,
+        total_chunks,
+        fwd_chunk_state,
         v_means,
         v_quats,
         v_scales,
@@ -945,7 +1007,13 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     // gradients of outputs
     const at::Tensor &v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor &v_render_alphas, // [..., C, image_height, image_width, 1]
-    const at::optional<at::Tensor> &v_render_normals // [..., C, image_height, image_width, 3]
+    const at::optional<at::Tensor> &v_render_normals, // [..., C, image_height, image_width, 3]
+    // CSR chunk structure (from fwd, threaded via save_for_backward)
+    const at::Tensor &chunks_per_tile,
+    const at::Tensor &chunk_offsets,
+    int64_t total_chunks,
+    // Per-chunk cumulative (T, pix_out, normal_out) persisted by the fwd pass.
+    const at::Tensor &fwd_chunk_state
 ) {
     return rasterize_to_pixels_from_world_3dgs_bwd_impl(
         means,
@@ -978,7 +1046,11 @@ rasterize_to_pixels_from_world_3dgs_bwd(
         last_ids,
         v_render_colors,
         v_render_alphas,
-        v_render_normals
+        v_render_normals,
+        chunks_per_tile,
+        chunk_offsets,
+        total_chunks,
+        fwd_chunk_state
     );
 }
 
