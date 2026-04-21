@@ -1938,9 +1938,20 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         else:
             render_normals = None
 
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
-            "rasterize_to_pixels_from_world_3dgs_fwd"
-        )(
+        # Fwd emits the CSR chunk structure (chunks_per_tile, chunk_offsets)
+        # and the `fwd_chunk_state` tensor that bwd consumes. Computing CSR
+        # offsets once per forward — instead of once per backward — shares
+        # the one blocking `chunk_offsets[-1].item()` D2H across both passes,
+        # and exposes the persisted per-chunk cumulative state so the bwd
+        # kernel can skip rebuilding it.
+        (
+            render_colors,
+            render_alphas,
+            last_ids,
+            chunks_per_tile,
+            chunk_offsets,
+            fwd_chunk_state,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_3dgs_fwd")(
             means,
             quats,
             scales,
@@ -1990,7 +2001,13 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             flatten_ids,
             render_alphas,
             last_ids,
+            chunks_per_tile,
+            chunk_offsets,
+            fwd_chunk_state,
         )
+        # total_chunks is recoverable from the fwd_chunk_state leading dim
+        # (avoids a second D2H sync — fwd already read it to size this tensor).
+        ctx.total_chunks = int(fwd_chunk_state.size(0))
         ctx.width = width
         ctx.height = height
         ctx.ut_params = ut_params
@@ -2035,7 +2052,14 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             flatten_ids,
             render_alphas,
             last_ids,
+            chunks_per_tile,
+            chunk_offsets,
+            fwd_chunk_state,
         ) = ctx.saved_tensors
+        # Bwd consumes `fwd_chunk_state` directly in K2's preamble — no
+        # separate state-scan / prefix-scan kernels. The tensor carries
+        # per-chunk cumulative (T, pix_out, normal_out) from fwd at every
+        # CHUNK_BATCHES boundary.
         width = ctx.width
         height = ctx.height
         ut_params = ctx.ut_params
@@ -2046,6 +2070,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         lidar_coeffs = ctx.lidar_coeffs
         external_distortion_coeffs = ctx.external_distortion_coeffs
         use_hit_distance = ctx.use_hit_distance
+        total_chunks = ctx.total_chunks
 
         (
             v_means,
@@ -2086,6 +2111,10 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
             v_render_normals.contiguous() if v_render_normals is not None else None,
+            chunks_per_tile,
+            chunk_offsets,
+            total_chunks,
+            fwd_chunk_state,
         )
 
         if ctx.needs_input_grad[5]:  # backgrounds

@@ -31,6 +31,7 @@
 #include "Common.h"
 #include "ExternalDistortion.cuh"
 #include "Rasterization.h"
+#include "RasterizeChunkCSR.h"
 #include "Utils.cuh"
 #include "Cameras.cuh"
 #include "Lidars.cuh"
@@ -43,11 +44,11 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 namespace cg = cooperative_groups;
 
 // Pad CDIM to an odd stride when it would be even, so that the per-thread
-// STORE `rgbs_batch[tr * stride + k] = colors[...]` (K1 line ~453 / K2 line ~1030)
-// writes to distinct 32-bit banks across a warp.  With a stride S, the 32 lanes
-// in a warp land in banks (tr * S) mod 32 for tr in [0,32); that hits all 32
-// banks iff gcd(S, 32) == 1, i.e. S is odd.  The inner loop READ from a fixed
-// `t` and varying `k` is a broadcast-per-lane and is not the conflict site.
+// STORE `rgbs_batch[tr * stride + k] = colors[...]` in K2 writes to distinct
+// 32-bit banks across a warp. With a stride S, the 32 lanes in a warp land
+// in banks (tr * S) mod 32 for tr in [0,32); that hits all 32 banks iff
+// gcd(S, 32) == 1, i.e. S is odd. The inner loop READ from a fixed `t` and
+// varying `k` is a broadcast-per-lane and is not the conflict site.
 // sizeof(float) == 4 → 32-bit banks; static_assert below pins that assumption.
 template <uint32_t CDIM>
 constexpr uint32_t cdim_smem_stride() {
@@ -56,64 +57,38 @@ constexpr uint32_t cdim_smem_stride() {
 }
 
 // ---------------------------------------------------------------------------
-// Batch-parallel backward pass (replaces the old monolithic kernel).
+// Single-kernel (K2-only) batch-parallel backward pass.
 //
-// Previous path: one kernel per pixel-batch sequentially accumulated every
-// Gaussian per pixel, plus a host-side scan over tile_offsets.cpu() to size
-// temp memory. Two bottlenecks: sequential per-pixel dependency starved the
-// scheduler on tiles with many Gaussians, and the host-side scan forced a
-// synchronous D2H copy on every backward pass.
+// An earlier three-kernel split (K1 state-scan + K1.5 prefix-scan + K2
+// gradient) had K1/K1.5 rebuild the per-chunk starting state
+// `(T_start, render_accum_dot_start, normal_accum_dot_start)` for K2.
+// That duplicated per-Gaussian work the FORWARD pass had already computed.
+// The current design persists the required cumulative state from fwd into
+// `fwd_chunk_state` at every CHUNK_BATCHES boundary, then folds the
+// derivation of the starting accumulators into K2's preamble as a single
+// CDIM dot + vec3 dot per thread — K1 and K1.5 are gone. See
+// `RasterizeChunkCSR.h` for the tensor layout and boundary formula.
 //
-// New path launches the following kernels in sequence per backward pass:
+// Math (derived from the bwd recurrence in the hot loop below):
+//   T_start_c          = fwd_chunk_state[slot=c, pix, T_OFFSET]
+//                      = T_fwd at fwd-batch num_batches-1-c*CHUNK_BATCHES
+//   render_accum_dot_c = dot(v_render_c,
+//                            pix_out_final - pix_out_fwd_at_boundary_c)
+//   normal_accum_dot_c = dot(v_render_n,
+//                            normal_out_final - normal_out_fwd_at_boundary_c)
+//   where `_final` is the c=0 slot (terminal fwd state) — the CSR-slot
+//   semantics are documented in `RasterizeChunkCSR.h`.
 //
-//   0. CSR setup (compute_chunks_per_tile_kernel + at::cumsum + at::cat).
-//      Builds chunks_per_tile[t] and chunk_offsets[0..num_tiles] entirely on
-//      device, replacing the old tile_offsets.cpu() + CPU-loop. One small
-//      scalar readback (total_chunks) remains -- see launcher NOTE for the
-//      sync-point rationale and the graph-capture caveat.
-//
-//   1. rasterize_to_pixels_3dgs_eval_state_kernel (K1, "state scan"). Same
-//      CTA layout as the forward pass (256 threads, 256 pixels). Processes
-//      all Gaussians state-only (geometry -> alpha -> state update, NO
-//      gradient chain). Every CHUNK_BATCHES batches, writes the per-pixel
-//      compositing state (product P, render_accum_dot S_render,
-//      normal_accum_dot S_normal) to the CSR-packed temp buffer.
-//
-//   2. rasterize_prologue_scan_kernel (K1.5, "prologue scan"). In-place
-//      prefix scan over each tile's chunk-slots, turning each chunk's local
-//      state into the correct starting prologue (T, accumulators) that K2
-//      needs. Uses shared-memory buffering (SCAN_TILE_CHUNKS at a time) to
-//      avoid global-memory round-trip stalls.
-//
-//   3. rasterize_to_pixels_3dgs_eval_bwd_kernel (K2, "gradient"). Expanded
-//      grid -- one CTA per (tile x chunk). Reads its chunk's prologue from
-//      the temp buffer, processes CHUNK_BATCHES batches of Gaussians with
-//      the full gradient chain. Chunks are INDEPENDENT -- no sequential
-//      dependency between them -- exposing more work to the GPU scheduler
-//      and eliminating the sequential-tail latency that dominated the old
-//      kernel on tiles with many Gaussians.
+// K2 grid: 1D {total_chunks, 1, 1}. Chunks are independent — no sequential
+// dependency — exposing ample work to the GPU scheduler and eliminating the
+// tail latency on tiles with many Gaussians.
 // ---------------------------------------------------------------------------
 
-// Number of batches per chunk. Each chunk is an independently-schedulable
-// unit of work in the gradient kernel. Smaller = more parallelism but more
-// temp memory and launch overhead.
-constexpr uint32_t CHUNK_BATCHES = 4;
-
-// Number of state floats per pixel per chunk: P, S_render, S_normal.
-constexpr uint32_t CHUNK_STATE_DIM = 3;
-
-// --- Helpers for CSR-packed chunk state ---
-//
-// Each tile contributes `chunks_per_tile[t]` chunk-slots to the flat
-// chunk_states buffer, with `chunk_offsets[t]` giving the starting slot of
-// tile t. `chunk_offsets[num_tiles]` is the total number of chunk-slots and
-// equals the CTA count for K1/K2. Per-tile padding (the old
-// `num_tiles × max_chunks` layout) is gone, which removes the dense-scene
-// OOM vector driven by the worst tile.
-
-// Populate chunks_per_tile[t] = ceil(ceil(range_t / pixels_per_tile) / CHUNK_BATCHES).
-// Single-dim launch, one thread per tile.
-__global__ void compute_chunks_per_tile_kernel(
+// Device kernel that computes per-tile chunk counts. This was previously
+// file-scoped to this TU; it is now reachable by the fwd persist path via
+// the `compute_chunk_csr` host helper below. Kept `static` because only
+// this TU launches it directly.
+static __global__ void compute_chunks_per_tile_kernel(
     const int32_t *__restrict__ tile_offsets,
     const uint32_t num_tiles,
     const uint32_t n_isects,
@@ -140,9 +115,60 @@ __global__ void compute_chunks_per_tile_kernel(
     chunks_per_tile[t] = static_cast<int32_t>(num_chunks);
 }
 
+// Host helper: see declaration in `RasterizeChunkCSR.h`. Launches the
+// device kernel above, builds the [num_tiles+1] CSR offsets via cumsum+cat,
+// then reads back `total_chunks` with a blocking `.item<int32_t>()`. Shared
+// by fwd (persist buffer sizing) and bwd (K1/K2 grid sizing).
+std::tuple<at::Tensor, at::Tensor, int64_t> compute_chunk_csr(
+    const at::Tensor &tile_offsets,
+    int64_t n_isects,
+    uint32_t num_tiles,
+    uint32_t pixels_per_tile,
+    at::TensorOptions dummy_options
+) {
+    auto int_opts = dummy_options.dtype(at::kInt);
+    auto chunks_per_tile_t =
+        at::empty({static_cast<int64_t>(num_tiles)}, int_opts);
+    if (num_tiles > 0) {
+        const uint32_t threads_per_block = 256;
+        const uint32_t blocks =
+            (num_tiles + threads_per_block - 1) / threads_per_block;
+        compute_chunks_per_tile_kernel
+            <<<blocks, threads_per_block, 0,
+               at::cuda::getCurrentCUDAStream()>>>(
+                tile_offsets.const_data_ptr<int32_t>(),
+                num_tiles,
+                static_cast<uint32_t>(n_isects),
+                pixels_per_tile,
+                chunks_per_tile_t.data_ptr<int32_t>());
+    }
+    // chunk_offsets[0..num_tiles]: exclusive prefix sum with a trailing sum.
+    auto chunk_offsets_tail = at::cumsum(chunks_per_tile_t, 0, at::kInt);
+    auto chunk_offsets_t = at::cat(
+        {at::zeros({1}, int_opts), chunk_offsets_tail});
+    const int64_t total_chunks = num_tiles == 0
+        ? int64_t{0}
+        : static_cast<int64_t>(
+              chunk_offsets_t[static_cast<int64_t>(num_tiles)]
+                  .item<int32_t>());
+    return std::make_tuple(chunks_per_tile_t, chunk_offsets_t, total_chunks);
+}
+
+// --- Helpers for CSR-packed chunk state ---
+//
+// Each tile contributes `chunks_per_tile[t]` chunk-slots to the flat
+// fwd_chunk_state buffer, with `chunk_offsets[t]` giving the starting slot
+// of tile t. `chunk_offsets[num_tiles]` is the total number of chunk-slots
+// and equals the CTA count for K2. Per-tile padding (the old
+// `num_tiles × max_chunks` layout) is gone, which removes the dense-scene
+// OOM vector driven by the worst tile.
+//
+// `CHUNK_BATCHES` and `compute_chunks_per_tile_kernel` live in
+// `RasterizeChunkCSR.h` so fwd and bwd can share a single source of truth.
+
 // Binary-search helper: given ascending `chunk_offsets[num_tiles + 1]`, find
 // tile t such that chunk_offsets[t] <= bid < chunk_offsets[t + 1]. Called once
-// per CTA in K1/K2; O(log num_tiles) ≈ 14 global-mem reads on a 10K-tile scene
+// per CTA in K2; O(log num_tiles) ≈ 14 global-mem reads on a 10K-tile scene
 // and the reads hit L2 after the first CTA in the launch wave.
 __device__ __forceinline__ uint32_t find_tile_for_block(
     const int32_t *__restrict__ chunk_offsets,
@@ -162,12 +188,13 @@ __device__ __forceinline__ uint32_t find_tile_for_block(
     return lo;
 }
 
-// Shared ray-generation helper used by K1 and K2. Takes the full camera-model
-// switch (pinhole / fisheye / ftheta / lidar × {windshield, empty distortion})
-// plus the "explicit rays" path, and returns the WorldRay for pixel (j, i) on
-// image `iid`. Marked `__forceinline__` so K2 keeps the register counts it had
-// when the block was inlined twice verbatim; the comment at K2's preamble
-// previously justified the duplication on occupancy grounds.
+// Shared ray-generation helper used by K2 (and previously by the deleted K1).
+// Takes the full camera-model switch (pinhole / fisheye / ftheta / lidar ×
+// {windshield, empty distortion}) plus the "explicit rays" path, and returns
+// the WorldRay for pixel (j, i) on image `iid`. Marked `__forceinline__` so
+// K2 keeps the register counts it had when the block was inlined verbatim;
+// the comment at K2's preamble previously justified the duplication on
+// occupancy grounds.
 template <typename scalar_t>
 __device__ __forceinline__ WorldRay compute_world_ray_bwd(
     const uint32_t iid,
@@ -357,396 +384,11 @@ __device__ __forceinline__ PixelCoords compute_pixel_coords_bwd(
     return out;
 }
 
-// Kernel 1: per-chunk state computation. One CTA per (tile, local_chunk) pair,
-// packed as a 1D grid of size total_chunks = chunk_offsets[num_tiles].
-// Each CTA processes CHUNK_BATCHES batches, state-only (no gradient chain),
-// starting from zero prologue (T=1, accum=0, normal_accum=0). Writes the
-// chunk's composed (P, S_render, S_normal) per pixel.
-//
-// chunk_PS layout: [total_chunks][pixels_per_tile][CHUNK_STATE_DIM] (CSR).
-template <uint32_t CDIM, typename scalar_t>
-__global__ void rasterize_state_scan_bwd_kernel(
-    const uint32_t B,
-    const uint32_t C,
-    const uint32_t N,
-    const uint32_t n_isects,
-    // fwd inputs
-    const vec3 *__restrict__ means,           // [B, N, 3]
-    const vec4 *__restrict__ quats,           // [B, N, 4]
-    const vec3 *__restrict__ scales,          // [B, N, 3]
-    const scalar_t *__restrict__ colors,      // [B, C, N, CDIM] or [nnz, CDIM]
-    const scalar_t *__restrict__ opacities,   // [B, C, N] or [nnz]
-    const bool *__restrict__ masks,           // [B, C, tile_height, tile_width]
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const uint32_t tile_size,
-    const uint32_t tile_width,
-    const uint32_t tile_height,
-    // camera model
-    const scalar_t *__restrict__ viewmats0, // [B, C, 4, 4]
-    const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
-    const scalar_t *__restrict__ Ks,        // [B, C, 3, 3]
-    const CameraModelType camera_model_type,
-    const ShutterType rs_type,
-    const scalar_t *__restrict__ rays,              // [B, C, H, W, 6]
-    const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
-    const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
-    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
-    const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
-    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
-    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
-    // intersections
-    const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
-    const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const bool use_hit_distance,
-    // fwd outputs
-    const scalar_t
-        *__restrict__ render_alphas,      // [B, C, image_height, image_width, 1]
-    const int32_t *__restrict__ last_ids, // [B, C, image_height, image_width]
-    // grad outputs
-    const scalar_t *__restrict__ v_render_colors, // [B, C, image_height,
-                                                  // image_width, CDIM]
-    const scalar_t
-        *__restrict__ v_render_normals, // [B, C, image_height, image_width, 3] optional
-    // chunk state output (CSR-packed; row i starts at chunk_offsets[i])
-    scalar_t *__restrict__ chunk_PS,     // [total_chunks, pixels_per_tile, 3]
-    scalar_t *__restrict__ t_final_buf,  // [num_tiles * pixels_per_tile]
-    const int32_t *__restrict__ chunk_offsets  // [num_tiles + 1]
-)
-{
-    auto block = cg::this_thread_block();
-    // 1D grid, one CTA per CSR chunk-slot. Binary-search chunk_offsets to
-    // recover (tile_linear, chunk_id_local) for this block; then derive
-    // (iid, tile_row, tile_col) from tile_linear.
-    const uint32_t num_tiles_total = (B * C) * tile_height * tile_width;
-    const uint32_t bid = block.group_index().x;
-    const uint32_t tile_linear =
-        find_tile_for_block(chunk_offsets, num_tiles_total, bid);
-    const uint32_t chunk_id =
-        bid - static_cast<uint32_t>(chunk_offsets[tile_linear]);
-    const uint32_t iid = tile_linear / (tile_height * tile_width);
-    const uint32_t tile_id = tile_linear - iid * (tile_height * tile_width);
-    const uint32_t tile_row = tile_id / tile_width;
-    const uint32_t tile_col = tile_id - tile_row * tile_width;
-    const uint32_t tr = block.thread_rank();
-    const uint32_t block_size = block.size();
-
-    // Advance per-image pointers to the current image (iid).
-    tile_offsets += iid * tile_height * tile_width;
-    render_alphas += iid * image_height * image_width;
-    last_ids += iid * image_height * image_width;
-    v_render_colors += iid * image_height * image_width * CDIM;
-    if (v_render_normals != nullptr) {
-        v_render_normals += iid * image_height * image_width * 3;
-    }
-    if (masks != nullptr) {
-        masks += iid * tile_height * tile_width;
-    }
-    if(rays != nullptr) {
-        rays += iid * image_height * image_width * 6;
-    }
-
-    // When the mask is provided, do nothing and return if
-    // this tile is labeled as False.
-    if (masks != nullptr && !masks[tile_id]) {
-        return;
-    }
-
-    // Gaussian range for this tile and chunk/batch decomposition.
-    const int32_t range_start = tile_offsets[tile_id];
-    const int32_t range_end =
-        (iid == B * C - 1) && (tile_id == tile_width * tile_height - 1)
-            ? n_isects
-            : tile_offsets[tile_id + 1];
-    const uint32_t num_batches =
-        (range_end - range_start + block_size - 1) / block_size;
-    const uint32_t pixels_per_tile = tile_size * tile_size;
-    // No padding blocks to handle: the grid is sized to total_chunks, so every
-    // launched block has chunk_id < num_chunks for its tile.
-
-    // Pixel mapping (camera vs lidar) — shared helper.
-    const PixelCoords pc = compute_pixel_coords_bwd(
-        camera_model_type, tile_id, tile_row, tile_col, tile_size, tr,
-        image_width, image_height, lidar_device_coeffs);
-    const uint32_t i = pc.row;
-    const uint32_t j = pc.col;
-    const bool inside = pc.inside;
-    const int32_t pix_id = pc.pix_id;
-
-    // Ray generation (camera-model switch + explicit-rays path) is factored
-    // into the shared compute_world_ray_bwd helper; see its definition above.
-    WorldRay ray = compute_world_ray_bwd<scalar_t>(
-        iid, j, i, pix_id, inside,
-        rays, viewmats0, viewmats1, Ks,
-        image_width, image_height,
-        camera_model_type, rs_type,
-        radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-        ftheta_device_coeffs, lidar_device_coeffs,
-        external_distortion_device_params);
-    const vec3 ray_o = ray.ray_org;
-    const vec3 ray_d = ray.ray_dir;
-    const bool pixel_valid = inside && ray.valid_flag;
-    const int32_t bin_final = pixel_valid ? last_ids[pix_id] : 0;
-
-    // Per-pixel gradients needed for the state recurrence.
-    float v_render_c[CDIM];
-#pragma unroll
-    for (uint32_t k = 0; k < CDIM; ++k) {
-        v_render_c[k] = pixel_valid ? v_render_colors[pix_id * CDIM + k] : 0.f;
-    }
-    vec3 v_render_n = vec3(0.f);
-    if (v_render_normals != nullptr && pixel_valid) {
-        v_render_n.x = v_render_normals[pix_id * 3 + 0];
-        v_render_n.y = v_render_normals[pix_id * 3 + 1];
-        v_render_n.z = v_render_normals[pix_id * 3 + 2];
-    }
-
-    // Shared memory: [xyz_opacity | scale | quat | rgbs] per thread.
-    extern __shared__ int s[];
-    vec4 *xyz_opacity_batch = reinterpret_cast<vec4 *>(s);
-    vec3 *scale_batch =
-        reinterpret_cast<vec3 *>(&xyz_opacity_batch[block_size]);
-    vec4 *quat_batch =
-        reinterpret_cast<vec4 *>(&scale_batch[block_size]);
-    float *rgbs_batch = (float *)&quat_batch[block_size];
-
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int32_t warp_bin_final =
-        cg::reduce(warp, bin_final, cg::greater<int>());
-
-    // Process this chunk with zero prologue.
-    float T = 1.0f;
-    float accum_render = 0.0f;
-    float accum_normal = 0.0f;
-    const uint32_t b_start = chunk_id * CHUNK_BATCHES;
-    const uint32_t b_end = min(b_start + CHUNK_BATCHES, num_batches);
-
-    for (uint32_t b = b_start; b < b_end; ++b) {
-        block.sync();
-        const int32_t batch_end = range_end - 1 - block_size * b;
-        const int32_t batch_size =
-            min(static_cast<int32_t>(block_size), batch_end + 1 - range_start);
-        const int32_t idx = batch_end - static_cast<int32_t>(tr);
-
-        if (idx >= range_start) {
-            // TODO: only support 1 camera for now so it is ok to abuse the index.
-            const int32_t isect_id = flatten_ids[idx]; // flatten index in [B * C * N] or [nnz]
-            const int32_t isect_bid = isect_id / (C * N);   // intersection batch index
-            // const int32_t isect_cid = (isect_id / N) % C; // intersection camera index
-            const int32_t isect_gid = isect_id % N;          // intersection gaussian index
-            const vec3 xyz = means[isect_bid * N + isect_gid];
-            const float opac = opacities[isect_id];
-            xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
-            scale_batch[tr] = scales[isect_bid * N + isect_gid];
-            quat_batch[tr] = quats[isect_bid * N + isect_gid];
-            // Projection kernel culls degenerate Gaussians (zero quaternion,
-            // zero scale) by setting radii = 0, preventing them from entering
-            // the intersection list. Mirror K2's asserts here so NaN from
-            // division-by-zero doesn't silently poison the scan state.
-            assert(glm::dot(quat_batch[tr], quat_batch[tr]) > 0.f);
-            assert(scale_batch[tr][0] > 0.f && scale_batch[tr][1] > 0.f && scale_batch[tr][2] > 0.f);
-#pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k) {
-                rgbs_batch[tr * cdim_smem_stride<CDIM>() + k] = colors[isect_id * CDIM + k];
-            }
-        }
-        block.sync();
-
-        for (uint32_t t = max(0, batch_end - warp_bin_final);
-             t < batch_size; ++t) {
-            bool valid = pixel_valid;
-            if (batch_end - t > bin_final) {
-                valid = false;
-            }
-            float ra = 1.0f;
-            float normal_render_dot = 0.f;
-            float local_hit_dist = 0.f;
-            if (valid) {
-                const vec4 xyz_opac = xyz_opacity_batch[t];
-                const float opac = xyz_opac[3];
-                const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
-                const vec3 scale = scale_batch[t];
-                const vec4 quat = quat_batch[t];
-                const mat3 R = quat_to_rotmat(quat);
-                const mat3 S_mat = mat3(
-                    1.0f / scale[0], 0.f, 0.f,
-                    0.f, 1.0f / scale[1], 0.f,
-                    0.f, 0.f, 1.0f / scale[2]);
-                const mat3 Mt = glm::transpose(R * S_mat);
-                const vec3 o_minus_mu = ray_o - xyz;
-                const vec3 gro = Mt * o_minus_mu;
-                const vec3 grd = Mt * ray_d;
-                const vec3 grd_n = safe_normalize(grd);
-                const vec3 gcrod = glm::cross(grd_n, gro);
-                const float grayDist = glm::dot(gcrod, gcrod);
-                const float power = -0.5f * grayDist;
-                const float vis = __expf(power);
-                float alpha = min(MAX_ALPHA, opac * vis);
-                if (power > 0.f || alpha < ALPHA_THRESHOLD) {
-                    alpha = 0.f;
-                }
-                ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
-
-                if (use_hit_distance) {
-                    const float hit_t = glm::dot(grd_n, -gro);
-                    const vec3 grds = scale * (grd_n * hit_t);
-                    local_hit_dist = glm::length(grds);
-                }
-                if (v_render_normals != nullptr) {
-                    const vec3 unnormalized_normal = R[2];
-                    const bool flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
-                    const vec3 unnormalized_flipped =
-                        flipped ? -unnormalized_normal : unnormalized_normal;
-                    const vec3 normal = safe_normalize(unnormalized_flipped);
-                    normal_render_dot = glm::dot(normal, v_render_n);
-                }
-            }
-            T *= ra;
-            const float fac = (1.0f - 1.0f / ra) * T;
-            float rgb_render_dot = 0.f;
-#pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k) {
-                const float rgb_k = (use_hit_distance && k == CDIM - 1)
-                    ? local_hit_dist
-                    : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
-                rgb_render_dot += rgb_k * v_render_c[k];
-            }
-            accum_render += rgb_render_dot * fac;
-            if (v_render_normals != nullptr) {
-                accum_normal += normal_render_dot * fac;
-            }
-        }
-    }
-
-    // Write (P, S_render, S_normal) for this chunk at its CSR slot.
-    const uint32_t base = bid * pixels_per_tile * CHUNK_STATE_DIM +
-                          tr * CHUNK_STATE_DIM;
-    chunk_PS[base + 0] = T;
-    chunk_PS[base + 1] = accum_render;
-    chunk_PS[base + 2] = accum_normal;
-
-    // Chunk 0 writes T_final for the scan kernel (works for both camera and lidar
-    // because K1 already resolved the correct pix_id via the proper pixel mapping).
-    if (chunk_id == 0) {
-        t_final_buf[tile_linear * pixels_per_tile + tr] =
-            pixel_valid ? 1.0f - render_alphas[pix_id] : 1.0f;
-    }
-}
-
-// Kernel 1.5: shared-memory-buffered prefix scan.
-//
-// Loads SCAN_TILE_CHUNKS chunks at a time (coalesced) into shared memory,
-// scans from shared memory (no global latency), writes back (coalesced).
-// This avoids the stride-768 global memory round-trips that caused 98.8%
-// no-eligible-warp stalls in the naive sequential scan.
-//
-// Grid: {num_tiles, 1, 1}. Block: {pixels_per_tile, 1, 1} = {256, 1, 1}.
-// Shared memory: SCAN_TILE_CHUNKS * pixels_per_tile * CHUNK_STATE_DIM floats.
-// 16 chunks × 256 pixels × 3 floats × 4B = 48 KiB — fits within the default
-// 48 KiB per-block shmem on every arch we target (no opt-in needed), and leaves
-// room for multiple blocks/SM to keep occupancy up.  (The old value of 32
-// required 96 KiB, which exceeded sm_75's 64 KiB cap and starved occupancy
-// on sm_86/sm_89 where the opt-in limit is 99-100 KiB.)
-constexpr uint32_t SCAN_TILE_CHUNKS = 16;
-
-template <typename scalar_t>
-__global__ void rasterize_prologue_scan_kernel(
-    const scalar_t *__restrict__ t_final_buf,
-    const bool *__restrict__ masks,                  // [num_tiles] or nullptr
-    const int32_t *__restrict__ chunk_offsets,       // [num_tiles + 1]
-    const uint32_t pixels_per_tile,
-    scalar_t *__restrict__ chunk_PS                  // CSR-packed
-)
-{
-    const uint32_t tile_linear = blockIdx.x;
-    const uint32_t pixel = threadIdx.x;
-    // Block size is always pixels_per_tile (see launcher); no partial blocks.
-
-    // Masked tiles are not read by K2 either, so skip the scan entirely.
-    // This lets us drop the `chunk_states.zero_()` memset in the launcher.
-    if (masks != nullptr && !masks[tile_linear]) {
-        return;
-    }
-
-    // CSR: chunk-slots for this tile span [chunk_offsets[t], chunk_offsets[t+1]).
-    const uint32_t chunk_base_slot = static_cast<uint32_t>(chunk_offsets[tile_linear]);
-    const uint32_t num_chunks_this_tile =
-        static_cast<uint32_t>(chunk_offsets[tile_linear + 1]) - chunk_base_slot;
-    if (num_chunks_this_tile == 0) {
-        // Empty tile: nothing to scan, nothing for K2 to read.
-        return;
-    }
-
-    const float T_final =
-        t_final_buf[tile_linear * pixels_per_tile + pixel];
-
-    const uint32_t tile_base =
-        chunk_base_slot * pixels_per_tile * CHUNK_STATE_DIM;
-    const uint32_t pixel_stride = pixels_per_tile * CHUNK_STATE_DIM;
-
-    // Shared memory: [SCAN_TILE_CHUNKS][pixels_per_tile][CHUNK_STATE_DIM]
-    extern __shared__ float shmem[];
-
-    float exc_P = 1.0f;
-    float exc_Sr = 0.0f;
-    float exc_Sn = 0.0f;
-
-    for (uint32_t c_base = 0; c_base < num_chunks_this_tile;
-         c_base += SCAN_TILE_CHUNKS) {
-        const uint32_t c_end =
-            min(c_base + SCAN_TILE_CHUNKS, num_chunks_this_tile);
-        const uint32_t tile_count = c_end - c_base;
-
-        // ---- Load chunk state into shmem (stride-3 per thread — the AoS
-        // ----  [chunk][pixel][state] layout is not fully coalesced). ----
-        for (uint32_t c = 0; c < tile_count; ++c) {
-            const uint32_t g_idx =
-                tile_base + (c_base + c) * pixel_stride + pixel * CHUNK_STATE_DIM;
-            const uint32_t s_idx =
-                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
-            shmem[s_idx + 0] = chunk_PS[g_idx + 0];
-            shmem[s_idx + 1] = chunk_PS[g_idx + 1];
-            shmem[s_idx + 2] = chunk_PS[g_idx + 2];
-        }
-        __syncthreads();
-
-        // ---- Scan from shared memory (no global latency) ----
-        for (uint32_t c = 0; c < tile_count; ++c) {
-            const uint32_t s_idx =
-                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
-            const float Pc = shmem[s_idx + 0];
-            const float Src = shmem[s_idx + 1];
-            const float Snc = shmem[s_idx + 2];
-            const float new_P = Pc * exc_P;
-            const float new_Sr = Src * exc_P + exc_Sr;
-            const float new_Sn = Snc * exc_P + exc_Sn;
-            // Write resolved prologue to shared memory.
-            shmem[s_idx + 0] = exc_P * T_final;
-            shmem[s_idx + 1] = exc_Sr * T_final;
-            shmem[s_idx + 2] = exc_Sn * T_final;
-            exc_P = new_P;
-            exc_Sr = new_Sr;
-            exc_Sn = new_Sn;
-        }
-        __syncthreads();
-
-        // ---- Coalesced write back ----
-        for (uint32_t c = 0; c < tile_count; ++c) {
-            const uint32_t g_idx =
-                tile_base + (c_base + c) * pixel_stride + pixel * CHUNK_STATE_DIM;
-            const uint32_t s_idx =
-                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
-            chunk_PS[g_idx + 0] = shmem[s_idx + 0];
-            chunk_PS[g_idx + 1] = shmem[s_idx + 1];
-            chunk_PS[g_idx + 2] = shmem[s_idx + 2];
-        }
-        __syncthreads();
-    }
-}
-
 // Kernel 2: gradient pass. Same CTA structure and inner loop as the original
-// kernel but with: (1) chunk_id decoded from grid x, (2) initial state read
-// from chunk_states, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
+// kernel but with: (1) chunk_id decoded from grid x, (2) initial state
+// materialised directly from the fwd-persisted `fwd_chunk_state` tensor via
+// one CDIM dot + one vec3 dot per thread — no separate state-scan or
+// prefix-scan kernels, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
 // via atomicAdd (multiple chunks per pixel).
 //
 // Grid: 1D {total_chunks, 1, 1}; each CTA's (tile_linear, chunk_id) is decoded
@@ -805,15 +447,18 @@ __global__ void rasterize_gradient_bwd_kernel(
     scalar_t *__restrict__ v_colors,   // [B, C, N, CDIM] or [nnz, CDIM]
     scalar_t *__restrict__ v_opacities, // [B, C, N] or [nnz]
     scalar_t *__restrict__ v_rays,     // [B, C, image_height, image_width, 6]
-    // chunk state input (from K1.5 prefix scan; CSR-packed)
-    const scalar_t *__restrict__ chunk_states, // [total_chunks, pixels_per_tile, 3]
-    const int32_t *__restrict__ chunk_offsets  // [num_tiles + 1]
+    // Fwd-persisted per-chunk cumulative state (CSR-packed; see
+    // `RasterizeChunkCSR.h`). Layout per slot: [T, pix_out[CDIM],
+    // normal_out[3]]. Slot c=0 is the terminal fwd state (used as
+    // `_final` reference); slot c=chunk_id is this CTA's boundary.
+    const scalar_t *__restrict__ fwd_chunk_state, // [total_chunks, pixels_per_tile, 1+CDIM+3]
+    const int32_t *__restrict__ chunk_offsets     // [num_tiles + 1]
 )
 {
-    // ---- Preamble: same CSR decode as K1 (chunk decode, pixel map, ray gen) ----
-    // NOTE: This duplicates K1's preamble intentionally. Factoring into a
-    // __device__ function risks register spills from the additional call frame,
-    // which would reduce occupancy on the register-pressure-sensitive K2 path.
+    // ---- Preamble: CSR chunk decode, pixel map, ray gen, fwd-state load ----
+    // K2 is the only bwd kernel in this path. The chunk-start accumulators
+    // are derived from `fwd_chunk_state` further down via one CDIM dot +
+    // one vec3 dot per thread.
     auto block = cg::this_thread_block();
     const uint32_t num_tiles_total = (B * C) * tile_height * tile_width;
     const uint32_t bid = block.group_index().x;
@@ -888,28 +533,85 @@ __global__ void rasterize_gradient_bwd_kernel(
     const bool pixel_valid = inside && ray.valid_flag;
     const int32_t bin_final = pixel_valid ? last_ids[pix_id] : 0;
 
-    // ---- Read chunk prologue from temp memory (CSR slot = bid) ----
-    const uint32_t cs_base = bid * pixels_per_tile * CHUNK_STATE_DIM +
-                             tr * CHUNK_STATE_DIM;
-    float T = chunk_states[cs_base + 0];
-    float render_accum_dot = chunk_states[cs_base + 1];
-    float normal_accum_dot = chunk_states[cs_base + 2];
-
     const float T_final = pixel_valid ? 1.0f - render_alphas[pix_id] : 1.0f;
 
     // ---- Per-pixel gradients (same as original kernel) ----
+    // These are loaded BEFORE the chunk-state materialisation below so the
+    // CDIM / vec3 dots can be fused in the same arithmetic region without
+    // a second pass over v_render_c / v_render_n.
     float v_render_c[CDIM];
 #pragma unroll
     for (uint32_t k = 0; k < CDIM; ++k) {
         v_render_c[k] = pixel_valid ? v_render_colors[pix_id * CDIM + k] : 0.f;
     }
     const float v_render_a = pixel_valid ? v_render_alphas[pix_id] : 0.f;
-    
+
     vec3 v_render_n = vec3(0.f);
     if (v_render_normals != nullptr && pixel_valid) {
         v_render_n.x = v_render_normals[pix_id * 3 + 0];
         v_render_n.y = v_render_normals[pix_id * 3 + 1];
         v_render_n.z = v_render_normals[pix_id * 3 + 2];
+    }
+
+    // ---- Materialise chunk-start state from `fwd_chunk_state` ----------------
+    // The monolithic bwd recurrence satisfies, at the start of bwd chunk c:
+    //   T_start_c          = T_fwd at fwd-batch num_batches-1-c*CHUNK_BATCHES
+    //   render_accum_dot_c = dot(v_render_c, pix_out_final - pix_out_boundary_c)
+    //   normal_accum_dot_c = dot(v_render_n, normal_out_final - normal_out_boundary_c)
+    // where slot c=0 IS the terminal fwd state (see `RasterizeChunkCSR.h`).
+    //
+    // CSR slot layout: `[T, pix_out[CDIM], normal_out[3]]` per pixel-per-slot.
+    //   - This CTA's boundary slot: `bid` (=chunk_offsets[tile]+chunk_id).
+    //   - The terminal slot for this tile: `chunk_offsets[tile_linear]` (c=0).
+    //
+    // int64 offset arithmetic: `total_chunks * pixels_per_tile * STATE_DIM` can
+    // exceed 2^31 on dense scenes at CDIM=24+ (≈18M intersections). The fwd
+    // persist path already uses int64; bwd matches.
+    constexpr uint32_t STATE_DIM = 1 + CDIM + 3;
+    constexpr uint32_t PIX_OFFSET = 1;
+    constexpr uint32_t NORMAL_OFFSET = 1 + CDIM;
+    const int64_t terminal_slot =
+        static_cast<int64_t>(chunk_offsets[tile_linear]);
+    const int64_t ppt64 = static_cast<int64_t>(pixels_per_tile);
+    const int64_t sd64 = static_cast<int64_t>(STATE_DIM);
+    const int64_t tr64 = static_cast<int64_t>(tr);
+    const int64_t terminal_base =
+        terminal_slot * ppt64 * sd64 + tr64 * sd64;
+    const int64_t boundary_base =
+        static_cast<int64_t>(bid) * ppt64 * sd64 + tr64 * sd64;
+
+    // T starts at the persisted fwd cumulative transmittance at this chunk's
+    // boundary — no further scaling needed (see math in file header).
+    float T = fwd_chunk_state[boundary_base + 0];
+
+    // render_accum_dot = dot(v_render_c, pix_out_final - pix_out_boundary)
+    // Streaming per-k load keeps the register footprint scalar (one `delta`
+    // in flight at a time) rather than materialising pix_out_boundary[CDIM]
+    // as live registers — critical for K2's already-tight register budget.
+    float render_accum_dot = 0.f;
+#pragma unroll
+    for (uint32_t k = 0; k < CDIM; ++k) {
+        const float pix_final_k = fwd_chunk_state[terminal_base + PIX_OFFSET + k];
+        const float pix_boundary_k = fwd_chunk_state[boundary_base + PIX_OFFSET + k];
+        const float delta_k = pix_final_k - pix_boundary_k;
+        render_accum_dot += delta_k * v_render_c[k];
+    }
+
+    // normal_accum_dot = dot(v_render_n, normal_final - normal_boundary).
+    // fwd always zero-fills the normal slot when `return_normals` is false,
+    // so reading unconditionally is safe. Guarded by the nullptr check to
+    // skip three loads + three muls when normals are disabled.
+    float normal_accum_dot = 0.f;
+    if (v_render_normals != nullptr) {
+        const float nx_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 0];
+        const float ny_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 1];
+        const float nz_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 2];
+        const float nx_boundary = fwd_chunk_state[boundary_base + NORMAL_OFFSET + 0];
+        const float ny_boundary = fwd_chunk_state[boundary_base + NORMAL_OFFSET + 1];
+        const float nz_boundary = fwd_chunk_state[boundary_base + NORMAL_OFFSET + 2];
+        normal_accum_dot = (nx_final - nx_boundary) * v_render_n.x
+                         + (ny_final - ny_boundary) * v_render_n.y
+                         + (nz_final - nz_boundary) * v_render_n.z;
     }
     float background_render_dot = 0.f;
     if (pixel_valid && backgrounds != nullptr) {
@@ -1272,6 +974,15 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
     const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
+    // CSR chunk structure precomputed by the forward pass
+    const at::Tensor chunks_per_tile,  // [num_tiles] int32
+    const at::Tensor chunk_offsets,    // [num_tiles + 1] int32
+    const int64_t total_chunks,        // scalar, equals chunk_offsets[num_tiles]
+    // Per-chunk cumulative state persisted by the fwd kernel at every
+    // CHUNK_BATCHES boundary. K2 reads this directly and folds the
+    // derivation of the starting accumulators into its preamble, so no
+    // separate state-scan or prefix-scan kernels are needed.
+    const at::Tensor fwd_chunk_state,  // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
     // outputs
     at::Tensor v_means,      // [..., N, 3]
     at::Tensor v_quats,      // [..., N, 4]
@@ -1282,6 +993,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 ) {
     bool packed = opacities.dim() == 1;
     TORCH_CHECK(!packed, "packed opacities are not supported in the 3DGS world-space backward");
+    (void)chunks_per_tile;  // only used for the shape check below
 
     uint32_t N = packed ? 0 : means.size(-2);   // number of gaussians
     uint32_t B = means.numel() / (N * 3);       // number of batches
@@ -1322,6 +1034,19 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         "Unsupported number of channels: ", channels,
         " (check GSPLAT_NUM_CHANNELS)");
 
+    const uint32_t pixels_per_tile = tile_size * tile_size;
+    const uint32_t num_tiles = I * tile_height * tile_width;
+
+    // CSR chunk structure was computed in the forward pass (shared kernel
+    // `compute_chunks_per_tile_kernel` lives in `RasterizeChunkCSR.h`) and
+    // is threaded through `save_for_backward`. We consume the precomputed
+    // tensors directly, avoiding the kernel launch + cumsum + blocking
+    // `.item<int32_t>()` readback that used to live here on every bwd.
+    TORCH_CHECK(chunks_per_tile.numel() == static_cast<int64_t>(num_tiles),
+                "chunks_per_tile has wrong size");
+    TORCH_CHECK(chunk_offsets.numel() == static_cast<int64_t>(num_tiles) + 1,
+                "chunk_offsets has wrong size");
+
     auto launch_kernel = [&]<typename ChannelsT>() {
         constexpr uint32_t CDIM = ChannelsT::value;
 
@@ -1329,56 +1054,24 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             tile_size * tile_size *
             (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * cdim_smem_stride<CDIM>());
 
-        const uint32_t pixels_per_tile = tile_size * tile_size;
-        const uint32_t num_tiles = I * tile_height * tile_width;
-
-        // --- Compute per-tile chunk counts and CSR offsets on device ---
-        // This replaces the old `tile_offsets.cpu()` + CPU-loop, which forced a
-        // synchronous D2H copy + O(num_tiles) host scan on every backward pass.
-        // One small int scalar readback (total_chunks) is needed to size the grid
-        // and the CSR temp buffer — orders of magnitude cheaper than the old sync.
-        auto int_opts = means.options().dtype(at::kInt);
-        auto chunks_per_tile_t = at::empty({static_cast<int64_t>(num_tiles)}, int_opts);
-        {
-            const uint32_t threads_per_block = 256;
-            const uint32_t blocks =
-                (num_tiles + threads_per_block - 1) / threads_per_block;
-            compute_chunks_per_tile_kernel
-                <<<blocks, threads_per_block, 0,
-                   at::cuda::getCurrentCUDAStream()>>>(
-                    tile_offsets.const_data_ptr<int32_t>(),
-                    num_tiles, n_isects, pixels_per_tile,
-                    chunks_per_tile_t.data_ptr<int32_t>());
-        }
-
-        // chunk_offsets[0..num_tiles]: exclusive prefix sum with a trailing sum.
-        // Built as concat({0}, cumsum(chunks_per_tile)) so chunk_offsets[t] gives
-        // tile t's starting CSR slot and chunk_offsets[num_tiles] == total_chunks.
-        auto chunk_offsets_tail = at::cumsum(chunks_per_tile_t, 0, at::kInt);
-        auto chunk_offsets_t = at::cat(
-            {at::zeros({1}, int_opts), chunk_offsets_tail});
-        // NOTE: .item<int32_t>() is a blocking D2H readback on the default stream.
-        // This is far cheaper than the previous host-side scan over tile_offsets,
-        // but it still forces a CPU<->GPU sync and is therefore NOT compatible
-        // with CUDA graph capture. Callers inside torch.cuda.graph(...) that need
-        // this backward must replace the readback with an upper-bound grid size +
-        // in-kernel early-out on chunk_offsets[num_tiles].
-        const int64_t total_chunks =
-            chunk_offsets_t[static_cast<int64_t>(num_tiles)].item<int32_t>();
-
-        if (total_chunks == 0) {
-            // No chunk-slots (e.g., all tiles empty after masking); nothing to do.
-            return;
-        }
-
-        // CSR-packed temp buffer: sized exactly to total_chunks slots, not the
-        // worst-tile product (that was the OOM vector on dense/skewed scenes).
-        // No zero-init: K1 writes every launched (tile, chunk, pixel); K1.5/K2
-        // skip masked tiles entirely so their slots are not consumed.
-        const int64_t chunk_state_numel =
-            total_chunks * pixels_per_tile * CHUNK_STATE_DIM;
-        auto chunk_states = at::empty(
-            {chunk_state_numel}, means.options().dtype(at::kFloat));
+        // Shape parity check for the fwd-persisted state. fwd allocates with
+        // shape `[total_chunks, pixels_per_tile, 1 + CDIM + 3]` and fills all
+        // boundaries (including early-exit tiles) with terminal state, so K2
+        // can read every slot unconditionally. Check each dim — matching numel
+        // alone would accept a transposed tensor with the same total element
+        // count but wrong stride, silently corrupting K2's reads.
+        const int64_t state_dim =
+            /*T*/ 1 + static_cast<int64_t>(CDIM) + /*normal*/ 3;
+        TORCH_CHECK(fwd_chunk_state.dim() == 3,
+                    "fwd_chunk_state must be 3-D (got ",
+                    fwd_chunk_state.dim(), "-D)");
+        TORCH_CHECK(fwd_chunk_state.size(0) == total_chunks &&
+                        fwd_chunk_state.size(1) == static_cast<int64_t>(pixels_per_tile) &&
+                        fwd_chunk_state.size(2) == state_dim,
+                    "fwd_chunk_state has wrong shape (got [",
+                    fwd_chunk_state.size(0), ", ", fwd_chunk_state.size(1),
+                    ", ", fwd_chunk_state.size(2), "], expected [",
+                    total_chunks, ", ", pixels_per_tile, ", ", state_dim, "])");
 
         // Common kernel argument block.
         const auto *means_ptr = reinterpret_cast<const vec3 *>(means.const_data_ptr<float>());
@@ -1417,76 +1110,18 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         auto *v_opacities_ptr = v_opacities.data_ptr<float>();
         auto *v_rays_ptr = v_rays.has_value()
             ? v_rays.value().data_ptr<float>() : nullptr;
-        auto *chunk_ptr = chunk_states.data_ptr<float>();
+        const auto *fwd_chunk_state_ptr =
+            fwd_chunk_state.const_data_ptr<float>();
 
-        // T_final buffer for the scan kernel (avoids lidar pixel mapping in scan).
-        // Written by K1's chunk_id==0 block for every tile with
-        // `num_chunks_this_tile > 0`; K1.5 skips masked and empty tiles before
-        // reading it, so every slot K1.5 consumes is written. `at::empty` is
-        // therefore sufficient -- no fill kernel launch needed.
-        auto t_final = at::empty(
-            {static_cast<int64_t>(num_tiles * pixels_per_tile)},
-            means.options().dtype(at::kFloat));
-        auto *t_final_ptr = t_final.data_ptr<float>();
+        const auto *chunk_offsets_ptr = chunk_offsets.const_data_ptr<int32_t>();
 
-        const auto *chunk_offsets_ptr = chunk_offsets_t.const_data_ptr<int32_t>();
-
-        // ---- Kernel 1: state scan, 1D grid over CSR chunk-slots ----
-        dim3 k1_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
-        int64_t k1_shmem =
-            pixels_per_tile *
-            (sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * cdim_smem_stride<CDIM>());
-        if (cudaFuncSetAttribute(
-                rasterize_state_scan_bwd_kernel<CDIM, float>,
-                cudaFuncAttributeMaxDynamicSharedMemorySize,
-                k1_shmem) != cudaSuccess) {
-            AT_ERROR("Failed to set shmem for state-scan kernel (",
-                     k1_shmem, " bytes).");
-        }
-        rasterize_state_scan_bwd_kernel<CDIM, float>
-            <<<k1_grid, threads, k1_shmem,
-               at::cuda::getCurrentCUDAStream()>>>(
-                B, C, N, n_isects,
-                means_ptr, quats_ptr, scales_ptr,
-                colors_ptr, opacities_ptr,
-                masks_ptr,
-                image_width, image_height, tile_size,
-                tile_width, tile_height,
-                viewmats0_ptr, viewmats1_ptr, Ks_ptr,
-                camera_model,
-                rs_type,
-                rays_ptr,
-                radial_ptr, tangential_ptr, thin_prism_ptr,
-                ftheta_device_coeffs, lidar_device_coeffs,
-                external_distortion_device_params,
-                tile_off_gpu, flatten_ptr,
-                use_hit_distance,
-                render_alphas_ptr, last_ids_ptr,
-                v_render_c_ptr, v_render_n_ptr,
-                chunk_ptr, t_final_ptr, chunk_offsets_ptr);
-
-        // ---- Kernel 1.5: prologue scan (shared-memory buffered), 1 CTA / tile ----
-        {
-            dim3 scan_grid = {num_tiles, 1, 1};
-            dim3 scan_threads = {pixels_per_tile, 1, 1};
-            int64_t scan_shmem =
-                SCAN_TILE_CHUNKS * pixels_per_tile * CHUNK_STATE_DIM *
-                sizeof(float);
-            if (cudaFuncSetAttribute(
-                    rasterize_prologue_scan_kernel<float>,
-                    cudaFuncAttributeMaxDynamicSharedMemorySize,
-                    scan_shmem) != cudaSuccess) {
-                AT_ERROR("Failed to set shmem for scan kernel (",
-                         scan_shmem, " bytes).");
-            }
-            rasterize_prologue_scan_kernel<float>
-                <<<scan_grid, scan_threads, scan_shmem,
-                   at::cuda::getCurrentCUDAStream()>>>(
-                    t_final_ptr, masks_ptr, chunk_offsets_ptr,
-                    pixels_per_tile, chunk_ptr);
-        }
-
-        // ---- Kernel 2: gradient, 1D grid matching K1 ----
+        // ---- Kernel 2: gradient, 1D grid over CSR chunk-slots ----
+        // K1 and K1.5 are gone. K2's preamble loads the
+        // per-chunk boundary and terminal state from `fwd_chunk_state` and
+        // materialises the starting accumulators via one CDIM dot + one vec3
+        // dot per thread — replacing the per-chunk scan that K1+K1.5 used to
+        // run, at the cost of one extra CSR slot read per chunk (the terminal
+        // slot).
         dim3 k2_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
         if (cudaFuncSetAttribute(
                 rasterize_gradient_bwd_kernel<CDIM, float>,
@@ -1517,11 +1152,12 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 v_render_c_ptr, v_render_a_ptr, v_render_n_ptr,
                 v_means_ptr, v_quats_ptr, v_scales_ptr,
                 v_colors_ptr, v_opacities_ptr, v_rays_ptr,
-                chunk_ptr, chunk_offsets_ptr);
+                fwd_chunk_state_ptr, chunk_offsets_ptr);
     };
     const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
+
 } // namespace gsplat
 
 #endif

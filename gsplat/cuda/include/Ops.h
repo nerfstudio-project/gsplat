@@ -566,7 +566,7 @@ projection_ut_3dgs_fused(
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 );
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_from_world_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor &means,     // [..., N, 3]
@@ -642,7 +642,13 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     // gradients of outputs
     const at::Tensor &v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor &v_render_alphas, // [..., C, image_height, image_width, 1]
-    const at::optional<at::Tensor> &v_render_normals // [..., C, image_height, image_width, 3]
+    const at::optional<at::Tensor> &v_render_normals, // [..., C, image_height, image_width, 3]
+    // CSR chunk structure (from fwd; threaded through save_for_backward)
+    const at::Tensor &chunks_per_tile, // [num_tiles] int32
+    const at::Tensor &chunk_offsets,   // [num_tiles + 1] int32
+    int64_t total_chunks,              // scalar; equals chunk_offsets[num_tiles]
+    // Per-chunk cumulative (T, pix_out, normal_out) persisted by the fwd pass.
+    const at::Tensor &fwd_chunk_state  // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
 );
 // Fused MCMC perturbation: inject noise into positions based on covariance
 void mcmc_perturb_positions(
