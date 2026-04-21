@@ -35,11 +35,18 @@ export GSPLAT_INPUT_CAPTURE_RASTERIZATION=/tmp/gsplat_inputs:1
 python your_app.py
 ```
 
-The value format is `<output_path>:<range_spec>`:
+The value is a comma-delimited list of specs, each of the form
+`<output_path>:<range_spec>`:
 
 - `<path>:<stop>` captures calls `0..stop-1`
 - `<path>:<start>:<stop>` captures calls `start..stop-1`
 - `<path>:<start>:<stop>:<step>` captures strided calls
+
+Multiple specs let you capture different call indices to different output
+paths in a single run — useful when one process makes several kinds of
+rasterization calls (e.g. a camera pass followed by a lidar pass) and you
+want each written to its own file. The call-index ranges across specs must
+not overlap.
 
 Examples:
 
@@ -49,6 +56,8 @@ export GSPLAT_INPUT_CAPTURE_RASTERIZATION=/tmp/gsplat_inputs:5:8
 export GSPLAT_INPUT_CAPTURE_RASTERIZATION=raster:10:20:2
 export GSPLAT_INPUT_CAPTURE_DIR=/tmp/gsplat-captures
 export GSPLAT_INPUT_CAPTURE_RASTERIZATION=raster:3
+# Capture call 0 as camera and call 1 as lidar:
+export GSPLAT_INPUT_CAPTURE_RASTERIZATION=/tmp/camera:1,/tmp/lidar:1:2
 ```
 
 Captured files are written with a numeric suffix such as
@@ -222,19 +231,24 @@ def capture_inputs(*, envvar: str) -> Callable[[_F], _F]:
     When the environment variable is not set the original function is returned
     unchanged with zero overhead.
 
-    Format: <envvar>=<output_path>:<range_spec>
+    Format: ``<envvar>=<spec>[,<spec>...]`` where each ``<spec>`` is
+    ``<output_path>:<range_spec>``.
 
     <range_spec> follows Python range() / tensor-slice conventions:
       - ``stop``             — capture calls 0, 1, ..., stop-1
       - ``start:stop``       — capture calls start, start+1, ..., stop-1
       - ``start:stop:step``  — capture calls start, start+step, ..., < stop
 
-    Integers are scanned from the right of the value; everything to the left
-    of them is the output path.  If the path is relative and
+    Within each spec, integers are scanned from the right; everything to the
+    left of them is the output path.  If the path is relative and
     ``GSPLAT_INPUT_CAPTURE_DIR`` is set, that directory is prepended.  If no
     file extension is given, ``.pt`` is used.  Each captured call is saved as
     ``<stem>_<zero-padded index><ext>``, with enough zero-padding so that all
-    indices in the range have the same number of digits.
+    indices across all specs share the same number of digits.
+
+    Passing multiple comma-separated specs lets a single run route different
+    call indices to different output paths (e.g. camera vs lidar calls).
+    Ranges across specs must be disjoint.
 
     All gsplat C++ custom classes support pickle via ``def_pickle`` in
     ``ext.cpp``, so ``torch.save`` handles them natively.
@@ -260,45 +274,72 @@ def capture_inputs(*, envvar: str) -> Callable[[_F], _F]:
         if not env:
             return fn
 
-        # Parse integers from the right; everything else is the output path.
-        parts = env.split(":")
-        range_ints: list[int] = []
-        path_end = len(parts)
-        for i in range(len(parts) - 1, -1, -1):
-            try:
-                range_ints.insert(0, int(parts[i]))
-                path_end = i
-            except ValueError:
-                break
-        if not range_ints:
-            raise ValueError(
-                f"{envvar}: expected <path>:<stop>, <path>:<start>:<stop>, or "
-                f"<path>:<start>:<stop>:<step>, got {env!r}"
-            )
-        if any(v < 0 for v in range_ints):
-            raise ValueError(
-                f"{envvar}: negative values are not supported, got {env!r}"
-            )
-        if len(range_ints) >= 2 and range_ints[1] < range_ints[0]:
-            raise ValueError(
-                f"{envvar}: stop ({range_ints[1]}) must be >= start ({range_ints[0]}), got {env!r}"
-            )
-        output_path = ":".join(parts[:path_end])
-        capture_range = range(*range_ints)
-
-        # Resolve output path: apply capture dir if path is relative, add
-        # default extension if none given.
         capture_dir = os.environ.get("GSPLAT_INPUT_CAPTURE_DIR")
-        if capture_dir and not os.path.isabs(output_path):
-            output_path = os.path.join(capture_dir, output_path)
-        stem, ext = os.path.splitext(output_path)
-        if not ext:
-            ext = ".pt"
 
-        # Zero-pad index so all filenames sort lexicographically.
-        if not capture_range:
-            raise ValueError(f"{envvar}: empty range (nothing to capture), got {env!r}")
-        n_digits = len(str(max(capture_range)))
+        # Parse the comma-delimited list of specs. Each spec is parsed
+        # independently into its own (stem, ext, capture_range).
+        specs: list[tuple[str, str, range]] = []
+        for spec_str in env.split(","):
+            spec_str = spec_str.strip()
+            if not spec_str:
+                continue
+            parts = spec_str.split(":")
+            range_ints: list[int] = []
+            path_end = len(parts)
+            for i in range(len(parts) - 1, -1, -1):
+                try:
+                    range_ints.insert(0, int(parts[i]))
+                    path_end = i
+                except ValueError:
+                    break
+            if not range_ints:
+                raise ValueError(
+                    f"{envvar}: expected <path>:<stop>, <path>:<start>:<stop>, or "
+                    f"<path>:<start>:<stop>:<step> in each spec, got {spec_str!r}"
+                )
+            if any(v < 0 for v in range_ints):
+                raise ValueError(
+                    f"{envvar}: negative values are not supported, got {spec_str!r}"
+                )
+            if len(range_ints) >= 2 and range_ints[1] < range_ints[0]:
+                raise ValueError(
+                    f"{envvar}: stop ({range_ints[1]}) must be >= start ({range_ints[0]}), got {spec_str!r}"
+                )
+            output_path = ":".join(parts[:path_end])
+            capture_range = range(*range_ints)
+            if not capture_range:
+                raise ValueError(
+                    f"{envvar}: empty range (nothing to capture), got {spec_str!r}"
+                )
+
+            # Resolve output path: apply capture dir if path is relative, add
+            # default extension if none given.
+            if capture_dir and not os.path.isabs(output_path):
+                output_path = os.path.join(capture_dir, output_path)
+            stem, ext = os.path.splitext(output_path)
+            if not ext:
+                ext = ".pt"
+
+            specs.append((stem, ext, capture_range))
+
+        if not specs:
+            raise ValueError(f"{envvar}: no specs provided, got {env!r}")
+
+        # Ensure call-index ranges don't overlap across specs — otherwise we'd
+        # need an arbitrary tie-break when a call matches several specs.
+        seen_calls: dict[int, int] = {}
+        for spec_idx, (_stem, _ext, capture_range) in enumerate(specs):
+            for c in capture_range:
+                if c in seen_calls:
+                    raise ValueError(
+                        f"{envvar}: call index {c} is claimed by multiple specs "
+                        f"(specs {seen_calls[c]} and {spec_idx}), got {env!r}"
+                    )
+                seen_calls[c] = spec_idx
+
+        # Zero-pad index so all filenames sort lexicographically across specs.
+        n_digits = len(str(max(seen_calls)))
+        total_captures = sum(len(r) for _s, _e, r in specs)
 
         # Track all active capture decorators so multiple instrumented functions
         # can coexist in one process without exiting early.
@@ -314,7 +355,14 @@ def capture_inputs(*, envvar: str) -> Callable[[_F], _F]:
         def _wrapper(*args: Any, **kwargs: Any) -> Any:
             nonlocal call_count, captures_done
 
-            if call_count in capture_range:
+            matching_spec: Optional[tuple[str, str, range]] = None
+            for spec in specs:
+                if call_count in spec[2]:
+                    matching_spec = spec
+                    break
+
+            if matching_spec is not None:
+                stem, ext, _capture_range = matching_spec
                 # Bind by signature so saved inputs are stable even when callers
                 # mix positional and keyword arguments.
                 bound = sig.bind(*args, **kwargs)
@@ -332,7 +380,7 @@ def capture_inputs(*, envvar: str) -> Callable[[_F], _F]:
                 captures_done += 1
                 print(
                     f"[gsplat.profile] Captured {fn.__name__} inputs "
-                    f"({captures_done}/{len(capture_range)}, call {call_count}) "
+                    f"({captures_done}/{total_captures}, call {call_count}) "
                     f"to {save_path}"
                 )
                 print(
@@ -344,7 +392,7 @@ def capture_inputs(*, envvar: str) -> Callable[[_F], _F]:
                         print(f"  {k}: shape={list(v.shape)}, dtype={v.dtype}")
                     elif v is not None:
                         print(f"  {k}: {type(v).__name__} = {v}")
-                if captures_done >= len(capture_range):
+                if captures_done >= total_captures:
                     _pending_captures.discard(capture_id)
                     if not _pending_captures:
                         raise SystemExit("[gsplat.profile] All captures done, exiting.")
