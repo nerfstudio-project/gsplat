@@ -59,7 +59,13 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     scalar_t
         *__restrict__ render_colors, // [I, image_height, image_width, CDIM]
     scalar_t *__restrict__ render_alphas, // [I, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids        // [I, image_height, image_width]
+    int32_t *__restrict__ last_ids,       // [I, image_height, image_width]
+    scalar_t
+        *__restrict__ render_median, // [I, image_height, image_width, 1]
+                                     // depth of the Gaussian that causes
+                                     // transmittance to cross 0.5, or the
+                                     // last-hit depth as a fallback.
+    int32_t *__restrict__ median_ids // [I, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -75,6 +81,8 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     render_colors += image_id * image_height * image_width * CDIM;
     render_alphas += image_id * image_height * image_width;
     last_ids += image_id * image_height * image_width;
+    render_median += image_id * image_height * image_width;
+    median_ids += image_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += image_id * CDIM;
     }
@@ -130,6 +138,14 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
+
+    // median depth tracking: record the depth of the Gaussian whose
+    // contribution drops T across 0.5. If T never crosses 0.5 fall back to the
+    // last hit depth (0.0 if no hits at all).
+    float median_depth = 0.0f;
+    uint32_t median_idx = 0u;
+    float last_hit_depth = 0.0f;
+    bool median_found = false;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
@@ -190,6 +206,17 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
             }
             cur_idx = batch_start + t;
 
+            // Track last hit depth (depth is stored as the last channel of
+            // colors, consistent with the existing D/ED plumbing and 2DGS).
+            const float dep = c_ptr[CDIM - 1];
+            last_hit_depth = dep;
+            // Median depth: first Gaussian that causes T to drop below 0.5.
+            if (!median_found && T > 0.5f && next_T <= 0.5f) {
+                median_depth = dep;
+                median_idx = batch_start + t;
+                median_found = true;
+            }
+
             T = next_T;
         }
     }
@@ -209,6 +236,14 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         }
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+
+        // Median depth: if transmittance never crossed 0.5 fall back to the
+        // last contributing Gaussian's depth (0.0 if there were no hits).
+        if (!median_found) {
+            median_depth = last_hit_depth;
+        }
+        render_median[pix_id] = median_depth;
+        median_ids[pix_id] = static_cast<int32_t>(median_idx);
     }
 }
 
@@ -229,9 +264,11 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // outputs
-    at::Tensor renders, // [..., image_height, image_width, channels]
-    at::Tensor alphas,  // [..., image_height, image_width]
-    at::Tensor last_ids // [..., image_height, image_width]
+    at::Tensor renders,       // [..., image_height, image_width, channels]
+    at::Tensor alphas,        // [..., image_height, image_width]
+    at::Tensor last_ids,      // [..., image_height, image_width]
+    at::Tensor render_median, // [..., image_height, image_width, 1]
+    at::Tensor median_ids     // [..., image_height, image_width]
 ) {
     bool packed = means2d.dim() == 2;
 
@@ -286,7 +323,9 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
             flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
-            last_ids.data_ptr<int32_t>()
+            last_ids.data_ptr<int32_t>(),
+            render_median.data_ptr<float>(),
+            median_ids.data_ptr<int32_t>()
         );
 }
 
@@ -308,7 +347,9 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         const at::Tensor flatten_ids,                                          \
         at::Tensor renders,                                                    \
         at::Tensor alphas,                                                     \
-        at::Tensor last_ids                                                    \
+        at::Tensor last_ids,                                                   \
+        at::Tensor render_median,                                              \
+        at::Tensor median_ids                                                  \
     );
 
 GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)

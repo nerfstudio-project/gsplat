@@ -840,7 +840,8 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [..., tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
-) -> Tuple[Tensor, Tensor]:
+    return_median: bool = False,
+) -> Tuple[Tensor, ...]:
     """Rasterizes Gaussians to pixels.
 
     Args:
@@ -857,12 +858,20 @@ def rasterize_to_pixels(
         masks: Optional tile mask to skip rendering GS to masked tiles. [..., tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+        return_median: If True, additionally returns per-pixel median depth, defined
+            as the value of the last channel of ``colors`` for the Gaussian whose
+            contribution causes the accumulated transmittance to drop across 0.5.
+            If the threshold is never crossed the last contributing Gaussian's value
+            is returned; if no Gaussian hits the pixel the value is 0. This output
+            is non-differentiable. Default: False.
 
     Returns:
         A tuple:
 
         - **Rendered colors**. [..., image_height, image_width, channels]
         - **Rendered alphas**. [..., image_height, image_width, 1]
+        - **Rendered median depth** (only when ``return_median=True``).
+          [..., image_height, image_width, 1]
     """
 
     image_dims = means2d.shape[:-2]
@@ -941,7 +950,7 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
+    render_colors, render_alphas, render_median, _median_ids = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
@@ -958,6 +967,8 @@ def rasterize_to_pixels(
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
+    if return_median:
+        return render_colors, render_alphas, render_median
     return render_colors, render_alphas
 
 
@@ -1724,10 +1735,14 @@ class _RasterizeToPixels(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
-            "rasterize_to_pixels_3dgs_fwd"
-        )(
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        (
+            render_colors,
+            render_alphas,
+            last_ids,
+            render_median,
+            median_ids,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_3dgs_fwd")(
             means2d,
             conics,
             colors,
@@ -1758,15 +1773,20 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
 
+        # Median depth outputs are forward-only (no backward).
+        ctx.mark_non_differentiable(render_median, median_ids)
+
         # double to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas
+        return render_colors, render_alphas, render_median, median_ids
 
     @staticmethod
     def backward(
         ctx,
         v_render_colors: Tensor,  # [..., H, W, 3]
         v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_render_median: Tensor,  # [..., H, W, 1], unused (non-differentiable)
+        v_median_ids: Tensor,  # [..., H, W], unused (non-differentiable)
     ):
         (
             means2d,
