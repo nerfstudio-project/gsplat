@@ -236,6 +236,15 @@ class Config:
     with_ut: bool = False
     with_eval3d: bool = False
 
+    # FlowSplat: Bayesian uncertainty on SH coefficients via diagonal Gaussian posterior.
+    flowsplat: bool = False
+    # Entropy regularizer weight when flowsplat is enabled (maximized => subtracted from loss).
+    lambda_entropy: float = 0.01
+    # Number of Monte Carlo samples drawn at inference time for uncertainty rendering.
+    num_uncertainty_samples: int = 16
+    # Initial value for sh0_logvar / shN_logvar (sigma = exp(0.5 * logvar); -4 => sigma ~ 0.135).
+    logvar_init: float = -4.0
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -283,6 +292,8 @@ def create_splats_with_optimizers(
     device: str = "cuda",
     world_rank: int = 0,
     world_size: int = 1,
+    flowsplat: bool = False,
+    logvar_init: float = -4.0,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
     if init_type == "sfm" or init_type == "lidar":
         points = torch.from_numpy(parser.points).float()
@@ -321,6 +332,11 @@ def create_splats_with_optimizers(
         colors[:, 0, :] = rgb_to_sh(rgbs)
         params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), sh0_lr))
         params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), shN_lr))
+        if flowsplat:
+            sh0_logvar = torch.full_like(colors[:, :1, :], float(logvar_init))
+            shN_logvar = torch.full_like(colors[:, 1:, :], float(logvar_init))
+            params.append(("sh0_logvar", torch.nn.Parameter(sh0_logvar), sh0_lr))
+            params.append(("shN_logvar", torch.nn.Parameter(shN_logvar), shN_lr))
     else:
         # features will be used for appearance and view-dependent shading
         features = torch.rand(N, feature_dim)  # [N, feature_dim]
@@ -352,6 +368,18 @@ def create_splats_with_optimizers(
         for name, _, lr in params
     }
     return splats, optimizers
+
+
+def _sample_shs(
+    splats: torch.nn.ParameterDict, flowsplat: bool, sample: bool
+) -> Tuple[Tensor, Tensor]:
+    """Return (sh0, shN). With flowsplat+sample, reparameterize mu + sigma * eps."""
+    sh0 = splats["sh0"]
+    shN = splats["shN"]
+    if flowsplat and sample:
+        sh0 = sh0 + torch.exp(0.5 * splats["sh0_logvar"]) * torch.randn_like(sh0)
+        shN = shN + torch.exp(0.5 * splats["shN_logvar"]) * torch.randn_like(shN)
+    return sh0, shN
 
 
 class Runner:
@@ -452,6 +480,11 @@ class Runner:
             raise ValueError(
                 f"PPISP post-processing requires MCMCStrategy at the moment."
             )
+        if cfg.flowsplat and cfg.app_opt:
+            raise ValueError(
+                "FlowSplat reparameterizes sh0/shN and is incompatible with --app_opt "
+                "(which uses learned `features`/`colors` instead)."
+            )
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
@@ -477,6 +510,8 @@ class Runner:
             device=self.device,
             world_rank=world_rank,
             world_size=world_size,
+            flowsplat=cfg.flowsplat,
+            logvar_init=cfg.logvar_init,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
@@ -634,6 +669,7 @@ class Runner:
         frame_idcs: Optional[Tensor] = None,
         camera_idcs: Optional[Tensor] = None,
         exposure: Optional[Tensor] = None,
+        sample_shs: bool = False,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -654,7 +690,8 @@ class Runner:
             colors = colors + self.splats["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+            sh0, shN = _sample_shs(self.splats, self.cfg.flowsplat, sample=sample_shs)
+            colors = torch.cat([sh0, shN], 1)  # [N, K, 3]
 
         if rasterize_mode is None:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -888,6 +925,7 @@ class Runner:
                 frame_idcs=image_ids,
                 camera_idcs=data["camera_idx"].to(device),
                 exposure=exposure,
+                sample_shs=cfg.flowsplat,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -959,6 +997,13 @@ class Runner:
                 loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
             if cfg.scale_reg > 0.0:
                 loss += cfg.scale_reg * torch.exp(self.splats["scales"]).mean()
+            if cfg.flowsplat:
+                # Maximize diagonal-Gaussian entropy (proportional to logvar) by subtracting it.
+                entropy_term = -0.5 * (
+                    self.splats["sh0_logvar"].mean()
+                    + self.splats["shN_logvar"].mean()
+                )
+                loss = loss + cfg.lambda_entropy * entropy_term
 
             loss.backward()
 
@@ -1132,6 +1177,15 @@ class Runner:
             else:
                 assert_never(self.cfg.strategy)
 
+            # FlowSplat: verify densification kept logvar tensors in lockstep with their means.
+            if cfg.flowsplat and (step + 1) % 500 == 0:
+                assert (
+                    self.splats["sh0"].shape == self.splats["sh0_logvar"].shape
+                ), f"sh0/sh0_logvar drift at step {step}: {self.splats['sh0'].shape} vs {self.splats['sh0_logvar'].shape}"
+                assert (
+                    self.splats["shN"].shape == self.splats["shN_logvar"].shape
+                ), f"shN/shN_logvar drift at step {step}: {self.splats['shN'].shape} vs {self.splats['shN_logvar'].shape}"
+
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
@@ -1153,6 +1207,41 @@ class Runner:
                 )
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
+
+    @torch.no_grad()
+    def render_with_uncertainty(
+        self,
+        camtoworlds: Tensor,
+        Ks: Tensor,
+        width: int,
+        height: int,
+        num_samples: int,
+        **kwargs,
+    ) -> Dict[str, Tensor]:
+        """Monte Carlo render over SH posterior. Returns mean/var/std of RGB over K samples."""
+        assert self.cfg.flowsplat, "render_with_uncertainty requires --flowsplat"
+        mean = None
+        mean_sq = None
+        for _ in range(num_samples):
+            colors, _, _ = self.rasterize_splats(
+                camtoworlds=camtoworlds,
+                Ks=Ks,
+                width=width,
+                height=height,
+                sample_shs=True,
+                **kwargs,
+            )
+            colors = colors[..., :3].clamp(0.0, 1.0)
+            if mean is None:
+                mean = colors.clone()
+                mean_sq = colors * colors
+            else:
+                mean += colors
+                mean_sq += colors * colors
+        mean = mean / num_samples
+        var = (mean_sq / num_samples) - mean * mean
+        var = var.clamp_min(0.0)
+        return {"mean_rgb": mean, "var_rgb": var, "std_rgb": torch.sqrt(var)}
 
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):
@@ -1207,6 +1296,29 @@ class Runner:
                     f"{self.render_dir}/{stage}_step{step}_{i:04d}.png",
                     canvas,
                 )
+
+                if cfg.flowsplat:
+                    unc = self.render_with_uncertainty(
+                        camtoworlds=camtoworlds,
+                        Ks=Ks,
+                        width=width,
+                        height=height,
+                        num_samples=cfg.num_uncertainty_samples,
+                        sh_degree=cfg.sh_degree,
+                        near_plane=cfg.near_plane,
+                        far_plane=cfg.far_plane,
+                        masks=masks,
+                        frame_idcs=None,
+                        camera_idcs=data["camera_idx"].to(device),
+                        exposure=exposure,
+                    )
+                    std_rgb = unc["std_rgb"].squeeze(0).cpu().numpy()  # [H, W, 3]
+                    std_scale = max(float(std_rgb.max()), 1e-6)
+                    std_vis = (std_rgb / std_scale * 255.0).clip(0, 255).astype(np.uint8)
+                    imageio.imwrite(
+                        f"{self.render_dir}/{stage}_step{step}_{i:04d}_std.png",
+                        std_vis,
+                    )
 
                 pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
                 colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
