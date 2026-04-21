@@ -320,6 +320,20 @@ def capture_inputs(*, envvar: str) -> Callable[[_F], _F]:
             if not ext:
                 ext = ".pt"
 
+            # Create the output directory up-front so a bad path fails before
+            # training starts rather than mid-run when torch.save() would
+            # otherwise raise FileNotFoundError / PermissionError deep inside
+            # the render loop.
+            target_dir = os.path.dirname(stem)
+            if target_dir:
+                try:
+                    os.makedirs(target_dir, exist_ok=True)
+                except OSError as e:
+                    raise OSError(
+                        f"{envvar}: cannot create capture directory {target_dir!r} "
+                        f"for spec {spec_str!r}: {e}"
+                    ) from e
+
             specs.append((stem, ext, capture_range))
 
         if not specs:
