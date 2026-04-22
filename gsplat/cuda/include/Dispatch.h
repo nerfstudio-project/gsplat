@@ -414,9 +414,14 @@ bool dispatch_type_param(ParamT& param, Remaining&&... remaining) {
 // invoked. Returns false if an IntParam's runtime value did not match any of its
 // allowed compile-time values — in this case the callable is NOT invoked.
 //
+// Marked [[nodiscard]] because silently ignoring the return value means a
+// runtime mismatch would skip the callable without any indication at the call
+// site — callers must explicitly handle the false case (typically by erroring
+// or falling back to a default path).
+//
 // Starts the recursion with an empty Resolved<> type list.
 template <typename... Args>
-bool dispatch(Args&&... args) {
+[[nodiscard]] bool dispatch(Args&&... args) {
     return detail::dispatch_impl<detail::Resolved<>>(std::forward<Args>(args)...);
 }
 
