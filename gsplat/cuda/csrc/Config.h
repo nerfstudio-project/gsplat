@@ -68,6 +68,16 @@
 #    define GSPLAT_BUILD_CAMERA_WRAPPERS 0
 #endif
 
+// Bilateral-grid affine-matrix dimensions (see FusedBgGridLosses). The grid
+// stores one 3x4 affine matrix per (b, d, h, w) cell, flattened into 12
+// channels. This layout is structural — the kernels and the Python wrapper
+// both hard-assume a 3x4 (12-channel) affine — so it is fixed here and is
+// deliberately NOT -D-overrideable (a different count would silently
+// disagree with the wrapper's cell-count math).
+#define LOSSES_GRID_NUM_ROWS     3
+#define LOSSES_GRID_NUM_COLS     4
+#define LOSSES_GRID_NUM_CHANNELS (LOSSES_GRID_NUM_ROWS * LOSSES_GRID_NUM_COLS)
+
 #ifndef GSPLAT_NUM_CHANNELS
 #    define GSPLAT_NUM_CHANNELS 1, 2, 3, 4, 5, 6, 8, 9, 16, 17, 21, 23, 24, 32, 33, 64, 65, 128, 129, 256, 257, 512, 513
 #endif
