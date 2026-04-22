@@ -564,6 +564,7 @@ def rasterization(
     _validate_3dgut_rasterize_mode(
         rasterize_mode, with_ut=with_ut, with_eval3d=with_eval3d
     )
+
     if colors is None and has_color:
         raise ValueError(
             f"colors must be provided when render_mode='{render_mode}' includes RGB. "
@@ -982,7 +983,7 @@ def rasterization(
                     output_splits=collected_splits,
                 )
             else:
-                means2d, depths, conics, opacities = all_to_all_tensor_list(
+                (means2d, depths, conics, opacities) = all_to_all_tensor_list(
                     world_size,
                     [means2d, depths, conics, opacities],
                     cnts,
@@ -1055,7 +1056,7 @@ def rasterization(
                 )
                 proj_features = reshape_view(C, proj_features, N_world)
             else:
-                means2d, depths, conics, opacities = all_to_all_tensor_list(
+                (means2d, depths, conics, opacities) = all_to_all_tensor_list(
                     world_size,
                     [
                         means2d.flatten(0, 1),
@@ -1072,6 +1073,8 @@ def rasterization(
             conics = reshape_view(C, conics, N_world)
             opacities = reshape_view(C, opacities, N_world)
         trace_pop()  # dist-scatter
+
+    # Rasterize to pixels.
     # Append depth channel to proj_features if needed.
     # Layout is [proj_features(D+E) | depth(1)], with depth always last.
     # In depth-only modes proj_features may not be set yet (no colors, no extra_signals).

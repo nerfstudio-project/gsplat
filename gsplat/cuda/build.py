@@ -141,12 +141,13 @@ def get_build_parameters():
         else:
             extra_cflags += ["/O2", "-DNDEBUG"]
             extra_cuda_cflags += ["-O2", "-DNDEBUG"]
+
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
 
     # Silencing of warnings
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
     extra_cuda_cflags += ["-diag-suppress", "20012,186"]
-    if sys.platform != "win32":
+    if not os.name == "nt":
         extra_cflags += ["-Wno-attributes"]
         # #pragma unroll is standard CUDA idiom but unknown to gcc
         extra_cflags += ["-Wno-unknown-pragmas"]

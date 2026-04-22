@@ -567,7 +567,7 @@ def _fully_fused_projection_with_ut(
     radius = torch.ceil(
         torch.minimum(
             # Clamp to 0 before sqrt: with negative UT center weight the covariance
-            # diagonal can be negative even after blur.  These Gaussians are culled
+            # diagonal can be negative even after blur. These Gaussians are culled
             # by valid_gaussian above, but sqrt(negative) produces NaN in the tensor
             # and autograd propagates NaN gradients to valid Gaussians too.
             extend[..., None] * torch.sqrt(cov_diag.clamp(min=0.0)),
