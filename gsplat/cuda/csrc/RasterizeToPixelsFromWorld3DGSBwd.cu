@@ -293,6 +293,70 @@ __device__ __forceinline__ WorldRay compute_world_ray_bwd(
     return ray;
 }
 
+// Pixel-coordinate resolution shared by K1 and K2. Handles the LIDAR-vs-camera
+// split: for LIDAR, looks up (row, col) from the per-tile element map and
+// marks inside=false for threads past element_count; for camera paths,
+// derives (row, col) from the tile origin + per-thread 2D rank and clamps to
+// the image extent. Also returns the clamped linear pix_id used by every
+// downstream load/store. Marked `__forceinline__` so K1/K2 keep their current
+// register counts; the call site would otherwise lose the fast path.
+struct PixelCoords
+{
+    uint32_t row;
+    uint32_t col;
+    int32_t pix_id;
+    bool inside;
+};
+
+__device__ __forceinline__ PixelCoords compute_pixel_coords_bwd(
+    const CameraModelType camera_model_type,
+    const uint32_t tile_id,
+    const uint32_t tile_row,
+    const uint32_t tile_col,
+    const uint32_t tile_size,
+    const uint32_t tr,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice>& lidar_device_coeffs
+)
+{
+    PixelCoords out;
+    if (camera_model_type == CameraModelType::LIDAR)
+    {
+        assert(lidar_device_coeffs);
+        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
+        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
+        const int tile_element_id = static_cast<int>(tr);
+        if (tile_element_id < element_count)
+        {
+            out.col = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // col_azimuth
+            out.row = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // row_elevation
+            assert(0 <= out.row);
+            assert(out.row < image_height);
+            assert(0 <= out.col);
+            assert(out.col < image_width);
+            out.inside = true;
+        }
+        else
+        {
+            out.row = 0;
+            out.col = 0;
+            out.inside = false;
+        }
+    }
+    else
+    {
+        out.row = tile_row * tile_size + threadIdx.y;
+        out.col = tile_col * tile_size + threadIdx.x;
+        out.inside = (out.row < image_height && out.col < image_width);
+    }
+    // Clamp to last pixel for out-of-bounds threads (both branches produce
+    // valid (row, col) in range, so this is a min() rather than a branch).
+    out.pix_id = min(static_cast<int32_t>(out.row * image_width + out.col),
+                     static_cast<int32_t>(image_width * image_height) - 1);
+    return out;
+}
+
 // Kernel 1: per-chunk state computation. One CTA per (tile, local_chunk) pair,
 // packed as a 1D grid of size total_chunks = chunk_offsets[num_tiles].
 // Each CTA processes CHUNK_BATCHES batches, state-only (no gradient chain),
@@ -400,41 +464,14 @@ __global__ void rasterize_state_scan_bwd_kernel(
     // No padding blocks to handle: the grid is sized to total_chunks, so every
     // launched block has chunk_id < num_chunks for its tile.
 
-    // Pixel mapping (camera vs lidar — same as original kernel).
-    uint32_t i, j;
-    bool inside;
-    if(camera_model_type == CameraModelType::LIDAR) {
-        assert(lidar_device_coeffs);
-        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
-        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
-        const int tile_element_id = tr;
-        if(tile_element_id < element_count)
-        {
-            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // col_azimuth
-            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // row_elevation
-            assert(0 <= i);
-            assert(i < image_height);
-            assert(0 <= j);
-            assert(j < image_width);
-            inside = true;
-        }
-        else
-        {
-            i = 0;
-            j = 0;
-            inside = false;
-        }
-    }
-    else
-    {
-        i = tile_row * tile_size + block.thread_index().y;
-        j = tile_col * tile_size + block.thread_index().x;
-        inside = (i < image_height && j < image_width);
-    }
-
-    // Clamp to last pixel for out-of-bounds threads.
-    const int32_t pix_id =
-        min(i * image_width + j, image_width * image_height - 1);
+    // Pixel mapping (camera vs lidar) — shared helper.
+    const PixelCoords pc = compute_pixel_coords_bwd(
+        camera_model_type, tile_id, tile_row, tile_col, tile_size, tr,
+        image_width, image_height, lidar_device_coeffs);
+    const uint32_t i = pc.row;
+    const uint32_t j = pc.col;
+    const bool inside = pc.inside;
+    const int32_t pix_id = pc.pix_id;
 
     // Ray generation (camera-model switch + explicit-rays path) is factored
     // into the shared compute_world_ray_bwd helper; see its definition above.
@@ -828,35 +865,14 @@ __global__ void rasterize_gradient_bwd_kernel(
     const uint32_t pixels_per_tile = tile_size * tile_size;
     // Grid sized to total_chunks (CSR); every launched block has a valid slot.
 
-    // Pixel mapping (camera vs lidar).
-    uint32_t i, j;
-    bool inside;
-    if(camera_model_type == CameraModelType::LIDAR) {
-        assert(lidar_device_coeffs);
-        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
-        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
-        const int tile_element_id = tr;
-        if(tile_element_id < element_count) {
-            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // col_azimuth
-            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // row_elevation
-            assert(0 <= i);
-            assert(i < image_height);
-            assert(0 <= j);
-            assert(j < image_width);
-            inside = true;
-        } else {
-            i = 0;
-            j = 0;
-            inside = false;
-        }
-    } else {
-        i = tile_row * tile_size + block.thread_index().y;
-        j = tile_col * tile_size + block.thread_index().x;
-        inside = (i < image_height && j < image_width);
-    }
-
-    const int32_t pix_id =
-        min(i * image_width + j, image_width * image_height - 1);
+    // Pixel mapping (camera vs lidar) — shared helper.
+    const PixelCoords pc = compute_pixel_coords_bwd(
+        camera_model_type, tile_id, tile_row, tile_col, tile_size, tr,
+        image_width, image_height, lidar_device_coeffs);
+    const uint32_t i = pc.row;
+    const uint32_t j = pc.col;
+    const bool inside = pc.inside;
+    const int32_t pix_id = pc.pix_id;
 
     // Ray generation — shared with K1 via compute_world_ray_bwd helper above.
     WorldRay ray = compute_world_ray_bwd<scalar_t>(
