@@ -35,7 +35,6 @@ namespace gsplat {
 // rasterize_to_pixels_3dgs
 /////////////////////////////////////////////////
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
@@ -57,7 +56,6 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     at::Tensor last_ids // [..., image_height, image_width]
 );
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
@@ -119,7 +117,6 @@ void launch_rasterize_to_indices_3dgs_kernel(
 // rasterize_to_pixels_2dgs
 /////////////////////////////////////////////////
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,        // [..., N, 2] or [nnz, 2]
@@ -145,7 +142,6 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     at::Tensor last_ids,       // [..., image_height, image_width]
     at::Tensor median_ids      // [..., image_height, image_width]
 );
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
@@ -216,7 +212,6 @@ void launch_rasterize_to_indices_2dgs_kernel(
 // rasterize_to_pixels_from_world_3dgs
 ///////////////////////////////////////////////////
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
@@ -257,7 +252,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     at::optional<at::Tensor> normals // [..., C, image_height, image_width, 3]
 );
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means,  // [..., N, 3]

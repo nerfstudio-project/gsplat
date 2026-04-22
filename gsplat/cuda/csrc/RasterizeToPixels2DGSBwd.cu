@@ -29,9 +29,11 @@
 #include "Common.h"
 #include "Rasterization.h"
 #include "Utils.cuh"
-#include "MacroUtils.h"
+#include "Dispatch.h"
 
 namespace gsplat {
+
+using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 
 namespace cg = cooperative_groups;
 
@@ -704,7 +706,6 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     }
 }
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
@@ -713,7 +714,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     const at::Tensor opacities,                 // [..., N] or [nnz]
     const at::Tensor normals,                   // [..., N, 3] or [nnz, 3]
     const at::Tensor densify,                   // [..., N, 2] or [nnz, 2]
-    const at::optional<at::Tensor> backgrounds, // [..., CDIM]
+    const at::optional<at::Tensor> backgrounds, // [..., channels]
     const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
@@ -723,7 +724,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
-    const at::Tensor render_colors, // [..., image_height, image_width, CDIM]
+    const at::Tensor render_colors, // [..., image_height, image_width, channels]
     const at::Tensor render_alphas, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
     const at::Tensor median_ids,    // [..., image_height, image_width]
@@ -755,114 +756,83 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     dim3 threads = {tile_size, tile_size, 1};
     dim3 grid = {I, tile_height, tile_width};
 
-    int64_t shmem_size =
-        tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(vec3) +
-         sizeof(vec3) + sizeof(float) * CDIM + sizeof(float) * 3);
-
     if (n_isects == 0) {
         // skip the kernel launch if there are no elements
         return;
     }
 
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    if (cudaFuncSetAttribute(
-            rasterize_to_pixels_2dgs_bwd_kernel<CDIM, float>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shmem_size
-        ) != cudaSuccess) {
-        AT_ERROR(
-            "Failed to set maximum shared memory size (requested ",
-            shmem_size,
-            " bytes), try lowering tile_size."
-        );
-    }
+    const int32_t channels = colors.size(-1);
+    TORCH_CHECK(SupportedChannels::contains(channels),
+        "Unsupported number of channels: ", channels,
+        " (check GSPLAT_NUM_CHANNELS)");
 
-    rasterize_to_pixels_2dgs_bwd_kernel<CDIM, float>
-        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-            I,
-            N,
-            n_isects,
-            packed,
-            reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
-            ray_transforms.const_data_ptr<float>(),
-            colors.const_data_ptr<float>(),
-            normals.const_data_ptr<float>(),
-            opacities.const_data_ptr<float>(),
-            backgrounds.has_value()
-                ? backgrounds.value().const_data_ptr<float>()
-                : nullptr,
-            masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
-            image_width,
-            image_height,
-            tile_size,
-            tile_width,
-            tile_height,
-            tile_offsets.const_data_ptr<int32_t>(),
-            flatten_ids.const_data_ptr<int32_t>(),
-            render_colors.const_data_ptr<float>(),
-            render_alphas.const_data_ptr<float>(),
-            last_ids.const_data_ptr<int32_t>(),
-            median_ids.const_data_ptr<int32_t>(),
-            v_render_colors.const_data_ptr<float>(),
-            v_render_alphas.const_data_ptr<float>(),
-            v_render_normals.const_data_ptr<float>(),
-            v_render_distort.const_data_ptr<float>(),
-            v_render_median.const_data_ptr<float>(),
-            v_means2d_abs.has_value()
-                ? reinterpret_cast<vec2 *>(
-                      v_means2d_abs.value().data_ptr<float>()
-                  )
-                : nullptr,
-            reinterpret_cast<vec2 *>(v_means2d.data_ptr<float>()),
-            v_ray_transforms.data_ptr<float>(),
-            v_colors.data_ptr<float>(),
-            v_opacities.data_ptr<float>(),
-            v_normals.data_ptr<float>(),
-            v_densify.data_ptr<float>()
-        );
+    auto launch_kernel = [&]<typename ChannelsT>() {
+        constexpr uint32_t CDIM = ChannelsT::value;
+
+        int64_t shmem_size =
+            tile_size * tile_size *
+            (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(vec3) +
+             sizeof(vec3) + sizeof(float) * CDIM + sizeof(float) * 3);
+
+        if (cudaFuncSetAttribute(
+                rasterize_to_pixels_2dgs_bwd_kernel<CDIM, float>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                shmem_size
+            ) != cudaSuccess) {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size,
+                " bytes), try lowering tile_size."
+            );
+        }
+
+        rasterize_to_pixels_2dgs_bwd_kernel<CDIM, float>
+            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                I,
+                N,
+                n_isects,
+                packed,
+                reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
+                ray_transforms.const_data_ptr<float>(),
+                colors.const_data_ptr<float>(),
+                normals.const_data_ptr<float>(),
+                opacities.const_data_ptr<float>(),
+                backgrounds.has_value()
+                    ? backgrounds.value().const_data_ptr<float>()
+                    : nullptr,
+                masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
+                image_width,
+                image_height,
+                tile_size,
+                tile_width,
+                tile_height,
+                tile_offsets.const_data_ptr<int32_t>(),
+                flatten_ids.const_data_ptr<int32_t>(),
+                render_colors.const_data_ptr<float>(),
+                render_alphas.const_data_ptr<float>(),
+                last_ids.const_data_ptr<int32_t>(),
+                median_ids.const_data_ptr<int32_t>(),
+                v_render_colors.const_data_ptr<float>(),
+                v_render_alphas.const_data_ptr<float>(),
+                v_render_normals.const_data_ptr<float>(),
+                v_render_distort.const_data_ptr<float>(),
+                v_render_median.const_data_ptr<float>(),
+                v_means2d_abs.has_value()
+                    ? reinterpret_cast<vec2 *>(
+                          v_means2d_abs.value().data_ptr<float>()
+                      )
+                    : nullptr,
+                reinterpret_cast<vec2 *>(v_means2d.data_ptr<float>()),
+                v_ray_transforms.data_ptr<float>(),
+                v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>(),
+                v_normals.data_ptr<float>(),
+                v_densify.data_ptr<float>()
+            );
+    };
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
-
-// Explicit Instantiation: this should match how it is being called in .cpp
-// file.
-// TODO: this is slow to compile, can we do something about it?
-#define __INS__(CDIM)                                                          \
-    template void launch_rasterize_to_pixels_2dgs_bwd_kernel<CDIM>(            \
-        const at::Tensor means2d,                                              \
-        const at::Tensor ray_transforms,                                       \
-        const at::Tensor colors,                                               \
-        const at::Tensor opacities,                                            \
-        const at::Tensor normals,                                              \
-        const at::Tensor densify,                                              \
-        const at::optional<at::Tensor> backgrounds,                            \
-        const at::optional<at::Tensor> masks,                                  \
-        const uint32_t image_width,                                            \
-        const uint32_t image_height,                                           \
-        const uint32_t tile_size,                                              \
-        const at::Tensor tile_offsets,                                         \
-        const at::Tensor flatten_ids,                                          \
-        const at::Tensor render_colors,                                        \
-        const at::Tensor render_alphas,                                        \
-        const at::Tensor last_ids,                                             \
-        const at::Tensor median_ids,                                           \
-        const at::Tensor v_render_colors,                                      \
-        const at::Tensor v_render_alphas,                                      \
-        const at::Tensor v_render_normals,                                     \
-        const at::Tensor v_render_distort,                                     \
-        const at::Tensor v_render_median,                                      \
-        at::optional<at::Tensor> v_means2d_abs,                                \
-        const at::Tensor v_means2d,                                            \
-        const at::Tensor v_ray_transforms,                                     \
-        const at::Tensor v_colors,                                             \
-        const at::Tensor v_opacities,                                          \
-        const at::Tensor v_normals,                                            \
-        const at::Tensor v_densify                                             \
-    );
-
-GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)
-#undef __INS__
 
 } // namespace gsplat
 

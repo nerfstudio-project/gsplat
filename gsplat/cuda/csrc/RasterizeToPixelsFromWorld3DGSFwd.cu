@@ -32,9 +32,11 @@
 #include "Cameras.cuh"
 #include "Lidars.cuh"
 #include "Utils.cuh"
-#include "MacroUtils.h"
+#include "Dispatch.h"
 
 namespace gsplat {
+
+using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 
 namespace cg = cooperative_groups;
 
@@ -532,7 +534,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     }
 }
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
@@ -593,23 +594,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
     // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch + scale_batch + normal_batch
     int64_t shmem_size =
-        tile_size * tile_size * 
+        tile_size * tile_size *
         (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3) + sizeof(vec3));
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    if (cudaFuncSetAttribute(
-        rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        shmem_size
-    ) != cudaSuccess) {
-        AT_ERROR(
-            "Failed to set maximum shared memory size (requested ",
-            shmem_size,
-            " bytes), try lowering tile_size."
-        );
-    }
 
     TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
     TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
@@ -630,108 +616,85 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         TORCH_CHECK(camera_model != CameraModelType::LIDAR, "If the sensor isn't lidar, lidar coefficients must not be given");
     }
 
-    rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>
-        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-            B,
-            C,
-            N,
-            n_isects,
-            packed,
-            reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
-            reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
-            reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
-            colors.const_data_ptr<float>(),
-            opacities.const_data_ptr<float>(),
-            backgrounds.has_value()
-                ? backgrounds.value().const_data_ptr<float>()
-                : nullptr,
-            masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
-            image_width,
-            image_height,
-            tile_size,
-            tile_width,
-            tile_height,
-            // camera model
-            viewmats0.const_data_ptr<float>(),
-            viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
-                                  : nullptr,
-            Ks.const_data_ptr<float>(),
-            camera_model,
-            // uncented transform
-            *ut_params,
-            rs_type,
-            rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
-            radial_coeffs.has_value()
-                ? radial_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            tangential_coeffs.has_value()
-                ? tangential_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            thin_prism_coeffs.has_value()
-                ? thin_prism_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            ftheta_device_coeffs,
-            lidar_device_coeffs,
-            external_distortion_device_params,
-            // intersections
-            tile_offsets.const_data_ptr<int32_t>(),
-            flatten_ids.const_data_ptr<int32_t>(),
-            use_hit_distance,
-            renders.data_ptr<float>(),
-            alphas.data_ptr<float>(),
-            normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
-            last_ids.data_ptr<int32_t>(),
-            sample_counts.has_value()
-                ? sample_counts.value().data_ptr<int32_t>()
-                : nullptr
-        );
+    const int32_t channels = colors.size(-1);
+    TORCH_CHECK(SupportedChannels::contains(channels),
+        "Unsupported number of channels: ", channels,
+        " (check GSPLAT_NUM_CHANNELS)");
+
+    auto launch_kernel = [&]<typename ChannelsT>() {
+        constexpr uint32_t CDIM = ChannelsT::value;
+
+        if (cudaFuncSetAttribute(
+            rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shmem_size
+        ) != cudaSuccess) {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size,
+                " bytes), try lowering tile_size."
+            );
+        }
+
+        rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>
+            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                B,
+                C,
+                N,
+                n_isects,
+                packed,
+                reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
+                reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
+                reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
+                colors.const_data_ptr<float>(),
+                opacities.const_data_ptr<float>(),
+                backgrounds.has_value()
+                    ? backgrounds.value().const_data_ptr<float>()
+                    : nullptr,
+                masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
+                image_width,
+                image_height,
+                tile_size,
+                tile_width,
+                tile_height,
+                // camera model
+                viewmats0.const_data_ptr<float>(),
+                viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
+                                      : nullptr,
+                Ks.const_data_ptr<float>(),
+                camera_model,
+                // uncented transform
+                *ut_params,
+                rs_type,
+                rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
+                radial_coeffs.has_value()
+                    ? radial_coeffs.value().const_data_ptr<float>()
+                    : nullptr,
+                tangential_coeffs.has_value()
+                    ? tangential_coeffs.value().const_data_ptr<float>()
+                    : nullptr,
+                thin_prism_coeffs.has_value()
+                    ? thin_prism_coeffs.value().const_data_ptr<float>()
+                    : nullptr,
+                ftheta_device_coeffs,
+                lidar_device_coeffs,
+                external_distortion_device_params,
+                // intersections
+                tile_offsets.const_data_ptr<int32_t>(),
+                flatten_ids.const_data_ptr<int32_t>(),
+                use_hit_distance,
+                renders.data_ptr<float>(),
+                alphas.data_ptr<float>(),
+                normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
+                last_ids.data_ptr<int32_t>(),
+                sample_counts.has_value()
+                    ? sample_counts.value().data_ptr<int32_t>()
+                    : nullptr
+            );
+    };
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
-
-// Explicit Instantiation: this should match how it is being called in .cpp
-// file.
-// TODO: this is slow to compile, can we do something about it?
-#define __INS__(CDIM)                                                          \
-    template void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM>( \
-        const at::Tensor means,                                                \
-        const at::Tensor quats,                                                \
-        const at::Tensor scales,                                               \
-        const at::Tensor colors,                                               \
-        const at::Tensor opacities,                                            \
-        const at::optional<at::Tensor> backgrounds,                            \
-        const at::optional<at::Tensor> masks,                                  \
-        const uint32_t image_width,                                            \
-        const uint32_t image_height,                                           \
-        const uint32_t tile_size,                                              \
-        const at::Tensor viewmats0,                                            \
-        const at::optional<at::Tensor> viewmats1,                              \
-        const at::Tensor Ks,                                                   \
-        const CameraModelType camera_model,                                    \
-        const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,     \
-        const ShutterType rs_type,                                             \
-        const at::optional<at::Tensor> rays,                                   \
-        const at::optional<at::Tensor> radial_coeffs,                          \
-        const at::optional<at::Tensor> tangential_coeffs,                      \
-        const at::optional<at::Tensor> thin_prism_coeffs,                      \
-        const c10::intrusive_ptr<FThetaCameraDistortionParameters>             \
-            &ftheta_coeffs,                                                    \
-        const at::optional<c10::intrusive_ptr<                                 \
-            RowOffsetStructuredSpinningLidarModelParametersExt>>               \
-            &lidar_coeffs,                                                     \
-        const at::optional<                                                    \
-            c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>   \
-            &external_distortion_params,                                       \
-        const at::Tensor tile_offsets,                                         \
-        const at::Tensor flatten_ids,                                          \
-        const bool use_hit_distance,                                           \
-        const at::Tensor renders,                                              \
-        const at::Tensor alphas,                                               \
-        const at::Tensor last_ids,                                             \
-        const at::optional<at::Tensor> sample_counts,                          \
-        const at::optional<at::Tensor> normals                                 \
-    );
-
-GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)
-#undef __INS__
 
 } // namespace gsplat
 

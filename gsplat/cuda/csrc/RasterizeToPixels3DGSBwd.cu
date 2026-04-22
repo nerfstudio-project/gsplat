@@ -29,9 +29,11 @@
 #include "Common.h"
 #include "Rasterization.h"
 #include "Utils.cuh"
-#include "MacroUtils.h"
+#include "Dispatch.h"
 
 namespace gsplat {
+
+using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 
 namespace cg = cooperative_groups;
 
@@ -300,7 +302,6 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     }
 }
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
@@ -342,96 +343,74 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     dim3 threads = {tile_size, tile_size, 1};
     dim3 grid = {I, tile_height, tile_width};
 
-    int64_t shmem_size =
-        tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(float) * CDIM);
-
     if (n_isects == 0) {
         // skip the kernel launch if there are no elements
         return;
     }
 
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    if (cudaFuncSetAttribute(
-            rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shmem_size
-        ) != cudaSuccess) {
-        AT_ERROR(
-            "Failed to set maximum shared memory size (requested ",
-            shmem_size,
-            " bytes), try lowering tile_size."
-        );
-    }
+    const int32_t channels = colors.size(-1);
+    TORCH_CHECK(SupportedChannels::contains(channels),
+        "Unsupported number of channels: ", channels,
+        " (check GSPLAT_NUM_CHANNELS)");
 
-    rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>
-        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-            I,
-            N,
-            n_isects,
-            packed,
-            reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
-            reinterpret_cast<const vec3 *>(conics.const_data_ptr<float>()),
-            colors.const_data_ptr<float>(),
-            opacities.const_data_ptr<float>(),
-            backgrounds.has_value()
-                ? backgrounds.value().const_data_ptr<float>()
-                : nullptr,
-            masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
-            image_width,
-            image_height,
-            tile_size,
-            tile_width,
-            tile_height,
-            tile_offsets.const_data_ptr<int32_t>(),
-            flatten_ids.const_data_ptr<int32_t>(),
-            render_alphas.const_data_ptr<float>(),
-            last_ids.const_data_ptr<int32_t>(),
-            v_render_colors.const_data_ptr<float>(),
-            v_render_alphas.const_data_ptr<float>(),
-            v_means2d_abs.has_value()
-                ? reinterpret_cast<vec2 *>(
-                      v_means2d_abs.value().data_ptr<float>()
-                  )
-                : nullptr,
-            reinterpret_cast<vec2 *>(v_means2d.data_ptr<float>()),
-            reinterpret_cast<vec3 *>(v_conics.data_ptr<float>()),
-            v_colors.data_ptr<float>(),
-            v_opacities.data_ptr<float>()
-        );
+    auto launch_kernel = [&]<typename ChannelsT>() {
+        constexpr uint32_t CDIM = ChannelsT::value;
+
+        int64_t shmem_size =
+            tile_size * tile_size *
+            (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(float) * CDIM);
+
+        if (cudaFuncSetAttribute(
+                rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                shmem_size
+            ) != cudaSuccess) {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size,
+                " bytes), try lowering tile_size."
+            );
+        }
+
+        rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>
+            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                I,
+                N,
+                n_isects,
+                packed,
+                reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
+                reinterpret_cast<const vec3 *>(conics.const_data_ptr<float>()),
+                colors.const_data_ptr<float>(),
+                opacities.const_data_ptr<float>(),
+                backgrounds.has_value()
+                    ? backgrounds.value().const_data_ptr<float>()
+                    : nullptr,
+                masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
+                image_width,
+                image_height,
+                tile_size,
+                tile_width,
+                tile_height,
+                tile_offsets.const_data_ptr<int32_t>(),
+                flatten_ids.const_data_ptr<int32_t>(),
+                render_alphas.const_data_ptr<float>(),
+                last_ids.const_data_ptr<int32_t>(),
+                v_render_colors.const_data_ptr<float>(),
+                v_render_alphas.const_data_ptr<float>(),
+                v_means2d_abs.has_value()
+                    ? reinterpret_cast<vec2 *>(
+                          v_means2d_abs.value().data_ptr<float>()
+                      )
+                    : nullptr,
+                reinterpret_cast<vec2 *>(v_means2d.data_ptr<float>()),
+                reinterpret_cast<vec3 *>(v_conics.data_ptr<float>()),
+                v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>()
+            );
+    };
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
-
-// Explicit Instantiation: this should match how it is being called in .cpp
-// file.
-// TODO: this is slow to compile, can we do something about it?
-#define __INS__(CDIM)                                                          \
-    template void launch_rasterize_to_pixels_3dgs_bwd_kernel<CDIM>(            \
-        const at::Tensor means2d,                                              \
-        const at::Tensor conics,                                               \
-        const at::Tensor colors,                                               \
-        const at::Tensor opacities,                                            \
-        const at::optional<at::Tensor> backgrounds,                            \
-        const at::optional<at::Tensor> masks,                                  \
-        uint32_t image_width,                                                  \
-        uint32_t image_height,                                                 \
-        uint32_t tile_size,                                                    \
-        const at::Tensor tile_offsets,                                         \
-        const at::Tensor flatten_ids,                                          \
-        const at::Tensor render_alphas,                                        \
-        const at::Tensor last_ids,                                             \
-        const at::Tensor v_render_colors,                                      \
-        const at::Tensor v_render_alphas,                                      \
-        at::optional<at::Tensor> v_means2d_abs,                                \
-        at::Tensor v_means2d,                                                  \
-        at::Tensor v_conics,                                                   \
-        at::Tensor v_colors,                                                   \
-        at::Tensor v_opacities                                                 \
-    );
-
-GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)
-#undef __INS__
 
 } // namespace gsplat
 
