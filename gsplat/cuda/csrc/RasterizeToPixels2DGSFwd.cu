@@ -407,10 +407,8 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
             }
             if (has_depth_channel) {
                 // Fix #863: replace packed Gaussian center depth
-                // with true ray-plane intersection depth:
-                // depth = 1 / dot(w_M, [px, py, 1])
-                const float isect_depth =
-                    1.0f / (w_M.x * px + w_M.y * py + w_M.z);
+                // with the Inria 2DGS ray-splat intersection depth.
+                const float isect_depth = s.x * w_M.x + s.y * w_M.y + w_M.z;
                 pix_out[CDIM - 1] +=
                     (isect_depth - c_ptr[CDIM - 1]) * vis;
             }
@@ -423,7 +421,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
 
             if (render_distort != nullptr) {
                 // the last channel of colors is depth
-                const float depth = 1.0f / (w_M.x * px + w_M.y * py + w_M.z);
+                const float depth = s.x * w_M.x + s.y * w_M.y + w_M.z;
                 // in nerfacc, loss_bi_0 = weights * t_mids *
                 // exclusive_sum(weights)
                 const float distort_bi_0 = vis * depth * (1.0f - T);
@@ -436,7 +434,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
 
             // compute median depth
             if (T > 0.5) {
-                median_depth = 1.0f / (w_M.x * px + w_M.y * py + w_M.z);
+                median_depth = s.x * w_M.x + s.y * w_M.y + w_M.z;
                 median_idx = batch_start + t;
             }
 
