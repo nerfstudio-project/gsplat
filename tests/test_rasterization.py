@@ -222,10 +222,10 @@ def gaussians(
                 [3],  # C (number of cameras)
                 [10_000],  # N (number of gaussians)
             ),
-            # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
-            # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
-            # signals case is the critical one — it produces 24 channels
-            # (3 RGB + 20 extra + 1 depth) which gets padded to CDIM=32.
+            # 3DGUT hit-distance modes: exercises `use_hit_distance` with the
+            # extra-signals plumbing. Channel counts produced (e.g. 24 = 3 RGB
+            # + 20 extra + 1 depth) must be present in `GSPLAT_NUM_CHANNELS` —
+            # see `pytest.ini` `NUM_CHANNELS`.
             product(
                 [False],  # per_view_color
                 [None],  # sh_degree
@@ -235,7 +235,7 @@ def gaussians(
                 [True],  # with_eval3d
                 [True],  # with_ut
                 ["pinhole"],  # camera_model
-                [None, (None, 20)],  # extra_signals_info — (None,20) triggers padding
+                [None, (None, 20)],  # extra_signals_info
                 [False],  # distributed
                 [3],  # C (number of cameras)
                 [10_000],  # N (number of gaussians)
