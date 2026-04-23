@@ -21,6 +21,7 @@
 #if GSPLAT_BUILD_3DGUT
 
 #include <ATen/Dispatch.h>
+#include <ATen/Functions.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAStream.h>
@@ -41,20 +42,340 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 
 namespace cg = cooperative_groups;
 
+// Pad CDIM to an odd stride when it would be even, so that the per-thread
+// STORE `rgbs_batch[tr * stride + k] = colors[...]` (K1 line ~453 / K2 line ~1030)
+// writes to distinct 32-bit banks across a warp.  With a stride S, the 32 lanes
+// in a warp land in banks (tr * S) mod 32 for tr in [0,32); that hits all 32
+// banks iff gcd(S, 32) == 1, i.e. S is odd.  The inner loop READ from a fixed
+// `t` and varying `k` is a broadcast-per-lane and is not the conflict site.
+// sizeof(float) == 4 → 32-bit banks; static_assert below pins that assumption.
+template <uint32_t CDIM>
+constexpr uint32_t cdim_smem_stride() {
+    static_assert(sizeof(float) == 4, "bank layout assumes 32-bit banks");
+    return (CDIM % 2 == 0) ? CDIM + 1 : CDIM;
+}
+
+// ---------------------------------------------------------------------------
+// Batch-parallel backward pass (replaces the old monolithic kernel).
+//
+// Previous path: one kernel per pixel-batch sequentially accumulated every
+// Gaussian per pixel, plus a host-side scan over tile_offsets.cpu() to size
+// temp memory. Two bottlenecks: sequential per-pixel dependency starved the
+// scheduler on tiles with many Gaussians, and the host-side scan forced a
+// synchronous D2H copy on every backward pass.
+//
+// New path launches the following kernels in sequence per backward pass:
+//
+//   0. CSR setup (compute_chunks_per_tile_kernel + at::cumsum + at::cat).
+//      Builds chunks_per_tile[t] and chunk_offsets[0..num_tiles] entirely on
+//      device, replacing the old tile_offsets.cpu() + CPU-loop. One small
+//      scalar readback (total_chunks) remains -- see launcher NOTE for the
+//      sync-point rationale and the graph-capture caveat.
+//
+//   1. rasterize_to_pixels_3dgs_eval_state_kernel (K1, "state scan"). Same
+//      CTA layout as the forward pass (256 threads, 256 pixels). Processes
+//      all Gaussians state-only (geometry -> alpha -> state update, NO
+//      gradient chain). Every CHUNK_BATCHES batches, writes the per-pixel
+//      compositing state (product P, render_accum_dot S_render,
+//      normal_accum_dot S_normal) to the CSR-packed temp buffer.
+//
+//   2. rasterize_prologue_scan_kernel (K1.5, "prologue scan"). In-place
+//      prefix scan over each tile's chunk-slots, turning each chunk's local
+//      state into the correct starting prologue (T, accumulators) that K2
+//      needs. Uses shared-memory buffering (SCAN_TILE_CHUNKS at a time) to
+//      avoid global-memory round-trip stalls.
+//
+//   3. rasterize_to_pixels_3dgs_eval_bwd_kernel (K2, "gradient"). Expanded
+//      grid -- one CTA per (tile x chunk). Reads its chunk's prologue from
+//      the temp buffer, processes CHUNK_BATCHES batches of Gaussians with
+//      the full gradient chain. Chunks are INDEPENDENT -- no sequential
+//      dependency between them -- exposing more work to the GPU scheduler
+//      and eliminating the sequential-tail latency that dominated the old
+//      kernel on tiles with many Gaussians.
+// ---------------------------------------------------------------------------
+
+// Number of batches per chunk. Each chunk is an independently-schedulable
+// unit of work in the gradient kernel. Smaller = more parallelism but more
+// temp memory and launch overhead.
+constexpr uint32_t CHUNK_BATCHES = 4;
+
+// Number of state floats per pixel per chunk: P, S_render, S_normal.
+constexpr uint32_t CHUNK_STATE_DIM = 3;
+
+// --- Helpers for CSR-packed chunk state ---
+//
+// Each tile contributes `chunks_per_tile[t]` chunk-slots to the flat
+// chunk_states buffer, with `chunk_offsets[t]` giving the starting slot of
+// tile t. `chunk_offsets[num_tiles]` is the total number of chunk-slots and
+// equals the CTA count for K1/K2. Per-tile padding (the old
+// `num_tiles × max_chunks` layout) is gone, which removes the dense-scene
+// OOM vector driven by the worst tile.
+
+// Populate chunks_per_tile[t] = ceil(ceil(range_t / pixels_per_tile) / CHUNK_BATCHES).
+// Single-dim launch, one thread per tile.
+__global__ void compute_chunks_per_tile_kernel(
+    const int32_t *__restrict__ tile_offsets,
+    const uint32_t num_tiles,
+    const uint32_t n_isects,
+    const uint32_t pixels_per_tile,
+    int32_t *__restrict__ chunks_per_tile
+) {
+    const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= num_tiles) {
+        return;
+    }
+    const int32_t start = tile_offsets[t];
+    const int32_t end = (t + 1 < num_tiles)
+        ? tile_offsets[t + 1]
+        : static_cast<int32_t>(n_isects);
+    const int32_t range = end - start;
+    if (range <= 0) {
+        chunks_per_tile[t] = 0;
+        return;
+    }
+    const uint32_t num_batches =
+        (static_cast<uint32_t>(range) + pixels_per_tile - 1) / pixels_per_tile;
+    const uint32_t num_chunks =
+        (num_batches + CHUNK_BATCHES - 1) / CHUNK_BATCHES;
+    chunks_per_tile[t] = static_cast<int32_t>(num_chunks);
+}
+
+// Binary-search helper: given ascending `chunk_offsets[num_tiles + 1]`, find
+// tile t such that chunk_offsets[t] <= bid < chunk_offsets[t + 1]. Called once
+// per CTA in K1/K2; O(log num_tiles) ≈ 14 global-mem reads on a 10K-tile scene
+// and the reads hit L2 after the first CTA in the launch wave.
+__device__ __forceinline__ uint32_t find_tile_for_block(
+    const int32_t *__restrict__ chunk_offsets,
+    uint32_t num_tiles,
+    uint32_t bid
+) {
+    uint32_t lo = 0;
+    uint32_t hi = num_tiles;
+    while (lo < hi) {
+        const uint32_t mid = (lo + hi) >> 1;
+        if (static_cast<uint32_t>(chunk_offsets[mid + 1]) <= bid) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// Shared ray-generation helper used by K1 and K2. Takes the full camera-model
+// switch (pinhole / fisheye / ftheta / lidar × {windshield, empty distortion})
+// plus the "explicit rays" path, and returns the WorldRay for pixel (j, i) on
+// image `iid`. Marked `__forceinline__` so K2 keeps the register counts it had
+// when the block was inlined twice verbatim; the comment at K2's preamble
+// previously justified the duplication on occupancy grounds.
+template <typename scalar_t>
+__device__ __forceinline__ WorldRay compute_world_ray_bwd(
+    const uint32_t iid,
+    const uint32_t j,
+    const uint32_t i,
+    const int32_t pix_id,
+    const bool inside,
+    const scalar_t *__restrict__ rays,
+    const scalar_t *__restrict__ viewmats0,
+    const scalar_t *__restrict__ viewmats1,
+    const scalar_t *__restrict__ Ks,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const CameraModelType camera_model_type,
+    const ShutterType rs_type,
+    const scalar_t *__restrict__ radial_coeffs,
+    const scalar_t *__restrict__ tangential_coeffs,
+    const scalar_t *__restrict__ thin_prism_coeffs,
+    const FThetaCameraDistortionDeviceParams& ftheta_device_coeffs,
+    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice>& lidar_device_coeffs,
+    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams>& external_distortion_device_params
+) {
+    auto rs_params = RollingShutterParameters(
+        viewmats0 + iid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16);
+    WorldRay ray;
+    if (inside && rays == nullptr) {
+        if (camera_model_type == CameraModelType::PINHOLE) {
+            if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
+                if (external_distortion_device_params.has_value()) {
+                    using CameraModel = PerfectPinholeCameraModel<extdist::BivariateWindshieldModel>;
+                    CameraModel::KernelParameters kernel_params = {
+                        { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                        Ks,
+                    };
+                    CameraModel camera_model(kernel_params, iid);
+                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+                } else {
+                    using CameraModel = PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
+                    CameraModel::KernelParameters kernel_params = {
+                        { {image_width, image_height}, rs_type, {} },
+                        Ks,
+                    };
+                    CameraModel camera_model(kernel_params, iid);
+                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+                }
+            } else {
+                if (external_distortion_device_params.has_value()) {
+                    using CameraModel = OpenCVPinholeCameraModel<extdist::BivariateWindshieldModel>;
+                    CameraModel::KernelParameters kernel_params = {
+                        { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                        Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                    };
+                    CameraModel camera_model(kernel_params, iid);
+                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+                } else {
+                    using CameraModel = OpenCVPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
+                    CameraModel::KernelParameters kernel_params = {
+                        { {image_width, image_height}, rs_type, {} },
+                        Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                    };
+                    CameraModel camera_model(kernel_params, iid);
+                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+                }
+            }
+        } else if (camera_model_type == CameraModelType::FISHEYE) {
+            if (external_distortion_device_params.has_value()) {
+                using CameraModel = OpenCVFisheyeCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                    Ks, radial_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = OpenCVFisheyeCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks, radial_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
+        } else if (camera_model_type == CameraModelType::FTHETA) {
+            if (external_distortion_device_params.has_value()) {
+                using CameraModel = FThetaCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                    Ks, ftheta_device_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks, ftheta_device_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
+        } else if (camera_model_type == CameraModelType::LIDAR) {
+            using CameraModel = RowOffsetStructuredSpinningLidarModel;
+            assert(lidar_device_coeffs);
+            CameraModel::KernelParameters kernel_params = { *lidar_device_coeffs };
+            CameraModel camera_model(kernel_params, iid);
+            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+        } else {
+            assert(false);
+            ray.valid_flag = false;
+        }
+    } else {
+        // Explicit rays path — rays may be nullptr for inactive threads when inside==false.
+        ray.valid_flag = false;
+        if (inside) {
+            assert(rays != nullptr);
+            // TODO: use at least 3x64b loads instead of 6x32b
+            ray.ray_org = {rays[pix_id * 6 + 0], rays[pix_id * 6 + 1], rays[pix_id * 6 + 2]};
+            ray.ray_dir = {rays[pix_id * 6 + 3], rays[pix_id * 6 + 4], rays[pix_id * 6 + 5]};
+            ray.valid_flag = true;
+        }
+    }
+    return ray;
+}
+
+// Pixel-coordinate resolution shared by K1 and K2. Handles the LIDAR-vs-camera
+// split: for LIDAR, looks up (row, col) from the per-tile element map and
+// marks inside=false for threads past element_count; for camera paths,
+// derives (row, col) from the tile origin + per-thread 2D rank and clamps to
+// the image extent. Also returns the clamped linear pix_id used by every
+// downstream load/store. Marked `__forceinline__` so K1/K2 keep their current
+// register counts; the call site would otherwise lose the fast path.
+struct PixelCoords
+{
+    uint32_t row;
+    uint32_t col;
+    int32_t pix_id;
+    bool inside;
+};
+
+__device__ __forceinline__ PixelCoords compute_pixel_coords_bwd(
+    const CameraModelType camera_model_type,
+    const uint32_t tile_id,
+    const uint32_t tile_row,
+    const uint32_t tile_col,
+    const uint32_t tile_size,
+    const uint32_t tr,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice>& lidar_device_coeffs
+)
+{
+    PixelCoords out;
+    if (camera_model_type == CameraModelType::LIDAR)
+    {
+        assert(lidar_device_coeffs);
+        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
+        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
+        const int tile_element_id = static_cast<int>(tr);
+        if (tile_element_id < element_count)
+        {
+            out.col = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // col_azimuth
+            out.row = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // row_elevation
+            assert(0 <= out.row);
+            assert(out.row < image_height);
+            assert(0 <= out.col);
+            assert(out.col < image_width);
+            out.inside = true;
+        }
+        else
+        {
+            out.row = 0;
+            out.col = 0;
+            out.inside = false;
+        }
+    }
+    else
+    {
+        out.row = tile_row * tile_size + threadIdx.y;
+        out.col = tile_col * tile_size + threadIdx.x;
+        out.inside = (out.row < image_height && out.col < image_width);
+    }
+    // Clamp to last pixel for out-of-bounds threads (both branches produce
+    // valid (row, col) in range, so this is a min() rather than a branch).
+    out.pix_id = min(static_cast<int32_t>(out.row * image_width + out.col),
+                     static_cast<int32_t>(image_width * image_height) - 1);
+    return out;
+}
+
+// Kernel 1: per-chunk state computation. One CTA per (tile, local_chunk) pair,
+// packed as a 1D grid of size total_chunks = chunk_offsets[num_tiles].
+// Each CTA processes CHUNK_BATCHES batches, state-only (no gradient chain),
+// starting from zero prologue (T=1, accum=0, normal_accum=0). Writes the
+// chunk's composed (P, S_render, S_normal) per pixel.
+//
+// chunk_PS layout: [total_chunks][pixels_per_tile][CHUNK_STATE_DIM] (CSR).
 template <uint32_t CDIM, typename scalar_t>
-__global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+__global__ void rasterize_state_scan_bwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
-    const bool packed,
     // fwd inputs
     const vec3 *__restrict__ means,           // [B, N, 3]
     const vec4 *__restrict__ quats,           // [B, N, 4]
     const vec3 *__restrict__ scales,          // [B, N, 3]
     const scalar_t *__restrict__ colors,      // [B, C, N, CDIM] or [nnz, CDIM]
     const scalar_t *__restrict__ opacities,   // [B, C, N] or [nnz]
-    const scalar_t *__restrict__ backgrounds, // [B, C, CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [B, C, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
@@ -66,8 +387,394 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
     const scalar_t *__restrict__ Ks,        // [B, C, 3, 3]
     const CameraModelType camera_model_type,
-    // uncented transform
-    const UnscentedTransformParameters ut_params,    
+    const ShutterType rs_type,
+    const scalar_t *__restrict__ rays,              // [B, C, H, W, 6]
+    const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
+    const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
+    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
+    const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
+    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
+    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
+    // intersections
+    const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    const bool use_hit_distance,
+    // fwd outputs
+    const scalar_t
+        *__restrict__ render_alphas,      // [B, C, image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids, // [B, C, image_height, image_width]
+    // grad outputs
+    const scalar_t *__restrict__ v_render_colors, // [B, C, image_height,
+                                                  // image_width, CDIM]
+    const scalar_t
+        *__restrict__ v_render_normals, // [B, C, image_height, image_width, 3] optional
+    // chunk state output (CSR-packed; row i starts at chunk_offsets[i])
+    scalar_t *__restrict__ chunk_PS,     // [total_chunks, pixels_per_tile, 3]
+    scalar_t *__restrict__ t_final_buf,  // [num_tiles * pixels_per_tile]
+    const int32_t *__restrict__ chunk_offsets  // [num_tiles + 1]
+)
+{
+    auto block = cg::this_thread_block();
+    // 1D grid, one CTA per CSR chunk-slot. Binary-search chunk_offsets to
+    // recover (tile_linear, chunk_id_local) for this block; then derive
+    // (iid, tile_row, tile_col) from tile_linear.
+    const uint32_t num_tiles_total = (B * C) * tile_height * tile_width;
+    const uint32_t bid = block.group_index().x;
+    const uint32_t tile_linear =
+        find_tile_for_block(chunk_offsets, num_tiles_total, bid);
+    const uint32_t chunk_id =
+        bid - static_cast<uint32_t>(chunk_offsets[tile_linear]);
+    const uint32_t iid = tile_linear / (tile_height * tile_width);
+    const uint32_t tile_id = tile_linear - iid * (tile_height * tile_width);
+    const uint32_t tile_row = tile_id / tile_width;
+    const uint32_t tile_col = tile_id - tile_row * tile_width;
+    const uint32_t tr = block.thread_rank();
+    const uint32_t block_size = block.size();
+
+    // Advance per-image pointers to the current image (iid).
+    tile_offsets += iid * tile_height * tile_width;
+    render_alphas += iid * image_height * image_width;
+    last_ids += iid * image_height * image_width;
+    v_render_colors += iid * image_height * image_width * CDIM;
+    if (v_render_normals != nullptr) {
+        v_render_normals += iid * image_height * image_width * 3;
+    }
+    if (masks != nullptr) {
+        masks += iid * tile_height * tile_width;
+    }
+    if(rays != nullptr) {
+        rays += iid * image_height * image_width * 6;
+    }
+
+    // When the mask is provided, do nothing and return if
+    // this tile is labeled as False.
+    if (masks != nullptr && !masks[tile_id]) {
+        return;
+    }
+
+    // Gaussian range for this tile and chunk/batch decomposition.
+    const int32_t range_start = tile_offsets[tile_id];
+    const int32_t range_end =
+        (iid == B * C - 1) && (tile_id == tile_width * tile_height - 1)
+            ? n_isects
+            : tile_offsets[tile_id + 1];
+    const uint32_t num_batches =
+        (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t pixels_per_tile = tile_size * tile_size;
+    // No padding blocks to handle: the grid is sized to total_chunks, so every
+    // launched block has chunk_id < num_chunks for its tile.
+
+    // Pixel mapping (camera vs lidar) — shared helper.
+    const PixelCoords pc = compute_pixel_coords_bwd(
+        camera_model_type, tile_id, tile_row, tile_col, tile_size, tr,
+        image_width, image_height, lidar_device_coeffs);
+    const uint32_t i = pc.row;
+    const uint32_t j = pc.col;
+    const bool inside = pc.inside;
+    const int32_t pix_id = pc.pix_id;
+
+    // Ray generation (camera-model switch + explicit-rays path) is factored
+    // into the shared compute_world_ray_bwd helper; see its definition above.
+    WorldRay ray = compute_world_ray_bwd<scalar_t>(
+        iid, j, i, pix_id, inside,
+        rays, viewmats0, viewmats1, Ks,
+        image_width, image_height,
+        camera_model_type, rs_type,
+        radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        ftheta_device_coeffs, lidar_device_coeffs,
+        external_distortion_device_params);
+    const vec3 ray_o = ray.ray_org;
+    const vec3 ray_d = ray.ray_dir;
+    const bool pixel_valid = inside && ray.valid_flag;
+    const int32_t bin_final = pixel_valid ? last_ids[pix_id] : 0;
+
+    // Per-pixel gradients needed for the state recurrence.
+    float v_render_c[CDIM];
+#pragma unroll
+    for (uint32_t k = 0; k < CDIM; ++k) {
+        v_render_c[k] = pixel_valid ? v_render_colors[pix_id * CDIM + k] : 0.f;
+    }
+    vec3 v_render_n = vec3(0.f);
+    if (v_render_normals != nullptr && pixel_valid) {
+        v_render_n.x = v_render_normals[pix_id * 3 + 0];
+        v_render_n.y = v_render_normals[pix_id * 3 + 1];
+        v_render_n.z = v_render_normals[pix_id * 3 + 2];
+    }
+
+    // Shared memory: [xyz_opacity | scale | quat | rgbs] per thread.
+    extern __shared__ int s[];
+    vec4 *xyz_opacity_batch = reinterpret_cast<vec4 *>(s);
+    vec3 *scale_batch =
+        reinterpret_cast<vec3 *>(&xyz_opacity_batch[block_size]);
+    vec4 *quat_batch =
+        reinterpret_cast<vec4 *>(&scale_batch[block_size]);
+    float *rgbs_batch = (float *)&quat_batch[block_size];
+
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    const int32_t warp_bin_final =
+        cg::reduce(warp, bin_final, cg::greater<int>());
+
+    // Process this chunk with zero prologue.
+    float T = 1.0f;
+    float accum_render = 0.0f;
+    float accum_normal = 0.0f;
+    const uint32_t b_start = chunk_id * CHUNK_BATCHES;
+    const uint32_t b_end = min(b_start + CHUNK_BATCHES, num_batches);
+
+    for (uint32_t b = b_start; b < b_end; ++b) {
+        block.sync();
+        const int32_t batch_end = range_end - 1 - block_size * b;
+        const int32_t batch_size =
+            min(static_cast<int32_t>(block_size), batch_end + 1 - range_start);
+        const int32_t idx = batch_end - static_cast<int32_t>(tr);
+
+        if (idx >= range_start) {
+            // TODO: only support 1 camera for now so it is ok to abuse the index.
+            const int32_t isect_id = flatten_ids[idx]; // flatten index in [B * C * N] or [nnz]
+            const int32_t isect_bid = isect_id / (C * N);   // intersection batch index
+            // const int32_t isect_cid = (isect_id / N) % C; // intersection camera index
+            const int32_t isect_gid = isect_id % N;          // intersection gaussian index
+            const vec3 xyz = means[isect_bid * N + isect_gid];
+            const float opac = opacities[isect_id];
+            xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
+            scale_batch[tr] = scales[isect_bid * N + isect_gid];
+            quat_batch[tr] = quats[isect_bid * N + isect_gid];
+            // Projection kernel culls degenerate Gaussians (zero quaternion,
+            // zero scale) by setting radii = 0, preventing them from entering
+            // the intersection list. Mirror K2's asserts here so NaN from
+            // division-by-zero doesn't silently poison the scan state.
+            assert(glm::dot(quat_batch[tr], quat_batch[tr]) > 0.f);
+            assert(scale_batch[tr][0] > 0.f && scale_batch[tr][1] > 0.f && scale_batch[tr][2] > 0.f);
+#pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k) {
+                rgbs_batch[tr * cdim_smem_stride<CDIM>() + k] = colors[isect_id * CDIM + k];
+            }
+        }
+        block.sync();
+
+        for (uint32_t t = max(0, batch_end - warp_bin_final);
+             t < batch_size; ++t) {
+            bool valid = pixel_valid;
+            if (batch_end - t > bin_final) {
+                valid = false;
+            }
+            float ra = 1.0f;
+            float normal_render_dot = 0.f;
+            float local_hit_dist = 0.f;
+            if (valid) {
+                const vec4 xyz_opac = xyz_opacity_batch[t];
+                const float opac = xyz_opac[3];
+                const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+                const vec3 scale = scale_batch[t];
+                const vec4 quat = quat_batch[t];
+                const mat3 R = quat_to_rotmat(quat);
+                const mat3 S_mat = mat3(
+                    1.0f / scale[0], 0.f, 0.f,
+                    0.f, 1.0f / scale[1], 0.f,
+                    0.f, 0.f, 1.0f / scale[2]);
+                const mat3 Mt = glm::transpose(R * S_mat);
+                const vec3 o_minus_mu = ray_o - xyz;
+                const vec3 gro = Mt * o_minus_mu;
+                const vec3 grd = Mt * ray_d;
+                const vec3 grd_n = safe_normalize(grd);
+                const vec3 gcrod = glm::cross(grd_n, gro);
+                const float grayDist = glm::dot(gcrod, gcrod);
+                const float power = -0.5f * grayDist;
+                const float vis = __expf(power);
+                float alpha = min(MAX_ALPHA, opac * vis);
+                if (power > 0.f || alpha < ALPHA_THRESHOLD) {
+                    alpha = 0.f;
+                }
+                ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
+
+                if (use_hit_distance) {
+                    const float hit_t = glm::dot(grd_n, -gro);
+                    const vec3 grds = scale * (grd_n * hit_t);
+                    local_hit_dist = glm::length(grds);
+                }
+                if (v_render_normals != nullptr) {
+                    const vec3 unnormalized_normal = R[2];
+                    const bool flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
+                    const vec3 unnormalized_flipped =
+                        flipped ? -unnormalized_normal : unnormalized_normal;
+                    const vec3 normal = safe_normalize(unnormalized_flipped);
+                    normal_render_dot = glm::dot(normal, v_render_n);
+                }
+            }
+            T *= ra;
+            const float fac = (1.0f - 1.0f / ra) * T;
+            float rgb_render_dot = 0.f;
+#pragma unroll
+            for (uint32_t k = 0; k < CDIM; ++k) {
+                const float rgb_k = (use_hit_distance && k == CDIM - 1)
+                    ? local_hit_dist
+                    : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
+                rgb_render_dot += rgb_k * v_render_c[k];
+            }
+            accum_render += rgb_render_dot * fac;
+            if (v_render_normals != nullptr) {
+                accum_normal += normal_render_dot * fac;
+            }
+        }
+    }
+
+    // Write (P, S_render, S_normal) for this chunk at its CSR slot.
+    const uint32_t base = bid * pixels_per_tile * CHUNK_STATE_DIM +
+                          tr * CHUNK_STATE_DIM;
+    chunk_PS[base + 0] = T;
+    chunk_PS[base + 1] = accum_render;
+    chunk_PS[base + 2] = accum_normal;
+
+    // Chunk 0 writes T_final for the scan kernel (works for both camera and lidar
+    // because K1 already resolved the correct pix_id via the proper pixel mapping).
+    if (chunk_id == 0) {
+        t_final_buf[tile_linear * pixels_per_tile + tr] =
+            pixel_valid ? 1.0f - render_alphas[pix_id] : 1.0f;
+    }
+}
+
+// Kernel 1.5: shared-memory-buffered prefix scan.
+//
+// Loads SCAN_TILE_CHUNKS chunks at a time (coalesced) into shared memory,
+// scans from shared memory (no global latency), writes back (coalesced).
+// This avoids the stride-768 global memory round-trips that caused 98.8%
+// no-eligible-warp stalls in the naive sequential scan.
+//
+// Grid: {num_tiles, 1, 1}. Block: {pixels_per_tile, 1, 1} = {256, 1, 1}.
+// Shared memory: SCAN_TILE_CHUNKS * pixels_per_tile * CHUNK_STATE_DIM floats.
+// 16 chunks × 256 pixels × 3 floats × 4B = 48 KiB — fits within the default
+// 48 KiB per-block shmem on every arch we target (no opt-in needed), and leaves
+// room for multiple blocks/SM to keep occupancy up.  (The old value of 32
+// required 96 KiB, which exceeded sm_75's 64 KiB cap and starved occupancy
+// on sm_86/sm_89 where the opt-in limit is 99-100 KiB.)
+constexpr uint32_t SCAN_TILE_CHUNKS = 16;
+
+template <typename scalar_t>
+__global__ void rasterize_prologue_scan_kernel(
+    const scalar_t *__restrict__ t_final_buf,
+    const bool *__restrict__ masks,                  // [num_tiles] or nullptr
+    const int32_t *__restrict__ chunk_offsets,       // [num_tiles + 1]
+    const uint32_t pixels_per_tile,
+    scalar_t *__restrict__ chunk_PS                  // CSR-packed
+)
+{
+    const uint32_t tile_linear = blockIdx.x;
+    const uint32_t pixel = threadIdx.x;
+    // Block size is always pixels_per_tile (see launcher); no partial blocks.
+
+    // Masked tiles are not read by K2 either, so skip the scan entirely.
+    // This lets us drop the `chunk_states.zero_()` memset in the launcher.
+    if (masks != nullptr && !masks[tile_linear]) {
+        return;
+    }
+
+    // CSR: chunk-slots for this tile span [chunk_offsets[t], chunk_offsets[t+1]).
+    const uint32_t chunk_base_slot = static_cast<uint32_t>(chunk_offsets[tile_linear]);
+    const uint32_t num_chunks_this_tile =
+        static_cast<uint32_t>(chunk_offsets[tile_linear + 1]) - chunk_base_slot;
+    if (num_chunks_this_tile == 0) {
+        // Empty tile: nothing to scan, nothing for K2 to read.
+        return;
+    }
+
+    const float T_final =
+        t_final_buf[tile_linear * pixels_per_tile + pixel];
+
+    const uint32_t tile_base =
+        chunk_base_slot * pixels_per_tile * CHUNK_STATE_DIM;
+    const uint32_t pixel_stride = pixels_per_tile * CHUNK_STATE_DIM;
+
+    // Shared memory: [SCAN_TILE_CHUNKS][pixels_per_tile][CHUNK_STATE_DIM]
+    extern __shared__ float shmem[];
+
+    float exc_P = 1.0f;
+    float exc_Sr = 0.0f;
+    float exc_Sn = 0.0f;
+
+    for (uint32_t c_base = 0; c_base < num_chunks_this_tile;
+         c_base += SCAN_TILE_CHUNKS) {
+        const uint32_t c_end =
+            min(c_base + SCAN_TILE_CHUNKS, num_chunks_this_tile);
+        const uint32_t tile_count = c_end - c_base;
+
+        // ---- Load chunk state into shmem (stride-3 per thread — the AoS
+        // ----  [chunk][pixel][state] layout is not fully coalesced). ----
+        for (uint32_t c = 0; c < tile_count; ++c) {
+            const uint32_t g_idx =
+                tile_base + (c_base + c) * pixel_stride + pixel * CHUNK_STATE_DIM;
+            const uint32_t s_idx =
+                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
+            shmem[s_idx + 0] = chunk_PS[g_idx + 0];
+            shmem[s_idx + 1] = chunk_PS[g_idx + 1];
+            shmem[s_idx + 2] = chunk_PS[g_idx + 2];
+        }
+        __syncthreads();
+
+        // ---- Scan from shared memory (no global latency) ----
+        for (uint32_t c = 0; c < tile_count; ++c) {
+            const uint32_t s_idx =
+                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
+            const float Pc = shmem[s_idx + 0];
+            const float Src = shmem[s_idx + 1];
+            const float Snc = shmem[s_idx + 2];
+            const float new_P = Pc * exc_P;
+            const float new_Sr = Src * exc_P + exc_Sr;
+            const float new_Sn = Snc * exc_P + exc_Sn;
+            // Write resolved prologue to shared memory.
+            shmem[s_idx + 0] = exc_P * T_final;
+            shmem[s_idx + 1] = exc_Sr * T_final;
+            shmem[s_idx + 2] = exc_Sn * T_final;
+            exc_P = new_P;
+            exc_Sr = new_Sr;
+            exc_Sn = new_Sn;
+        }
+        __syncthreads();
+
+        // ---- Coalesced write back ----
+        for (uint32_t c = 0; c < tile_count; ++c) {
+            const uint32_t g_idx =
+                tile_base + (c_base + c) * pixel_stride + pixel * CHUNK_STATE_DIM;
+            const uint32_t s_idx =
+                c * pixels_per_tile * CHUNK_STATE_DIM + pixel * CHUNK_STATE_DIM;
+            chunk_PS[g_idx + 0] = shmem[s_idx + 0];
+            chunk_PS[g_idx + 1] = shmem[s_idx + 1];
+            chunk_PS[g_idx + 2] = shmem[s_idx + 2];
+        }
+        __syncthreads();
+    }
+}
+
+// Kernel 2: gradient pass. Same CTA structure and inner loop as the original
+// kernel but with: (1) chunk_id decoded from grid x, (2) initial state read
+// from chunk_states, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
+// via atomicAdd (multiple chunks per pixel).
+//
+// Grid: 1D {total_chunks, 1, 1}; each CTA's (tile_linear, chunk_id) is decoded
+// via a binary search on chunk_offsets in the preamble.
+template <uint32_t CDIM, typename scalar_t>
+__global__ void rasterize_gradient_bwd_kernel(
+    const uint32_t B,
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t n_isects,
+    // fwd inputs
+    const vec3 *__restrict__ means,           // [B, N, 3]
+    const vec4 *__restrict__ quats,           // [B, N, 4]
+    const vec3 *__restrict__ scales,          // [B, N, 3]
+    const scalar_t *__restrict__ colors,      // [B, C, N, CDIM] or [nnz, CDIM]
+    const scalar_t *__restrict__ opacities,   // [B, C, N] or [nnz]
+    const scalar_t *__restrict__ backgrounds, // [B, C, CDIM]
+    const bool *__restrict__ masks,           // [B, C, tile_height, tile_width]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    // camera model
+    const scalar_t *__restrict__ viewmats0, // [B, C, 4, 4]
+    const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
+    const scalar_t *__restrict__ Ks,        // [B, C, 3, 3]
+    const CameraModelType camera_model_type,
     const ShutterType rs_type,
     const scalar_t *__restrict__ rays,              // [B, C, H, W, 6]
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
@@ -97,41 +804,29 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     vec3 *__restrict__ v_scales,       // [B, N, 3]
     scalar_t *__restrict__ v_colors,   // [B, C, N, CDIM] or [nnz, CDIM]
     scalar_t *__restrict__ v_opacities, // [B, C, N] or [nnz]
-    scalar_t *__restrict__ v_rays      // [B, C, image_height, image_width, 6]
-) {
+    scalar_t *__restrict__ v_rays,     // [B, C, image_height, image_width, 6]
+    // chunk state input (from K1.5 prefix scan; CSR-packed)
+    const scalar_t *__restrict__ chunk_states, // [total_chunks, pixels_per_tile, 3]
+    const int32_t *__restrict__ chunk_offsets  // [num_tiles + 1]
+)
+{
+    // ---- Preamble: same CSR decode as K1 (chunk decode, pixel map, ray gen) ----
+    // NOTE: This duplicates K1's preamble intentionally. Factoring into a
+    // __device__ function risks register spills from the additional call frame,
+    // which would reduce occupancy on the register-pressure-sensitive K2 path.
     auto block = cg::this_thread_block();
-    uint32_t iid = block.group_index().x;
-    uint32_t tile_id =
-        block.group_index().y * tile_width + block.group_index().z;
-
-    uint32_t i, j;
-    bool inside;
-    if(camera_model_type == CameraModelType::LIDAR) {
-        assert(lidar_device_coeffs);
-        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
-        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
-        const int tile_element_id = block.thread_rank();
-        if(tile_element_id < element_count)
-        {
-            j = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // col_azimuth
-            i = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // row_elevation
-            assert(0 <= i);
-            assert(i < image_height);
-            assert(0 <= j);
-            assert(j < image_width);
-            inside = true;
-        }
-        else
-        {
-            inside = false;
-        }
-    }
-    else
-    {
-        i = block.group_index().y * tile_size + block.thread_index().y;
-        j = block.group_index().z * tile_size + block.thread_index().x;
-        inside = (i < image_height && j < image_width);
-    }
+    const uint32_t num_tiles_total = (B * C) * tile_height * tile_width;
+    const uint32_t bid = block.group_index().x;
+    const uint32_t tile_linear =
+        find_tile_for_block(chunk_offsets, num_tiles_total, bid);
+    const uint32_t chunk_id =
+        bid - static_cast<uint32_t>(chunk_offsets[tile_linear]);
+    const uint32_t iid = tile_linear / (tile_height * tile_width);
+    const uint32_t tile_id = tile_linear - iid * (tile_height * tile_width);
+    const uint32_t tile_row = tile_id / tile_width;
+    const uint32_t tile_col = tile_id - tile_row * tile_width;
+    const uint32_t tr = block.thread_rank();
+    const uint32_t block_size = block.size();
 
     tile_offsets += iid * tile_height * tile_width;
     render_alphas += iid * image_height * image_width;
@@ -160,280 +855,126 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         return;
     }
 
-    // clamp this value to the last pixel
-    const int32_t pix_id =
-        min(i * image_width + j, image_width * image_height - 1);
-
-    // Create rolling shutter parameter
-    auto rs_params = RollingShutterParameters(
-        viewmats0 + iid * 16,
-        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16
-    );
-
-    WorldRay ray;
-    if(inside && rays == nullptr)
-    {
-        // Create ray from pixel.
-        // Each camera model's element_to_image_point converts (j, i) pixel
-        // indices to the image-point convention it expects.
-        if (camera_model_type == CameraModelType::PINHOLE) {
-            if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-                if (external_distortion_device_params.has_value()) {
-                    using CameraModel = PerfectPinholeCameraModel<extdist::BivariateWindshieldModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        {
-                            {image_width, image_height},
-                            rs_type,
-                            *external_distortion_device_params,
-                        },
-                        Ks,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                } else {
-                    using CameraModel = PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        {
-                            {image_width, image_height},
-                            rs_type,
-                            {},
-                        },
-                        Ks,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                }
-            }
-            else {
-                if (external_distortion_device_params.has_value()) {
-                    using CameraModel = OpenCVPinholeCameraModel<extdist::BivariateWindshieldModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        {
-                            {image_width, image_height},
-                            rs_type,
-                            *external_distortion_device_params,
-                        },
-                        Ks,
-                        radial_coeffs,
-                        tangential_coeffs,
-                        thin_prism_coeffs,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                } else {
-                    using CameraModel = OpenCVPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        {
-                            {image_width, image_height},
-                            rs_type,
-                            {},
-                        },
-                        Ks,
-                        radial_coeffs,
-                        tangential_coeffs,
-                        thin_prism_coeffs,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                }
-            }
-        }
-        else if (camera_model_type == CameraModelType::FISHEYE) {
-            if (external_distortion_device_params.has_value()) {
-                using CameraModel = OpenCVFisheyeCameraModel<extdist::BivariateWindshieldModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    {
-                        {image_width, image_height},
-                        rs_type,
-                        *external_distortion_device_params,
-                    },
-                    Ks,
-                    radial_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            } else {
-                using CameraModel = OpenCVFisheyeCameraModel<extdist::EmptyExternalDistortionModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    {
-                        {image_width, image_height},
-                        rs_type,
-                        {},
-                    },
-                    Ks,
-                    radial_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            }
-        }
-        else if (camera_model_type == CameraModelType::FTHETA) {
-            if (external_distortion_device_params.has_value()) {
-                using CameraModel = FThetaCameraModel<extdist::BivariateWindshieldModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    {
-                        {image_width, image_height},
-                        rs_type,
-                        *external_distortion_device_params,
-                    },
-                    Ks,
-                    ftheta_device_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            } else {
-                using CameraModel = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    {
-                        {image_width, image_height},
-                        rs_type,
-                        {},
-                    },
-                    Ks,
-                    ftheta_device_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            }
-        }
-        else if (camera_model_type == CameraModelType::LIDAR) {
-            using CameraModel = RowOffsetStructuredSpinningLidarModel;
-            assert(lidar_device_coeffs);
-            CameraModel::KernelParameters kernel_params = {
-                *lidar_device_coeffs,
-            };
-            CameraModel camera_model(kernel_params, iid);
-            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-        }
-        else {
-            assert(false);
-            return;
-        }
-    }
-    else
-    {
-        // rays may be nullptr for inactive threads when inside==false
-        ray.valid_flag = false;
-        if(inside)
-        {
-            assert(rays != nullptr);
-            // TODO: use at least 3x64b loads instead of 6x32b
-            ray.ray_org = {rays[pix_id*6+0], rays[pix_id*6+1], rays[pix_id*6+2]};
-            ray.ray_dir = {rays[pix_id*6+3], rays[pix_id*6+4], rays[pix_id*6+5]};
-            ray.valid_flag = true;
-        }
-    }
-    const vec3 ray_d = ray.ray_dir;
-    const vec3 ray_o = ray.ray_org;
-
-    // keep not rasterizing threads around for reading data
-    bool done = inside && ray.valid_flag;
-
-    // have all threads in tile process the same gaussians in batches
-    // first collect gaussians between range.x and range.y in batches
-    // which gaussians to look through in this tile
-    int32_t range_start = tile_offsets[tile_id];
-    int32_t range_end =
+    const int32_t range_start = tile_offsets[tile_id];
+    const int32_t range_end =
         (iid == B * C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    const uint32_t block_size = block.size();
     const uint32_t num_batches =
         (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t pixels_per_tile = tile_size * tile_size;
+    // Grid sized to total_chunks (CSR); every launched block has a valid slot.
 
-    extern __shared__ int s[];
-    int32_t *id_batch = (int32_t *)s; // [block_size]
-    vec4 *xyz_opacity_batch =
-        reinterpret_cast<vec4 *>(&id_batch[block_size]); // [block_size]
-    vec3 *scale_batch =
-        reinterpret_cast<vec3 *>(&xyz_opacity_batch[block_size]); // [block_size]
-    vec4 *quat_batch =
-        reinterpret_cast<vec4 *>(&scale_batch[block_size]); // [block_size]
-    float *rgbs_batch =
-        (float *)&quat_batch[block_size]; // [block_size * CDIM]
+    // Pixel mapping (camera vs lidar) — shared helper.
+    const PixelCoords pc = compute_pixel_coords_bwd(
+        camera_model_type, tile_id, tile_row, tile_col, tile_size, tr,
+        image_width, image_height, lidar_device_coeffs);
+    const uint32_t i = pc.row;
+    const uint32_t j = pc.col;
+    const bool inside = pc.inside;
+    const int32_t pix_id = pc.pix_id;
 
-    // this is the T AFTER the last gaussian in this pixel
-    float T_final = 1.0f - render_alphas[pix_id];
-    float T = T_final;
-    float render_accum_dot = 0.f;
-    float normal_accum_dot = 0.f;
-    // index of last gaussian to contribute to this pixel
-    const int32_t bin_final = done ? last_ids[pix_id] : 0;
+    // Ray generation — shared with K1 via compute_world_ray_bwd helper above.
+    WorldRay ray = compute_world_ray_bwd<scalar_t>(
+        iid, j, i, pix_id, inside,
+        rays, viewmats0, viewmats1, Ks,
+        image_width, image_height,
+        camera_model_type, rs_type,
+        radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        ftheta_device_coeffs, lidar_device_coeffs,
+        external_distortion_device_params);
+    const vec3 ray_d = ray.ray_dir;
+    const vec3 ray_o = ray.ray_org;
+    const bool pixel_valid = inside && ray.valid_flag;
+    const int32_t bin_final = pixel_valid ? last_ids[pix_id] : 0;
 
-    // df/d_out for this pixel
+    // ---- Read chunk prologue from temp memory (CSR slot = bid) ----
+    const uint32_t cs_base = bid * pixels_per_tile * CHUNK_STATE_DIM +
+                             tr * CHUNK_STATE_DIM;
+    float T = chunk_states[cs_base + 0];
+    float render_accum_dot = chunk_states[cs_base + 1];
+    float normal_accum_dot = chunk_states[cs_base + 2];
+
+    const float T_final = pixel_valid ? 1.0f - render_alphas[pix_id] : 1.0f;
+
+    // ---- Per-pixel gradients (same as original kernel) ----
     float v_render_c[CDIM];
 #pragma unroll
     for (uint32_t k = 0; k < CDIM; ++k) {
-        v_render_c[k] = v_render_colors[pix_id * CDIM + k];
+        v_render_c[k] = pixel_valid ? v_render_colors[pix_id * CDIM + k] : 0.f;
     }
-    const float v_render_a = v_render_alphas[pix_id];
+    const float v_render_a = pixel_valid ? v_render_alphas[pix_id] : 0.f;
     
-    // df/d_normal for this pixel (only if computing normals)
-    vec3 v_render_n = vec3(0.f, 0.f, 0.f);
-    if (v_render_normals != nullptr) {
+    vec3 v_render_n = vec3(0.f);
+    if (v_render_normals != nullptr && pixel_valid) {
         v_render_n.x = v_render_normals[pix_id * 3 + 0];
         v_render_n.y = v_render_normals[pix_id * 3 + 1];
         v_render_n.z = v_render_normals[pix_id * 3 + 2];
     }
-
     float background_render_dot = 0.f;
-    if (backgrounds != nullptr) {
+    if (pixel_valid && backgrounds != nullptr) {
 #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
             background_render_dot += backgrounds[k] * v_render_c[k];
         }
     }
+    const float v_alpha_ind_coeff = v_render_a - background_render_dot;
 
     vec3 v_ray_o = {0.f, 0.f, 0.f};
     vec3 v_ray_d = {0.f, 0.f, 0.f};
 
-    // collect and process batches of gaussians
-    // each thread loads one gaussian at a time before rasterizing
-    const uint32_t tr = block.thread_rank();
+    extern __shared__ int s[];  // same layout as K1, plus id_batch prefix
+    int32_t *id_batch = (int32_t *)s;
+    vec4 *xyz_opacity_batch =
+        reinterpret_cast<vec4 *>(&id_batch[block_size]);
+    vec3 *scale_batch =
+        reinterpret_cast<vec3 *>(&xyz_opacity_batch[block_size]);
+    vec4 *quat_batch =
+        reinterpret_cast<vec4 *>(&scale_batch[block_size]);
+    float *rgbs_batch = (float *)&quat_batch[block_size];
+
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
     const int32_t warp_bin_final =
         cg::reduce(warp, bin_final, cg::greater<int>());
-    for (uint32_t b = 0; b < num_batches; ++b) {
-        // resync all threads before writing next batch of shared mem
-        block.sync();
 
-        // each thread fetch 1 gaussian from back to front
-        // 0 index will be furthest back in batch
-        // index of gaussian to load
-        // batch end is the index of the last gaussian in the batch
-        // These values can be negative so must be int32 instead of uint32
+    // ---- Batch loop: same as original kernel, chunk-limited ----
+    const uint32_t b_start = chunk_id * CHUNK_BATCHES;
+    const uint32_t b_end = min(b_start + CHUNK_BATCHES, num_batches);
+
+    for (uint32_t b = b_start; b < b_end; ++b) {
+        block.sync();
         const int32_t batch_end = range_end - 1 - block_size * b;
-        const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
-        const int32_t idx = batch_end - tr;
+        const int32_t batch_size =
+            min(static_cast<int32_t>(block_size), batch_end + 1 - range_start);
+        const int32_t idx = batch_end - static_cast<int32_t>(tr);
+
         if (idx >= range_start) {
             // TODO: only support 1 camera for now so it is ok to abuse the index.
             int32_t isect_id = flatten_ids[idx]; // flatten index in [B * C * N] or [nnz]
             int32_t isect_bid = isect_id / (C * N);   // intersection batch index
-            // int32_t isect_cid = (isect_id / N) % C;   // intersection camera index
-            int32_t isect_gid = isect_id % N;         // intersection gaussian index
+            // int32_t isect_cid = (isect_id / N) % C; // intersection camera index
+            int32_t isect_gid = isect_id % N;          // intersection gaussian index
             id_batch[tr] = isect_id;
             const vec3 xyz = means[isect_bid * N + isect_gid];
             const float opac = opacities[isect_id];
             xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
             scale_batch[tr] = scales[isect_bid * N + isect_gid];
             quat_batch[tr] = quats[isect_bid * N + isect_gid];
-            // Projection kernel culls degenerate Gaussians (zero quaternion,
-            // zero scale) by setting radii = 0, preventing them from entering
-            // the intersection list. Assert the preconditions here.
             assert(glm::dot(quat_batch[tr], quat_batch[tr]) > 0.f);
             assert(scale_batch[tr][0] > 0.f && scale_batch[tr][1] > 0.f && scale_batch[tr][2] > 0.f);
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
-                rgbs_batch[tr * CDIM + k] = colors[isect_id * CDIM + k];
+                rgbs_batch[tr * cdim_smem_stride<CDIM>() + k] = colors[isect_id * CDIM + k];
             }
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
+
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
         for (uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size;
              ++t) {
-            bool valid = done;
+            bool valid = pixel_valid;
             if (batch_end - t > bin_final) {
                 valid = 0;
             }
@@ -504,7 +1045,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             float v_opacity_local = 0.f;
 
             // initialize everything to 0, only set if the lane is valid
-            vec3 normal = {0.f, 0.f, 0.f};  // pre-declare for use in v_alpha and later
+            vec3 normal = {0.f, 0.f, 0.f};
             if (valid) {
                 // compute the current T for this gaussian
                 float ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
@@ -531,26 +1072,30 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     normal = safe_normalize(unnormalized_flipped);
                 }
                 
+                // contribution from this pixel
                 float rgb_render_dot = 0.f;
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
+                    // For the last channel with use_hit_distance, use the per-pixel
+                    // local_hit_dist instead of per-Gaussian rgbs_batch (which is
+                    // shared memory and would race across pixels in the tile).
                     const float rgb_k = (use_hit_distance && k == CDIM - 1)
                         ? local_hit_dist
-                        : rgbs_batch[t * CDIM + k];
+                        : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                     rgb_render_dot += rgb_k * v_render_c[k];
                 }
 
                 float normal_render_dot = 0.f;
+                // contribution from background pixel
                 if (v_render_normals != nullptr) {
                     normal_render_dot = glm::dot(normal, v_render_n);
                 }
-
-                float v_alpha = rgb_render_dot * T - render_accum_dot * ra;
-
-                v_alpha += T_final * ra * v_render_a;
-                if (backgrounds != nullptr) {
-                    v_alpha += -T_final * ra * background_render_dot;
-                }
+                
+                // Add contribution from normals to v_alpha (product rule term)
+                float v_alpha = rgb_render_dot * T - render_accum_dot * ra
+                              + T_final * ra * v_alpha_ind_coeff;
+                // Forward: render_normals += normal * vis (where vis = alpha * T)
+                // So v_alpha_normals = dot(normal * T - normal_buffer * ra, v_render_n)
                 if (v_render_normals != nullptr) {
                     v_alpha += normal_render_dot * T - normal_accum_dot * ra;
                 }
@@ -633,6 +1178,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 }
 
                 render_accum_dot += rgb_render_dot * fac;
+                
+                // Update normal buffer (for product rule in next iterations)
                 if (v_render_normals != nullptr) {
                     normal_accum_dot += normal_render_dot * fac;
                 }
@@ -674,14 +1221,15 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         }
     }
 
-    if (v_rays != nullptr && inside) {
-        float *v_ray_ptr = (float *)(v_rays) + 6 * pix_id;
-        v_ray_ptr[0] = v_ray_o.x;
-        v_ray_ptr[1] = v_ray_o.y;
-        v_ray_ptr[2] = v_ray_o.z;
-        v_ray_ptr[3] = v_ray_d.x;
-        v_ray_ptr[4] = v_ray_d.y;
-        v_ray_ptr[5] = v_ray_d.z;
+    // v_rays: atomicAdd since multiple chunks contribute per pixel.
+    if (v_rays != nullptr && pixel_valid) {
+        float *vr = (float *)(v_rays) + 6 * pix_id;
+        gpuAtomicAdd(vr + 0, v_ray_o.x);
+        gpuAtomicAdd(vr + 1, v_ray_o.y);
+        gpuAtomicAdd(vr + 2, v_ray_o.z);
+        gpuAtomicAdd(vr + 3, v_ray_d.x);
+        gpuAtomicAdd(vr + 4, v_ray_d.y);
+        gpuAtomicAdd(vr + 5, v_ray_d.z);
     }
 }
 
@@ -733,7 +1281,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     at::optional<at::Tensor> v_rays // [..., C, image_height, image_width, 6]
 ) {
     bool packed = opacities.dim() == 1;
-    assert (packed == false); // only support non-packed for now
+    TORCH_CHECK(!packed, "packed opacities are not supported in the 3DGS world-space backward");
 
     uint32_t N = packed ? 0 : means.size(-2);   // number of gaussians
     uint32_t B = means.numel() / (N * 3);       // number of batches
@@ -743,17 +1291,16 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     uint32_t tile_width = tile_offsets.size(-1);
     uint32_t n_isects = flatten_ids.size(0);
 
-    // Each block covers a tile on the image. In total there are
-    // I * tile_height * tile_width blocks.
     dim3 threads = {tile_size, tile_size, 1};
-    dim3 grid = {I, tile_height, tile_width};
-
     if (n_isects == 0) {
         // skip the kernel launch if there are no elements
         return;
     }
 
-    TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
+
     TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
     FThetaCameraDistortionDeviceParams ftheta_device_coeffs(*ftheta_coeffs);
     cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
@@ -766,9 +1313,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     if (lidar_coeffs.has_value()) {
         TORCH_CHECK(camera_model == CameraModelType::LIDAR, "If lidar sensor coefficients are given, the camera model must be lidar");
         lidar_device_coeffs = *lidar_coeffs.value();
-    }
-    else
-    {
+    } else {
         TORCH_CHECK(camera_model != CameraModelType::LIDAR, "If the sensor isn't lidar, lidar coefficients must not be given");
     }
 
@@ -782,87 +1327,201 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
         int64_t shmem_size =
             tile_size * tile_size *
-            (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * CDIM);
+            (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * cdim_smem_stride<CDIM>());
 
-        if (cudaFuncSetAttribute(
-                rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>,
-                cudaFuncAttributeMaxDynamicSharedMemorySize,
-                shmem_size
-            ) != cudaSuccess) {
-            AT_ERROR(
-                "Failed to set maximum shared memory size (requested ",
-                shmem_size,
-                " bytes), try lowering tile_size."
-            );
+        const uint32_t pixels_per_tile = tile_size * tile_size;
+        const uint32_t num_tiles = I * tile_height * tile_width;
+
+        // --- Compute per-tile chunk counts and CSR offsets on device ---
+        // This replaces the old `tile_offsets.cpu()` + CPU-loop, which forced a
+        // synchronous D2H copy + O(num_tiles) host scan on every backward pass.
+        // One small int scalar readback (total_chunks) is needed to size the grid
+        // and the CSR temp buffer — orders of magnitude cheaper than the old sync.
+        auto int_opts = means.options().dtype(at::kInt);
+        auto chunks_per_tile_t = at::empty({static_cast<int64_t>(num_tiles)}, int_opts);
+        {
+            const uint32_t threads_per_block = 256;
+            const uint32_t blocks =
+                (num_tiles + threads_per_block - 1) / threads_per_block;
+            compute_chunks_per_tile_kernel
+                <<<blocks, threads_per_block, 0,
+                   at::cuda::getCurrentCUDAStream()>>>(
+                    tile_offsets.const_data_ptr<int32_t>(),
+                    num_tiles, n_isects, pixels_per_tile,
+                    chunks_per_tile_t.data_ptr<int32_t>());
         }
 
-        rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>
-            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                B,
-                C,
-                N,
-                n_isects,
-                packed,
-                reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
-                reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
-                reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
-                colors.const_data_ptr<float>(),
-                opacities.const_data_ptr<float>(),
-                backgrounds.has_value()
-                    ? backgrounds.value().const_data_ptr<float>()
-                    : nullptr,
-                masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
-                image_width,
-                image_height,
-                tile_size,
-                tile_width,
-                tile_height,
-                // camera model
-                viewmats0.const_data_ptr<float>(),
-                viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
-                                      : nullptr,
-                Ks.const_data_ptr<float>(),
+        // chunk_offsets[0..num_tiles]: exclusive prefix sum with a trailing sum.
+        // Built as concat({0}, cumsum(chunks_per_tile)) so chunk_offsets[t] gives
+        // tile t's starting CSR slot and chunk_offsets[num_tiles] == total_chunks.
+        auto chunk_offsets_tail = at::cumsum(chunks_per_tile_t, 0, at::kInt);
+        auto chunk_offsets_t = at::cat(
+            {at::zeros({1}, int_opts), chunk_offsets_tail});
+        // NOTE: .item<int32_t>() is a blocking D2H readback on the default stream.
+        // This is far cheaper than the previous host-side scan over tile_offsets,
+        // but it still forces a CPU<->GPU sync and is therefore NOT compatible
+        // with CUDA graph capture. Callers inside torch.cuda.graph(...) that need
+        // this backward must replace the readback with an upper-bound grid size +
+        // in-kernel early-out on chunk_offsets[num_tiles].
+        const int64_t total_chunks =
+            chunk_offsets_t[static_cast<int64_t>(num_tiles)].item<int32_t>();
+
+        if (total_chunks == 0) {
+            // No chunk-slots (e.g., all tiles empty after masking); nothing to do.
+            return;
+        }
+
+        // CSR-packed temp buffer: sized exactly to total_chunks slots, not the
+        // worst-tile product (that was the OOM vector on dense/skewed scenes).
+        // No zero-init: K1 writes every launched (tile, chunk, pixel); K1.5/K2
+        // skip masked tiles entirely so their slots are not consumed.
+        const int64_t chunk_state_numel =
+            total_chunks * pixels_per_tile * CHUNK_STATE_DIM;
+        auto chunk_states = at::empty(
+            {chunk_state_numel}, means.options().dtype(at::kFloat));
+
+        // Common kernel argument block.
+        const auto *means_ptr = reinterpret_cast<const vec3 *>(means.const_data_ptr<float>());
+        const auto *quats_ptr = reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>());
+        const auto *scales_ptr = reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>());
+        const auto *colors_ptr = colors.const_data_ptr<float>();
+        const auto *opacities_ptr = opacities.const_data_ptr<float>();
+        const auto *backgrounds_ptr = backgrounds.has_value()
+            ? backgrounds.value().const_data_ptr<float>() : nullptr;
+        const auto *masks_ptr = masks.has_value()
+            ? masks.value().const_data_ptr<bool>() : nullptr;
+        const auto *viewmats0_ptr = viewmats0.const_data_ptr<float>();
+        const auto *viewmats1_ptr = viewmats1.has_value()
+            ? viewmats1.value().const_data_ptr<float>() : nullptr;
+        const auto *Ks_ptr = Ks.const_data_ptr<float>();
+        const auto *rays_ptr = rays.has_value()
+            ? rays.value().const_data_ptr<float>() : nullptr;
+        const auto *radial_ptr = radial_coeffs.has_value()
+            ? radial_coeffs.value().const_data_ptr<float>() : nullptr;
+        const auto *tangential_ptr = tangential_coeffs.has_value()
+            ? tangential_coeffs.value().const_data_ptr<float>() : nullptr;
+        const auto *thin_prism_ptr = thin_prism_coeffs.has_value()
+            ? thin_prism_coeffs.value().const_data_ptr<float>() : nullptr;
+        const auto *tile_off_gpu = tile_offsets.const_data_ptr<int32_t>();
+        const auto *flatten_ptr = flatten_ids.const_data_ptr<int32_t>();
+        const auto *render_alphas_ptr = render_alphas.const_data_ptr<float>();
+        const auto *last_ids_ptr = last_ids.const_data_ptr<int32_t>();
+        const auto *v_render_c_ptr = v_render_colors.const_data_ptr<float>();
+        const auto *v_render_a_ptr = v_render_alphas.const_data_ptr<float>();
+        const auto *v_render_n_ptr = v_render_normals.has_value()
+            ? v_render_normals.value().const_data_ptr<float>() : nullptr;
+        auto *v_means_ptr = reinterpret_cast<vec3 *>(v_means.data_ptr<float>());
+        auto *v_quats_ptr = reinterpret_cast<vec4 *>(v_quats.data_ptr<float>());
+        auto *v_scales_ptr = reinterpret_cast<vec3 *>(v_scales.data_ptr<float>());
+        auto *v_colors_ptr = v_colors.data_ptr<float>();
+        auto *v_opacities_ptr = v_opacities.data_ptr<float>();
+        auto *v_rays_ptr = v_rays.has_value()
+            ? v_rays.value().data_ptr<float>() : nullptr;
+        auto *chunk_ptr = chunk_states.data_ptr<float>();
+
+        // T_final buffer for the scan kernel (avoids lidar pixel mapping in scan).
+        // Written by K1's chunk_id==0 block for every tile with
+        // `num_chunks_this_tile > 0`; K1.5 skips masked and empty tiles before
+        // reading it, so every slot K1.5 consumes is written. `at::empty` is
+        // therefore sufficient -- no fill kernel launch needed.
+        auto t_final = at::empty(
+            {static_cast<int64_t>(num_tiles * pixels_per_tile)},
+            means.options().dtype(at::kFloat));
+        auto *t_final_ptr = t_final.data_ptr<float>();
+
+        const auto *chunk_offsets_ptr = chunk_offsets_t.const_data_ptr<int32_t>();
+
+        // ---- Kernel 1: state scan, 1D grid over CSR chunk-slots ----
+        dim3 k1_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
+        int64_t k1_shmem =
+            pixels_per_tile *
+            (sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * cdim_smem_stride<CDIM>());
+        if (cudaFuncSetAttribute(
+                rasterize_state_scan_bwd_kernel<CDIM, float>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                k1_shmem) != cudaSuccess) {
+            AT_ERROR("Failed to set shmem for state-scan kernel (",
+                     k1_shmem, " bytes).");
+        }
+        rasterize_state_scan_bwd_kernel<CDIM, float>
+            <<<k1_grid, threads, k1_shmem,
+               at::cuda::getCurrentCUDAStream()>>>(
+                B, C, N, n_isects,
+                means_ptr, quats_ptr, scales_ptr,
+                colors_ptr, opacities_ptr,
+                masks_ptr,
+                image_width, image_height, tile_size,
+                tile_width, tile_height,
+                viewmats0_ptr, viewmats1_ptr, Ks_ptr,
                 camera_model,
-                // uncented transform
-                *ut_params,
                 rs_type,
-                rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
-                radial_coeffs.has_value()
-                    ? radial_coeffs.value().const_data_ptr<float>()
-                    : nullptr,
-                tangential_coeffs.has_value()
-                    ? tangential_coeffs.value().const_data_ptr<float>()
-                    : nullptr,
-                thin_prism_coeffs.has_value()
-                    ? thin_prism_coeffs.value().const_data_ptr<float>()
-                    : nullptr,
-                ftheta_device_coeffs,
-                lidar_device_coeffs,
+                rays_ptr,
+                radial_ptr, tangential_ptr, thin_prism_ptr,
+                ftheta_device_coeffs, lidar_device_coeffs,
                 external_distortion_device_params,
-                // intersections
-                tile_offsets.const_data_ptr<int32_t>(),
-                flatten_ids.const_data_ptr<int32_t>(),
+                tile_off_gpu, flatten_ptr,
                 use_hit_distance,
-                render_alphas.const_data_ptr<float>(),
-                last_ids.const_data_ptr<int32_t>(),
-                v_render_colors.const_data_ptr<float>(),
-                v_render_alphas.const_data_ptr<float>(),
-                v_render_normals.has_value()
-                    ? v_render_normals.value().const_data_ptr<float>()
-                    : nullptr,
-                // outputs
-                reinterpret_cast<vec3 *>(v_means.data_ptr<float>()),
-                reinterpret_cast<vec4 *>(v_quats.data_ptr<float>()),
-                reinterpret_cast<vec3 *>(v_scales.data_ptr<float>()),
-                v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
-                v_rays.has_value() ? v_rays.value().data_ptr<float>() : nullptr
-            );
+                render_alphas_ptr, last_ids_ptr,
+                v_render_c_ptr, v_render_n_ptr,
+                chunk_ptr, t_final_ptr, chunk_offsets_ptr);
+
+        // ---- Kernel 1.5: prologue scan (shared-memory buffered), 1 CTA / tile ----
+        {
+            dim3 scan_grid = {num_tiles, 1, 1};
+            dim3 scan_threads = {pixels_per_tile, 1, 1};
+            int64_t scan_shmem =
+                SCAN_TILE_CHUNKS * pixels_per_tile * CHUNK_STATE_DIM *
+                sizeof(float);
+            if (cudaFuncSetAttribute(
+                    rasterize_prologue_scan_kernel<float>,
+                    cudaFuncAttributeMaxDynamicSharedMemorySize,
+                    scan_shmem) != cudaSuccess) {
+                AT_ERROR("Failed to set shmem for scan kernel (",
+                         scan_shmem, " bytes).");
+            }
+            rasterize_prologue_scan_kernel<float>
+                <<<scan_grid, scan_threads, scan_shmem,
+                   at::cuda::getCurrentCUDAStream()>>>(
+                    t_final_ptr, masks_ptr, chunk_offsets_ptr,
+                    pixels_per_tile, chunk_ptr);
+        }
+
+        // ---- Kernel 2: gradient, 1D grid matching K1 ----
+        dim3 k2_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
+        if (cudaFuncSetAttribute(
+                rasterize_gradient_bwd_kernel<CDIM, float>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                shmem_size) != cudaSuccess) {
+            AT_ERROR("Failed to set shmem for gradient kernel (",
+                     shmem_size, " bytes).");
+        }
+        rasterize_gradient_bwd_kernel<CDIM, float>
+            <<<k2_grid, threads, shmem_size,
+               at::cuda::getCurrentCUDAStream()>>>(
+                B, C, N, n_isects,
+                means_ptr, quats_ptr, scales_ptr,
+                colors_ptr, opacities_ptr, backgrounds_ptr,
+                masks_ptr,
+                image_width, image_height, tile_size,
+                tile_width, tile_height,
+                viewmats0_ptr, viewmats1_ptr, Ks_ptr,
+                camera_model,
+                rs_type,
+                rays_ptr,
+                radial_ptr, tangential_ptr, thin_prism_ptr,
+                ftheta_device_coeffs, lidar_device_coeffs,
+                external_distortion_device_params,
+                tile_off_gpu, flatten_ptr,
+                use_hit_distance,
+                render_alphas_ptr, last_ids_ptr,
+                v_render_c_ptr, v_render_a_ptr, v_render_n_ptr,
+                v_means_ptr, v_quats_ptr, v_scales_ptr,
+                v_colors_ptr, v_opacities_ptr, v_rays_ptr,
+                chunk_ptr, chunk_offsets_ptr);
     };
     const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
-
 } // namespace gsplat
 
 #endif
