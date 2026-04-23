@@ -50,16 +50,17 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     // image size
     int64_t image_width,
     int64_t image_height,
+    int64_t tile_size,
     // intersections
-    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor &flatten_ids   // [n_isects]
+    const at::Tensor &isect_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids    // [n_isects]
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(conics);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
-    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(isect_offsets);
     CHECK_INPUT(flatten_ids);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
@@ -69,7 +70,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     }
 
     auto opt = means2d.options();
-    at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
+    at::DimVector image_dims(isect_offsets.sizes().slice(0, isect_offsets.dim() - 2));
     uint32_t channels = colors.size(-1);
 
     at::DimVector renders_dims(image_dims);
@@ -93,7 +94,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
         masks,
         image_width,
         image_height,
-        tile_offsets,
+        tile_size,
+        isect_offsets,
         flatten_ids,
         renders,
         alphas,
