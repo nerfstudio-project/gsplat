@@ -964,6 +964,11 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("distort_camera_rays(Tensor rays, Tensor h_poly, Tensor v_poly, Tensor h_inv_poly, Tensor v_inv_poly, int reference_poly, bool inverse) -> Tensor");
     m.def("eval_bivariate_poly(Tensor x, Tensor y, Tensor poly_coeffs, int order) -> Tensor");
 #endif
+
+#if GSPLAT_BUILD_LOSSES
+    m.def("gaussian_losses_fwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, Tensor? visibility, float z_scale_threshold, Tensor(a!) loss_scale, Tensor(b!) loss_density, Tensor(c!) loss_z_scale, Tensor(d!) loss_oob) -> ()");
+    m.def("gaussian_losses_bwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, Tensor? visibility, float z_scale_threshold, Tensor v_loss_scale, Tensor v_loss_density, Tensor v_loss_z_scale, Tensor v_loss_oob, Tensor(a!) v_scales, Tensor(b!) v_densities, Tensor(c!) v_z_scales, Tensor(d!) v_positions) -> ()");
+#endif
 }
 
 TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
@@ -1018,5 +1023,10 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
     m.impl("distort_camera_rays", &gsplat::extdist::distort_camera_rays_torch_op);
     m.impl("eval_bivariate_poly", &gsplat::extdist::eval_bivariate_poly_wrapper);
+#endif
+
+#if GSPLAT_BUILD_LOSSES
+    m.impl("gaussian_losses_fwd", &gsplat::gaussian_losses_fwd);
+    m.impl("gaussian_losses_bwd", &gsplat::gaussian_losses_bwd);
 #endif
 }
