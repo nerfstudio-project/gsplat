@@ -2254,6 +2254,7 @@ def rasterization_2dgs(
         packed=packed,
         absgrad=absgrad,
         distloss=distloss,
+        has_depth_channel=render_mode_has_depth_channel(render_mode),
     )
     render_normals_from_depth = None
     if render_mode_has_expected_depth(render_mode):

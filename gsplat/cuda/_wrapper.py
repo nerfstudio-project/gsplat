@@ -2768,6 +2768,7 @@ def rasterize_to_pixels_2dgs(
     packed: bool = False,
     absgrad: bool = False,
     distloss: bool = False,
+    has_depth_channel: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterize Gaussians to pixels.
 
@@ -2873,6 +2874,7 @@ def rasterize_to_pixels_2dgs(
         flatten_ids.contiguous(),
         absgrad,
         distloss,
+        has_depth_channel,
     )
 
     if padded_channels > 0:
@@ -2989,6 +2991,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         flatten_ids: Tensor,
         absgrad: bool,
         distloss: bool,
+        has_depth_channel: bool,
     ) -> Tuple[Tensor, Tensor]:
         (
             render_colors,
@@ -3011,6 +3014,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            has_depth_channel,
         )
 
         ctx.save_for_backward(
@@ -3034,6 +3038,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
         ctx.distloss = distloss
+        ctx.has_depth_channel = has_depth_channel
 
         # double to float
         render_alphas = render_alphas.float()
@@ -3108,6 +3113,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_render_distort.contiguous(),
             v_render_median.contiguous(),
             absgrad,
+            ctx.has_depth_channel,
         )
         torch.cuda.synchronize()
         if absgrad:
@@ -3136,4 +3142,5 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             None,  # flatten_ids
             None,  # absgrad
             None,  # distloss
+            None,  # has_depth_channel
         )
