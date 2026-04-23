@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>G-SHARP v0.2 -&gt; gsplat Integration Plan</title>
+<style>
+  :root{
+    --bg:#0b0f14;
+    --panel:#121923;
+    --panel2:#0f1620;
+    --ink:#e7ecf2;
+    --muted:#8ea0b5;
+    --accent:#7cc4ff;
+    --accent2:#9de3a4;
+    --warn:#ffcf7a;
+    --danger:#ff8b8b;
+    --border:#1f2a38;
+    --core:#203a53;
+    --contrib:#3a2c53;
+    --examples:#2b4b37;
+    --docs:#4a3a22;
+    --tests:#4a2230;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,kbd,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.92em}
+  code{background:#0d141d;border:1px solid var(--border);padding:1px 6px;border-radius:4px;color:#cfe5ff}
+  .wrap{max-width:1200px;margin:0 auto;padding:32px 28px 80px}
+  header{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:24px;display:flex;flex-direction:column;gap:8px}
+  header h1{margin:0;font-size:28px;letter-spacing:-0.01em}
+  header .sub{color:var(--muted)}
+  header .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .badge{display:inline-flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--border);color:var(--muted);padding:4px 10px;border-radius:999px;font-size:12px}
+  .badge b{color:var(--ink);font-weight:600}
+  .badge.scaffold{border-color:#2a4a2e;color:#b8e4bc}
+  .badge.status{border-color:#4a3a22;color:#ffd49a}
+  h2{margin:32px 0 10px;font-size:20px;letter-spacing:-0.01em}
+  h3{margin:20px 0 8px;font-size:16px;color:var(--accent)}
+  p{margin:8px 0;color:#cfd7e0}
+  ul{margin:8px 0;padding-left:22px;color:#cfd7e0}
+  li{margin:4px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  @media (max-width:820px){.grid2{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
+  .panel h3{margin-top:0}
+  table{width:100%;border-collapse:collapse;margin-top:10px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  thead th{text-align:left;background:#0c131c;color:#9cc2ea;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600;letter-spacing:0.02em;text-transform:uppercase}
+  tbody td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;color:#d6dde6}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:#101923}
+  td.pass{color:var(--accent2)}
+  td.fail{color:var(--warn)}
+  td.chip{white-space:nowrap}
+  .chip-pill{display:inline-block;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:600}
+  .core{background:var(--core);color:#bcd7f5}
+  .contrib{background:var(--contrib);color:#e2c7ff}
+  .examples{background:var(--examples);color:#c8e8d1}
+  .docs{background:var(--docs);color:#ffd9a1}
+  .tests{background:var(--tests);color:#f2bcc9}
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 10px}
+  .legend .chip-pill{font-size:11px}
+  svg{width:100%;height:auto;max-width:1140px;display:block}
+  .arch{background:#0c121b;border:1px solid var(--border);border-radius:10px;padding:16px}
+  .note{background:#0f1a27;border-left:3px solid var(--accent);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0;color:#d6dde6}
+  .warn{background:#1f170a;border-left:3px solid var(--warn);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0;color:#f3dca0}
+  footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted);font-size:13px}
+  .kv{display:grid;grid-template-columns:180px 1fr;gap:6px 16px;margin:6px 0}
+  .kv div:nth-child(odd){color:var(--muted)}
+  .pill-row{display:flex;flex-wrap:wrap;gap:6px}
+  .pill-row .chip-pill{font-size:11px;padding:2px 7px}
+  @media print{body{background:#fff;color:#000}.panel,.arch{background:#fff;border-color:#bbb}.panel h3{color:#06438c}tbody tr:hover{background:transparent}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>G-SHARP v0.2 &rarr; gsplat Integration Plan</h1>
+  <div class="sub">Porting the training-time algorithmic components of G-SHARP v0.2 (surgical 4D Gaussian Splatting) into the gsplat library, natively.</div>
+  <div class="meta">
+    <span class="badge status">Status: <b>Scaffolding landed, awaiting architecture review</b></span>
+    <span class="badge">Branch: <b>vnath_gsharp</b></span>
+    <span class="badge">Base: <b>nv/main</b></span>
+    <span class="badge scaffold">Implementation: <b>not started (TDD)</b></span>
+    <span class="badge">Source: <b>holohub/applications/surgical_scene_recon</b></span>
+    <span class="badge">Target: <b>gsplat/</b></span>
+  </div>
+</header>
+
+<section>
+  <h2>1. Goals and non-goals</h2>
+  <div class="grid2">
+    <div class="panel">
+      <h3>Goals</h3>
+      <ul>
+        <li>Port all <b>training-time algorithmic</b> contributions of G-SHARP v0.2 into gsplat.</li>
+        <li>Keep deformable / 4D machinery behind a clearly experimental <code>gsplat/contrib/</code> namespace.</li>
+        <li>Ship <b>test-first</b>: every ported unit has positive + negative pytest cases.</li>
+        <li>Provide a runnable end-to-end tutorial on the EndoNeRF sample.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Non-goals</h3>
+      <ul>
+        <li>No Holoscan / HoloHub imports anywhere.</li>
+        <li>No Depth Anything V2 / MedSAM3 / VGGT code inside <code>gsplat/</code>. The tutorial only <em>references</em> them as optional upstream preprocessing.</li>
+        <li>No compression / rate-distortion work (not present in G-SHARP v0.2).</li>
+        <li>No camera-pose optimization (G-SHARP v0.2 doesn't do it either).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>2. Architecture</h2>
+
+  <div class="legend">
+    <span class="chip-pill core">core (stable)</span>
+    <span class="chip-pill contrib">contrib (experimental)</span>
+    <span class="chip-pill examples">examples</span>
+    <span class="chip-pill docs">docs</span>
+    <span class="chip-pill tests">tests</span>
+  </div>
+
+  <div class="arch">
+  <svg viewBox="0 0 1160 680" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Architecture diagram">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f87a6"/>
+      </marker>
+      <style>
+        .grp{fill:#0f1620;stroke:#1f2a38;stroke-width:1.2;rx:12;ry:12}
+        .grpLabel{font:600 12px ui-sans-serif,system-ui;fill:#8ea0b5;letter-spacing:0.06em;text-transform:uppercase}
+        .box{stroke-width:1.2;rx:8;ry:8}
+        .boxCore{fill:#203a53;stroke:#3a5e84}
+        .boxContrib{fill:#3a2c53;stroke:#624683}
+        .boxExamples{fill:#2b4b37;stroke:#4a7a5f}
+        .boxDocs{fill:#4a3a22;stroke:#7a5e35}
+        .boxTitle{font:600 13px ui-sans-serif,system-ui;fill:#e7ecf2}
+        .boxSub{font:11px ui-monospace,Menlo,Consolas;fill:#cfd7e0}
+        .flow{stroke:#6f87a6;stroke-width:1.4;fill:none;marker-end:url(#arrow)}
+      </style>
+    </defs>
+
+    <!-- CORE group -->
+    <rect class="grp" x="20" y="40" width="540" height="320"/>
+    <text class="grpLabel" x="36" y="30">gsplat/ &mdash; core (stable)</text>
+
+    <g>
+      <rect class="box boxCore" x="40" y="70" width="240" height="62"/>
+      <text class="boxTitle" x="52" y="92">rendering.py</text>
+      <text class="boxSub" x="52" y="112">rasterization() &mdash; existing</text>
+    </g>
+    <g>
+      <rect class="box boxCore" x="300" y="70" width="240" height="62"/>
+      <text class="boxTitle" x="312" y="92">strategy/ &mdash; existing</text>
+      <text class="boxSub" x="312" y="112">DefaultStrategy, MCMCStrategy</text>
+    </g>
+    <g>
+      <rect class="box boxCore" x="40" y="150" width="240" height="62"/>
+      <text class="boxTitle" x="52" y="172">losses.py + losses_depth.py</text>
+      <text class="boxSub" x="52" y="192">binocular L1, Pearson, masked L1/SSIM</text>
+    </g>
+    <g>
+      <rect class="box boxCore" x="300" y="150" width="240" height="62"/>
+      <text class="boxTitle" x="312" y="172">regularizers.py (NEW)</text>
+      <text class="boxSub" x="312" y="192">occlusion-TV, torch dilation, invisible mask</text>
+    </g>
+    <g>
+      <rect class="box boxCore" x="40" y="230" width="240" height="62"/>
+      <text class="boxTitle" x="52" y="252">init_utils.py (NEW)</text>
+      <text class="boxSub" x="52" y="272">multi-frame depth unprojection, KNN init</text>
+    </g>
+    <g>
+      <rect class="box boxCore" x="300" y="230" width="240" height="62"/>
+      <text class="boxTitle" x="312" y="252">training/schedulers.py (NEW)</text>
+      <text class="boxSub" x="312" y="272">TwoStageScheduler (coarse &rarr; fine)</text>
+    </g>
+
+    <!-- CONTRIB group -->
+    <rect class="grp" x="600" y="40" width="540" height="260"/>
+    <text class="grpLabel" x="616" y="30">gsplat/contrib/dynamic/ &mdash; experimental</text>
+
+    <g>
+      <rect class="box boxContrib" x="620" y="70" width="240" height="62"/>
+      <text class="boxTitle" x="632" y="92">hexplane.py</text>
+      <text class="boxSub" x="632" y="112">HexPlaneField (6 planes, multires)</text>
+    </g>
+    <g>
+      <rect class="box boxContrib" x="880" y="70" width="240" height="62"/>
+      <text class="boxTitle" x="892" y="92">deformation.py</text>
+      <text class="boxSub" x="892" y="112">DeformNetwork, DeformationTable</text>
+    </g>
+    <g>
+      <rect class="box boxContrib" x="620" y="150" width="240" height="62"/>
+      <text class="boxTitle" x="632" y="172">regulation.py</text>
+      <text class="boxSub" x="632" y="192">plane/time smoothness, time L1</text>
+    </g>
+    <g>
+      <rect class="box boxContrib" x="880" y="150" width="240" height="62"/>
+      <text class="boxTitle" x="892" y="172">strategy.py</text>
+      <text class="boxSub" x="892" y="192">DynamicStrategy(DefaultStrategy)</text>
+    </g>
+
+    <!-- EXAMPLES group -->
+    <rect class="grp" x="20" y="400" width="540" height="120"/>
+    <text class="grpLabel" x="36" y="390">examples/</text>
+    <g>
+      <rect class="box boxExamples" x="40" y="420" width="240" height="62"/>
+      <text class="boxTitle" x="52" y="442">datasets/endonerf.py (NEW)</text>
+      <text class="boxSub" x="52" y="462">EndoNeRFParser, EndoNeRFDataset</text>
+    </g>
+    <g>
+      <rect class="box boxExamples" x="300" y="420" width="240" height="62"/>
+      <text class="boxTitle" x="312" y="442">dynamic_trainer.py (NEW)</text>
+      <text class="boxSub" x="312" y="462">end-to-end recipe</text>
+    </g>
+
+    <!-- DOCS group -->
+    <rect class="grp" x="600" y="340" width="540" height="180"/>
+    <text class="grpLabel" x="616" y="330">docs/source/</text>
+    <g>
+      <rect class="box boxDocs" x="620" y="360" width="500" height="54"/>
+      <text class="boxTitle" x="632" y="382">proposals/gsharp_v0_2_port.rst (this proposal)</text>
+      <text class="boxSub" x="632" y="400">landed</text>
+    </g>
+    <g>
+      <rect class="box boxDocs" x="620" y="430" width="240" height="62"/>
+      <text class="boxTitle" x="632" y="452">examples/dynamic_surgical.rst</text>
+      <text class="boxSub" x="632" y="472">tutorial (stub)</text>
+    </g>
+    <g>
+      <rect class="box boxDocs" x="880" y="430" width="240" height="62"/>
+      <text class="boxTitle" x="892" y="452">apis/contrib.rst</text>
+      <text class="boxSub" x="892" y="472">autodoc</text>
+    </g>
+
+    <!-- arrows: deps into dynamic_trainer -->
+    <path class="flow" d="M280 461 L 300 451"/>
+    <path class="flow" d="M160 292 C 260 360, 320 400, 360 418"/>
+    <path class="flow" d="M420 292 C 420 360, 420 400, 420 418"/>
+    <path class="flow" d="M160 212 C 240 320, 340 400, 380 418"/>
+    <path class="flow" d="M420 212 C 400 320, 400 400, 410 418"/>
+    <path class="flow" d="M160 132 C 240 300, 340 400, 370 418"/>
+    <path class="flow" d="M420 132 C 420 300, 420 400, 420 418"/>
+    <path class="flow" d="M880 101 L 560 451" stroke-dasharray="4 4"/>
+    <path class="flow" d="M1000 212 C 800 360, 640 420, 540 452"/>
+    <text class="boxSub" x="560" y="540" fill="#8ea0b5">Arrows = import / use-site dependencies. Dashed = optional.</text>
+  </svg>
+  </div>
+
+  <div class="note">
+    <b>Why this split?</b> Core library stays pure splatting math; 4D / deformable pieces (HexPlane, DeformNet, DynamicStrategy) are still research-grade, so they land under <code>gsplat.contrib.dynamic</code> with an API-may-change banner &mdash; same pattern as <code>torchvision.prototype</code>. The EndoNeRF/SCARED loader is domain glue, so it lives next to <code>colmap.py</code>/<code>ncore.py</code> under <code>examples/datasets/</code>.
+  </div>
+</section>
+
+<section>
+  <h2>3. Component &rarr; file map</h2>
+
+  <h3>Core (stable)</h3>
+  <table>
+    <thead><tr><th>Component</th><th>New file</th><th>G-SHARP source</th></tr></thead>
+    <tbody>
+      <tr><td>Binocular disparity L1 loss</td><td><code>gsplat/losses_depth.py</code></td><td><code>EndoRunner.compute_depth_loss</code> (gsplat_train.py 906&ndash;960)</td></tr>
+      <tr><td>Pearson depth loss (monocular)</td><td><code>gsplat/losses_depth.py</code></td><td>same</td></tr>
+      <tr><td>Masked L1 / SSIM wrappers</td><td><code>gsplat/losses_depth.py</code></td><td><code>gsplat_train.py</code> 1059&ndash;1101</td></tr>
+      <tr><td>Occlusion-TV regularizer</td><td><code>gsplat/regularizers.py</code></td><td><code>compute_tv_loss_targeted</code> (1925&ndash;2028)</td></tr>
+      <tr><td>Torch mask dilation</td><td><code>gsplat/regularizers.py</code></td><td>OpenCV dilate &rarr; max-pool</td></tr>
+      <tr><td>Invisible-mask builder</td><td><code>gsplat/regularizers.py</code></td><td><code>create_invisible_mask_from_paths</code></td></tr>
+      <tr><td>Multi-frame depth unprojection</td><td><code>gsplat/init_utils.py</code></td><td><code>accumulate_multiframe_pointcloud</code> (2036&ndash;2159)</td></tr>
+      <tr><td>KNN scale init</td><td><code>gsplat/init_utils.py</code></td><td><code>create_splats_with_optimizers</code> (1796&ndash;1906)</td></tr>
+      <tr><td>Two-stage scheduler</td><td><code>gsplat/training/schedulers.py</code></td><td><code>EndoRunner._train_stage</code> (1007&ndash;1050)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Contrib (experimental)</h3>
+  <table>
+    <thead><tr><th>Component</th><th>New file</th><th>G-SHARP source</th></tr></thead>
+    <tbody>
+      <tr><td>HexPlane field</td><td><code>gsplat/contrib/dynamic/hexplane.py</code></td><td><code>training/scene/hexplane.py</code></td></tr>
+      <tr><td>Deform MLP + per-Gaussian deformation table</td><td><code>gsplat/contrib/dynamic/deformation.py</code></td><td><code>training/scene/deformation.py</code>; <code>gsplat_train.py</code> 1376&ndash;1664</td></tr>
+      <tr><td>Plane / time smoothness regularizers</td><td><code>gsplat/contrib/dynamic/regulation.py</code></td><td><code>training/scene/regulation.py</code>; loop 1233&ndash;1272</td></tr>
+      <tr><td>DynamicStrategy</td><td><code>gsplat/contrib/dynamic/strategy.py</code></td><td><code>rasterize_splats</code> (864&ndash;896)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Examples &amp; docs</h3>
+  <table>
+    <thead><tr><th>Deliverable</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>EndoNeRF / SCARED dataset loader</td><td><code>examples/datasets/endonerf.py</code></td></tr>
+      <tr><td>Dynamic-scene trainer recipe</td><td><code>examples/dynamic_trainer.py</code></td></tr>
+      <tr><td>Tutorial</td><td><code>docs/source/examples/dynamic_surgical.rst</code></td></tr>
+      <tr><td>Contrib API docs</td><td><code>docs/source/apis/contrib.rst</code></td></tr>
+      <tr><td>Full proposal inside repo</td><td><code>docs/source/proposals/gsharp_v0_2_port.rst</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>4. Test matrix (positive + negative)</h2>
+  <p>Every new module gets a <code>tests/test_*.py</code> with happy-path and failure cases. Tests follow the existing flat pytest layout (<code>conftest.py</code> with seed 42, CUDA-aware).</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Test file</th>
+        <th>Positive cases</th>
+        <th>Negative cases</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>test_losses_depth.py</code></td>
+        <td class="pass">identical depths &rarr; 0; gradient flows; mask slices correct; Pearson on correlated &rarr; 0, anti-correlated &rarr; 2</td>
+        <td class="fail">shape mismatch raises; fully masked &rarr; 0 (no NaN); negative/zero depth handled via eps</td>
+      </tr>
+      <tr>
+        <td><code>test_regularizers_occlusion.py</code></td>
+        <td class="pass">TV on constant image = 0; step edge = analytic; <code>dilate(k=1)</code> identity</td>
+        <td class="fail">empty mask &rarr; 0 (no div-by-0); non-binary mask rejected</td>
+      </tr>
+      <tr>
+        <td><code>test_init_multiframe.py</code></td>
+        <td class="pass">synthetic cube recovered within 1e-5; per-point RGB matches source</td>
+        <td class="fail">shape mismatch across frames raises; fully masked &rarr; empty set</td>
+      </tr>
+      <tr>
+        <td><code>test_two_stage_scheduler.py</code></td>
+        <td class="pass">coarse locks on coarse frame; fine shuffles after boundary</td>
+        <td class="fail">negative step count raises</td>
+      </tr>
+      <tr>
+        <td><code>test_contrib_hexplane.py</code></td>
+        <td class="pass">forward output shape; gradients reach plane params</td>
+        <td class="fail">out-of-bounds <code>t</code> handled per config</td>
+      </tr>
+      <tr>
+        <td><code>test_contrib_deformnet.py</code></td>
+        <td class="pass">zero-init &rarr; identity on means/quats/opacities; gradients flow to MLP</td>
+        <td class="fail">dtype/device mismatch raises</td>
+      </tr>
+      <tr>
+        <td><code>test_contrib_dynamic_strategy.py</code></td>
+        <td class="pass"><code>check_sanity</code> passes; densify resizes deformation table; 1-step train no NaN</td>
+        <td class="fail">missing <code>initialize_state</code> raises clear error</td>
+      </tr>
+      <tr>
+        <td><code>test_dataset_endonerf.py</code></td>
+        <td class="pass">tiny EndoNeRF fixture loads; SCARED routing works</td>
+        <td class="fail">missing <code>poses_bounds.npy</code> raises; non-binary mask rejected</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="note">All tests are currently <code>pytest.mark.skip</code> on branch <code>vnath_gsharp</code> with a reason string so CI stays green. Skips become real assertions as each component is implemented.</div>
+</section>
+
+<section>
+  <h2>5. What's already landed (this PR)</h2>
+  <div class="panel">
+    <ul>
+      <li>Branch <code>vnath_gsharp</code> created off <code>nv/main</code>.</li>
+      <li>Stub modules created at all target paths with typed signatures + <code>NotImplementedError</code> placeholders &mdash; review-friendly file tree.</li>
+      <li>Skipped pytest stubs at <code>tests/test_*.py</code> for each component (positive + negative slots).</li>
+      <li>Full proposal doc at <code>docs/source/proposals/gsharp_v0_2_port.rst</code>, wired into Sphinx index under a new &ldquo;Proposals&rdquo; toctree caption.</li>
+      <li>Tutorial stub at <code>docs/source/examples/dynamic_surgical.rst</code>; API stub at <code>docs/source/apis/contrib.rst</code>.</li>
+      <li>Planning folder at repo-parent workspace: this HTML, a markdown mirror, and <code>dev_updates/</code> seeded for future dev-log entries.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>6. Open risks</h2>
+  <div class="grid2">
+    <div class="panel">
+      <h3>Deformation coupling to <code>rasterization()</code></h3>
+      <p><code>gsplat.rasterization</code> has no time axis. <code>DynamicStrategy</code> therefore applies the deform-net to <code>(means, quats, opacities)</code> <em>before</em> <code>rasterization(...)</code> is called &mdash; same pattern as G-SHARP's <code>rasterize_splats</code>.</p>
+    </div>
+    <div class="panel">
+      <h3>CUDA-only paths</h3>
+      <p>HexPlane / DeformNet tests run on CPU for determinism. GPU smoke tests marked CUDA-only, matching <code>tests/test_rasterization.py</code>.</p>
+    </div>
+    <div class="panel">
+      <h3>Dataset licensing</h3>
+      <p>EndoNeRF sample and SCARED are not redistributed in-tree. Tutorial documents the sources.</p>
+    </div>
+    <div class="panel">
+      <h3>Optional dependencies</h3>
+      <p>KNN scale init has a pure-torch fallback so sklearn remains optional. No new required deps.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>7. Review asks</h2>
+  <div class="warn">
+    <p>Before implementation starts, please sign off on:</p>
+    <ol>
+      <li><b>Layout:</b> core-vs-contrib split above.</li>
+      <li><b>Contrib namespace:</b> <code>gsplat/contrib/dynamic/</code> as the home for 4D / deformable research code.</li>
+      <li><b>Examples scope:</b> EndoNeRF loader under <code>examples/datasets/</code> and the recipe at <code>examples/dynamic_trainer.py</code>.</li>
+      <li><b>No external pretrained nets in-library:</b> DA2 / MedSAM3 / VGGT stay out of <code>gsplat/</code>; only referenced in the tutorial.</li>
+      <li><b>Test matrix:</b> coverage above is the minimum bar per component.</li>
+    </ol>
+  </div>
+</section>
+
+<footer>
+  <div class="kv">
+    <div>Plan markdown</div><div><code>planning/gsharp_gsplat_plan.md</code></div>
+    <div>Proposal (RST)</div><div><code>gsplat/docs/source/proposals/gsharp_v0_2_port.rst</code></div>
+    <div>Branch</div><div><code>vnath_gsharp</code> off <code>nv/main</code></div>
+    <div>Dev log</div><div><code>planning/dev_updates/NNNN_*.md</code></div>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>

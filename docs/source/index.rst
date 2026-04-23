@@ -115,6 +115,14 @@ Links
    migration/*
 
 
+.. toctree::    
+   :glob:
+   :maxdepth: 1
+   :caption: Proposals
+
+   proposals/*
+
+
 Citations
 -------------
 .. bibliography::
