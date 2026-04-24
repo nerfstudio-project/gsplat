@@ -1987,7 +1987,13 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     )
     opacities = torch.broadcast_to(opacities[..., None, :], batch_dims + (C, N))
 
-    # Identify intersecting tiles
+    # Identify intersecting tiles.
+    # NOTE: CDIM=128 needs the smaller tile so the backward's per-block
+    # shared memory (tile_size^2 * CDIM * 4 bytes) stays below the device limit;
+    # the forward dispatches to a matching (TILE_SIZE=4, CTA_SIZE=16) kernel variant.
+    # When we also convert the 3DGS backward rasterizer pass, it will require much
+    # less shared memory since we're iterating with PPT=4 and will therefore be able
+    # to remove tile_size=4 both here and in the forward rasterizer.
     tile_size = 16 if channels <= 32 else 4
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))

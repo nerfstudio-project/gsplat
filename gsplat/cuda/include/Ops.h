@@ -305,8 +305,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     int64_t image_height,
     int64_t tile_size,
     // intersections
-    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor &flatten_ids   // [n_isects]
+    const at::Tensor &isect_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids    // [n_isects]
 );
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_bwd(
