@@ -93,7 +93,8 @@ class Config:
     # --- NCore-specific options (only used when data_type="ncore") ---
     # Camera sensor IDs to load (auto-detected from sequence if empty)
     ncore_camera_ids: List[str] = field(default_factory=list)
-    # Lidar sensor IDs to load (auto-detected from sequence if empty)
+    # Point cloud source IDs to load -- accepts lidar, radar, or native point cloud
+    # source IDs (auto-detected from sequence if empty). Field name kept for backward compat.
     ncore_lidar_ids: List[str] = field(default_factory=list)
     # Temporal seek offset in seconds
     ncore_seek_offset_sec: Optional[float] = None
