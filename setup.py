@@ -86,6 +86,9 @@ setup(
         "rich>=12",
         "torch",
         "typing_extensions; python_version<'3.8'",
+        # gsplat-scene / gsplat-stage live under libs/scene and libs/stage and
+        # are installed via ``libs/install.sh scene && libs/install.sh stage``;
+        # they are not published, so listing them here would break ``pip install``.
     ],
     extras_require={
         # lidar dependencies. Install them by `pip install gsplat[lidar]`

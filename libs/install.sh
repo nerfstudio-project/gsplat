@@ -14,9 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Install script for the gsplat geometry library
+# Install script for gsplat shared libraries
 # Usage: ./install.sh [package_name]
-# If no package name is provided, lists the supported package
+# If no package name is provided, lists the supported packages
+#
+# Install order matters for editable dev: stage depends on scene, so
+# `./install.sh scene` before `./install.sh stage` to pick up local edits.
 
 set -e
 
@@ -26,6 +29,8 @@ cd "$SCRIPT_DIR"
 if [ $# -eq 0 ]; then
     echo "Available packages:"
     echo "  - geometry"
+    echo "  - scene"
+    echo "  - stage"
     echo ""
     echo "Usage: $0 <package_name>"
     echo "Example: $0 geometry"
@@ -37,12 +42,19 @@ PACKAGE=$1
 case $PACKAGE in
     geometry)
         echo "Installing gsplat-geometry..."
-        cd geometry
-        pip install -e .
+        (cd "$SCRIPT_DIR/geometry" && pip install -e .)
+        ;;
+    scene)
+        echo "Installing gsplat-scene..."
+        (cd "$SCRIPT_DIR/scene" && pip install -e .)
+        ;;
+    stage)
+        echo "Installing gsplat-stage..."
+        (cd "$SCRIPT_DIR/stage" && pip install -e .)
         ;;
     *)
         echo "Unknown package: $PACKAGE"
-        echo "Available packages: geometry"
+        echo "Available packages: geometry, scene, stage"
         exit 1
         ;;
 esac

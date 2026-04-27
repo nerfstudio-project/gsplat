@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple, Union
 
@@ -20,6 +22,7 @@ import torch
 from typing_extensions import Literal
 
 from .base import Strategy
+from gsplat_scene import Scene
 from .ops import duplicate, remove, reset_opa, split
 
 
@@ -172,6 +175,7 @@ class DefaultStrategy(Strategy):
         step: int,
         info: Dict[str, Any],
         packed: bool = False,
+        scene: Scene | None = None,
     ):
         """Callback function to be executed after the `loss.backward()` call."""
         if step >= self.refine_stop_iter:
@@ -185,7 +189,9 @@ class DefaultStrategy(Strategy):
             and step % self.reset_every >= self.pause_refine_after_reset
         ):
             # grow GSs
-            n_dupli, n_split = self._grow_gs(params, optimizers, state, step)
+            n_dupli, n_split = self._grow_gs(
+                params, optimizers, state, step, scene=scene
+            )
             if self.verbose:
                 print(
                     f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
@@ -193,7 +199,7 @@ class DefaultStrategy(Strategy):
                 )
 
             # prune GSs
-            n_prune = self._prune_gs(params, optimizers, state, step)
+            n_prune = self._prune_gs(params, optimizers, state, step, scene=scene)
             if self.verbose:
                 print(
                     f"Step {step}: {n_prune} GSs pruned. "
@@ -281,6 +287,7 @@ class DefaultStrategy(Strategy):
         optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
         step: int,
+        scene: Scene | None = None,
     ) -> Tuple[int, int]:
         count = state["count"]
         grads = state["grad2d"] / count.clamp_min(1)
@@ -302,7 +309,13 @@ class DefaultStrategy(Strategy):
 
         # first duplicate
         if n_dupli > 0:
-            duplicate(params=params, optimizers=optimizers, state=state, mask=is_dupli)
+            duplicate(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=is_dupli,
+                scene=scene,
+            )
 
         # new GSs added by duplication will not be split
         is_split = torch.cat(
@@ -320,6 +333,7 @@ class DefaultStrategy(Strategy):
                 state=state,
                 mask=is_split,
                 revised_opacity=self.revised_opacity,
+                scene=scene,
             )
         return n_dupli, n_split
 
@@ -330,6 +344,7 @@ class DefaultStrategy(Strategy):
         optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
         step: int,
+        scene: Scene | None = None,
     ) -> int:
         is_prune = torch.sigmoid(params["opacities"].flatten()) < self.prune_opa
         if step > self.reset_every:
@@ -349,6 +364,12 @@ class DefaultStrategy(Strategy):
 
         n_prune = is_prune.sum().item()
         if n_prune > 0:
-            remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
+            remove(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=is_prune,
+                scene=scene,
+            )
 
         return n_prune

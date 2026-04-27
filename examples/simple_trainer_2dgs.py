@@ -48,6 +48,8 @@ from utils import (
 )
 from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
+from gsplat_scene import GaussianScene
+from gsplat_stage import Stage
 from gsplat.strategy import DefaultStrategy
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
@@ -324,6 +326,12 @@ class Runner:
             device=self.device,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
+
+        self.scene = GaussianScene.from_splats(self.splats, id="scene")
+        self.splats = self.scene.splats
+        self.stage = Stage()
+        self.stage.add_scene(self.scene, self.rasterize_splats)
+
         self.model_type = cfg.model_type
 
         if self.model_type == "2dgs":
@@ -409,27 +417,29 @@ class Runner:
         Ks: Tensor,
         width: int,
         height: int,
+        splats: Optional[torch.nn.ParameterDict] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
-        means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+        splats = splats if splats is not None else self.splats
+        means = splats["means"]  # [N, 3]
+        # quats = F.normalize(splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
-        scales = torch.exp(self.splats["scales"])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+        quats = splats["quats"]  # [N, 4]
+        scales = torch.exp(splats["scales"])  # [N, 3]
+        opacities = torch.sigmoid(splats["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
-                features=self.splats["features"],
+                features=splats["features"],
                 embed_ids=image_ids,
                 dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
                 sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
             )
-            colors = colors + self.splats["colors"]
+            colors = colors + splats["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+            colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
 
         assert self.cfg.antialiased is False, "Antialiased is not supported for 2DGS"
 
@@ -571,7 +581,8 @@ class Runner:
                 render_distort,
                 render_median,
                 info,
-            ) = self.rasterize_splats(
+            ) = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -695,6 +706,7 @@ class Runner:
                 step=step,
                 info=info,
                 packed=cfg.packed,
+                scene=self.scene,
             )
 
             # Turn Gradients into Sparse Tensor before running optimizer
@@ -739,6 +751,7 @@ class Runner:
                 torch.save(
                     {
                         "step": step,
+                        "scene_id": self.scene.id,
                         "splats": self.splats.state_dict(),
                     },
                     f"{self.ckpt_dir}/ckpt_{step}.pt",
@@ -790,7 +803,8 @@ class Runner:
                 render_distort,
                 render_median,
                 _,
-            ) = self.rasterize_splats(
+            ) = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -914,7 +928,8 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _, surf_normals, _, _, _ = self.rasterize_splats(
+            renders, _, _, surf_normals, _, _, _ = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -972,7 +987,8 @@ class Runner:
             render_distort,
             render_median,
             info,
-        ) = self.rasterize_splats(
+        ) = self.stage.render(
+            self.scene.id,
             camtoworlds=c2w[None],
             Ks=K[None],
             width=width,

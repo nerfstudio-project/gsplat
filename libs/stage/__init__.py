@@ -13,13 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[pytest]
-testpaths = tests libs/geometry/functional libs/scene/components libs/stage/components
-pythonpath = .
-filterwarnings =
-    ignore::DeprecationWarning:_pytest
-    ignore::SyntaxWarning:nerfacc
-env =
-    VERBOSE=1
-    BUILD_CAMERA_WRAPPERS=1
-    NUM_CHANNELS=1,3,4,8,24,32,128
+from .components.stage import Stage
+
+__all__ = ["Stage"]
