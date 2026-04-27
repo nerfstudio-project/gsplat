@@ -59,6 +59,8 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization, RasterizeMode
+from gsplat_scene import GaussianScene
+from gsplat_stage import Stage
 from gsplat.cuda._wrapper import CameraModel
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
@@ -486,6 +488,10 @@ class Runner:
             world_rank=world_rank,
             world_size=world_size,
         )
+        self.scene = GaussianScene.from_splats(self.splats, id="scene")
+        self.splats = self.scene.splats
+        self.stage = Stage()
+        self.stage.add_scene(self.scene, self.rasterize_splats)
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
         # Densification Strategy
@@ -642,27 +648,29 @@ class Runner:
         frame_idcs: Optional[Tensor] = None,
         camera_idcs: Optional[Tensor] = None,
         exposure: Optional[Tensor] = None,
+        splats: Optional[torch.nn.ParameterDict] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
-        means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+        splats = splats if splats is not None else self.splats
+        means = splats["means"]  # [N, 3]
+        # quats = F.normalize(splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
-        scales = torch.exp(self.splats["scales"])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+        quats = splats["quats"]  # [N, 4]
+        scales = torch.exp(splats["scales"])  # [N, 3]
+        opacities = torch.sigmoid(splats["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
-                features=self.splats["features"],
+                features=splats["features"],
                 embed_ids=image_ids,
                 dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
                 sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
             )
-            colors = colors + self.splats["colors"]
+            colors = colors + splats["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+            colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
 
         if rasterize_mode is None:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -882,7 +890,8 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            renders, alphas, info = self.rasterize_splats(
+            renders, alphas, info = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -968,7 +977,7 @@ class Runner:
 
             loss.backward()
 
-            desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
+            desc = f"loss={loss.item():.3f}| sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
@@ -1021,7 +1030,11 @@ class Runner:
                     "w",
                 ) as f:
                     json.dump(stats, f)
-                data = {"step": step, "splats": self.splats.state_dict()}
+                data = {
+                    "step": step,
+                    "scene_id": self.scene.id,
+                    "splats": self.splats.state_dict(),
+                }
                 if cfg.pose_opt:
                     if world_size > 1:
                         data["pose_adjust"] = self.pose_adjust.module.state_dict()
@@ -1040,7 +1053,6 @@ class Runner:
             if (
                 step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1
             ) and cfg.save_ply:
-
                 if self.cfg.app_opt:
                     # eval at origin to bake the appeareance into the colors
                     rgb = self.app_module(
@@ -1125,6 +1137,7 @@ class Runner:
                     step=step,
                     info=info,
                     packed=cfg.packed,
+                    scene=self.scene,
                 )
             elif isinstance(self.cfg.strategy, MCMCStrategy):
                 self.cfg.strategy.step_post_backward(
@@ -1134,6 +1147,7 @@ class Runner:
                     step=step,
                     info=info,
                     lr=schedulers[0].get_last_lr()[0],
+                    scene=self.scene,
                 )
             else:
                 assert_never(self.cfg.strategy)
@@ -1186,7 +1200,8 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            colors, _, _ = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -1316,7 +1331,8 @@ class Runner:
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
 
-            renders, _, _ = self.rasterize_splats(
+            renders, _, _ = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -1409,7 +1425,8 @@ class Runner:
             "alpha": "RGB",
         }
 
-        render_colors, render_alphas, info = self.rasterize_splats(
+        render_colors, render_alphas, info = self.stage.render(
+            self.scene.id,
             camtoworlds=c2w[None],
             Ks=K[None],
             width=width,
@@ -1495,6 +1512,10 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         ]
         for k in runner.splats.keys():
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+        runner.scene = GaussianScene.from_splats(runner.splats, id="scene")
+        runner.splats = runner.scene.splats
+        runner.stage = Stage()
+        runner.stage.add_scene(runner.scene, runner.rasterize_splats)
         if runner.post_processing_module is not None:
             pp_state = ckpts[0].get("post_processing")
             if pp_state is not None:
