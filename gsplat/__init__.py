@@ -51,6 +51,8 @@ from .cuda._wrapper import (
     RowOffsetStructuredSpinningLidarModelParametersExt,
 )
 from .exporter import export_splats
+from gsplat_scene import GaussianScene, Scene
+from gsplat_stage import Stage
 from .optimizers import SelectiveAdam
 from .rendering import (
     RasterizeMode,
@@ -89,7 +91,7 @@ from .cuda._lidar import (
     compute_tiling as compute_lidar_tiling,
 )
 
-all = [
+__all__ = [
     "color_correct_affine",
     "color_correct_quadratic",
     "PngCompression",
@@ -124,6 +126,9 @@ all = [
     "fully_fused_projection_with_ut",
     "rasterize_to_pixels_eval3d",
     "export_splats",
+    "Scene",
+    "GaussianScene",
+    "Stage",
     "__version__",
     "has_2dgs",
     "has_3dgs",
