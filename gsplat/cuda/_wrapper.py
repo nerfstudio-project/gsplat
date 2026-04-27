@@ -35,6 +35,7 @@ from gsplat.cuda._lidar import (
 
 ExternalDistortionModelMeta = Literal["bivariate-windshield"]
 CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar"]
+RasterizeFwdImpl = Literal["gemm", "legacy"]
 
 
 def _make_lazy_cuda_func(name: str) -> Callable:
@@ -86,6 +87,20 @@ def _unavailable_cuda_cls(name: str) -> Any:
             )
 
     return _UnavailableCudaCls
+
+
+# Keep this mapping in sync with the enum parsing on the C++ side.
+_RASTERIZE_FWD_IMPL_TO_ID = {"gemm": 0, "legacy": 1}
+
+
+def _parse_rasterize_fwd_impl(impl: RasterizeFwdImpl) -> int:
+    try:
+        return _RASTERIZE_FWD_IMPL_TO_ID[impl]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported rasterize_fwd_impl '{impl}'. Expected one of: "
+            f"{tuple(_RASTERIZE_FWD_IMPL_TO_ID)}."
+        ) from exc
 
 
 def _make_lazy_cuda_obj(name: str) -> Any:
@@ -840,6 +855,7 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [..., tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
+    rasterize_fwd_impl: RasterizeFwdImpl = "legacy",
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -857,6 +873,7 @@ def rasterize_to_pixels(
         masks: Optional tile mask to skip rendering GS to masked tiles. [..., tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+        rasterize_fwd_impl: Forward rasterization backend. One of {"gemm", "legacy"}.
 
     Returns:
         A tuple:
@@ -954,6 +971,7 @@ def rasterize_to_pixels(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
+        _parse_rasterize_fwd_impl(rasterize_fwd_impl),
     )
 
     if padded_channels > 0:
@@ -1724,6 +1742,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
+        rasterize_fwd_impl: int,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_3dgs_fwd"
@@ -1739,6 +1758,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            rasterize_fwd_impl,
         )
 
         ctx.save_for_backward(
@@ -1833,6 +1853,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             None,  # isect_offsets
             None,  # flatten_ids
             None,  # absgrad
+            None,  # rasterize_fwd_impl
         )
 
 
@@ -2768,6 +2789,7 @@ def rasterize_to_pixels_2dgs(
     packed: bool = False,
     absgrad: bool = False,
     distloss: bool = False,
+    rasterize_fwd_impl: RasterizeFwdImpl = "legacy",
 ) -> Tuple[Tensor, Tensor]:
     """Rasterize Gaussians to pixels.
 
@@ -2785,6 +2807,7 @@ def rasterize_to_pixels_2dgs(
         masks: Optional tile mask to skip rendering GS to masked tiles. [..., tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+        rasterize_fwd_impl: Forward rasterization backend. One of {"gemm", "legacy"}.
 
     Returns:
         A tuple:
@@ -2873,6 +2896,7 @@ def rasterize_to_pixels_2dgs(
         flatten_ids.contiguous(),
         absgrad,
         distloss,
+        _parse_rasterize_fwd_impl(rasterize_fwd_impl),
     )
 
     if padded_channels > 0:
@@ -2989,6 +3013,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         flatten_ids: Tensor,
         absgrad: bool,
         distloss: bool,
+        rasterize_fwd_impl: int,
     ) -> Tuple[Tensor, Tensor]:
         (
             render_colors,
@@ -3011,6 +3036,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            rasterize_fwd_impl,
         )
 
         ctx.save_for_backward(
@@ -3136,4 +3162,5 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             None,  # flatten_ids
             None,  # absgrad
             None,  # distloss
+            None,  # rasterize_fwd_impl
         )

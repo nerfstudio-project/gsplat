@@ -27,6 +27,7 @@ from ._helper import assert_shape
 from .cuda._wrapper import (
     RollingShutterType,
     CameraModel,
+    RasterizeFwdImpl,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
     RowOffsetStructuredSpinningLidarModelParametersExt,
@@ -277,6 +278,7 @@ def rasterization(
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: RasterizeMode = "classic",
+    rasterize_fwd_impl: RasterizeFwdImpl = "legacy",
     channel_chunk: int = 32,
     distributed: bool = False,
     camera_model: CameraModel = "pinhole",
@@ -330,6 +332,11 @@ def rasterization(
     .. note::
         **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians
         to a batch of images in one go, by simplly providing the batched `viewmats` and `Ks`.
+
+    .. note::
+        **Experimental GEMM Forward Rasterization**: Set `rasterize_fwd_impl="gemm"`
+        to force the GEMM forward raster backend, or keep the default
+        `rasterize_fwd_impl="legacy"` to use the original raster kernel.
 
     .. note::
         **Support N-D Features**: If `sh_degree` is None,
@@ -1180,6 +1187,7 @@ def rasterization(
                     backgrounds=backgrounds_chunk,
                     packed=packed,
                     absgrad=absgrad,
+                    rasterize_fwd_impl=rasterize_fwd_impl,
                 )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
@@ -1237,6 +1245,7 @@ def rasterization(
                 backgrounds=backgrounds,
                 packed=packed,
                 absgrad=absgrad,
+                rasterize_fwd_impl=rasterize_fwd_impl,
             )
 
     if extra_signals is not None:
@@ -1975,6 +1984,7 @@ def rasterization_2dgs(
     render_mode: RenderMode = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
+    rasterize_fwd_impl: RasterizeFwdImpl = "legacy",
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
@@ -1984,6 +1994,11 @@ def rasterization_2dgs(
 
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
+
+    .. note::
+        **Experimental GEMM Forward Rasterization**: Set `rasterize_fwd_impl="gemm"`
+        to force the GEMM forward raster backend, or keep the default
+        `rasterize_fwd_impl="legacy"` to use the original raster kernel.
 
     Args:
         means: The 3D centers of the Gaussians. [..., N, 3]
@@ -2021,6 +2036,7 @@ def rasterization_2dgs(
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
             `meta["means2d"].absgrad`. Default is False.
+        rasterize_fwd_impl: Forward rasterization backend. One of {"auto", "gemm", "legacy"}.
         channel_chunk: The number of channels to render in one go. Default is 32.
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
@@ -2254,6 +2270,7 @@ def rasterization_2dgs(
         packed=packed,
         absgrad=absgrad,
         distloss=distloss,
+        rasterize_fwd_impl=rasterize_fwd_impl,
     )
     render_normals_from_depth = None
     if render_mode_has_expected_depth(render_mode):
