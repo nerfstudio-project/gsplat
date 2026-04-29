@@ -16,17 +16,19 @@
 from __future__ import annotations
 
 import os
-from typing import Callable, Dict, List, Union
-
 import numpy as np
+from typing import TYPE_CHECKING, Callable, Dict, List, Union
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
 from gsplat import quat_scale_to_covar_preci
-from gsplat_scene import Scene
 from gsplat.relocation import compute_relocation
 from gsplat.utils import normalized_quat_to_rotmat
+
+if TYPE_CHECKING:
+    from gsplat_scene import Scene
 
 _MCMC_BACKEND_TORCH = {"torch", "pytorch", "py"}
 _MCMC_BACKEND_CUDA = {"cuda", "native", ""}

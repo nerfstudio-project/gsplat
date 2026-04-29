@@ -51,8 +51,6 @@ from .cuda._wrapper import (
     RowOffsetStructuredSpinningLidarModelParametersExt,
 )
 from .exporter import export_splats
-from gsplat_scene import GaussianScene, Scene
-from gsplat_stage import Stage
 from .optimizers import SelectiveAdam
 from .rendering import (
     RasterizeMode,
@@ -126,9 +124,6 @@ __all__ = [
     "fully_fused_projection_with_ut",
     "rasterize_to_pixels_eval3d",
     "export_splats",
-    "Scene",
-    "GaussianScene",
-    "Stage",
     "__version__",
     "has_2dgs",
     "has_3dgs",

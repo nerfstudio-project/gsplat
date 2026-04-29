@@ -16,14 +16,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Tuple, Union
 
 import torch
 from typing_extensions import Literal
 
 from .base import Strategy
-from gsplat_scene import Scene
 from .ops import duplicate, remove, reset_opa, split
+
+if TYPE_CHECKING:
+    from gsplat_scene import Scene
 
 
 @dataclass

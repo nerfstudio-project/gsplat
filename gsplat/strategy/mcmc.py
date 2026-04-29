@@ -18,14 +18,16 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, Union
+from typing import TYPE_CHECKING, Any, Dict, Union
 
 import torch
 from torch import Tensor
 
 from .base import Strategy
-from gsplat_scene import Scene
 from .ops import inject_noise_to_position, relocate, sample_add
+
+if TYPE_CHECKING:
+    from gsplat_scene import Scene
 
 
 @dataclass
