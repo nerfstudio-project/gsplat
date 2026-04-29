@@ -644,4 +644,14 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::Tensor &v_render_alphas, // [..., C, image_height, image_width, 1]
     const at::optional<at::Tensor> &v_render_normals // [..., C, image_height, image_width, 3]
 );
+// Fused MCMC perturbation: inject noise into positions based on covariance
+void mcmc_perturb_positions(
+    at::Tensor positions,            // [N, 3] in-place, float32
+    const at::Tensor &quats,         // [N, 4] wxyz pre-activation
+    const at::Tensor &scales,        // [N, 3] log-scale
+    const at::Tensor &opacities,     // [N] logit
+    const at::Tensor &noise,         // [N, 3] standard normal
+    double scaler
+);
+
 } // namespace gsplat

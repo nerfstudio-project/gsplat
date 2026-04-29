@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2024 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import os
 import numpy as np
 from typing import Callable, Dict, List, Union
 
@@ -26,6 +27,19 @@ from gsplat import quat_scale_to_covar_preci
 from gsplat_scene import Scene
 from gsplat.relocation import compute_relocation
 from gsplat.utils import normalized_quat_to_rotmat
+
+_MCMC_BACKEND_TORCH = {"torch", "pytorch", "py"}
+_MCMC_BACKEND_CUDA = {"cuda", "native", ""}
+_raw = os.environ.get("GSPLAT_MCMC_BACKEND", "").strip().lower()
+_force_torch_backend = _raw in _MCMC_BACKEND_TORCH
+if _raw and _raw not in _MCMC_BACKEND_TORCH | _MCMC_BACKEND_CUDA:
+    import warnings
+
+    warnings.warn(
+        f"GSPLAT_MCMC_BACKEND={_raw!r} not recognised; using default (CUDA with"
+        f" fallback). Valid: {sorted(_MCMC_BACKEND_TORCH | _MCMC_BACKEND_CUDA)}",
+        stacklevel=2,
+    )
 
 
 @torch.no_grad()
@@ -374,12 +388,82 @@ def sample_add(
 
 
 @torch.no_grad()
+def _cuda_fused_mcmc_perturb(
+    positions: Tensor,
+    quats: Tensor,
+    scales: Tensor,
+    opacities: Tensor,
+    scaler: float,
+) -> bool:
+    """Try the fused CUDA kernel for MCMC perturbation; return False if not applicable.
+
+    positions must be contiguous (mutated in-place); other tensors are made contiguous
+    via .contiguous() since the kernel only reads them. See
+    gsplat/cuda/csrc/MCMCPerturbCUDA.cu for the kernel.
+    """
+    try:
+        from gsplat.cuda._backend import _C
+    except ImportError:
+        _C = None  # type: ignore[assignment]
+    if _C is None or not positions.is_cuda:
+        return False
+    # positions is modified in-place — cannot .contiguous()-copy;
+    # fall back to PyTorch if non-contiguous.
+    if not positions.is_contiguous():
+        return False
+    # All inputs must be float32 CUDA tensors
+    for t in (positions, quats, scales, opacities):
+        if t.dtype != torch.float32 or not t.is_cuda:
+            return False
+    try:
+        noise = torch.randn_like(positions)
+        torch.ops.gsplat.mcmc_perturb_positions(
+            positions,
+            quats.contiguous(),
+            scales.contiguous(),
+            opacities.flatten().contiguous(),
+            noise,
+            float(scaler),
+        )
+        return True
+    except AttributeError:
+        return False
+    except RuntimeError as e:
+        import warnings
+
+        warnings.warn(
+            f"CUDA fused MCMC perturb failed, falling back to PyTorch: {e}",
+            stacklevel=2,
+        )
+        return False
+
+
+@torch.no_grad()
 def inject_noise_to_position(
     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     scaler: float,
 ):
+    """Add covariance- and opacity-weighted Gaussian noise to ``params["means"]`` in-place.
+
+    Prefers a fused CUDA kernel when available, with a pure-PyTorch fallback. The
+    backend can be overridden with the ``GSPLAT_MCMC_BACKEND`` env var:
+      * ``cuda`` / ``native`` / unset (default) — prefer the fused CUDA kernel.
+      * ``torch`` / ``pytorch`` / ``py`` — force the PyTorch fallback.
+    """
+    if not _force_torch_backend:
+        # Priority 1: native CUDA (single kernel launch)
+        if _cuda_fused_mcmc_perturb(
+            positions=params["means"],
+            quats=params["quats"],
+            scales=params["scales"],
+            opacities=params["opacities"],
+            scaler=scaler,
+        ):
+            return
+
+    # Priority 2: PyTorch fallback
     opacities = torch.sigmoid(params["opacities"].flatten())
     scales = torch.exp(params["scales"])
     covars, _ = quat_scale_to_covar_preci(
