@@ -51,8 +51,54 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 //   each thread handling PIXELS_PER_THREAD pixels in a vertical stride.
 // Shared memory per batch: CTA_SIZE * 80B = 2560B (vs 20480B with 256 threads).
 
+// Per-architecture hardware cap on thread blocks per SM. ptxas rejects
+// min_blocks_per_sm > HW cap under --warning-as-error.
+//   sm_90, sm_100, sm_120: 32 blocks/SM
+//   everything else:       16 blocks/SM (covers Ampere/Ada and anything older)
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 32
+#else
+    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 16
+#endif
+
+// Range endpoints of the CDIM-indexed schedule.
+#define GSPLAT_MIN_CDIM_FOR_HINT 1u
+#define GSPLAT_MAX_CDIM_FOR_HINT 24u
+
+// Target min_blocks at the endpoints of the schedule.
+//   - CDIM=1 : push occupancy up to the HW cap, but not above 24 (beyond this
+//              the kernel's natural register usage forces ptxas to spill).
+//   - CDIM=24: 16. HW cap on pre-sm_90, 25% occ on sm_90+; fits within the
+//              kernel's register footprint at full SH + extras.
+#define GSPLAT_MIN_BLOCKS_AT_MIN_CDIM \
+    (GSPLAT_ARCH_MAX_BLOCKS_PER_SM < 24 ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM : 24)
+#define GSPLAT_MIN_BLOCKS_AT_MAX_CDIM 16u
+
+// Per-CDIM occupancy hint for __launch_bounds__ min_blocks_per_sm.
+// Linear schedule from MIN_BLOCKS_AT_MIN_CDIM down to MIN_BLOCKS_AT_MAX_CDIM
+// over CDIM in [MIN_CDIM_FOR_HINT, MAX_CDIM_FOR_HINT]. Beyond that we emit
+// min_blocks=1 (no effective hint) — high-channel kernels carry enough
+// register pressure that forcing occupancy would spill.
+//   blocks = high - ((CDIM - min_cdim) * (high - low)) / (max_cdim - min_cdim)
+// Collapses to the constant low value on archs where high == low.
+template <uint32_t CDIM>
+constexpr uint32_t min_blocks_for_cdim() {
+    if constexpr (CDIM > GSPLAT_MAX_CDIM_FOR_HINT) {
+        return 1;
+    } else {
+        constexpr uint32_t high = GSPLAT_MIN_BLOCKS_AT_MIN_CDIM;
+        constexpr uint32_t low = GSPLAT_MIN_BLOCKS_AT_MAX_CDIM;
+        constexpr uint32_t cdim_span =
+            GSPLAT_MAX_CDIM_FOR_HINT - GSPLAT_MIN_CDIM_FOR_HINT;
+        constexpr uint32_t block_span = (high >= low) ? (high - low) : 0;
+        constexpr uint32_t decrement =
+            ((CDIM - GSPLAT_MIN_CDIM_FOR_HINT) * block_span) / cdim_span;
+        return (high > decrement) ? (high - decrement) : low;
+    }
+}
+
 template <uint32_t CDIM, uint32_t TILE_SIZE, uint32_t CTA_SIZE>
-__global__ void __launch_bounds__(CTA_SIZE)
+__global__ void __launch_bounds__(CTA_SIZE, min_blocks_for_cdim<CDIM>())
 rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -168,8 +214,11 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 pix_i[p] = lidar_device_coeffs->tiles_to_elements_map[element_start + elem].y;
                 pix_id[p] = pix_i[p] * image_width + pix_j[p];
             } else {
-                pix_j[p] = 0;
-                pix_i[p] = 0;
+                // Idle pad: mark out-of-bounds so the final `inside` check
+                // (pix_i < H && pix_j < W) rejects the write. Leaving (0,0)
+                // would race with the active thread covering pix (row=0, col=0).
+                pix_j[p] = image_width;
+                pix_i[p] = image_height;
                 pix_id[p] = 0;
                 done_mask |= (1u << p);
             }
