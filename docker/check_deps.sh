@@ -55,20 +55,30 @@ normalize_name()
 # ── Source file parsers ──────────────────────────────────────────────────
 
 # Extract dependency strings from a setup.py section.
-# Uses awk range patterns — assumes the closing ] of each list starts
-# its own line (standard Python formatting).  Nested brackets like
-# black[jupyter] don't have ] at the start of a line, so they are safe.
+# Imports the setup.py as a module (its setup() call is gated on
+# __name__ == "__main__") and reads INSTALL_REQUIRES / get_extras_require()
+# directly, so the parser sees whatever the build sees — no string-shape
+# assumptions.
 extract_setup_section()
 {
     local file=$1 section=$2
 
-    case $section in
-        install) awk '/install_requires[[:space:]]*=[[:space:]]*\[/,/^[[:space:]]*\]/' "$file" ;;
-        dev)     awk '/"dev"[[:space:]]*:[[:space:]]*\[/,/^[[:space:]]*\]/' "$file" ;;
-    esac \
-    | grep -oE '"[^"]+"' \
-    | tr -d '"' \
-    | grep -vxF dev        # filter out the "dev" dict key captured from '"dev": ['
+    python3 - "$file" "$section" <<'PY'
+import importlib.util
+import sys
+
+setup_path, section = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("setup", setup_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+if section == "install":
+    items = module.INSTALL_REQUIRES
+else:
+    items = module.get_extras_require()[section]
+
+print("\n".join(items))
+PY
 }
 
 # Extract deps from requirements.txt (skip comments and blank lines).
