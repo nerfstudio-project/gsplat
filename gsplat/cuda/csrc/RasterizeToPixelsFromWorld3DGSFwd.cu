@@ -144,20 +144,31 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     //   - [1+CDIM..1+CDIM+3): normal_out[3] (only written when render_normals != nullptr)
     // Each tile owns chunks_per_tile[tile_linear] slots, starting at
     // chunk_offsets[tile_linear]. Persist slot c (c in [0, num_chunks))
-    // corresponds to fwd state after batch (num_batches - 1 - c*CHUNK_BATCHES).
+    // corresponds to fwd state after logical batch (num_logical_batches - 1 - c*CHUNK_BATCHES),
+    // where one logical batch covers pixels_per_tile gaussians (matches bwd's batch unit).
     // chunk_offsets_csr and fwd_chunk_state are passed null-or-non-null in
     // lockstep by the launcher (gated on `total_chunks > 0`); both null ⇔
     // persistence disabled (e.g. `n_isects == 0`).
     const int32_t *__restrict__ chunk_offsets_csr, // [num_tiles + 1]
     float *__restrict__ fwd_chunk_state // [total_chunks, pixels_per_tile, 1 + CDIM + 3]    
 ) {
-    constexpr uint32_t BATCH_SIZE        = CTA_SIZE;
+    // FETCH_SIZE = gaussians fetched per cooperative-fetch round (one per
+    // thread; sized to the CTA so threads fetch in parallel without idling).
+    // LOGICAL_BATCH = gaussians per outer-loop iteration; matches the bwd's
+    // batch unit (= pixels_per_tile) so chunk-state persist boundaries land
+    // at the same gaussian positions the bwd's CSR view expects. Each logical
+    // batch is split into FETCHES_PER_BATCH cooperative fetch rounds.
+    constexpr uint32_t FETCH_SIZE        = CTA_SIZE;
     constexpr uint32_t PIXELS_PER_THREAD = TILE_SIZE * TILE_SIZE / CTA_SIZE;
+    constexpr uint32_t LOGICAL_BATCH     = TILE_SIZE * TILE_SIZE;
+    constexpr uint32_t FETCHES_PER_BATCH = LOGICAL_BATCH / FETCH_SIZE;
     constexpr uint32_t ROW_STRIDE        = CTA_SIZE / TILE_SIZE;
     constexpr uint32_t TILE_MASK         = TILE_SIZE - 1;
     constexpr uint32_t TILE_SHIFT        = __builtin_ctz(TILE_SIZE);
     constexpr uint32_t ALL_DONE          = (1u << PIXELS_PER_THREAD) - 1u;
     static_assert(PIXELS_PER_THREAD > 0, "PIXELS_PER_THREAD == 0 - CTA_SIZE must not exceed TILE_SIZE * TILE_SIZE");
+    static_assert(LOGICAL_BATCH % FETCH_SIZE == 0, "LOGICAL_BATCH must be a multiple of FETCH_SIZE");
+    static_assert(FETCHES_PER_BATCH >= 1, "FETCHES_PER_BATCH must be >= 1");
 
     const int32_t iid = blockIdx.x;
     const uint32_t grid_width  = gridDim.z;
@@ -437,17 +448,21 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         (tile_id == (int32_t)(grid_width * grid_height) - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    const uint32_t num_batches =
-        (range_end - range_start + BATCH_SIZE - 1) / BATCH_SIZE;
+    // Logical-batch count matches the bwd's view (= ceil(range / pixels_per_tile)),
+    // so persist boundaries align with the CSR-allocated slot positions.
+    const uint32_t num_logical_batches =
+        (range_end - range_start + LOGICAL_BATCH - 1) / LOGICAL_BATCH;
 
     // --- Chunk-state persistence setup (shared with bwd K1/K2) ---------------
     // Compute this tile's base slot in the CSR `fwd_chunk_state` buffer. Per
     // the CSR invariant (see `RasterizeChunkCSR.h`), the slot `c` for bwd
-    // chunk c corresponds to fwd state after batch `num_batches - 1 -
-    // c*CHUNK_BATCHES` (for c in [0, num_chunks)), so c=0 is the terminal
-    // state and c=num_chunks-1 is the earliest persistable state. We
-    // precompute per-pixel state write pointers here so the inner batch loop
-    // stays tight.
+    // chunk c corresponds to fwd state after logical batch
+    // `num_logical_batches - 1 - c*CHUNK_BATCHES` (for c in [0, num_chunks)),
+    // so c=0 is the terminal state and c=num_chunks-1 is the earliest
+    // persistable state. Logical batches advance by LOGICAL_BATCH gaussians,
+    // matching the bwd's per-batch gaussian count, so this slot index maps
+    // to the same gaussian position the bwd will read from. We precompute
+    // per-pixel state write pointers here so the inner batch loop stays tight.
     //
     // chunk_offsets_csr and fwd_chunk_state are passed null-or-non-null in
     // lockstep by the launcher (gated on `total_chunks > 0`); pin the
@@ -468,24 +483,25 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         ? static_cast<int64_t>(chunk_offsets_csr[tile_linear])
         : 0;
     // Number of chunks bwd will consume for this tile = ceil-div; we don't
-    // reference `num_chunks` directly because the per-batch persist check
-    // `(num_batches - 1 - b) % CHUNK_BATCHES == 0` naturally emits exactly
-    // `num_chunks` writes (one per persist boundary), and the partial-last-
-    // chunk case (num_batches % CHUNK_BATCHES != 0) maps to
-    // c = num_chunks - 1 being the oldest boundary, written when b = b_last
-    // where b_last = (num_batches - 1) - (num_chunks - 1)*CHUNK_BATCHES.
+    // reference `num_chunks` directly because the per-logical-batch persist
+    // check `(num_logical_batches - 1 - lb) % CHUNK_BATCHES == 0` naturally
+    // emits exactly `num_chunks` writes (one per persist boundary), and the
+    // partial-last-chunk case (num_logical_batches % CHUNK_BATCHES != 0) maps
+    // to c = num_chunks - 1 being the oldest boundary, written when
+    // lb = lb_last = (num_logical_batches-1) - (num_chunks-1)*CHUNK_BATCHES.
 
-    // Shared memory: CTA_SIZE entries
+    // Shared memory: FETCH_SIZE (= CTA_SIZE) entries; reused across each
+    // logical batch's FETCHES_PER_BATCH cooperative-fetch rounds.
     extern __shared__ int s[];
-    int32_t *id_batch = (int32_t *)s; // [BATCH_SIZE]
+    int32_t *id_batch = (int32_t *)s; // [FETCH_SIZE]
     vec4 *xyz_opacity_batch =
-        reinterpret_cast<vec4 *>(&id_batch[BATCH_SIZE]); // [BATCH_SIZE]
+        reinterpret_cast<vec4 *>(&id_batch[FETCH_SIZE]); // [FETCH_SIZE]
     mat3 *iscl_rot_batch =
-        reinterpret_cast<mat3 *>(&xyz_opacity_batch[BATCH_SIZE]); // [BATCH_SIZE]
+        reinterpret_cast<mat3 *>(&xyz_opacity_batch[FETCH_SIZE]); // [FETCH_SIZE]
     vec3 *scale_batch =
-        reinterpret_cast<vec3 *>(&iscl_rot_batch[BATCH_SIZE]); // [BATCH_SIZE]
+        reinterpret_cast<vec3 *>(&iscl_rot_batch[FETCH_SIZE]); // [FETCH_SIZE]
     vec3 *normal_batch =
-        reinterpret_cast<vec3 *>(&scale_batch[BATCH_SIZE]); // [BATCH_SIZE]
+        reinterpret_cast<vec3 *>(&scale_batch[FETCH_SIZE]); // [FETCH_SIZE]
 
     // Per-pixel state
     int32_t cur_idx[PIXELS_PER_THREAD];
@@ -545,156 +561,174 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         }
     };
 
-    #pragma unroll 1
-    for (uint32_t b = 0; b < num_batches; ++b) {
-        // Each thread fetches 1 gaussian from front to back
-        const uint32_t batch_start = range_start + BATCH_SIZE * b;
-        const uint32_t idx = batch_start + tid;
-        if (idx < range_end) {
-            // TODO: only support 1 camera for now so it is ok to abuse the index.
-            int32_t isect_id = flatten_ids[idx];
-            int32_t isect_bid = isect_id / (C * N);
-            int32_t isect_gid = isect_id % N;
-            id_batch[tid] = isect_id;
-            const vec3 xyz = means[isect_bid * N + isect_gid];
-            const float opac = opacities[isect_id];
-            xyz_opacity_batch[tid] = {xyz.x, xyz.y, xyz.z, opac};
-
-            const vec4 quat = quats[isect_bid * N + isect_gid];
-            vec3 scale = scales[isect_bid * N + isect_gid];
-
-            assert(glm::dot(quat, quat) > 0.f);
-            assert(scale[0] > 0.f && scale[1] > 0.f && scale[2] > 0.f);
-
-            mat3 R = quat_to_rotmat(quat);
-            mat3 S = mat3(
-                1.0f / scale[0], 0.f, 0.f,
-                0.f, 1.0f / scale[1], 0.f,
-                0.f, 0.f, 1.0f / scale[2]
-            );
-            iscl_rot_batch[tid] = S * glm::transpose(R);
-            scale_batch[tid] = scale;
-
-            if (return_normals) {
-                normal_batch[tid] = R[2];
+#pragma unroll 1
+    for (uint32_t lb = 0; lb < num_logical_batches; ++lb) {
+        // Each logical batch covers LOGICAL_BATCH (= pixels_per_tile) gaussians,
+        // matching the bwd's per-batch unit so persist boundaries align with
+        // the CSR slot positions. Internally it issues FETCHES_PER_BATCH
+        // cooperative fetch rounds of FETCH_SIZE (= CTA_SIZE) gaussians each
+        // — this is what keeps the CTA at one warp.
+        const uint32_t logical_batch_start = range_start + LOGICAL_BATCH * lb;
+#pragma unroll
+        for (uint32_t r = 0; r < FETCHES_PER_BATCH; ++r) {
+            const uint32_t batch_start = logical_batch_start + FETCH_SIZE * r;
+            // Skip rounds that fall past the tile's gaussian range (last
+            // logical batch may be partial). Each thread votes "no fetch"
+            // uniformly via the per-thread `idx >= range_end` guard below;
+            // here we only skip the cooperative fetch entirely when the
+            // whole round is past range_end.
+            if (batch_start >= (uint32_t)range_end) {
+                break;
             }
-        }
 
-        if constexpr (CTA_SIZE == 32) {
-            __syncwarp();
-        } else {
-            __syncthreads();
-        }
+            // Each thread fetches 1 gaussian from front to back
+            const uint32_t idx = batch_start + tid;
+            if (idx < range_end) {
+                // TODO: only support 1 camera for now so it is ok to abuse the index.
+                int32_t isect_id = flatten_ids[idx];
+                int32_t isect_bid = isect_id / (C * N);
+                int32_t isect_gid = isect_id % N;
+                id_batch[tid] = isect_id;
+                const vec3 xyz = means[isect_bid * N + isect_gid];
+                const float opac = opacities[isect_id];
+                xyz_opacity_batch[tid] = {xyz.x, xyz.y, xyz.z, opac};
 
-        // Process gaussians in this batch
-        const uint32_t batch_size = min(BATCH_SIZE, ((uint32_t)range_end - batch_start));
-        for (uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t) {
-            const vec4 xyz_opac = xyz_opacity_batch[t];
-            const float opac = xyz_opac[3];
-            const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
-            const mat3 iscl_rot = iscl_rot_batch[t];
-            const vec3 scale = scale_batch[t];
+                const vec4 quat = quats[isect_bid * N + isect_gid];
+                vec3 scale = scales[isect_bid * N + isect_gid];
 
-#pragma unroll
-            for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-                if (done_mask & (1u << p)) {
-                    continue;
-                }
+                assert(glm::dot(quat, quat) > 0.f);
+                assert(scale[0] > 0.f && scale[1] > 0.f && scale[2] > 0.f);
 
-                const vec3 gro = iscl_rot * (ray_o[p] - xyz);
-                const vec3 grd = safe_normalize(iscl_rot * ray_d[p]);
-                const vec3 gcrod = glm::cross(grd, gro);
-                const float grayDist = glm::dot(gcrod, gcrod);
-                const float power = -0.5f * grayDist;
-                float max_response = __expf(power);
-                float alpha = min(MAX_ALPHA, opac * max_response);
-
-                if (alpha < ALPHA_THRESHOLD) {
-                    continue;
-                }
-
-                float hit_distance = 0.0f;
-                if (use_hit_distance) {
-                    const float hit_t = glm::dot(grd, -gro);
-                    const vec3 grds = scale * (grd * hit_t);
-                    hit_distance = glm::length(grds);
-                }
-
-                const float next_T = T[p] * (1.0f - alpha);
-                if (next_T <= TRANSMITTANCE_THRESHOLD) {
-                    done_mask |= (1u << p);
-                    continue;
-                }
-
-                int32_t isect_id = id_batch[t];
-                const float vis = alpha * T[p];
-                const float *c_ptr = colors + isect_id * CDIM;
-
-                if (use_hit_distance) {
-#pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        const float value = (k == CDIM - 1) ? hit_distance : c_ptr[k];
-                        pix_out[p][k] += value * vis;
-                    }
-                } else {
-#pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        pix_out[p][k] += c_ptr[k] * vis;
-                    }
-                }
+                mat3 R = quat_to_rotmat(quat);
+                mat3 S = mat3(
+                    1.0f / scale[0], 0.f, 0.f,
+                    0.f, 1.0f / scale[1], 0.f,
+                    0.f, 0.f, 1.0f / scale[2]
+                );
+                iscl_rot_batch[tid] = S * glm::transpose(R);
+                scale_batch[tid] = scale;
 
                 if (return_normals) {
-                    const vec3 unnormalized_normal = normal_batch[t];
-                    const bool flipped = glm::dot(unnormalized_normal, ray_d[p]) > 0.0f;
-                    const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
-                    const vec3 normal = safe_normalize(unnormalized_flipped);
-                    normal_out[p] += normal * vis;
+                    normal_batch[tid] = R[2];
                 }
+            }
 
-                cur_idx[p] = batch_start + t;
-                n_accumulated[p]++;
-                T[p] = next_T;
+            if constexpr (CTA_SIZE == 32) {
+                __syncwarp();
+            } else {
+                __syncthreads();
+            }
+
+            // Process gaussians in this fetch round
+            const uint32_t batch_size = min(FETCH_SIZE, ((uint32_t)range_end - batch_start));
+            for (uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t) {
+                const vec4 xyz_opac = xyz_opacity_batch[t];
+                const float opac = xyz_opac[3];
+                const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+                const mat3 iscl_rot = iscl_rot_batch[t];
+                const vec3 scale = scale_batch[t];
+
+#pragma unroll
+                for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
+                    if (done_mask & (1u << p)) {
+                        continue;
+                    }
+
+                    const vec3 gro = iscl_rot * (ray_o[p] - xyz);
+                    const vec3 grd = safe_normalize(iscl_rot * ray_d[p]);
+                    const vec3 gcrod = glm::cross(grd, gro);
+                    const float grayDist = glm::dot(gcrod, gcrod);
+                    const float power = -0.5f * grayDist;
+                    float max_response = __expf(power);
+                    float alpha = min(MAX_ALPHA, opac * max_response);
+
+                    if (alpha < ALPHA_THRESHOLD) {
+                        continue;
+                    }
+
+                    float hit_distance = 0.0f;
+                    if (use_hit_distance) {
+                        const float hit_t = glm::dot(grd, -gro);
+                        const vec3 grds = scale * (grd * hit_t);
+                        hit_distance = glm::length(grds);
+                    }
+
+                    const float next_T = T[p] * (1.0f - alpha);
+                    if (next_T <= TRANSMITTANCE_THRESHOLD) {
+                        done_mask |= (1u << p);
+                        continue;
+                    }
+
+                    int32_t isect_id = id_batch[t];
+                    const float vis = alpha * T[p];
+                    const float *c_ptr = colors + isect_id * CDIM;
+
+                    if (use_hit_distance) {
+#pragma unroll
+                        for (uint32_t k = 0; k < CDIM; ++k) {
+                            const float value = (k == CDIM - 1) ? hit_distance : c_ptr[k];
+                            pix_out[p][k] += value * vis;
+                        }
+                    } else {
+#pragma unroll
+                        for (uint32_t k = 0; k < CDIM; ++k) {
+                            pix_out[p][k] += c_ptr[k] * vis;
+                        }
+                    }
+
+                    if (return_normals) {
+                        const vec3 unnormalized_normal = normal_batch[t];
+                        const bool flipped = glm::dot(unnormalized_normal, ray_d[p]) > 0.0f;
+                        const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+                        const vec3 normal = safe_normalize(unnormalized_flipped);
+                        normal_out[p] += normal * vis;
+                    }
+
+                    cur_idx[p] = batch_start + t;
+                    n_accumulated[p]++;
+                    T[p] = next_T;
+                }
             }
         }
 
         // --- Chunk-boundary persist ---------------------------------------
-        // After finishing batch `b`, if this batch is a persist boundary
-        // write the current per-pixel state into fwd_chunk_state. A batch is
-        // a persist boundary when (num_batches - 1 - b) is a non-negative
-        // multiple of CHUNK_BATCHES; the corresponding chunk index is
-        // c = (num_batches - 1 - b) / CHUNK_BATCHES.
+        // After finishing logical batch `lb`, if this batch is a persist
+        // boundary write the current per-pixel state into fwd_chunk_state. A
+        // logical batch is a persist boundary when (num_logical_batches - 1
+        // - lb) is a non-negative multiple of CHUNK_BATCHES; the corresponding
+        // chunk index is c = (num_logical_batches - 1 - lb) / CHUNK_BATCHES.
         //
         // The lambda is called uniformly across all threads in the block
         // (no divergent control): every thread's T/pix_out/normal_out is
         // valid at this program point since we're outside the per-Gaussian
         // inner loop. This keeps the writes coalesced per CSR row.
         if (persist_chunks) {
-            const int32_t diff = static_cast<int32_t>(num_batches) - 1 -
-                                 static_cast<int32_t>(b);
+            const int32_t diff = static_cast<int32_t>(num_logical_batches) - 1 -
+                                 static_cast<int32_t>(lb);
             if (diff >= 0 && (diff % CHUNK_BATCHES) == 0) {
                 persist_state(static_cast<uint32_t>(diff) / CHUNK_BATCHES);
             }
         }
 
         // Block-level early exit + inter-batch sync barrier
-        if (__syncthreads_count(done_mask == ALL_DONE) >= BATCH_SIZE) {
+        if (__syncthreads_count(done_mask == ALL_DONE) >= CTA_SIZE) {
             // Block-level early exit: every pixel has hit T <=
             // TRANSMITTANCE_THRESHOLD (or was never inside). Remaining
             // persist boundaries therefore all reflect the terminal state
             // each thread holds now. Emit them before breaking so the CSR
-            // slot array is completely populated — bwd K1-lite / K1.5' / K2
-            // variants will be able to load any slot `c` in [0, num_chunks)
-            // without needing to know which batches actually executed.
+            // slot array is completely populated — bwd K2 will be able to
+            // load any slot `c` in [0, num_chunks) without needing to know
+            // which batches actually executed.
             if (persist_chunks) {
-                for (uint32_t bb = b; bb < num_batches; ++bb) {
+                for (uint32_t lbb = lb + 1; lbb < num_logical_batches; ++lbb) {
                     const int32_t diff =
-                        static_cast<int32_t>(num_batches) - 1 -
-                        static_cast<int32_t>(bb);
+                        static_cast<int32_t>(num_logical_batches) - 1 -
+                        static_cast<int32_t>(lbb);
                     if (diff >= 0 && (diff % CHUNK_BATCHES) == 0) {
                         persist_state(static_cast<uint32_t>(diff) / CHUNK_BATCHES);
                     }
                 }
-            }            
+            }
             break;
         }
     }
