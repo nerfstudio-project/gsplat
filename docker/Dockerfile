@@ -108,6 +108,18 @@ EOS
 # Test/dev dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
+    # Resolve the cupy variant matching this image's CUDA toolkit. setup.py
+    # detects the local CUDA major and exposes the wheel name (cupy-cuda12x,
+    # cupy-cuda13x, ...) via get_extras_require(); we read it and pin our
+    # version on top so the Dockerfile and source stay in sync when the base
+    # image's CUDA major changes.
+    cupy_pkg=$(cd /opt/dep-check && python3 -c '
+import setup
+pkgs = [d for d in setup.get_extras_require()["dev"] if d.startswith("cupy")]
+assert len(pkgs) == 1, f"expected one cupy entry in dev extras, got {pkgs}"
+print(pkgs[0])
+')
+
     # Dev/test deps
     packages=(
         "black[jupyter]==22.3.0"
@@ -123,7 +135,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         "pyyaml==6.0.1"
         "build==1.3.0"
         "twine==1.6.0"
-        "cupy==13.6.0"
+        "${cupy_pkg}==13.6.0"
         "nerfacc==0.5.3"
         "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
         "imageio[ffmpeg]==2.37.2"
@@ -132,7 +144,12 @@ RUN --mount=type=tmpfs,target=/tmp \
 
     check_gsplat_deps.sh -f /opt/dep-check/setup.py:dev -- "${packages[@]}"
 
-    # Tests need cupy, let install faster (and smaller) by targeting a specific compute and rely on CUDA JIT.
+    # Tests need cupy. The prebuilt cupy-cudaXXx wheel installs without
+    # compiling against the local toolkit and relies on CUDA JIT at runtime.
+    # The CUPY_* env vars below are no-ops on the wheel path, but kept so
+    # that if _detect_cupy_requirement() ever falls back to the source
+    # `cupy` (no nvcc detected), the source build is still parallelized
+    # and targeted to a single compute capability.
     CUPY_NUM_BUILD_JOBS=$(nproc) \
     CUPY_NUM_NVCC_THREADS=$(nproc) \
     CUPY_NVCC_GENERATE_CODE=arch=compute_80,code=compute_80 \
