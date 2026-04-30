@@ -39,6 +39,37 @@ if [ $# -eq 0 ]; then
     exit 0
 fi
 
+# Skip `pip install -e` when the package is already installed in the active
+# interpreter and no source file is newer than the egg-info marker (which pip
+# rewrites on every editable install). pip install -e always rebuilds the
+# editable wheel and reinstalls — even when nothing changed — so this guard is
+# the only way to make repeated runs cheap. Removing the egg-info dir or pip
+# uninstalling the package both force a fresh install.
+install_one()
+{
+    local pkg="$1"
+    local dist="gsplat_${pkg}"
+    local dir="$SCRIPT_DIR/$pkg"
+    local marker="$dir/${dist}.egg-info/PKG-INFO"
+
+    # find_spec checks the package is importable without actually loading it
+    # (a real `import` of any of these triggers torch and costs ~2s each).
+    if [[ -f "$marker" ]] \
+       && python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('${dist}') else 1)" >/dev/null 2>&1 \
+       && [[ -z "$(find "$dir" -type f \
+                \( -name '*.py' -o -name '*.toml' -o -name '*.cu' \
+                   -o -name '*.cuh' -o -name '*.cpp' -o -name '*.cc' \
+                   -o -name '*.h'  -o -name '*.hpp' \) \
+                -newer "$marker" -print -quit)" ]]
+    then
+        echo "Skipping ${dist}: up to date"
+        return 0
+    fi
+
+    echo "Installing ${dist}..."
+    (cd "$dir" && pip install -e .)
+}
+
 PACKAGE=$1
 
 check_no_build_isolation_deps() {
@@ -49,13 +80,8 @@ check_no_build_isolation_deps() {
 }
 
 case $PACKAGE in
-    geometry)
-        echo "Installing gsplat-geometry..."
-        (cd "$SCRIPT_DIR/geometry" && pip install -e .)
-        ;;
-    scene)
-        echo "Installing gsplat-scene..."
-        (cd "$SCRIPT_DIR/scene" && pip install -e .)
+    geometry|scene|stage)
+        install_one "$PACKAGE"
         ;;
     sensors)
         python -c "import importlib.metadata as m; m.version('gsplat-geometry')" >/dev/null 2>&1 || {
@@ -65,10 +91,6 @@ case $PACKAGE in
         echo "Installing gsplat-sensors..."
         check_no_build_isolation_deps
         (cd "$SCRIPT_DIR/sensors" && pip install --no-build-isolation -e .)
-        ;;
-    stage)
-        echo "Installing gsplat-stage..."
-        (cd "$SCRIPT_DIR/stage" && pip install -e .)
         ;;
     *)
         echo "Unknown package: $PACKAGE" >&2

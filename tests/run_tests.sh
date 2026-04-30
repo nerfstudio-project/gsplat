@@ -303,11 +303,21 @@ elif $do_ssh; then
     # -e: log connections/disconnections to stderr instead of syslog
     shell_args+=(/usr/sbin/sshd -D -e)
 else
+    # libs that must be `pip install -e`'d into the venv before pytest runs.
+    # Listed once and joined into the bash -lc command string below; adding a
+    # new lib only needs an extra array entry.
+    install_libs=(
+        geometry
+        scene
+        stage
+    )
+    printf -v install_chain 'libs/install.sh %s && ' "${install_libs[@]}"
+
     if $do_sanitize; then
         shell_args+=(
             /bin/bash
             -lc
-            'libs/install.sh geometry && exec /usr/local/cuda/bin/compute-sanitizer /usr/local/venv/bin/pytest "$@"'
+            "${install_chain}"'exec /usr/local/cuda/bin/compute-sanitizer /usr/local/venv/bin/pytest "$@"'
             bash
         )
         if $do_verbose; then
@@ -316,11 +326,10 @@ else
         run_args+=(-e DEBUG=1) # it's helpful for triggering asserts and full symbol info
         run_args+=(--privileged) # compute-sanitizer sometimes segfaults if not running on privileged container
     else
-        # Install the geometry package; pass tests/ and libs/geometry/functional on the pytest CLI when mirroring CI.
         shell_args+=(
             /bin/bash
             -lc
-            'libs/install.sh geometry && exec pytest "$@"'
+            "${install_chain}"'exec pytest "$@"'
             bash
         )
         if $do_verbose; then
