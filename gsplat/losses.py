@@ -205,6 +205,65 @@ def depth_l1_loss(
     return F.l1_loss(disp, disp_gt) * scene_scale
 
 
+def binocular_disparity_l1(
+    pred_depth: Tensor,
+    gt_depth: Tensor,
+    mask: Optional[Tensor] = None,
+    eps: float = 1e-7,
+) -> Tensor:
+    """L1 loss in inverse-depth (disparity) space, with optional masking.
+
+    Mask-aware variant of :func:`depth_l1_loss` ported from G-SHARP v0.2's
+    ``EndoRunner.compute_depth_loss`` (binocular branch). Implementation
+    pending on branch ``vnath_gsharp``.
+
+    Args:
+        pred_depth: Predicted depth, shape ``(..., H, W)``.
+        gt_depth: Ground-truth depth, same shape as *pred_depth*.
+        mask: Optional binary mask; 1 = include pixel, 0 = ignore.
+        eps: Small constant added before reciprocal for numerical safety.
+    """
+    raise NotImplementedError("vnath_gsharp: binocular_disparity_l1 pending")
+
+
+def pearson_depth_loss(
+    pred_depth: Tensor,
+    gt_depth: Tensor,
+    mask: Optional[Tensor] = None,
+) -> Tensor:
+    """Monocular depth loss: ``1 - Pearson r`` on masked flattened pairs.
+
+    Ported from G-SHARP v0.2 (monocular branch). Implementation pending on
+    branch ``vnath_gsharp``.
+    """
+    raise NotImplementedError("vnath_gsharp: pearson_depth_loss pending")
+
+
+# ---------------------------------------------------------------------------
+# Mask-aware photometric wrappers (G-SHARP v0.2)
+# ---------------------------------------------------------------------------
+
+
+def masked_l1(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
+    """L1 over only the ``mask == 1`` region.
+
+    Mask-aware wrapper around :func:`l1_loss`, ported from G-SHARP v0.2 to
+    zero out tool / dynamic-object regions. Safe when mask is all-zero.
+    Implementation pending on branch ``vnath_gsharp``.
+    """
+    raise NotImplementedError("vnath_gsharp: masked_l1 pending")
+
+
+def masked_ssim(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
+    """SSIM over only the ``mask == 1`` region.
+
+    Mask-aware wrapper around :func:`ssim_loss`, ported from G-SHARP v0.2 to
+    zero out tool / dynamic-object regions. Implementation pending on branch
+    ``vnath_gsharp``.
+    """
+    raise NotImplementedError("vnath_gsharp: masked_ssim pending")
+
+
 # ---------------------------------------------------------------------------
 # Loss function dispatch
 # ---------------------------------------------------------------------------

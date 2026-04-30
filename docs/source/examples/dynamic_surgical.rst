@@ -4,7 +4,7 @@ Dynamic Surgical Scene Reconstruction (G-SHARP port, experimental)
 .. note::
 
    This tutorial is **scaffolding only** on branch ``vnath_gsharp``. The
-   underlying modules (``gsplat.losses_depth``, ``gsplat.regularizers``,
+   underlying modules (the G-SHARP additions in ``gsplat.losses``, ``gsplat.regularizers``,
    ``gsplat.init_utils``, ``gsplat.training``, ``gsplat.contrib.dynamic``) are
    stubs pending implementation. See the proposal at
    :doc:`../proposals/gsharp_v0_2_port` for the full plan.
@@ -49,7 +49,7 @@ Quickstart
 .. code-block:: bash
 
    # (once the vnath_gsharp branch lands implementation)
-   python examples/dynamic_trainer.py \
+   python examples/dynamic_surgical_trainer.py \
        --data_dir path/to/endonerf_pulling \
        --dataset_type endonerf \
        --depth_mode binocular \

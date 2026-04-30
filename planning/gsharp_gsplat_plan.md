@@ -24,7 +24,7 @@ Destination: `gsplat/`
 flowchart LR
   subgraph gsplatCore ["gsplat/ (core, stable)"]
     rendering["rendering.py<br/>rasterization()"]
-    losses["losses.py + losses_depth.py (NEW)<br/>depth/mask losses"]
+    losses["losses.py<br/>+ depth/mask wrappers (NEW)"]
     regs["regularizers.py (NEW)<br/>occlusion-TV, mask dilation"]
     init["init_utils.py (NEW)<br/>multi-frame depth unprojection"]
     sched["training/schedulers.py (NEW)<br/>TwoStageScheduler"]
@@ -40,7 +40,7 @@ flowchart LR
 
   subgraph examplesDir ["examples/"]
     endoDs["datasets/endonerf.py (NEW)"]
-    dynTrain["dynamic_trainer.py (NEW)"]
+    dynTrain["dynamic_surgical_trainer.py (NEW)"]
   end
 
   rendering --> dynstrat
@@ -67,7 +67,7 @@ flowchart LR
 
 | Component | New file | G-SHARP source |
 |---|---|---|
-| Binocular disparity L1 loss | `gsplat/losses_depth.py` (to be merged into `gsplat/losses.py`) | `EndoRunner.compute_depth_loss`, `training/gsplat_train.py` 906–960 |
+| Binocular disparity L1 loss | `gsplat/losses.py` (added alongside existing depth losses) | `EndoRunner.compute_depth_loss`, `training/gsplat_train.py` 906–960 |
 | Pearson depth loss (mono) | same | same |
 | Masked L1 / SSIM wrappers | same | `training/gsplat_train.py` 1059–1101 |
 | Occlusion-TV regularizer | `gsplat/regularizers.py` | `compute_tv_loss_targeted`, `training/gsplat_train.py` 1925–2028 |
@@ -91,7 +91,7 @@ flowchart LR
 | Deliverable | Path |
 |---|---|
 | EndoNeRF/SCARED dataset loader | `gsplat/examples/datasets/endonerf.py` |
-| Dynamic-scene trainer recipe | `gsplat/examples/dynamic_trainer.py` |
+| Dynamic-scene trainer recipe | `gsplat/examples/dynamic_surgical_trainer.py` |
 | Tutorial | `gsplat/docs/source/examples/dynamic_surgical.rst` |
 | Contrib API docs | `gsplat/docs/source/apis/contrib.rst` |
 | Full proposal inside repo | `gsplat/docs/source/proposals/gsharp_v0_2_port.rst` |
