@@ -38,13 +38,13 @@ Core (stable) additions:
      - New file
      - G-SHARP source
    * - Binocular disparity L1 loss
-     - ``gsplat/losses_depth.py``
+     - ``gsplat/losses.py`` (added alongside existing depth losses)
      - ``EndoRunner.compute_depth_loss``, ``training/gsplat_train.py`` 906–960
    * - Pearson depth loss (mono)
-     - ``gsplat/losses_depth.py``
+     - ``gsplat/losses.py`` (added alongside existing depth losses)
      - same
    * - Masked L1 / SSIM wrappers
-     - ``gsplat/losses_depth.py``
+     - ``gsplat/losses.py`` (added alongside existing depth losses)
      - ``training/gsplat_train.py`` 1059–1101
    * - Occlusion-TV regularizer
      - ``gsplat/regularizers.py``
@@ -98,7 +98,7 @@ Examples / docs:
    * - EndoNeRF/SCARED dataset loader
      - ``examples/datasets/endonerf.py``
    * - Dynamic-scene trainer recipe
-     - ``examples/dynamic_trainer.py``
+     - ``examples/dynamic_surgical_trainer.py``
    * - Tutorial
      - ``docs/source/examples/dynamic_surgical.rst``
    * - Contrib API docs

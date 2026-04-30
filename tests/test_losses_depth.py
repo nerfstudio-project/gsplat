@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Scaffolding tests for gsplat.losses_depth (branch: vnath_gsharp).
+"""Scaffolding tests for the G-SHARP v0.2 additions to ``gsplat.losses`` (branch: vnath_gsharp).
 
 Every test in this file is skipped until the corresponding implementation
 lands. The skip markers document the intended positive / negative coverage.
