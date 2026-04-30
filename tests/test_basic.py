@@ -2974,9 +2974,10 @@ def test_fwd_chunk_state_c0_matches_terminal_after_early_exit():
         isect_tiles,
     )
 
-    tile_size = 16
+    # 3DGUT compact-CTA forward kernel hardcodes TILE_SIZE = 8.
+    tile_size = 8
     width = height = tile_size  # single tile
-    pixels_per_tile = tile_size * tile_size  # 256
+    pixels_per_tile = tile_size * tile_size  # 64
 
     # Enough gaussians per tile that num_batches > CHUNK_BATCHES. The
     # per-batch count matches `block_size = pixels_per_tile`; six batches
