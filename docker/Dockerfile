@@ -3,6 +3,13 @@
 # Fix the base image to avoid spurious rebuilds
 ARG BASE_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d39279f2cf664fbb9b5d5f21de104b79745ea29bf2cb
 
+# Bumped on every image release (mirrors IMAGE_TAG in config.yaml). Used to
+# bake the venv at /var/cache/venv-${IMAGE_VERSION} so a per-version cache
+# volume mounted at the same sub-path is auto-populated by Docker on first
+# use, and old version's venvs coexist instead of forcing --reset-cache on
+# image bumps.
+ARG IMAGE_VERSION
+
 # Downloads and installs ccache for build acceleration --------------------------------
 FROM alpine:3.19.1 as ccache
 # We need a fairly recent ccache recent ccache with proper nvcc support.
@@ -16,6 +23,7 @@ EOS
 
 # Base layer with Python, apt configuration, and virtual environment setup ------------
 FROM ${BASE_IMAGE} as python
+ARG IMAGE_VERSION
 SHELL ["/bin/bash", "-ex", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -52,7 +60,14 @@ ENV PYTHON_VENV_PATH=/usr/local/venv
 ENV PATH="$PYTHON_VENV_PATH/bin:$PATH"
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    python3 -m venv "$PYTHON_VENV_PATH"
+    # Bake the venv at /var/cache/venv-${IMAGE_VERSION}. At runtime the caller
+    # mounts a per-version volume at the same sub-path; Docker auto-populates
+    # a fresh volume from the image's content here, so editable pip installs
+    # survive --rm and image bumps coexist (each tag gets its own volume).
+    # The symlink is created first because python's venv module refuses to
+    # initialize into a symlinked path, so we point it at the real target.
+    ln -s /var/cache/venv-${IMAGE_VERSION} "$PYTHON_VENV_PATH"
+    python3 -m venv /var/cache/venv-${IMAGE_VERSION}
 EOS
 
 # Installs all GSplat dependencies (including dev dependencies) -----------
@@ -200,8 +215,13 @@ EOS
 # and all gsplat dependencies into an image.
 
 FROM python as main
+ARG IMAGE_VERSION
 
-COPY --link --from=gsplat-deps "$PYTHON_VENV_PATH/" "$PYTHON_VENV_PATH/"
+# Copy the populated venv via its real path. With --link, copying onto
+# $PYTHON_VENV_PATH/ (the symlink created in the python stage) would shadow
+# the symlink with a fresh dir layer, so we copy to the versioned path and
+# leave the inherited symlink intact.
+COPY --link --from=gsplat-deps /var/cache/venv-${IMAGE_VERSION}/ /var/cache/venv-${IMAGE_VERSION}/
 COPY --link --from=gsplat-deps /opt/dep-check/ /opt/dep-check/
 COPY --link --from=ccache ccache /usr/local/bin/ccache
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
@@ -242,6 +262,12 @@ RUN <<EOS
     # shared persistent cache (ccache, CUDA JIT, pip).  Acceptable in a
     # local dev-only image; do NOT use in production/shared environments.
     chmod 777 /var/cache
+
+    # Same justification: any host UID mapped into the container needs to
+    # install editable packages (e.g. gsplat-geometry) into the venv at
+    # runtime. Make every file and directory in the venv writable by
+    # anyone. Dev-only image — do NOT use in production/shared environments.
+    chmod -R a+w "$PYTHON_VENV_PATH"
 
     ccache --max-size=20G
 
