@@ -453,7 +453,20 @@ def main() -> None:
             "when rays is None."
         ),
     )
+    parser.add_argument(
+        "--no-rays",
+        action="store_true",
+        help=(
+            "Strip the `rays` tensor from the captured inputs (set to None) "
+            "before replay, forcing the kernel to synthesise rays from the "
+            "camera model on the fly. Use this to profile the rays-synthesis "
+            "code path on captures that originally embed precomputed rays. "
+            "Mutually exclusive with --ensure-rays."
+        ),
+    )
     args = parser.parse_args()
+    if args.ensure_rays and args.no_rays:
+        parser.error("--ensure-rays and --no-rays are mutually exclusive")
 
     print(f"[gsplat.profile] Loading inputs from {args.input}")
     inputs: dict[str, Any] = torch.load(
@@ -468,6 +481,16 @@ def main() -> None:
             and inputs[k].is_floating_point()
         ):
             inputs[k] = inputs[k].requires_grad_(True)
+
+    if args.no_rays:
+        if inputs.get("rays") is None:
+            print("[gsplat.profile] --no-rays: skipping (rays already None)")
+        else:
+            print(
+                f"[gsplat.profile] --no-rays: stripping rays "
+                f"{tuple(inputs['rays'].shape)} from inputs"
+            )
+            inputs["rays"] = None
 
     if args.ensure_rays and inputs.get("rays") is None:
         cam_model = inputs.get("camera_model", "pinhole")
