@@ -504,7 +504,7 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const uint32_t num_logical_batches =
         (range_end - range_start + LOGICAL_BATCH - 1) / LOGICAL_BATCH;
 
-    // --- Chunk-state persistence setup (shared with bwd K1/K2) ---------------
+    // --- Chunk-state persistence setup (shared with bwd gradient kernel) -----
     // Compute this tile's base slot in the CSR `fwd_chunk_state` buffer. Per
     // the CSR invariant (see `RasterizeChunkCSR.h`), the slot `c` for bwd
     // chunk c corresponds to fwd state after logical batch
@@ -571,10 +571,10 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // block call this together — one slot row per thread (tr), with thread
     // rank tr indexing the pixels_per_tile axis. Threads where `inside ==
     // false` write their trivial (T=1, pix_out=0, normal_out=0) state into
-    // the slot; bwd K1 writes similar no-op states in the same positions and
-    // bwd variants that consume these slots also ignore out-of-bounds pixels
-    // via the same `inside` check, so the write is harmless but kept to keep
-    // the memory layout fully populated.
+    // the slot; the bwd gradient kernel reads the slot unconditionally but
+    // ignores out-of-bounds pixels in its downstream gradient walk via the
+    // same `inside` check, so the trivial values never propagate. The
+    // writes are kept so the memory layout stays fully populated.
     //
     // `c=0` corresponds to the terminal state (what bwd chunk 0 starts from);
     // `c=num_chunks-1` corresponds to the earliest persistable state. The
@@ -775,9 +775,9 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             // TRANSMITTANCE_THRESHOLD (or was never inside). Remaining
             // persist boundaries therefore all reflect the terminal state
             // each thread holds now. Emit them before breaking so the CSR
-            // slot array is completely populated — bwd K2 will be able to
-            // load any slot `c` in [0, num_chunks) without needing to know
-            // which batches actually executed.
+            // slot array is completely populated — the bwd gradient kernel
+            // can then load any slot `c` in [0, num_chunks) without needing
+            // to know which batches actually executed.
             if (persist_chunks) {
                 for (uint32_t lbb = lb + 1; lbb < num_logical_batches; ++lbb) {
                     const int32_t diff =

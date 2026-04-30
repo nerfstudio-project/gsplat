@@ -27,7 +27,7 @@
 namespace gsplat {
 
 // Number of batches per chunk. Must match the value used by the backward
-// K1/K1.5/K2 kernels and the forward chunk-boundary persist. Smaller values
+// gradient kernel and the forward chunk-boundary persist. Smaller values
 // expose more chunk-level parallelism to bwd at the cost of more temp
 // memory writes in fwd.
 constexpr uint32_t CHUNK_BATCHES = 4;
@@ -42,9 +42,10 @@ constexpr uint32_t FWD_CHUNK_STATE_NORMAL_EXTRA = 3;
 
 // Host helper: compute the CSR chunk structure (chunks_per_tile,
 // chunk_offsets, total_chunks) from `tile_offsets`. Shared by both fwd
-// (to size the persist buffer) and bwd (to size K1/K2 grids). The blocking
-// `.item<int32_t>()` readback is kept here (not compatible with CUDA graph
-// capture, but cheap compared to the former host-side scan over tile_offsets).
+// (to size the persist buffer) and bwd (to size the gradient-kernel grid).
+// The blocking `.item<int32_t>()` readback is kept here (not compatible
+// with CUDA graph capture, but cheap compared to the former host-side scan
+// over tile_offsets).
 //
 // `dummy_options` supplies the target device; typically `means.options()`.
 // Returns {chunks_per_tile [num_tiles] int32, chunk_offsets [num_tiles+1]
