@@ -44,7 +44,7 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 namespace cg = cooperative_groups;
 
 // Pad CDIM to an odd stride when it would be even, so that the per-thread
-// STORE `rgbs_batch[tr * stride + k] = colors[...]` in K2 writes to distinct
+// STORE `rgbs_batch[tr * stride + k] = colors[...]` in bwd writes to distinct
 // 32-bit banks across a warp. With a stride S, the 32 lanes in a warp land
 // in banks (tr * S) mod 32 for tr in [0,32); that hits all 32 banks iff
 // gcd(S, 32) == 1, i.e. S is odd. The inner loop READ from a fixed `t` and
@@ -57,16 +57,12 @@ constexpr uint32_t cdim_smem_stride() {
 }
 
 // ---------------------------------------------------------------------------
-// Single-kernel (K2-only) batch-parallel backward pass.
+// Single-kernel chunk-parallel backward pass.
 //
-// An earlier three-kernel split (K1 state-scan + K1.5 prefix-scan + K2
-// gradient) had K1/K1.5 rebuild the per-chunk starting state
-// `(T_start, render_accum_dot_start, normal_accum_dot_start)` for K2.
-// That duplicated per-Gaussian work the FORWARD pass had already computed.
-// The current design persists the required cumulative state from fwd into
-// `fwd_chunk_state` at every CHUNK_BATCHES boundary, then folds the
-// derivation of the starting accumulators into K2's preamble as a single
-// CDIM dot + vec3 dot per thread — K1 and K1.5 are gone. See
+// fwd persists per-chunk cumulative state into `fwd_chunk_state` at every
+// CHUNK_BATCHES boundary; bwd derives the per-chunk starting accumulators
+// from that state via a single CDIM dot + vec3 dot per thread in its
+// preamble, then runs the per-gaussian gradient walk. See
 // `RasterizeChunkCSR.h` for the tensor layout and boundary formula.
 //
 // Math (derived from the bwd recurrence in the hot loop below):
@@ -79,7 +75,7 @@ constexpr uint32_t cdim_smem_stride() {
 //   where `_final` is the c=0 slot (terminal fwd state) — the CSR-slot
 //   semantics are documented in `RasterizeChunkCSR.h`.
 //
-// K2 grid: 1D {total_chunks, 1, 1}. Chunks are independent — no sequential
+// Grid: 1D {total_chunks, 1, 1}. Chunks are independent — no sequential
 // dependency — exposing ample work to the GPU scheduler and eliminating the
 // tail latency on tiles with many Gaussians.
 // ---------------------------------------------------------------------------
@@ -118,7 +114,7 @@ static __global__ void compute_chunks_per_tile_kernel(
 // Host helper: see declaration in `RasterizeChunkCSR.h`. Launches the
 // device kernel above, builds the [num_tiles+1] CSR offsets via cumsum+cat,
 // then reads back `total_chunks` with a blocking `.item<int32_t>()`. Shared
-// by fwd (persist buffer sizing) and bwd (K1/K2 grid sizing).
+// by fwd (persist buffer sizing) and bwd (gradient-kernel grid sizing).
 std::tuple<at::Tensor, at::Tensor, int64_t> compute_chunk_csr(
     const at::Tensor &tile_offsets,
     int64_t n_isects,
@@ -159,16 +155,16 @@ std::tuple<at::Tensor, at::Tensor, int64_t> compute_chunk_csr(
 // Each tile contributes `chunks_per_tile[t]` chunk-slots to the flat
 // fwd_chunk_state buffer, with `chunk_offsets[t]` giving the starting slot
 // of tile t. `chunk_offsets[num_tiles]` is the total number of chunk-slots
-// and equals the CTA count for K2. Per-tile padding (the old
-// `num_tiles × max_chunks` layout) is gone, which removes the dense-scene
-// OOM vector driven by the worst tile.
+// and equals the CTA count for the gradient kernel. The flat layout
+// avoids the per-tile padding (`num_tiles × max_chunks`) that would
+// otherwise create a dense-scene OOM vector driven by the worst tile.
 //
 // `CHUNK_BATCHES` and `compute_chunks_per_tile_kernel` live in
 // `RasterizeChunkCSR.h` so fwd and bwd can share a single source of truth.
 
 // Binary-search helper: given ascending `chunk_offsets[num_tiles + 1]`, find
-// tile t such that chunk_offsets[t] <= bid < chunk_offsets[t + 1]. Called once
-// per CTA in K2; O(log num_tiles) ≈ 14 global-mem reads on a 10K-tile scene
+// tile t such that chunk_offsets[t] <= bid < chunk_offsets[t + 1]. Called
+// once per CTA; O(log num_tiles) ≈ 14 global-mem reads on a 10K-tile scene
 // and the reads hit L2 after the first CTA in the launch wave.
 __device__ __forceinline__ uint32_t find_tile_for_block(
     const int32_t *__restrict__ chunk_offsets,
@@ -188,13 +184,11 @@ __device__ __forceinline__ uint32_t find_tile_for_block(
     return lo;
 }
 
-// Shared ray-generation helper used by K2 (and previously by the deleted K1).
-// Takes the full camera-model switch (pinhole / fisheye / ftheta / lidar ×
-// {windshield, empty distortion}) plus the "explicit rays" path, and returns
-// the WorldRay for pixel (j, i) on image `iid`. Marked `__forceinline__` so
-// K2 keeps the register counts it had when the block was inlined verbatim;
-// the comment at K2's preamble previously justified the duplication on
-// occupancy grounds.
+// Shared ray-generation helper. Takes the full camera-model switch
+// (pinhole / fisheye / ftheta / lidar × {windshield, empty distortion})
+// plus the "explicit rays" path, and returns the WorldRay for pixel
+// (j, i) on image `iid`. Marked `__forceinline__` so the gradient kernel
+// keeps its register count after inlining at the call site.
 template <typename scalar_t>
 __device__ __forceinline__ WorldRay compute_world_ray_bwd(
     const uint32_t iid,
@@ -320,13 +314,13 @@ __device__ __forceinline__ WorldRay compute_world_ray_bwd(
     return ray;
 }
 
-// Pixel-coordinate resolution shared by K1 and K2. Handles the LIDAR-vs-camera
-// split: for LIDAR, looks up (row, col) from the per-tile element map and
-// marks inside=false for threads past element_count; for camera paths,
-// derives (row, col) from the tile origin + per-thread 2D rank and clamps to
-// the image extent. Also returns the clamped linear pix_id used by every
-// downstream load/store. Marked `__forceinline__` so K1/K2 keep their current
-// register counts; the call site would otherwise lose the fast path.
+// Pixel-coordinate resolution. Handles the LIDAR-vs-camera split: for
+// LIDAR, looks up (row, col) from the per-tile element map and marks
+// inside=false for threads past element_count; for camera paths, derives
+// (row, col) from the tile origin + per-thread 2D rank and sets inside
+// from a bounds check. Returns the clamped linear pix_id used by every
+// downstream load/store. Marked `__forceinline__` so the call site keeps
+// its register count after inlining.
 struct PixelCoords
 {
     uint32_t row;
@@ -384,12 +378,11 @@ __device__ __forceinline__ PixelCoords compute_pixel_coords_bwd(
     return out;
 }
 
-// Kernel 2: gradient pass. Same CTA structure and inner loop as the original
-// kernel but with: (1) chunk_id decoded from grid x, (2) initial state
-// materialised directly from the fwd-persisted `fwd_chunk_state` tensor via
-// one CDIM dot + one vec3 dot per thread — no separate state-scan or
-// prefix-scan kernels, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
-// via atomicAdd (multiple chunks per pixel).
+// Gradient pass. Per-CTA: (1) chunk_id decoded from grid x via binary
+// search on chunk_offsets, (2) initial state materialised from the
+// fwd-persisted `fwd_chunk_state` tensor via one CDIM dot + one vec3 dot
+// per thread, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
+// accumulated via atomicAdd (multiple chunks per pixel).
 //
 // Grid: 1D {total_chunks, 1, 1}; each CTA's (tile_linear, chunk_id) is decoded
 // via a binary search on chunk_offsets in the preamble.
@@ -456,9 +449,8 @@ __global__ void rasterize_gradient_bwd_kernel(
 )
 {
     // ---- Preamble: CSR chunk decode, pixel map, ray gen, fwd-state load ----
-    // K2 is the only bwd kernel in this path. The chunk-start accumulators
-    // are derived from `fwd_chunk_state` further down via one CDIM dot +
-    // one vec3 dot per thread.
+    // The chunk-start accumulators are derived from `fwd_chunk_state` further
+    // down via one CDIM dot + one vec3 dot per thread.
     auto block = cg::this_thread_block();
     const uint32_t num_tiles_total = (B * C) * tile_height * tile_width;
     const uint32_t bid = block.group_index().x;
@@ -519,7 +511,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     const bool inside = pc.inside;
     const int32_t pix_id = pc.pix_id;
 
-    // Ray generation — shared with K1 via compute_world_ray_bwd helper above.
+    // Ray generation — uses the shared compute_world_ray_bwd helper above.
     WorldRay ray = compute_world_ray_bwd<scalar_t>(
         iid, j, i, pix_id, inside,
         rays, viewmats0, viewmats1, Ks,
@@ -587,7 +579,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     // render_accum_dot = dot(v_render_c, pix_out_final - pix_out_boundary)
     // Streaming per-k load keeps the register footprint scalar (one `delta`
     // in flight at a time) rather than materialising pix_out_boundary[CDIM]
-    // as live registers — critical for K2's already-tight register budget.
+    // as live registers — critical for the kernel's already-tight register budget.
     float render_accum_dot = 0.f;
 #pragma unroll
     for (uint32_t k = 0; k < CDIM; ++k) {
@@ -625,7 +617,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     vec3 v_ray_o = {0.f, 0.f, 0.f};
     vec3 v_ray_d = {0.f, 0.f, 0.f};
 
-    extern __shared__ int s[];  // same layout as K1, plus id_batch prefix
+    extern __shared__ int s[];  // id_batch prefix + xyz_opacity + scale + quat + rgbs
     int32_t *id_batch = (int32_t *)s;
     vec4 *xyz_opacity_batch =
         reinterpret_cast<vec4 *>(&id_batch[block_size]);
@@ -808,8 +800,10 @@ __global__ void rasterize_gradient_bwd_kernel(
                     rgb_render_dot += rgb_k * v_render_c[k];
                 }
 
+                // Per-Gaussian projection of the rendered-normal grad onto the
+                // Gaussian's normal vector — used in the product-rule term for
+                // v_alpha below.
                 float normal_render_dot = 0.f;
-                // contribution from background pixel
                 if (v_render_normals != nullptr) {
                     normal_render_dot = glm::dot(normal, v_render_n);
                 }
@@ -818,7 +812,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 float v_alpha = rgb_render_dot * T - render_accum_dot * ra
                               + T_final * ra * v_alpha_ind_coeff;
                 // Forward: render_normals += normal * vis (where vis = alpha * T)
-                // So v_alpha_normals = dot(normal * T - normal_buffer * ra, v_render_n)
+                // So v_alpha_normals = dot(normal * T - normal_accum * ra, v_render_n)
                 if (v_render_normals != nullptr) {
                     v_alpha += normal_render_dot * T - normal_accum_dot * ra;
                 }
@@ -907,7 +901,7 @@ __global__ void rasterize_gradient_bwd_kernel(
 
                 render_accum_dot += rgb_render_dot * fac;
                 
-                // Update normal buffer (for product rule in next iterations)
+                // Accumulate normal contribution (for product rule in next iterations).
                 if (v_render_normals != nullptr) {
                     normal_accum_dot += normal_render_dot * fac;
                 }
@@ -1005,9 +999,9 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::Tensor chunk_offsets,    // [num_tiles + 1] int32
     const int64_t total_chunks,        // scalar, equals chunk_offsets[num_tiles]
     // Per-chunk cumulative state persisted by the fwd kernel at every
-    // CHUNK_BATCHES boundary. K2 reads this directly and folds the
-    // derivation of the starting accumulators into its preamble, so no
-    // separate state-scan or prefix-scan kernels are needed.
+    // CHUNK_BATCHES boundary. The bwd kernel reads it directly and derives
+    // the per-chunk starting accumulators in its preamble — no separate
+    // state-scan or prefix-scan pass needed.
     const at::Tensor fwd_chunk_state,  // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
     // outputs
     at::Tensor v_means,      // [..., N, 3]
@@ -1082,10 +1076,10 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
         // Shape parity check for the fwd-persisted state. fwd allocates with
         // shape `[total_chunks, pixels_per_tile, 1 + CDIM + 3]` and fills all
-        // boundaries (including early-exit tiles) with terminal state, so K2
-        // can read every slot unconditionally. Check each dim — matching numel
+        // boundaries (including early-exit tiles) with terminal state, so the
+        // bwd kernel can read every slot. Check each dim — matching numel
         // alone would accept a transposed tensor with the same total element
-        // count but wrong stride, silently corrupting K2's reads.
+        // count but wrong stride, silently corrupting bwd's reads.
         const int64_t state_dim =
             /*T*/ 1 + static_cast<int64_t>(CDIM) + /*normal*/ 3;
         TORCH_CHECK(fwd_chunk_state.dim() == 3,
@@ -1141,14 +1135,12 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
         const auto *chunk_offsets_ptr = chunk_offsets.const_data_ptr<int32_t>();
 
-        // ---- Kernel 2: gradient, 1D grid over CSR chunk-slots ----
-        // K1 and K1.5 are gone. K2's preamble loads the
-        // per-chunk boundary and terminal state from `fwd_chunk_state` and
-        // materialises the starting accumulators via one CDIM dot + one vec3
-        // dot per thread — replacing the per-chunk scan that K1+K1.5 used to
-        // run, at the cost of one extra CSR slot read per chunk (the terminal
-        // slot).
-        dim3 k2_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
+        // ---- Gradient kernel: 1D grid over CSR chunk-slots ----
+        // The preamble loads per-chunk boundary and terminal state from
+        // `fwd_chunk_state` and materialises the starting accumulators via
+        // one CDIM dot + one vec3 dot per thread, at the cost of one extra
+        // CSR slot read per chunk (the terminal slot).
+        dim3 grad_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
         if (cudaFuncSetAttribute(
                 rasterize_gradient_bwd_kernel<CDIM, float>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -1157,7 +1149,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                      shmem_size, " bytes).");
         }
         rasterize_gradient_bwd_kernel<CDIM, float>
-            <<<k2_grid, threads, shmem_size,
+            <<<grad_grid, threads, shmem_size,
                at::cuda::getCurrentCUDAStream()>>>(
                 B, C, N, n_isects,
                 means_ptr, quats_ptr, scales_ptr,
