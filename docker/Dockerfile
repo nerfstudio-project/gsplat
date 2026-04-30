@@ -285,7 +285,13 @@ RUN <<EOS
     done
 EOS
 
-COPY --link cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
+# Plain COPY (no --link) so the destination resolves through the
+# /usr/local/cuda symlink (which the base image points at the actual
+# versioned CUDA install dir) and the wrapper lands at the real bin
+# directory next to the renamed nvcc-real. With --link the COPY layer
+# creates a fresh /usr/local/cuda/ directory that shadows the symlink,
+# leaving nvcc-real unreachable at runtime.
+COPY cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
 COPY --chmod=755 entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bash", "--login"]
