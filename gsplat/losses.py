@@ -228,17 +228,43 @@ def binocular_disparity_l1(
 ) -> Tensor:
     """L1 loss in inverse-depth (disparity) space, with optional masking.
 
-    Mask-aware variant of :func:`depth_l1_loss` ported from G-SHARP v0.2's
-    ``EndoRunner.compute_depth_loss`` (binocular branch). Implementation
-    pending on branch ``vnath_gsharp``.
+    Ported from G-SHARP v0.2's binocular branch of
+    ``EndoRunner.compute_depth_loss``. Pixels whose predicted *or*
+    ground-truth depth has absolute value at or below *eps* are treated as
+    "no depth" and contribute 0 to the inverse-depth tensor (matching the
+    ``rendered_depth != 0`` sentinel convention used by the source).
 
     Args:
         pred_depth: Predicted depth, shape ``(..., H, W)``.
         gt_depth: Ground-truth depth, same shape as *pred_depth*.
-        mask: Optional binary mask; 1 = include pixel, 0 = ignore.
-        eps: Small constant added before reciprocal for numerical safety.
+        mask: Optional binary mask broadcastable to *pred_depth*; ``!= 0`` =
+            include pixel, ``0`` = ignore. Without a mask, the loss is the
+            mean over all pixels (the zero-depth ones contribute 0 on both
+            sides).
+        eps: Threshold below which depth is treated as invalid; also keeps
+            the divisor away from zero so the reciprocal stays finite.
+
+    Returns:
+        Scalar disparity-space L1 loss.
     """
-    raise NotImplementedError("vnath_gsharp: binocular_disparity_l1 pending")
+    if pred_depth.shape != gt_depth.shape:
+        raise ValueError(
+            f"binocular_disparity_l1: pred_depth shape {pred_depth.shape} != "
+            f"gt_depth shape {gt_depth.shape}. Shapes must match."
+        )
+    ones_pred = torch.ones_like(pred_depth)
+    valid_pred = pred_depth.abs() > eps
+    safe_pred = torch.where(valid_pred, pred_depth, ones_pred)
+    pred_inv = torch.where(valid_pred, 1.0 / safe_pred, torch.zeros_like(pred_depth))
+
+    ones_gt = torch.ones_like(gt_depth)
+    valid_gt = gt_depth.abs() > eps
+    safe_gt = torch.where(valid_gt, gt_depth, ones_gt)
+    gt_inv = torch.where(valid_gt, 1.0 / safe_gt, torch.zeros_like(gt_depth))
+
+    if mask is None:
+        return (pred_inv - gt_inv).abs().mean()
+    return masked_l1(pred_inv, gt_inv, mask)
 
 
 def pearson_depth_loss(
@@ -246,12 +272,43 @@ def pearson_depth_loss(
     gt_depth: Tensor,
     mask: Optional[Tensor] = None,
 ) -> Tensor:
-    """Monocular depth loss: ``1 - Pearson r`` on masked flattened pairs.
+    """Monocular depth loss: ``1 - Pearson r`` on (masked) flattened depth pairs.
 
-    Ported from G-SHARP v0.2 (monocular branch). Implementation pending on
-    branch ``vnath_gsharp``.
+    Ported from G-SHARP v0.2 (monocular branch). Returns a differentiable 0
+    when fewer than two valid samples remain after masking, and clamps the
+    denominator to a tiny positive constant when either input has near-zero
+    variance — both situations would otherwise yield NaN.
+
+    Args:
+        pred_depth: Predicted depth, shape ``(..., H, W)``.
+        gt_depth: Ground-truth depth, same shape as *pred_depth*.
+        mask: Optional binary mask broadcastable to *pred_depth*; samples
+            where ``mask == 0`` are dropped before the correlation.
+
+    Returns:
+        Scalar loss in approximately ``[0, 2]``.
     """
-    raise NotImplementedError("vnath_gsharp: pearson_depth_loss pending")
+    if pred_depth.shape != gt_depth.shape:
+        raise ValueError(
+            f"pearson_depth_loss: pred_depth shape {pred_depth.shape} != "
+            f"gt_depth shape {gt_depth.shape}. Shapes must match."
+        )
+    pred_flat = pred_depth.reshape(-1)
+    gt_flat = gt_depth.reshape(-1)
+    if mask is not None:
+        mask_flat = (mask != 0).reshape(-1)
+        pred_flat = pred_flat[mask_flat]
+        gt_flat = gt_flat[mask_flat]
+    if pred_flat.numel() < 2:
+        return pred_depth.sum() * 0.0
+
+    pred_centered = pred_flat - pred_flat.mean()
+    gt_centered = gt_flat - gt_flat.mean()
+    num = (pred_centered * gt_centered).sum()
+    denom = (
+        (pred_centered.pow(2).sum() * gt_centered.pow(2).sum()).clamp(min=1e-12).sqrt()
+    )
+    return 1.0 - num / denom
 
 
 # ---------------------------------------------------------------------------
@@ -260,23 +317,59 @@ def pearson_depth_loss(
 
 
 def masked_l1(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
-    """L1 over only the ``mask == 1`` region.
+    """L1 over only the ``mask != 0`` region.
 
     Mask-aware wrapper around :func:`l1_loss`, ported from G-SHARP v0.2 to
-    zero out tool / dynamic-object regions. Safe when mask is all-zero.
-    Implementation pending on branch ``vnath_gsharp``.
+    zero out tool / dynamic-object regions. The mask is broadcast to *pred*'s
+    shape (so a ``[B, 1, H, W]`` mask works on ``[B, C, H, W]`` inputs) and
+    the mean is taken over unmasked elements only. Returns a differentiable 0
+    when the mask is all-zero (no NaN).
+
+    Args:
+        pred: Predicted tensor.
+        gt: Ground-truth tensor, same shape as *pred*.
+        mask: Mask broadcastable to *pred*; ``!= 0`` = include element.
+
+    Returns:
+        Scalar L1 loss.
     """
-    raise NotImplementedError("vnath_gsharp: masked_l1 pending")
+    if pred.shape != gt.shape:
+        raise ValueError(
+            f"masked_l1: pred shape {pred.shape} != gt shape {gt.shape}. "
+            "Shapes must match."
+        )
+    abs_diff = (pred - gt).abs()
+    bool_mask = mask != 0
+    if bool_mask.shape != abs_diff.shape:
+        bool_mask = bool_mask.expand_as(abs_diff)
+    selected = abs_diff[bool_mask]
+    if selected.numel() == 0:
+        return pred.sum() * 0.0
+    return selected.mean()
 
 
 def masked_ssim(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
-    """SSIM over only the ``mask == 1`` region.
+    """SSIM loss after zeroing both inputs in the masked region.
 
-    Mask-aware wrapper around :func:`ssim_loss`, ported from G-SHARP v0.2 to
-    zero out tool / dynamic-object regions. Implementation pending on branch
-    ``vnath_gsharp``.
+    Mask-aware wrapper around :func:`ssim_loss`, ported from G-SHARP v0.2.
+    Both *pred* and *gt* are multiplied by *mask* before SSIM, matching the
+    G-SHARP training-loop convention (mask the rendered output and the GT,
+    then take an unmasked SSIM over the zeroed pair).
+
+    Args:
+        pred: Predicted image batch ``[B, C, H, W]``, values in ``[0, 1]``.
+        gt: Ground-truth image batch, same shape as *pred*.
+        mask: Mask broadcastable to *pred* (e.g. ``[B, 1, H, W]``).
+
+    Returns:
+        Scalar SSIM loss (``1 - SSIM`` of the zeroed pair).
     """
-    raise NotImplementedError("vnath_gsharp: masked_ssim pending")
+    if pred.shape != gt.shape:
+        raise ValueError(
+            f"masked_ssim: pred shape {pred.shape} != gt shape {gt.shape}. "
+            "Shapes must match."
+        )
+    return ssim_loss(pred * mask, gt * mask)
 
 
 # ---------------------------------------------------------------------------
