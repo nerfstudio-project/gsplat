@@ -271,6 +271,8 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
 }
 
 #endif
+
+
 #if GSPLAT_BUILD_2DGS
 
 ////////////////////////////////////////////////////
