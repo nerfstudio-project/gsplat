@@ -5,7 +5,7 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Tests" href="tests.html"><link rel="prev" title="Evaluation" href="eval.html">
 
-    <!-- Generated with Sphinx 7.4.7 and Furo 2025.12.19 -->
+    <!-- Generated with Sphinx 8.1.3 and Furo 2025.12.19 -->
         <title>Profiling - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
@@ -311,7 +311,7 @@
           <section id="profiling">
 <span id="id1"></span><h1>Profiling<a class="headerlink" href="#profiling" title="Link to this heading">¶</a></h1>
 <p><cite>gsplat</cite> is developed with efficiency in mind, while also supports trade-offs between
-memory consumption and speed. The <code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code> function has a few arguments
+memory consumption and speed. The <a class="reference internal" href="../apis/rasterization.html#gsplat.rasterization" title="gsplat.rasterization"><code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code></a> function has a few arguments
 that would not affect the numerical results but could significantly impact the runtime and
 memory usage, including <strong>packed</strong> and <strong>sparse_grad</strong>:</p>
 <ul class="simple">
@@ -327,7 +327,7 @@ the intermidate tensors, the gradients will also be packed into a
 This could further reduce the memory usage when training a large scene as the gradients of
 the Gaussian attributes are usually sparse. Note that in most cases, sparse gradients should be used together
 with a sparse optimizer, such as <a class="reference external" href="https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html">torch.optim.SparseAdam</a>. And currently we only supports
-sparse gradients for part of the Gaussian attributes. See <code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code>
+sparse gradients for part of the Gaussian attributes. See <a class="reference internal" href="../apis/rasterization.html#gsplat.rasterization" title="gsplat.rasterization"><code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code></a>
 for more details.</p></li>
 </ul>
 <p>Here we provide careful profiling of the performance with the different rasterization backends, along with
@@ -749,7 +749,7 @@ on a 24GB NVIDIA TITAN RTX GPU. (commit 8ea2ea3)</p>
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>

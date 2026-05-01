@@ -2,11 +2,10 @@
 <html class="no-js" lang="en" data-content_root="../">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Train on an NCore v4 Capture" href="ncore.html"><link rel="prev" title="Fit a Single Image" href="image.html">
+    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html">
 
     <!-- Generated with Sphinx 8.1.3 and Furo 2025.12.19 -->
-        <title>Render a Large Scene - gsplat documentation</title>
+        <title>Overview: module code - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -243,11 +242,11 @@
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
-<ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="colmap.html">Fit a COLMAP Capture</a></li>
-<li class="toctree-l1"><a class="reference internal" href="image.html">Fit a Single Image</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Render a Large Scene</a></li>
-<li class="toctree-l1"><a class="reference internal" href="ncore.html">Train on an NCore v4 Capture</a></li>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/colmap.html">Fit a COLMAP Capture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/image.html">Fit a Single Image</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/large_scale.html">Render a Large Scene</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/ncore.html">Train on an NCore v4 Capture</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Conventions</span></p>
 <ul>
@@ -289,13 +288,7 @@
           <span>Back to top</span>
         </a>
         <div class="content-icon-container">
-          <div class="view-this-page">
-  <a class="muted-link" href="../_sources/examples/large_scale.rst.txt" title="View this page">
-    <svg><use href="#svg-eye"></use></svg>
-    <span class="visually-hidden">View this page</span>
-  </a>
-</div>
-<div class="theme-toggle-container theme-toggle-content">
+          <div class="theme-toggle-container theme-toggle-content">
             <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
               <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
               <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
@@ -308,64 +301,22 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="render-a-large-scene">
-<h1>Render a Large Scene<a class="headerlink" href="#render-a-large-scene" title="Link to this heading">¶</a></h1>
-<p><cite>gsplat</cite> is designed with efficiency in mind so it’s very suitable to render a large scene.
-For example here we mimic a large scene by replicating the Garden scene into a 9x9 grid,
-which results 30M Gaussians in total while <cite>gsplat</cite> still allows real-time rendering for it.</p>
-<p>The main magic that allows this is a very simple trick: we disregard the Gaussians that are
-far away from the camera, by applying a small threshold (e.g., 3 pixel) to the projected
-Gaussian radius which is configurable in our <a class="reference internal" href="../apis/rasterization.html#gsplat.rasterization" title="gsplat.rasterization"><code class="xref py py-func docutils literal notranslate"><span class="pre">rasterization()</span></code></a> API as <code class="code docutils literal notranslate"><span class="pre">radius_clip</span></code>.</p>
-<p>With <cite>gsplat</cite> as CUDA Backend:</p>
-<div style="position:relative; padding-bottom:56.25%; height:0; width:100%">
-    <iframe style="position:absolute; top:0; left:0; width:100%; height:100%" src="https://www.youtube.com/embed/rXyJwL7uJFQ?si=kQ10HcASlvhztTUA" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
-</div><p>With <cite>diff-gaussian-rasterization</cite> as CUDA Backend:</p>
-<div style="position:relative; padding-bottom:56.25%; height:0; width:100%">
-    <iframe style="position:absolute; top:0; left:0; width:100%; height:100%" src="https://www.youtube.com/embed/kk3G3P68rkc?si=JJplV2ZY3PxE_5k7" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
-</div><p>Note: Similar to the <a class="reference external" href="https://docs.nerf.studio/">nerfstudio</a> viewer, our viewer automatically
-switch to low resolution if the rendering is slow.</p>
-<p>The code for this example can be found under <cite>examples/</cite>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># First train a 3DGS model</span>
-<span class="nv">CUDA_VISIBLE_DEVICES</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>python<span class="w"> </span>simple_trainer.py<span class="w"> </span>default<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--data_dir<span class="w"> </span>data/360_v2/garden/<span class="w"> </span>--data_factor<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--result_dir<span class="w"> </span>./results/garden
-
-<span class="c1"># View it in a viewer with gsplat</span>
-python<span class="w"> </span>simple_viewer.py<span class="w"> </span>--scene_grid<span class="w"> </span><span class="m">5</span><span class="w"> </span>--ckpt<span class="w"> </span>results/garden/ckpts/ckpt_6999.pt<span class="w"> </span>--backend<span class="w"> </span>gsplat
-
-<span class="c1"># Or, view it with inria&#39;s backend (requires to insteall `diff-gaussian-rasterization`)</span>
-python<span class="w"> </span>simple_viewer.py<span class="w"> </span>--scene_grid<span class="w"> </span><span class="m">5</span><span class="w"> </span>--ckpt<span class="w"> </span>results/garden/ckpts/ckpt_6999.pt<span class="w"> </span>--backend<span class="w"> </span>inria
-
-<span class="c1"># Warning: a large `--scene_grid` might blow up your GPU memory.</span>
-</pre></div>
-</div>
-</section>
-
+          <h1>All modules for which code is available</h1>
+<ul><li><a href="gsplat/compression/png_compression.html">gsplat.compression.png_compression</a></li>
+<li><a href="gsplat/cuda/_torch_impl.html">gsplat.cuda._torch_impl</a></li>
+<li><a href="gsplat/cuda/_torch_impl_2dgs.html">gsplat.cuda._torch_impl_2dgs</a></li>
+<li><a href="gsplat/cuda/_wrapper.html">gsplat.cuda._wrapper</a></li>
+<li><a href="gsplat/rendering.html">gsplat.rendering</a></li>
+<li><a href="gsplat/strategy/default.html">gsplat.strategy.default</a></li>
+<li><a href="gsplat/strategy/mcmc.html">gsplat.strategy.mcmc</a></li>
+</ul>
         </article>
       </div>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="ncore.html">
-              <div class="page-info">
-                <div class="context">
-                  <span>Next</span>
-                </div>
-                <div class="title">Train on an NCore v4 Capture</div>
-              </div>
-              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
-            </a>
-          <a class="prev-page" href="image.html">
-              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
-              <div class="page-info">
-                <div class="context">
-                  <span>Previous</span>
-                </div>
-                
-                <div class="title">Fit a Single Image</div>
-                
-              </div>
-            </a>
+          
+          
         </div>
         <div class="bottom-of-page">
           <div class="left-details">
