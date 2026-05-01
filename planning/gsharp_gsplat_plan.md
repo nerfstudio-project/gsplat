@@ -92,9 +92,9 @@ flowchart LR
 |---|---|
 | EndoNeRF/SCARED dataset loader | `gsplat/examples/datasets/endonerf.py` |
 | Dynamic-scene trainer recipe | `gsplat/examples/dynamic_surgical_trainer.py` |
-| Tutorial | `gsplat/docs/source/examples/dynamic_surgical.rst` |
-| Contrib API docs | `gsplat/docs/source/apis/contrib.rst` |
-| Full proposal inside repo | `gsplat/docs/source/proposals/gsharp_v0_2_port.rst` |
+| Tutorial | `docs/source/examples/dynamic_surgical.rst` |
+| Contrib API docs | `docs/source/apis/contrib.rst` |
+| Full proposal inside repo | `docs/source/proposals/gsharp_v0_2_port.rst` |
 
 ## 4. Test matrix (positive + negative)
 
@@ -120,8 +120,8 @@ See the todos pinned to the plan file. TDD per component: write failing test →
 - Branch `vnath_gsharp` created off `nv/main`.
 - All stub files created at their destination paths with docstrings + `NotImplementedError` placeholders so the directory tree review-ready.
 - Empty pytest stubs marked `pytest.skip("vnath_gsharp: not yet implemented")` to keep CI green.
-- Full proposal checked in at `gsplat/docs/source/proposals/gsharp_v0_2_port.rst`.
-- Shareable HTML at `planning/gsharp_gsplat_plan.html`.
+- Full proposal checked in at `docs/source/proposals/gsharp_v0_2_port.rst`.
+- Shareable HTML preview is now kept locally (regenerate from this markdown when needed); not tracked in the repo.
 
 ## 7. Open risks
 

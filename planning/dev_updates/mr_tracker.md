@@ -54,3 +54,6 @@ labels: [<area tags, e.g. losses, contrib, docs>]
 | MR-004 | Shikhar Solanki | 2026-04-25 | Naming nit `contrib/` vs `experimental/` → **keep `contrib/`** | addressed | [MR-004](mr_comments/MR-004_shsolanki_contrib-vs-experimental.md) |
 | MR-005 | Shikhar Solanki | 2026-04-25 | Rename `dynamic_trainer.py` → **`dynamic_surgical_trainer.py`** | addressed | [MR-005](mr_comments/MR-005_shsolanki_trainer-naming.md) |
 | MR-006 | Shikhar Solanki (Andre pushback) | 2026-04-25 | Move init_utils into trainer? → **keep separate** (vnath confirms reuse) | addressed | [MR-006](mr_comments/MR-006_shsolanki_init-utils-consolidation.md) |
+| MR-007 | Vincent Caux-Brisebois | 2026-04-30 | HTML plan stale → **drop in-repo, refresh workspace copy** (Option A) | addressed | [MR-007](mr_comments/MR-007_vcauxbrisebo_html-stale.md) |
+| MR-008 | Vincent Caux-Brisebois | 2026-04-30 | `gsplat/docs/source/...` path-prefix bug at 4 more sites — fixed in plan.md (both copies) + HTML | addressed | [MR-008](mr_comments/MR-008_vcauxbrisebo_path-prefix-multi.md) |
+| MR-009 | Vincent Caux-Brisebois | 2026-04-30 | Nit: HTML now `.gitignore`-d in gsplat repo (folded into MR-007 fix) | addressed | [MR-009](mr_comments/MR-009_vcauxbrisebo_html-not-committed.md) |

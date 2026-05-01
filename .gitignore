@@ -128,3 +128,6 @@ data
 results
 
 !examples/benchmarks/compression/results/
+
+# Generated/shareable HTML preview of the planning markdown — kept locally only.
+planning/*.html
