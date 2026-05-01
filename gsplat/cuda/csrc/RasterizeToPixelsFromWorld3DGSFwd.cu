@@ -43,8 +43,6 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 // Forward
 ////////////////////////////////////////////////////////////////
 
-// TODO: rename tile_offsets to isect_offsets
-
 // Compact CTA rasterizer for 3DGUT (world-space ray-gaussian evaluation).
 // Same architectural pattern as the 3DGS compact CTA:
 //   CTA_SIZE threads process a TILE_SIZE x TILE_SIZE tile,
@@ -61,13 +59,17 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
     #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 16
 #endif
 
-// Range endpoints of the CDIM-indexed schedule.
-#define GSPLAT_MIN_CDIM_FOR_HINT 1u
+// Range endpoints of the CDIM-indexed schedule. The schedule plateaus at
+// `high` blocks/SM for CDIM in [1, MIN_CDIM_FOR_HINT], then linearly descends
+// to `low` at MAX_CDIM_FOR_HINT. The plateau covers the camera-inference
+// CDIM=4 path so it sustains max occupancy alongside CDIM={1,2,3}.
+#define GSPLAT_MIN_CDIM_FOR_HINT 4u
 #define GSPLAT_MAX_CDIM_FOR_HINT 24u
 
 // Target min_blocks at the endpoints of the schedule.
-//   - CDIM=1 : push occupancy up to the HW cap, but not above 24 (beyond this
-//              the kernel's natural register usage forces ptxas to spill).
+//   - CDIM <= MIN_CDIM_FOR_HINT (plateau): push occupancy up to the HW cap,
+//              but not above 24 (beyond this the kernel's natural register
+//              usage forces ptxas to spill).
 //   - CDIM=24: 16. HW cap on pre-sm_90, 25% occ on sm_90+; fits within the
 //              kernel's register footprint at full SH + extras.
 #define GSPLAT_MIN_BLOCKS_AT_MIN_CDIM \
@@ -75,30 +77,79 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 #define GSPLAT_MIN_BLOCKS_AT_MAX_CDIM 16u
 
 // Per-CDIM occupancy hint for __launch_bounds__ min_blocks_per_sm.
-// Linear schedule from MIN_BLOCKS_AT_MIN_CDIM down to MIN_BLOCKS_AT_MAX_CDIM
-// over CDIM in [MIN_CDIM_FOR_HINT, MAX_CDIM_FOR_HINT]. Beyond that we emit
-// min_blocks=1 (no effective hint) — high-channel kernels carry enough
+// Plateau at `high` for CDIM in [1, MIN_CDIM_FOR_HINT]; linear descent from
+// `high` (at MIN_CDIM_FOR_HINT) to `low` (at MAX_CDIM_FOR_HINT) above. Beyond
+// MAX_CDIM_FOR_HINT we emit min_blocks=1, high-channel kernels carry enough
 // register pressure that forcing occupancy would spill.
-//   blocks = high - ((CDIM - min_cdim) * (high - low)) / (max_cdim - min_cdim)
+//   cdim_excess     = max(0, CDIM - MIN_CDIM_FOR_HINT)   (saturating sub)
+//   blocks_at_cta32 = high - cdim_excess * (high - low) / (max_cdim - min_cdim)
 // Collapses to the constant low value on archs where high == low.
-template <uint32_t CDIM>
+//
+// The schedule was tuned at CTA_SIZE=32. To use the same kernel at larger
+// CTAs, we preserve the threads/SM target (= blocks_at_cta32 * 32) and
+// re-derive min_blocks at the actual CTA_SIZE; otherwise asking 16-24
+// blocks/SM at CTA=256 yields physically impossible 4096-6144 threads/SM
+// and ptxas either rejects (under -Werror) or produces a degenerate spill.
+
+// Here's a table of the different values you can expect per variables and arch
+//  CDIM | sm90+ CTA=32 | sm90+ CTA=256 | < sm90 CTA=32 | < sm90 CTA=256
+// ----------------------------------------------------------------------
+//     1 |      24      |       3       |      16       |       2
+//     2 |      24      |       3       |      16       |       2
+//     3 |      24      |       3       |      16       |       2
+//     4 |      24      |       3       |      16       |       2
+//     5 |      24      |       3       |      16       |       2
+//     6 |      24      |       3       |      16       |       2
+//     7 |      23      |       2       |      16       |       2
+//     8 |      23      |       2       |      16       |       2
+//     9 |      22      |       2       |      16       |       2
+//    10 |      22      |       2       |      16       |       2
+//    11 |      22      |       2       |      16       |       2
+//    12 |      21      |       2       |      16       |       2
+//    13 |      21      |       2       |      16       |       2
+//    14 |      20      |       2       |      16       |       2
+//    15 |      20      |       2       |      16       |       2
+//    16 |      20      |       2       |      16       |       2
+//    17 |      19      |       2       |      16       |       2
+//    18 |      19      |       2       |      16       |       2
+//    19 |      18      |       2       |      16       |       2
+//    20 |      18      |       2       |      16       |       2
+//    21 |      18      |       2       |      16       |       2
+//    22 |      17      |       2       |      16       |       2
+//    23 |      17      |       2       |      16       |       2
+//    24 |      16      |       2       |      16       |       2
+//   >24 |       1      |       1       |       1       |       1
+
+template <uint32_t CDIM, uint32_t CTA_SIZE>
 constexpr uint32_t min_blocks_for_cdim() {
     if constexpr (CDIM > GSPLAT_MAX_CDIM_FOR_HINT) {
         return 1;
     } else {
         constexpr uint32_t high = GSPLAT_MIN_BLOCKS_AT_MIN_CDIM;
         constexpr uint32_t low = GSPLAT_MIN_BLOCKS_AT_MAX_CDIM;
+        constexpr uint32_t cdim_excess =
+            (CDIM > GSPLAT_MIN_CDIM_FOR_HINT)
+                ? (CDIM - GSPLAT_MIN_CDIM_FOR_HINT)
+                : 0u;
         constexpr uint32_t cdim_span =
             GSPLAT_MAX_CDIM_FOR_HINT - GSPLAT_MIN_CDIM_FOR_HINT;
         constexpr uint32_t block_span = (high >= low) ? (high - low) : 0;
-        constexpr uint32_t decrement =
-            ((CDIM - GSPLAT_MIN_CDIM_FOR_HINT) * block_span) / cdim_span;
-        return (high > decrement) ? (high - decrement) : low;
+        constexpr uint32_t decrement = (cdim_excess * block_span) / cdim_span;
+        constexpr uint32_t blocks_at_cta32 =
+            (high > decrement) ? (high - decrement) : low;
+        constexpr uint32_t threads_target = blocks_at_cta32 * 32u;
+        constexpr uint32_t blocks = threads_target / CTA_SIZE;
+        constexpr uint32_t lo_clamped = (blocks == 0u) ? 1u : blocks;
+        constexpr uint32_t hi_clamped =
+            (lo_clamped > GSPLAT_ARCH_MAX_BLOCKS_PER_SM)
+                ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM
+                : lo_clamped;
+        return hi_clamped;
     }
 }
 
 template <uint32_t CDIM, uint32_t TILE_SIZE, uint32_t CTA_SIZE>
-__global__ void __launch_bounds__(CTA_SIZE, min_blocks_for_cdim<CDIM>())
+__global__ void __launch_bounds__(CTA_SIZE, min_blocks_for_cdim<CDIM, CTA_SIZE>())
 rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -129,7 +180,7 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs,
     const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
     // intersections
-    const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
+    const int32_t *__restrict__ isect_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     const bool use_hit_distance,
     float *__restrict__ render_colors,        // [B, C, image_height, image_width, CDIM]
@@ -179,13 +230,13 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const int32_t tile_id = blockIdx.y * grid_width + blockIdx.z;
 
     const uint32_t tid = threadIdx.x;
-    const uint32_t thread_x = tid & TILE_MASK;
-    const uint32_t thread_y = tid >> TILE_SHIFT;
+    const uint32_t thread_x = tid & TILE_MASK;  // X & 0xF(15) == X % 16
+    const uint32_t thread_y = tid >> TILE_SHIFT; // X >> 4 == X / 16
 
     const bool return_normals = render_normals != nullptr;
 
     // Offset pointers to current image
-    tile_offsets += iid * grid_height * grid_width;
+    isect_offsets += iid * grid_height * grid_width;
     render_colors += iid * image_height * image_width * CDIM;
     render_alphas += iid * image_height * image_width;
     if (render_normals != nullptr) {
@@ -442,12 +493,12 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     }
 
     // Gaussian range for this tile
-    const int32_t range_start = tile_offsets[tile_id];
+    const int32_t range_start = isect_offsets[tile_id];
     const int32_t range_end =
         (iid == (int32_t)gridDim.x - 1) &&
         (tile_id == (int32_t)(grid_width * grid_height) - 1)
             ? n_isects
-            : tile_offsets[tile_id + 1];
+            : isect_offsets[tile_id + 1];
     // Logical-batch count matches the bwd's view (= ceil(range / pixels_per_tile)),
     // so persist boundaries align with the CSR-allocated slot positions.
     const uint32_t num_logical_batches =
@@ -774,6 +825,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
+    const uint32_t tile_size,
     // camera
     const at::Tensor viewmats0,               // [..., C, 4, 4]
     const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
@@ -791,7 +843,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // external distortion
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
-    const at::Tensor tile_offsets, // [..., C, grid_h, grid_w]
+    const at::Tensor isect_offsets, // [..., C, grid_h, grid_w]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
     // CSR chunk structure (precomputed by caller, shared with bwd)
@@ -816,18 +868,9 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const uint32_t B = means.numel() / (N * 3);       // number of batches
     const uint32_t C = viewmats0.size(-3);            // number of cameras
     const uint32_t I = B * C;                         // number of images
-    const uint32_t grid_h = tile_offsets.size(-2);
-    const uint32_t grid_w = tile_offsets.size(-1);
+    const uint32_t grid_h = isect_offsets.size(-2);
+    const uint32_t grid_w = isect_offsets.size(-1);
     const uint32_t n_isects = flatten_ids.size(0);
-
-    constexpr uint32_t TILE_SIZE = 8;
-    constexpr uint32_t CTA_SIZE = 32;
-
-    const dim3 threads = {CTA_SIZE, 1, 1};
-    const dim3 grid = {I, grid_h, grid_w};
-    // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch + scale_batch + normal_batch
-    const int64_t shmem_size =
-        CTA_SIZE * (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3) + sizeof(vec3));
 
     TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
     TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
@@ -856,77 +899,106 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     auto launch_kernel = [&]<typename ChannelsT>() {
         constexpr uint32_t CDIM = ChannelsT::value;
 
-        if (cudaFuncSetAttribute(
-            rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shmem_size
-        ) != cudaSuccess) {
+        auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>() {
+            const dim3 threads = {CTA_SIZE, 1, 1};
+            const dim3 grid = {I, grid_h, grid_w};
+            // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch + scale_batch + normal_batch
+            const int64_t shmem_size =
+                CTA_SIZE * (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3) + sizeof(vec3));
+
+            if (cudaFuncSetAttribute(
+                rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                shmem_size
+            ) != cudaSuccess) {
+                AT_ERROR(
+                    "Failed to set maximum shared memory size (requested ",
+                    shmem_size,
+                    " bytes)."
+                );
+            }
+
+            rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
+                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                    C,
+                    N,
+                    n_isects,
+                    packed,
+                    reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
+                    reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
+                    reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
+                    colors.const_data_ptr<float>(),
+                    opacities.const_data_ptr<float>(),
+                    backgrounds.has_value()
+                        ? backgrounds.value().const_data_ptr<float>()
+                        : nullptr,
+                    masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
+                    image_width,
+                    image_height,
+                    // camera model
+                    viewmats0.const_data_ptr<float>(),
+                    viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
+                                          : nullptr,
+                    Ks.const_data_ptr<float>(),
+                    camera_model,
+                    *ut_params,
+                    rs_type,
+                    rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
+                    radial_coeffs.has_value()
+                        ? radial_coeffs.value().const_data_ptr<float>()
+                        : nullptr,
+                    tangential_coeffs.has_value()
+                        ? tangential_coeffs.value().const_data_ptr<float>()
+                        : nullptr,
+                    thin_prism_coeffs.has_value()
+                        ? thin_prism_coeffs.value().const_data_ptr<float>()
+                        : nullptr,
+                    ftheta_device_coeffs,
+                    lidar_device_coeffs,
+                    external_distortion_device_params,
+                    // intersections
+                    isect_offsets.const_data_ptr<int32_t>(),
+                    flatten_ids.const_data_ptr<int32_t>(),
+                    use_hit_distance,
+                    renders.data_ptr<float>(),
+                    alphas.data_ptr<float>(),
+                    normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
+                    last_ids.data_ptr<int32_t>(),
+                    sample_counts.has_value()
+                        ? sample_counts.value().data_ptr<int32_t>()
+                        : nullptr,
+                    // CSR chunk state persistence. A total_chunks==0 degenerate case
+                    // (e.g. n_isects==0) is signaled by passing nullptr — the
+                    // in-kernel `persist_chunks` flag then short-circuits all writes.
+                    (total_chunks > 0)
+                        ? chunk_offsets.const_data_ptr<int32_t>()
+                        : nullptr,
+                    (total_chunks > 0)
+                        ? fwd_chunk_state.data_ptr<float>()
+                        : nullptr
+                );
+        };
+
+        // NOTE: Two (TILE_SIZE, CTA_SIZE) variants are kept because the
+        // optimum differs by workload. tile_size=8 (CTA=32, PPT=2) is the
+        // compact-CTA path: wins on training (mixed CDIM cameras + lidar) by
+        // keeping per-CTA shmem small so many CTAs co-reside per SM.
+        // tile_size=16 (CTA=256, PPT=1) is one thread per pixel: wins on
+        // render-only workloads where fewer/larger tiles shrink the
+        // intersect+sort cost. Espectially true with 1080p and 4K resolutions.
+        // The kernel body is identical between the two; only the templated
+        // constants change. min_blocks_for_cdim is re-derived from CTA_SIZE
+        // so the schedule stays valid past CTA=32.
+        if (tile_size == 8u) {
+            launch_variant.template operator()<8u, 32u>();
+        } else if (tile_size == 16u) {
+            launch_variant.template operator()<16u, 256u>();
+        } else {
             AT_ERROR(
-                "Failed to set maximum shared memory size (requested ",
-                shmem_size,
-                " bytes)."
+                "Unsupported tile_size ", tile_size,
+                "; supported values are {8, 16}."
             );
         }
-
-        rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
-            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                C,
-                N,
-                n_isects,
-                packed,
-                reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
-                reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
-                reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
-                colors.const_data_ptr<float>(),
-                opacities.const_data_ptr<float>(),
-                backgrounds.has_value()
-                    ? backgrounds.value().const_data_ptr<float>()
-                    : nullptr,
-                masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
-                image_width,
-                image_height,
-                // camera model
-                viewmats0.const_data_ptr<float>(),
-                viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
-                                      : nullptr,
-                Ks.const_data_ptr<float>(),
-                camera_model,
-                *ut_params,
-                rs_type,
-                rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
-                radial_coeffs.has_value()
-                    ? radial_coeffs.value().const_data_ptr<float>()
-                    : nullptr,
-                tangential_coeffs.has_value()
-                    ? tangential_coeffs.value().const_data_ptr<float>()
-                    : nullptr,
-                thin_prism_coeffs.has_value()
-                    ? thin_prism_coeffs.value().const_data_ptr<float>()
-                    : nullptr,
-                ftheta_device_coeffs,
-                lidar_device_coeffs,
-                external_distortion_device_params,
-                // intersections
-                tile_offsets.const_data_ptr<int32_t>(),
-                flatten_ids.const_data_ptr<int32_t>(),
-                use_hit_distance,
-                renders.data_ptr<float>(),
-                alphas.data_ptr<float>(),
-                normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
-                last_ids.data_ptr<int32_t>(),
-                sample_counts.has_value()
-                    ? sample_counts.value().data_ptr<int32_t>()
-                    : nullptr,
-                // CSR chunk state persistence. A total_chunks==0 degenerate case
-                // (e.g. n_isects==0) is signaled by passing nullptr — the
-                // in-kernel `persist_chunks` flag then short-circuits all writes.
-                (total_chunks > 0)
-                    ? chunk_offsets.const_data_ptr<int32_t>()
-                    : nullptr,
-                (total_chunks > 0)
-                    ? fwd_chunk_state.data_ptr<float>()
-                    : nullptr
-            );
     };
     const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");

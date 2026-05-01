@@ -727,6 +727,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
         masks,
         image_width,
         image_height,
+        tile_size,
         viewmats0,
         viewmats1,
         Ks,

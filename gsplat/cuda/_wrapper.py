@@ -1228,11 +1228,15 @@ def rasterize_to_pixels_eval3d_extra(
     else:
         padded_channels = 0
 
-    # The 3DGUT forward kernel is compiled with TILE_SIZE=8, CTA_SIZE=32.
-    # tile_size must match or the tile grid will be misaligned with the kernel.
-    assert (
-        tile_size == 8
-    ), f"3DGUT rasterization requires tile_size=8 (kernel compiled with TILE_SIZE=8), got {tile_size}"
+    # The 3DGUT fwd launcher dispatches at on tile_size:
+    #   tile_size=8  -> kernel<CDIM, 8,  32 > (compact CTA, PPT=2)
+    #   tile_size=16 -> kernel<CDIM, 16, 256> (one thread per pixel, PPT=1)
+    # tile_size must match the launcher dispatch or the tile grid will be
+    # misaligned with the kernel's TILE_SIZE constexpr.
+    assert tile_size in (
+        8,
+        16,
+    ), f"3DGUT rasterization requires tile_size in (8, 16), got {tile_size}"
 
     tile_height, tile_width = isect_offsets.shape[-2:]
     if camera_model == "lidar":

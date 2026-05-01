@@ -559,11 +559,6 @@ def rasterization(
 
     """
     meta = {}
-    # Resolve tile_size default based on rasterizer path. The 3DGUT kernel is
-    # compiled with TILE_SIZE=8; the 3DGS kernel is compiled with TILE_SIZE=16.
-    # Callers that don't specify tile_size get the path-correct default.
-    if tile_size is None:
-        tile_size = 8 if with_eval3d else 16
     has_color = render_mode_has_color(render_mode)
 
     _validate_3dgut_rasterize_mode(
@@ -587,6 +582,24 @@ def rasterization(
     if lidar_coeffs is not None:
         width = lidar_coeffs.n_columns
         height = lidar_coeffs.n_rows
+
+    # Resolve tile_size default. The 3DGS kernel is compiled with TILE_SIZE=16
+    # only; the 3DGUT kernel dispatches at compile time on tile_size in {8, 16}
+    # and the optimum is workload-dependent: tile=8 (CTA=32, PPT=2) is the
+    # compact-CTA path that wins below 1080p where smaller per-tile shmem lets
+    # many CTAs co-reside per SM and the intersect+sort cost is small. tile=16
+    # (CTA=256, PPT=1) is one thread per pixel; it wins at 1080p+ where
+    # intersect+sort dominates and fewer/larger tiles shrink it.
+    #
+    # Spinning lidar grids are wide but shallow (e.g. pandar128 = 128 rows x 
+    # 3600 cols, at128 = 128 x 1200); min gates on the row count keeps lidar at
+    # tile=8 alongside sub-1080p cameras. Cameras at 1080p+ have min(W,H) >= 1080
+    # and pick tile=16.
+    if tile_size is None:
+        if with_eval3d:
+            tile_size = 16 if min(width, height) >= 1080 else 8
+        else:
+            tile_size = 16
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
