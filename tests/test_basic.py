@@ -2868,6 +2868,23 @@ def test_rasterize_to_pixels_eval3d(
         rtol=0,
         atol=1e-4 * _lidar_tol,
     )
+    # Structural invariant for use_hit_distance:
+    # - fwd overwrites pix_out[..., -1] with per-pixel hit_distance,
+    #   computed from means/quats/scales/rays (not from colors[..., -1]).
+    # - colors[..., -1] is therefore absent from the rendered output, so
+    #   d(loss)/d(colors[..., -1]) is structurally zero.
+    # - PyTorch ref produces 0 via
+    #   `torch.cat([gauss_colors[..., :-1], hitDist[..., None]], -1)`.
+    # - The CUDA bwd's per-Gaussian color VJP must match exactly (atol=0).
+    if use_hit_distance:
+        last_grad = v_colors[..., -1]
+        assert torch.allclose(last_grad, torch.zeros_like(last_grad), atol=0.0), (
+            "v_colors[..., -1] must be 0 when use_hit_distance=True (the "
+            "last colors channel is replaced by hit_distance in fwd, so "
+            "d(loss)/d(colors[..., -1]) is structurally zero). Got max="
+            f"{last_grad.abs().max().item():.3e}, mean="
+            f"{last_grad.abs().mean().item():.3e}."
+        )
     torch.testing.assert_close(
         v_opacities * opacities_mask.float(),
         _v_opacities * opacities_mask.float(),
