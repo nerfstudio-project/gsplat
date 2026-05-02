@@ -752,13 +752,27 @@ __global__ void rasterize_gradient_bwd_kernel(
                 // compute the current T for this gaussian
                 float ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
                 T *= ra;
-                // update v_rgb for this gaussian
+                // Per-Gaussian color VJP: v_rgb_local[k] = fac * v_render_c[k].
+                //
+                // Last-channel special case when `use_hit_distance` is on:
+                // - fwd substitutes per-pixel hit_distance for colors[g,CDIM-1]
+                //   in pix_out, so colors[..., CDIM-1] is structurally absent
+                //   from the rendered output.
+                // - Therefore d(loss)/d(colors[..., CDIM-1]) = 0.
+                // - Zero v_rgb_local[CDIM-1] so the warp-reduced atomic add
+                //   leaves v_colors[..., CDIM-1] at 0.
+                // - The hit_distance VJP below pulls the depth-channel
+                //   gradient straight from v_render_c[CDIM-1], not from this
+                //   slot.
                 const float fac = alpha * T;
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
-                
+                if (use_hit_distance) {
+                    v_rgb_local[CDIM - 1] = 0.f;
+                }
+
                 // Precompute normal if needed (for both v_alpha contribution and gradient)
                 bool flipped = false;
                 if (v_render_normals != nullptr) {
@@ -806,7 +820,12 @@ __global__ void rasterize_gradient_bwd_kernel(
                 vec3 v_grd_n_hit = vec3(0.f);
                 vec3 v_gro_hit = vec3(0.f);
                 if (use_hit_distance) {
-                    const float v_depth = v_rgb_local[CDIM - 1];  // gradient from depth channel (last channel)
+                    // Depth-channel gradient for the hit_distance VJP.
+                    // v_rgb_local[CDIM-1] was zeroed above (fwd replaces
+                    // that color channel with hit_distance, so the color
+                    // VJP must be 0). Compute v_depth directly from
+                    // v_render_c instead of reading the zeroed slot.
+                    const float v_depth = fac * v_render_c[CDIM - 1];
 
                     // From forward:
                     const float hit_t = glm::dot(grd_n, -gro);
