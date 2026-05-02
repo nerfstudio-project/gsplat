@@ -49,6 +49,7 @@ from gsplat._helper import (
     load_test_data,
     get_inlier_abserror_mask,
     assert_mismatch_ratio,
+    assert_close_with_boundary_band,
 )
 
 from gsplat.cuda._wrapper import (
@@ -639,16 +640,40 @@ def test_fully_fused_projection_ut(
         radii_cuda[sel].float(), radii_torch[sel].float(), rtol=0, atol=radii_atol
     )
 
-    # means2d: Sub-pixel precision expected
-    # Relaxed tolerances appropriate for UT's multi-step numerical pipeline
-    # UT involves sigma point generation, projection, and weighted averaging
-    # which accumulates small FP32 differences between CUDA and PyTorch
-    torch.testing.assert_close(
-        means2d_cuda[sel],
-        means2d_torch[sel],
-        rtol=0.5,  # 50% relative tolerance (handles high rel diff at near-zero values)
-        atol=0.05,  # 0.05 pixel absolute tolerance (great sub-pixel accuracy)
-    )
+    # means2d: split by shutter mode.  GLOBAL is smooth in inputs and admits
+    # a tight per-element check.  ROLLING does a 10-iter refinement whose
+    # convergence basin can shift on a small fraction of
+    # Gaussians, producing tail elements with up to ~16% rel-diff.  Use a
+    # bounded per-element check with a small fail-rate cap so the tight bulk
+    # check still catches systematic bias.  Replaces rtol=0.5, atol=0.05.
+    if rolling_shutter == RollingShutterType.GLOBAL:
+        torch.testing.assert_close(
+            means2d_cuda[sel],
+            means2d_torch[sel],
+            rtol=2e-3,
+            atol=5e-2,
+        )
+    else:
+        _diff = (means2d_cuda[sel] - means2d_torch[sel]).abs()
+        _bound = 5e-2 + 2e-3 * means2d_torch[sel].abs()
+        _fail = _diff > _bound
+        _fr = _fail.float().mean().item()
+        # fail_cap = 1.05 x worst observed (0.013145%) -> 0.014%.
+        assert _fr <= 1.4e-4, (
+            f"UT means2d (rolling): fail-rate {_fr:.4%} > cap 0.014% "
+            f"(atol=5e-2, rtol=2e-3, {int(_fail.sum().item())}/{_fail.numel()})"
+        )
+        # Outlier guard: even admitted outliers must satisfy a per-element
+        # bound so a single-element catastrophic bug cannot hide inside the
+        # fail-rate budget.  Tightened to 1.05 x worst observed excess
+        # (0.66) over old (atol=0.1, rtol=0.2) -> atol=0.07, rtol=0.14.
+        _outlier_bound = 0.07 + 0.14 * means2d_torch[sel].abs()
+        _outlier_fail = _diff > _outlier_bound
+        assert not _outlier_fail.any(), (
+            f"UT means2d (rolling): {int(_outlier_fail.sum().item())} elements "
+            f"exceed outlier bound (atol=0.07, rtol=0.14); worst diff "
+            f"{_diff.max().item():.4e}"
+        )
 
     # depths: High precision expected
     # Depths are computed from camera transformation, less accumulation than means2d
@@ -659,37 +684,116 @@ def test_fully_fused_projection_ut(
         atol=2e-6,  # 2e-6 absolute tolerance (2x safety margin)
     )
 
-    # conics: Moderate precision
-    # Conics involve covariance inverse which can amplify small numerical differences
-    # Near-zero conic values can have large relative differences but small absolute differences
-    # Rolling shutter: iterative refinement affects 2D covariance which propagates to conics
+    # conics: covariance inverse amplifies small numerical differences.
+    # GLOBAL is smooth and admits a tight per-element check.  ROLLING goes
+    # through the 10-iter refinement, producing a tail of elements with
+    # high rel-diff -- previously rtol=10.0 admitted any error.  Use a
+    # bounded per-element check with a fail-rate cap.
     if rolling_shutter == RollingShutterType.GLOBAL:
-        conics_rtol, conics_atol = 1e-2, 1e-2
+        torch.testing.assert_close(
+            conics_cuda[sel],
+            conics_torch[sel],
+            rtol=2e-3,
+            atol=2e-3,
+        )
     else:
-        conics_rtol, conics_atol = (
-            10.0,
-            1.0,
-        )  # Rolling shutter amplifies differences in conic computation
-
-    torch.testing.assert_close(
-        conics_cuda[sel], conics_torch[sel], rtol=conics_rtol, atol=conics_atol
-    )
+        _diff_c = (conics_cuda[sel] - conics_torch[sel]).abs()
+        _bound_c = 1e-2 + 1e-2 * conics_torch[sel].abs()
+        _fail_c = _diff_c > _bound_c
+        _fr_c = _fail_c.float().mean().item()
+        # fail_cap = 1.05 x envelope:
+        #   RTX PRO 2000  worst fail-rate 0.0161%
+        #   RTX PRO 6000  worst fail-rate 0.0191%
+        assert _fr_c <= 2.1e-4, (
+            f"UT conics (rolling): fail-rate {_fr_c:.4%} > cap 0.021% "
+            f"(atol=1e-2, rtol=1e-2, {int(_fail_c.sum().item())}/{_fail_c.numel()})"
+        )
+        # Outlier guard tightened to 1.05 x worst observed (1.855) -> 2.0.
+        _outlier_bound_c = 2.0
+        _outlier_fail_c = _diff_c > _outlier_bound_c
+        assert not _outlier_fail_c.any(), (
+            f"UT conics (rolling): {int(_outlier_fail_c.sum().item())} elements "
+            f"exceed outlier bound (atol=2.0); worst diff "
+            f"{_diff_c.max().item():.4e}"
+        )
 
     # compensations: Moderate precision
-    # Compensations involve sqrt(det_orig/det_blur) which can be sensitive
-    # Small differences in determinants can cause larger differences in sqrt ratio
-    # Rolling shutter: changes in 2D covariance determinant cascade through compensation
+    # Compensations involve sqrt(det_orig/det_blur) which can be sensitive.
+    # Small differences in determinants can cause larger differences in sqrt
+    # ratio. For GLOBAL shutter the comp computation is smooth in the inputs
+    # and admits a tight per-element check.  For rolling-shutter modes, the
+    # 10-iter shutter refinement uses floor(image_point.y) inside
+    # shutter_relative_frame_time -- a step discontinuity at every integer y.
+    # ULP noise in the iteration can flip floor() between two
+    # values, jumping `relative_time` by 1/(H-1) and routing the iteration
+    # into a different basin of attraction.  We therefore split into:
+    #   interior:     Gaussians whose 2D footprint stays clear of any
+    #                 integer y -> tight assert_close.
+    #   boundary band: Gaussians whose footprint crosses an integer y ->
+    #                 budgeted, symmetric flip-rate check.
     if rolling_shutter == RollingShutterType.GLOBAL:
-        comps_rtol, comps_atol = 0.1, 0.01  # Global: max_abs=0.0034, max_rel=4.3%
+        torch.testing.assert_close(
+            comps_cuda[sel], comps_torch[sel], rtol=0.01, atol=0.01
+        )
     else:
-        comps_rtol, comps_atol = (
-            0.25,
-            0.15,
-        )  # Rolling shutter: max_abs=0.110, max_rel=18.4%
+        # Boundary mask = "any of the 7 UT sigma points might project within
+        # ULP of an integer y".  UT sigma-point analytical half-spread =
+        # sqrt((n + lambda) * Sigma_i), which for our params (alpha=0.1,
+        # kappa=0, n=3) gives lambda = -2.97 and a sqrt(0.03) ~ 0.173 scale
+        # factor along each principal axis.  In the projected 2D image we use
+        # 1/sqrt(conic[2]) ~ sigma_y as a cheap monotone proxy and apply the
+        # same scale; double for safety against per-camera anisotropy
+        # amplification through projection.  A Gaussian's sigma-point cluster
+        # straddles an integer iff dist_to_int < sigma-point half-spread.
+        y_ref = means2d_torch[sel][..., 1]
+        sigma_y = (1.0 / conics_torch[sel][..., 2].clamp(min=1e-6)).sqrt()
+        # Boundary half-spread = K * sigma_y. K must cover the worst observed
+        # sigma-point projection drift:
+        #   analytical static half-spread = 0.35 * sigma  (UT, alpha=0.1, n=3)
+        #   RTX PRO 2000  10-iter drift cap ~ 0.6 * sigma  (1.7x)
+        #   RTX PRO 6000  10-iter drift cap ~ 0.675 * sigma (1.93x)
+        # K = 0.75 (env x 1.05) leaves headroom for both.
+        sp_half_spread = 0.75 * sigma_y
+        dist_to_int = (y_ref - y_ref.round()).abs()
+        boundary_mask = dist_to_int < sp_half_spread
 
-    torch.testing.assert_close(
-        comps_cuda[sel], comps_torch[sel], rtol=comps_rtol, atol=comps_atol
-    )
+        # Calibration trace -- envelope x 1.05:
+        #   - interior assert atol=7e-3, rtol=0.01:
+        #       RTX PRO 2000  worst <7e-3  (passes)
+        #       RTX PRO 6000  worst <7e-3  (passes after K=0.75)
+        #   - in-band flips at flip_predicate (a-e).abs() > 7e-3:
+        #       RTX PRO 2000  50/188261 (0.0266%)   globalz/distsensor allvalid
+        #                     58/188485 (0.0308%)   globalz/distsensor somevalid
+        #                     historic single-Gaussian outlier diff=0.398 included
+        #       RTX PRO 6000  similar magnitudes, bounded by the 4.5e-4 cap below.
+        #   - asymmetry not enforced: too few flips for stable bias estimate.
+        # See plan: ~/.claude/plans/how-to-devise-tests-hidden-fox.md
+        # CUDA does not expose per-sigma-point projections, so a true cross
+        # predicate cannot be written here; the boundary mask is a geometric
+        # proxy.
+        assert_close_with_boundary_band(
+            comps_cuda[sel],
+            comps_torch[sel],
+            boundary_mask=boundary_mask,
+            interior_atol=7e-3,
+            interior_rtol=0.01,
+            boundary_max_flip_ratio=4.5e-4,  # 1.05 x observed worst (4.23e-4)
+            boundary_symmetry_tol=1.0,  # disabled: too few flips meaningful
+            flip_predicate=lambda a, e: (a - e).abs() > 7e-3,
+            boundary_cross_predicate=None,
+            msg="cluster A: rolling-shutter floor() discontinuity",
+        )
+        # Outlier guard: even admitted in-band flips must satisfy a loose
+        # absolute bound, so a catastrophic single-Gaussian bug cannot hide
+        # inside the boundary flip budget.  Tightened to 1.05 x worst
+        # observed in-band diff ~0.398 -> atol=0.42.
+        _diff_a = (comps_cuda[sel] - comps_torch[sel]).abs()
+        _outlier_a = (_diff_a > 0.42) & boundary_mask
+        assert not _outlier_a.any(), (
+            f"cluster A: {int(_outlier_a.sum().item())} in-band elements "
+            f"exceed outlier bound atol=0.42; worst diff "
+            f"{_diff_a.max().item():.4e}"
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
