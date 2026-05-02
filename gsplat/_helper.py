@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import os
+import warnings
 from typing import Optional, Tuple
 
 import numpy as np
@@ -206,3 +207,248 @@ def assert_mismatch_ratio(actual, expected, *, max=1e-5):
     assert (
         mismatch_ratio <= max
     ), f"Too many validity mismatches: {mismatch}/{total} ({mismatch_ratio*100:.2f}%) "
+
+
+def assert_close_with_boundary_band(
+    actual,
+    expected,
+    *,
+    boundary_mask,
+    interior_atol,
+    interior_rtol,
+    boundary_max_flip_ratio,
+    boundary_symmetry_tol,
+    flip_predicate=None,
+    boundary_cross_predicate=None,
+    msg="",
+):
+    """
+    Two-tier comparison for quantities sensitive to algorithmic discontinuities
+    (e.g. floor() of a projected coordinate, or strict < at an image edge).
+
+    The caller supplies ``boundary_mask`` (True = element sits in the band where
+    a discontinuity lives, False = element is in the smooth interior). The
+    helper applies:
+
+      INTERIOR (boundary_mask=False): tight per-element ``assert_close`` with
+      (interior_atol, interior_rtol). This catches real numerical regressions:
+      a bug that nudges most elements past interior_atol fires here.
+
+      BOUNDARY (boundary_mask=True): allow disagreement only if
+        (i)  the disagreeing fraction is <= boundary_max_flip_ratio,
+        (ii) disagreements are roughly symmetric (no directional bias) -
+             |a_only - r_only| / (a_only + r_only) <= boundary_symmetry_tol,
+       (iii) if ``boundary_cross_predicate`` is provided, every disagreement in
+             the band must satisfy it. The predicate confirms each flip is a
+             true boundary cross (actual and expected agree within an upstream
+             ULP AND fall on opposite sides of the same discontinuity).
+             Disagreements in the band that are NOT crosses indicate real bugs.
+
+    For boolean inputs, symmetry compares (a & ~e) vs (~a & e) counts.
+    For non-boolean inputs, symmetry uses the mean of sign(a-e) over flips.
+    Both formulas normalize to [0, 1] and produce comparable values: a
+    ``boundary_symmetry_tol=0.5`` means the same thing on a float test as on
+    a bool test ("at most 50% net imbalance among flips").
+
+    Predicate-input asymmetry: ``flip_predicate`` receives the band-only
+    slices ``actual[boundary_mask]`` / ``expected[boundary_mask]``;
+    ``boundary_cross_predicate`` receives the FULL-shape mask so its closure
+    can index unrelated upstream tensors (e.g. the projected image_point).
+    Each predicate's parameter doc states this contract; check the relevant
+    block before writing a new closure.
+
+    Args:
+        actual, expected:
+            Tensors of equal shape and dtype.
+        boundary_mask:
+            Bool tensor of same shape; True = element is in the discontinuity
+            band, False = interior.
+        interior_atol, interior_rtol:
+            Forwarded to ``torch.testing.assert_close`` for the interior.
+        boundary_max_flip_ratio:
+            Maximum allowed disagreeing fraction within the band.
+        boundary_symmetry_tol:
+            Bias guardrail (see above). Set to 1.0 to disable when there are
+            too few flips to be statistically meaningful (e.g. n=1).
+        flip_predicate:
+            Callable ``(a_band, e_band) -> bool tensor`` of length
+            ``boundary_mask.sum()``. Inputs are the band-only slices
+            ``actual[boundary_mask]`` and ``expected[boundary_mask]``.
+            Returns True for elements that COUNT toward
+            ``boundary_max_flip_ratio``; False elements are admitted into the
+            band without counting.
+
+            Two regimes; pick by what the boundary looks like:
+
+            * **Residual-based** (default for non-bool:
+              ``(a-e).abs() > interior_atol``). Right when the boundary is a
+              quantization step (``floor()``) -- ULP-scale disagreements at
+              the step are noise; anything larger is a real flip. Pass a
+              closure that mirrors ``interior_atol`` so a regression nudging
+              every band element by ``interior_atol`` still trips the cap.
+
+            * **Magnitude-based** (caller-supplied, e.g.
+              ``lambda a, e, _t=nz_thresh: a.abs() > 10 * _t``). Right when
+              the boundary is a near-zero region (Newton fall-off, fisheye
+              ``z->0``): both sides agree on FP noise around zero; only
+              large-magnitude disagreement is a real bug. Most call sites in
+              ``test_basic`` / ``test_2dgs`` use this shape because their
+              gradients fall to zero on near-zero-depth Gaussians.
+
+            Default for bool dtype is ``a != e``.
+        boundary_cross_predicate:
+            Optional callable ``(boundary_mask) -> bool tensor`` of length
+            ``boundary_mask.sum()``. The input is the FULL-shape mask (not
+            the band-only slices, unlike ``flip_predicate``); the closure
+            may capture upstream tensors (e.g. the projected image_point)
+            needed to verify the cross. Returns one bool per band element
+            (i.e. one per ``True`` entry of ``boundary_mask``); every flip
+            in the band must satisfy it.
+
+            Idiom (capture upstream tensors, compute full-shape, index by
+            the mask)::
+
+                def cross_pred(m, _a=image_point, _b=image_point_ref):
+                    full = _a.floor() != _b.floor()  # full shape
+                    return full[m]                   # band length
+        msg:
+            String prefix included in any AssertionError.
+
+    Calibration tip (used during initial setup):
+        Set ``interior_atol=0``, ``interior_rtol=0``,
+        ``boundary_max_flip_ratio=0``, ``boundary_symmetry_tol=1.0`` (off),
+        ``boundary_cross_predicate=None``. The first failure tells you whether
+        the disagreement is interior or in-band, and gives you the magnitude
+        and count to set tight values.
+
+    Calibration policy:
+        Existing call-site tolerances are envelope-of-worst-observed x 1.05
+        across the calibration GPUs. When a new GPU produces a value above
+        the envelope, prefer (1) bisecting the per-test calibration trace
+        comments to identify the new worst-case, (2) confirming the new
+        value is FP-noise-level rather than an algorithmic regression, and
+        (3) only then bumping the envelope to ``new_worst x 1.05``. Avoid
+        widening tolerances solely to chase a CI failure -- the in-tree
+        ``test_basic.py`` per-GPU traces are the audit trail.
+
+    Edge cases:
+        * Empty boundary band -> only the interior assert runs.
+        * Empty interior     -> a UserWarning is emitted; boundary checks
+                                still run. Callers should ensure
+                                ``boundary_mask`` isn't trivializing the test.
+        * NaN / Inf in actual or expected -> rejected up front; the default
+          flip-predicate (``(a-e).abs() > interior_atol``) and any caller
+          predicates of the same shape silently treat NaN as "not a flip"
+          (NaN > anything is False), which would let band NaN escape the cap.
+        * Per-flip magnitude is unbounded by the band check. Admitted in-band
+          flips can be arbitrarily large; the cross-predicate is the intended
+          escape hatch when an upstream invariant is verifiable. When no
+          cross-predicate is feasible, callers should add a per-element
+          ``(actual - expected).abs() <= atol_outlier + rtol_outlier *
+          expected.abs()`` assertion alongside this helper to catch a NaN /
+          catastrophic single-element bug from hiding inside the budget
+          (see ``test_basic.py`` proj covars2d for an example).
+    """
+    assert actual.shape == expected.shape, f"{actual.shape=} {expected.shape=}"
+    assert actual.dtype == expected.dtype, f"{msg}: {actual.dtype=} {expected.dtype=}"
+    assert (
+        boundary_mask.shape == actual.shape
+    ), f"{boundary_mask.shape=} {actual.shape=}"
+    assert boundary_mask.dtype == torch.bool, f"{boundary_mask.dtype=}"
+    assert 0.0 <= boundary_max_flip_ratio <= 1.0, (
+        f"{msg}: boundary_max_flip_ratio must be in [0, 1] "
+        f"(got {boundary_max_flip_ratio})"
+    )
+    assert 0.0 <= boundary_symmetry_tol <= 1.0, (
+        f"{msg}: boundary_symmetry_tol must be in [0, 1] "
+        f"(got {boundary_symmetry_tol})"
+    )
+    if actual.dtype != torch.bool:
+        assert torch.isfinite(actual).all(), f"{msg}: actual contains NaN / Inf"
+        assert torch.isfinite(expected).all(), f"{msg}: expected contains NaN / Inf"
+
+    interior = ~boundary_mask
+
+    # --- Interior assert: regression catcher ----------------------------------
+    if interior.any():
+        torch.testing.assert_close(
+            actual[interior],
+            expected[interior],
+            atol=interior_atol,
+            rtol=interior_rtol,
+            msg=lambda default_msg: f"{msg}: interior failure: {default_msg}",
+        )
+
+    if not boundary_mask.any():
+        return
+
+    # --- Empty-interior warning (hoisted before band checks so a degenerate
+    # mask is flagged even if a subsequent band check raises) ----------------
+    if not interior.any():
+        warnings.warn(
+            f"[boundary-band] {msg}: all elements in band; no interior "
+            f"coverage. Verify the boundary_mask is not trivially True.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    a_b = actual[boundary_mask]
+    e_b = expected[boundary_mask]
+
+    # --- flip predicate -------------------------------------------------------
+    if flip_predicate is None:
+        if actual.dtype == torch.bool:
+            flips = a_b != e_b
+        else:
+            flips = (a_b - e_b).abs() > interior_atol
+    else:
+        flips = flip_predicate(a_b, e_b)
+        assert flips.shape == a_b.shape, (
+            f"{msg}: flip predicate shape mismatch "
+            f"(got {flips.shape}, expected {a_b.shape})"
+        )
+
+    n_flips = int(flips.sum().item())
+    n_band = int(flips.numel())
+    flip_ratio = n_flips / n_band if n_band > 0 else 0.0
+
+    # --- Cross verification: every band flip must be a true boundary cross ---
+    if boundary_cross_predicate is not None and n_flips > 0:
+        crosses = boundary_cross_predicate(boundary_mask)
+        assert crosses.shape == flips.shape, (
+            f"{msg}: cross predicate shape mismatch "
+            f"(got {crosses.shape}, expected {flips.shape})"
+        )
+        non_cross_flips = flips & ~crosses
+        n_non_cross = int(non_cross_flips.sum().item())
+        assert n_non_cross == 0, (
+            f"{msg}: {n_non_cross}/{n_flips} band flips are NOT true boundary "
+            f"crosses (real disagreements, not FP noise at the discontinuity)"
+        )
+
+    # --- Flip-rate cap --------------------------------------------------------
+    assert flip_ratio <= boundary_max_flip_ratio, (
+        f"{msg}: band flip ratio {flip_ratio*100:.4f}% "
+        f"({n_flips}/{n_band}) > {boundary_max_flip_ratio*100:.4f}%"
+    )
+
+    # --- Symmetry guardrail ---------------------------------------------------
+    if actual.dtype == torch.bool:
+        a_only = int((a_b & ~e_b).sum().item())
+        r_only = int((~a_b & e_b).sum().item())
+        if a_only + r_only > 0:
+            asym = abs(a_only - r_only) / (a_only + r_only)
+            assert asym <= boundary_symmetry_tol, (
+                f"{msg}: directional asymmetry in band flips: "
+                f"a_only={a_only} r_only={r_only} (|delta|/sum={asym:.3f} > "
+                f"{boundary_symmetry_tol:.3f})"
+            )
+    else:
+        if n_flips > 0:
+            signs = (a_b - e_b).sign()[flips]
+            sign_mean = signs.float().mean().abs().item()
+            assert sign_mean <= boundary_symmetry_tol, (
+                f"{msg}: directional asymmetry in band flips: "
+                f"|mean(sign(a-e))|={sign_mean:.3f} > "
+                f"{boundary_symmetry_tol:.3f}"
+            )
