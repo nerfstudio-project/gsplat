@@ -50,6 +50,7 @@ from gsplat._helper import (
     get_inlier_abserror_mask,
     assert_mismatch_ratio,
     assert_close_with_boundary_band,
+    assert_grad_sparsity,
 )
 
 from gsplat.cuda._wrapper import (
@@ -149,8 +150,43 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int,
         (_covars * v_covars + _precis * v_precis).sum(),
         (quats, scales),
     )
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e0, atol=1e-1)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=1e0, atol=1e-1)
+
+    # Gradient comparison via assert_close_with_boundary_band.
+    # Per-element value diff with a "ref near-zero" boundary band: an element
+    # whose reference value sits below the FP noise floor (|ref| < nz_thresh)
+    # has unbounded relative tolerance and is admitted into the band; the
+    # flip predicate fires when CUDA's value rises significantly above that
+    # floor (catches "false non-zero" sparsity bugs). Off-band elements get
+    # a tight per-element rtol -- catches magnitude bias, sign flip, "false
+    # zero" sparsity bugs (CUDA outputs 0 where ref outputs non-zero), and
+    # most off-by-one bugs in the backward chain.
+    for name, vc, vt in [
+        ("v_quats", v_quats, _v_quats),
+        ("v_scales", v_scales, _v_scales),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} backward sparsity")
+        # Tight nz_thresh (1e-7 of max) -- this test has narrow gradient
+        # magnitude distribution, so most elements are in interior and
+        # 0.3% bias is reliably caught.
+        nz_thresh = vt.abs().max().item() * 1e-7
+        boundary_mask = vt.abs() < nz_thresh
+        # interior_rtol envelope x 1.05:
+        #   RTX PRO 2000  worst rtol_req=1.2e-3   (triu=False)
+        #   RTX PRO 6000  worst rtol_req=1.55e-2  (triu=True)
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=boundary_mask,
+            interior_atol=nz_thresh,
+            interior_rtol=1.65e-2,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e: a.abs() > 10 * nz_thresh,
+            msg=f"{name} backward (triu={triu})",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
