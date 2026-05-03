@@ -3147,6 +3147,47 @@ def test_rasterize_to_pixels_eval3d(
     assert opacities_mask.sum() > 0
     assert backgrounds_mask.sum() > 0
 
+    # Per-Gaussian sparsity check: the quantile-based inlier mask above is
+    # per-element, so a CUDA backward that zeros (or explodes) a single
+    # Gaussian's gradient lands in the dropped tail and slips through the
+    # magnitude-only assert_close.  Aggregate to one scalar per Gaussian
+    # (sum |grad| over all batch / feature dims) and check that the
+    # CUDA-vs-ref magnitude ratio is bounded for Gaussians whose gradient
+    # is meaningful (>= 1% of the max ref magnitude).  The min_ratio of
+    # 5e-3 admits the rasterizer's tile-edge magnitude noise
+    # (worst observed ratio 1.6e-2 at this floor) while still catching
+    # zero/200x-explosion sparsity bugs.
+    vis_g = visible_mask[0, :, 0]  # [N]
+
+    def _per_gaussian_mag(t):
+        m = t.abs().sum(dim=-1)
+        while m.ndim > 1:
+            m = m.sum(dim=0)
+        return m  # [N]
+
+    for name, vc, vt in [
+        ("v_means", v_means, _v_means),
+        ("v_quats", v_quats, _v_quats),
+        ("v_scales", v_scales, _v_scales),
+        ("v_colors", v_colors, _v_colors),
+        ("v_opacities", v_opacities, _v_opacities),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"eval3d {name}: NaN/Inf in CUDA grad"
+        mag_c = _per_gaussian_mag(vc)[vis_g]
+        mag_t = _per_gaussian_mag(vt)[vis_g]
+        larger = torch.maximum(mag_c, mag_t)
+        smaller = torch.minimum(mag_c, mag_t)
+        sig = larger > mag_t.max() * 1e-2
+        if sig.any():
+            ratio = smaller[sig] / larger[sig].clamp(min=1e-30)
+            n_bad = int((ratio < 5e-3).sum().item())
+            assert n_bad == 0, (
+                f"eval3d {name}: {n_bad} significant Gaussians with >200x "
+                f"grad-magnitude mismatch (worst ratio {ratio.min().item():.4e})"
+            )
+
     # Compare backward gradients, excluding the ones that fall above the quantile threshold.
     torch.testing.assert_close(
         v_means * means_mask.float(),
