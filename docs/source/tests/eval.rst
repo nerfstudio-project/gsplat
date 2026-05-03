@@ -141,7 +141,7 @@ within the gsplat repo (commit 6acdce4).
 
 The evaluation of `inria-X` can be 
 reproduced with our forked wersion of the official implementation at 
-`here <https://github.com/liruilong940607/gaussian-splatting/tree/benchmark>`_, 
+`here <https://github.com/liruilong940607/gaussian-splatting/tree/benchmark>`__, 
 with the command :code:`python full_eval_m360.py` (commit 36546ce).
 
 2DGS
@@ -152,13 +152,13 @@ No Regularization
 
 .. table:: Performance on `Mip-NeRF 360 Captures <https://jonbarron.info/mipnerf360/>`_ (Averaged Over 7 Scenes)
 
-+---------------------+-------+-------+-------+------------------+------------+
-|                     | PSNR  | SSIM  | LPIPS | Train Mem        | Train Time |
-+=====================+=======+=======+=======+==================+============+
-| inria-30k           | 28.73 | 0.860 | 0.148 | 3.73 GB          | 22m16s     |
-+---------------------+-------+-------+-------+------------------+------------+
-| gsplat-30k          | 28.76 | 0.867 | 0.145 | **3.70 GB**      | **15m44s** |
-+---------------------+-------+-------+-------+------------------+------------+
+    +---------------------+-------+-------+-------+------------------+------------+
+    |                     | PSNR  | SSIM  | LPIPS | Train Mem        | Train Time |
+    +=====================+=======+=======+=======+==================+============+
+    | inria-30k           | 28.73 | 0.860 | 0.148 | 3.73 GB          | 22m16s     |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | gsplat-30k          | 28.76 | 0.867 | 0.145 | **3.70 GB**      | **15m44s** |
+    +---------------------+-------+-------+-------+------------------+------------+
 
 With Normal Consistency and Distortion Regularization
 ------------------------------------------------------
@@ -237,6 +237,6 @@ within the gsplat repo (commit 48abf70).
 
 The evaluation of `inria-X` can be 
 reproduced with our forked wersion of the official implementation at 
-`here <https://github.com/hbb1/diff-surfel-rasterization>`_;
+`here <https://github.com/hbb1/diff-surfel-rasterization>`__;
 you need to change the :code:`--model_type 2dgs` to :code:`--model_type 2dgs-inria` in
 :code:`benchmars/basic_2dgs` and run command :code:`cd examples; bash benchmarks/basic_2dgs.sh` (commit 28c928a).
