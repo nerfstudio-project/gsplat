@@ -20,6 +20,10 @@ import pytest
 import torch
 from typing_extensions import Tuple
 import gsplat
+from gsplat._helper import (
+    assert_close_with_boundary_band,
+    assert_grad_sparsity,
+)
 
 device = torch.device("cuda:0")
 
@@ -133,12 +137,39 @@ def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=6e-2, atol=1e-3)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
-    torch.testing.assert_close(
-        v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1
-    )
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
+    # Per-element band+sparsity check on the conditioning-sensitive gradients
+    # (2DGS projection backward; rtol blowup at near-zero gradient values).
+    # Note: v_scales is sliced to [..., :2] because 2DGS uses 2D scales for
+    # the on-plane covariance; the third axis is degenerate.
+    # interior_rtol = 1.05 x worst observed required rtol per gradient
+    # (msg suffix "(2dgs proj)").
+    for name, vc, vt, rtol in [
+        ("v_viewmats", v_viewmats, _v_viewmats, 1.9e-5),  # rtol_req=1.83e-5
+        ("v_quats", v_quats, _v_quats, 1e-5),  # rtol_req=0
+        (
+            "v_scales[:2]",
+            v_scales[..., :2],
+            _v_scales[..., :2],
+            1.9e-5,
+        ),  # rtol_req=1.83e-5
+        ("v_means", v_means, _v_means, 1.6e-5),  # rtol_req=1.52e-5
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+            msg=f"{name} backward (2dgs proj)",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -260,10 +291,30 @@ def test_fully_fused_projection_packed_2dgs(
         v_scales = v_scales.to_dense()
         v_means = v_means.to_dense()
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-2, atol=1e-2)
+    # Per-element band+sparsity check (2DGS packed projection backward).
+    # interior_rtol = 1.05 x worst required (probed; all 4 grads rtol_req=0).
+    for name, vc, vt, rtol in [
+        ("v_viewmats", v_viewmats, _v_viewmats, 1e-5),
+        ("v_quats", v_quats, _v_quats, 1e-5),
+        ("v_scales", v_scales, _v_scales, 1e-5),
+        ("v_means", v_means, _v_means, 1e-5),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+            msg=f"{name} backward (2dgs packed)",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -397,12 +448,37 @@ def test_rasterize_to_pixels_2dgs(
     torch.testing.assert_close(render_alphas, _render_alphas, atol=1e-3, rtol=1e-3)
     torch.testing.assert_close(render_normals, _render_normals, atol=1e-3, rtol=1e-3)
 
-    # assert close backward
-    torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(
-        v_ray_transforms, _v_ray_transforms, rtol=2e-1, atol=5e-2
-    )
-    torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
-    torch.testing.assert_close(v_normals, _v_normals, rtol=1e-3, atol=1e-3)
+    # assert close backward.  Per-output band+sparsity check; v_ray_transforms
+    # used to be rtol=2e-1 (200x looser than the others) due to FP-noisy 3x3
+    # matrix backward; the band absorbs that noise without admitting bias.
+    # interior_rtol = 1.05 x worst observed required rtol per gradient
+    # (msg suffix "(2dgs raster)").
+    for name, vc, vt, rtol in [
+        ("v_means2d", v_means2d, _v_means2d, 1e-4),  # rtol_req=8.24e-5
+        (
+            "v_ray_transforms",
+            v_ray_transforms,
+            _v_ray_transforms,
+            2.5e-5,
+        ),  # rtol_req=2.34e-5 (RTX PRO 6000)
+        ("v_colors", v_colors, _v_colors, 3e-5),  # rtol_req=2.77e-5
+        ("v_opacities", v_opacities, _v_opacities, 1e-5),  # rtol_req=0
+        ("v_backgrounds", v_backgrounds, _v_backgrounds, 1e-5),  # rtol_req=0
+        ("v_normals", v_normals, _v_normals, 2.7e-5),  # rtol_req=2.48e-5
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+            msg=f"{name} backward (2dgs raster)",
+        )
