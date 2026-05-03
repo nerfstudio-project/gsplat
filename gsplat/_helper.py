@@ -209,6 +209,91 @@ def assert_mismatch_ratio(actual, expected, *, max=1e-5):
     ), f"Too many validity mismatches: {mismatch}/{total} ({mismatch_ratio*100:.2f}%) "
 
 
+def assert_grad_sparsity(
+    actual,
+    expected,
+    *,
+    min_ratio,
+    reduce_dim=-1,
+    msg="",
+):
+    """Per-row (per-Gaussian / per-pixel) magnitude-ratio sparsity check.
+
+    Reduces ``actual`` and ``expected`` to a magnitude per row by summing
+    ``|x|`` over ``reduce_dim`` and asserts ``min(a, e) / max(a, e) >=
+    min_ratio`` for every row -- the two magnitudes never differ by more
+    than ``1 / min_ratio``.
+
+    Catches the bug class that per-element ``assert_close`` admits: a
+    CUDA backward that zeros a real gradient (one side ~0, other side
+    non-zero -> ratio ~0), an atomic-add that's forgotten (entire input's
+    gradient missing), a backward branch that returns 0 in some cases.
+    These survive tolerance-based checks because ``|0 - tiny|`` is always
+    within atol; the ratio check sees that the magnitudes are
+    fundamentally inconsistent regardless of absolute scale.
+
+    Args:
+        actual, expected: tensors of equal shape and dtype. Must be finite
+                          (NaN / Inf are rejected up front; a NaN-tolerant
+                          ratio admits the very bug class this helper exists
+                          to catch).
+        min_ratio:        REQUIRED, must be > 0. Minimum allowed
+                          ``min(a, e) / max(a, e)`` per row. Tighter values
+                          catch more sparsity bugs but admit fewer magnitude
+                          variations. Set per call site -- the appropriate
+                          value depends on the gradient's magnitude variance.
+        reduce_dim:       dim (or tuple) to reduce for the per-row magnitude
+                          (default last dim).
+        msg:              prefix for any AssertionError.
+
+    Magnitude is computed as L1 (``sum(|x|)``) rather than L2
+    (``sqrt(sum(x*x))``). The choice does not affect missing-grad
+    detection (which only fires when one side's magnitude is identically
+    zero), and L1 avoids a per-row ``sqrt`` and is overflow-stable on
+    the ~1e3-magnitude fisheye ``z<=0`` grads the helper must accept.
+
+    Edge cases:
+        * Fully-zero rows on both sides -> skipped (ratio undefined; both
+          sides agree at zero so there is no missing-grad signal to catch).
+        * All rows zero on both sides (e.g. degenerate test fixture
+          producing no gradient flow) -> all rows skipped, helper
+          returns silently. This is row-level by design (the bug class
+          this helper catches is sparsity, not absence of signal); for
+          a tensor-level "expected has gradient flow" precondition,
+          add an upstream ``expected.abs().sum() > 0`` assert at the
+          call site.
+        * NaN / Inf in actual or expected -> rejected before the ratio
+          check; rows containing them would silently mark as "skipped"
+          (NaN > 0 is False) and the missing-grad bug class would survive.
+    """
+    assert actual.shape == expected.shape, f"{actual.shape=} {expected.shape=}"
+    assert actual.dtype == expected.dtype, f"{msg}: {actual.dtype=} {expected.dtype=}"
+    assert min_ratio > 0, f"{msg}: min_ratio must be > 0 (got {min_ratio})"
+    assert torch.isfinite(actual).all(), f"{msg}: actual contains NaN / Inf"
+    assert torch.isfinite(expected).all(), f"{msg}: expected contains NaN / Inf"
+    mag_actual = actual.abs().sum(dim=reduce_dim)
+    mag_expected = expected.abs().sum(dim=reduce_dim)
+    larger = torch.maximum(mag_actual, mag_expected)
+    smaller = torch.minimum(mag_actual, mag_expected)
+    # Rows where both are essentially zero -- skip (ratio undefined).
+    valid = larger > 0
+    ratio = torch.ones_like(larger)
+    ratio[valid] = smaller[valid] / larger[valid]
+    mismatch = ratio < min_ratio
+    n_mismatch = int(mismatch.sum().item())
+    if n_mismatch > 0:
+        # Direction: which side is the smaller (i.e. which side is missing
+        # gradient signal)?
+        actual_smaller = (mag_actual < mag_expected) & mismatch
+        expected_smaller = (mag_actual > mag_expected) & mismatch
+        raise AssertionError(
+            f"{msg}: {n_mismatch} per-row sparsity mismatches "
+            f"(min_ratio={min_ratio}; "
+            f"actual_smaller={int(actual_smaller.sum().item())}, "
+            f"expected_smaller={int(expected_smaller.sum().item())})"
+        )
+
+
 def assert_close_with_boundary_band(
     actual,
     expected,
