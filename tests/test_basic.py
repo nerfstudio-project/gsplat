@@ -231,7 +231,40 @@ def test_proj(
         assert_never(camera_model)
 
     torch.testing.assert_close(means2d, _means2d, rtol=1e-4, atol=1e-4)
-    torch.testing.assert_close(covars2d, _covars2d, rtol=1e-1, atol=3e-2)
+    # covars2d: pinhole projection involves J*Sigma*J^T where J is the
+    # 2x2 affine Jacobian; FP32 cancellation in the matrix product produces
+    # non-trivial per-element noise on the tail (worst observed ~6% rel, ~0.12
+    # abs).  Use band+sparsity so the bulk gets a tight check while the tail
+    # is absorbed in a small flip budget.
+    nz_thresh = _covars2d.abs().max().item() * 1e-3
+    # interior_rtol envelope x 1.05:
+    #   RTX PRO 2000  worst rtol_req=7e-7
+    #   RTX PRO 6000  worst rtol_req=6.55e-6
+    # interior_atol stays at 2e-3 -- the FP32 cancellation noise floor on
+    # this matrix product.
+    assert_close_with_boundary_band(
+        covars2d,
+        _covars2d,
+        boundary_mask=_covars2d.abs() < nz_thresh,
+        interior_atol=2e-3,
+        interior_rtol=7e-6,
+        boundary_max_flip_ratio=1e-3,
+        boundary_symmetry_tol=0.5,
+        flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+        msg="proj covars2d (forward)",
+    )
+    # Outlier guard: even admitted in-band flips must fit a per-element
+    # bound matching the original test's loose tolerance, so a NaN / catastrophic
+    # single-element bug cannot hide inside the boundary flip budget.  The
+    # original was rtol=0.1, atol=3e-2; covars2d magnitudes reach ~1e11 on
+    # near-zero-depth Gaussians, where a small absolute outlier guard would
+    # false-fire on FP noise relative to that magnitude.
+    _diff_cv = (covars2d - _covars2d).abs()
+    _outlier_bound_cv = 3e-2 + 0.1 * _covars2d.abs()
+    assert (_diff_cv <= _outlier_bound_cv).all(), (
+        f"proj covars2d: outlier diff {_diff_cv.max().item():.4e} exceeds "
+        f"loose bound (atol=3e-2, rtol=0.1)"
+    )
 
     # backward
     v_means2d = torch.randn_like(means2d)
@@ -244,8 +277,33 @@ def test_proj(
         (_means2d * v_means2d).sum() + (_covars2d * v_covars2d).sum(),
         (means, covars),
     )
-    torch.testing.assert_close(v_means, _v_means, rtol=6e-1, atol=1e-2)
-    torch.testing.assert_close(v_covars, _v_covars, rtol=1e-1, atol=1e-1)
+    # Per-element band+sparsity check (cluster-A pattern: rel-diff blows up
+    # at near-zero gradient values; off-band tight rtol catches systematic
+    # bias / sign flip / sparsity bug, in-band absorbs FP noise).
+    for name, vc, vt in [
+        ("v_means", v_means, _v_means),
+        ("v_covars", v_covars, _v_covars),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} backward sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        # interior_rtol envelope x 1.05:
+        #   RTX PRO 2000  rtol_req=0       (atol absorbs all on pinhole/ortho)
+        #   RTX PRO 6000  rtol_req=6.5e-4  (fisheye v_means; the geom-band
+        #                                    carve-out arrives in a later commit)
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=7e-4,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e: a.abs() > 10 * nz_thresh,
+            msg=f"{name} backward (proj)",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -352,13 +410,44 @@ def test_projection(
         (viewmats, quats, scales, means),
     )
 
+    # v_viewmats stays tight (already well-conditioned).
     torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=2e-3, atol=2e-3)
-    # Slightly relaxed tolerance for quats due to numerical differences between triu=True
-    # (CUDA path with triangular storage) and triu=False (PyTorch reference with full 3x3).
-    # Both are mathematically equivalent but have different FP operation order.
-    torch.testing.assert_close(v_quats, _v_quats, rtol=3e-1, atol=3e-2)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-1, atol=2e-1)
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
+
+    # Per-element band+sparsity check on the conditioning-sensitive
+    # gradients (v_quats, v_scales, v_means flow through quat_scale_to_covar
+    # which has 1/scale**2 singularity at small scales).
+    # interior_rtol = 1.05 x envelope across calibrated GPUs (RTX PRO 2000 / 6000):
+    for name, vc, vt, rtol in [
+        (
+            "v_quats",
+            v_quats,
+            _v_quats,
+            1.17e-3,
+        ),  # RTX PRO 2000=4.8e-5, RTX PRO 6000=5.91e-4, L40S=1.108e-3
+        (
+            "v_scales",
+            v_scales,
+            _v_scales,
+            1.75e-2,
+        ),  # RTX PRO 2000=2.9e-3, RTX PRO 6000=1.638e-2
+        ("v_means", v_means, _v_means, 1e-5),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} backward sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e: a.abs() > 10 * nz_thresh,
+            msg=f"{name} backward",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -534,10 +623,31 @@ def test_fully_fused_projection_packed(
         v_scales = v_scales.to_dense()
         v_means = v_means.to_dense()
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
+    # Per-element band+sparsity check (catches sparsity bugs + sign flips
+    # that the previous magnitude-only asserts admitted).
+    # interior_rtol = 1.05 x worst observed required rtol per gradient.
+    for name, vc, vt, rtol in [
+        ("v_viewmats", v_viewmats, _v_viewmats, 1e-5),  # rtol_req=0
+        ("v_quats", v_quats, _v_quats, 2.6e-5),  # rtol_req=2.45e-5 (L40S)
+        ("v_scales", v_scales, _v_scales, 1e-5),  # rtol_req=0
+        ("v_means", v_means, _v_means, 4e-4),  # rtol_req=3.78e-4
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} backward sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e: a.abs() > 10 * nz_thresh,
+            msg=f"{name} backward (packed)",
+        )
 
 
 @pytest.mark.skipif(
