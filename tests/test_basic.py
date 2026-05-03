@@ -2322,11 +2322,44 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         + (_render_alphas * v_render_alphas).sum(),
         (means2d, conics, colors, opacities, backgrounds),
     )
-    torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
-    torch.testing.assert_close(v_conics, _v_conics, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_opacities, _v_opacities, rtol=8e-3, atol=6e-3)
-    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
+    # Per-element band+sparsity check on rasterization backward.
+    # - interior_atol absorbs absolute FP cancellation noise at small
+    #   magnitudes; interior_rtol catches systematic bias at large.
+    # - interior_rtol = 1.05 x envelope across calibrated GPUs (RTX PRO 2000 / 6000).
+    # - v_means2d atol scales with channel count: more channels accumulate
+    #   more alpha-compositing terms (channels=3,32 stay under 1e-3;
+    #   channels=128 reaches ~1.4e-3).
+    # - v_means2d batch_dims*-128 OOMed on RTX PRO 2000, so its envelope is
+    #   RTX PRO 6000-only.
+    for name, vc, vt, rtol, atol in [
+        (
+            "v_means2d",
+            v_means2d,
+            _v_means2d,
+            2.5e-4,
+            1.6e-3,
+        ),  # RTX PRO 2000=OOM, RTX PRO 6000: rtol=2.14e-4 atol=1.47e-3
+        ("v_conics", v_conics, _v_conics, 1e-5, 1e-3),
+        ("v_colors", v_colors, _v_colors, 1e-5, 1e-3),
+        ("v_opacities", v_opacities, _v_opacities, 1e-5, 2e-3),
+        ("v_backgrounds", v_backgrounds, _v_backgrounds, 1e-5, 1e-3),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=atol,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+            msg=f"{name} backward (rasterize)",
+        )
 
 
 def _quat_rotation_y(angle_rad: float, device: torch.device):
