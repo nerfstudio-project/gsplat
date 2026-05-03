@@ -2926,9 +2926,18 @@ def test_rasterize_to_pixels_eval3d(
 
     assert count_match.sum() > 0
 
-    # Compare alphas for each group
+    # Compare alphas for each group.
+    # - lidar uses element_to_image_point CUDA / _generate_rays ref, which
+    #   diverge by ~1 pixel at tile boundaries, so its envelope is wider.
+    # - Non-lidar: tight on both RTX PRO 2000 and RTX PRO 6000; lidar RTX PRO 6000 worst:
+    #   rtol=8.4e-3, atol=2.27e-3 (count_match alpha diff at lidar tile edge).
+    count_match_rtol = 9e-3 if camera_model == "lidar" else 1e-3
+    count_match_atol = 2.5e-3 if camera_model == "lidar" else 2e-3
     torch.testing.assert_close(
-        render_alphas * count_match, _render_alphas * count_match, rtol=1e-2, atol=2e-3
+        render_alphas * count_match,
+        _render_alphas * count_match,
+        rtol=count_match_rtol,
+        atol=count_match_atol,
     )
     # For lidar, the CUDA kernel generates rays via element_to_image_point
     # while the ref uses _generate_rays, producing ~1 pixel mismatch at tile
@@ -2967,7 +2976,7 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(
         render_colors * count_match,
         _render_colors * count_match,
-        rtol=3e-3 * _lidar_tol,
+        rtol=1e-3 * _lidar_tol,
         atol=1e-3 * _lidar_tol,
     )
     # Bumped tolerance due to release mode optimizations. In debug mode it's ALPHA_THRESHOLD+1e-5.
@@ -2980,7 +2989,7 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(
         render_colors * count_mismatch,
         _render_colors * count_mismatch,
-        rtol=2e-2 * _lidar_tol,
+        rtol=0,
         atol=3e-3 * _lidar_tol,
     )
 
@@ -3111,22 +3120,6 @@ def test_rasterize_to_pixels_eval3d(
 
     assert visible_mask.sum() > 0
 
-    # Extract visible elements once (use reshaped gradients for expand_as)
-    means_mask = visible_mask.expand_as(v_means) & get_inlier_abserror_mask(
-        v_means, _v_means, quantile=0.90
-    )
-    scales_mask = visible_mask.expand_as(v_scales) & get_inlier_abserror_mask(
-        v_scales, _v_scales, quantile=0.90
-    )
-    quats_mask = visible_mask.expand_as(v_quats) & get_inlier_abserror_mask(
-        v_quats, _v_quats, quantile=0.99
-    )
-    colors_mask = visible_mask.expand_as(v_colors) & get_inlier_abserror_mask(
-        v_colors, _v_colors, quantile=0.99
-    )
-    opacities_mask = visible_mask.expand_as(v_opacities) & get_inlier_abserror_mask(
-        v_opacities, _v_opacities, quantile=0.99
-    )
     # Background gradients are a direct reduction of per-pixel transmittance.
     # Compare only the structurally matched pixels; vis/count mismatches are
     # already validated separately above with looser forward tolerances.
@@ -3139,24 +3132,24 @@ def test_rasterize_to_pixels_eval3d(
     backgrounds_mask = get_inlier_abserror_mask(
         v_backgrounds_struct, _v_backgrounds_struct, quantile=0.99
     )
-
-    assert means_mask.sum() > 0
-    assert scales_mask.sum() > 0
-    assert quats_mask.sum() > 0
-    assert colors_mask.sum() > 0
-    assert opacities_mask.sum() > 0
     assert backgrounds_mask.sum() > 0
 
-    # Per-Gaussian sparsity check: the quantile-based inlier mask above is
-    # per-element, so a CUDA backward that zeros (or explodes) a single
-    # Gaussian's gradient lands in the dropped tail and slips through the
-    # magnitude-only assert_close.  Aggregate to one scalar per Gaussian
-    # (sum |grad| over all batch / feature dims) and check that the
-    # CUDA-vs-ref magnitude ratio is bounded for Gaussians whose gradient
-    # is meaningful (>= 1% of the max ref magnitude).  The min_ratio of
-    # 5e-3 admits the rasterizer's tile-edge magnitude noise
-    # (worst observed ratio 1.6e-2 at this floor) while still catching
-    # zero/200x-explosion sparsity bugs.
+    # Per-Gaussian sparsity + sign check.  The per-element bound check
+    # below absorbs absolute-bias and FP noise via atol+rtol+fail_cap,
+    # but two bug classes can still slip through:
+    #   1. Sparsity: CUDA zeros (or explodes) one Gaussian's gradient.  The
+    #      cap admits this if the Gaussian touches few elements.  Catch it
+    #      by aggregating |grad| per Gaussian and bounding the CUDA/ref
+    #      magnitude ratio.
+    #   2. Sign flip: CUDA returns -ref on a gradient.  The bound admits
+    #      this on small-|e| elements (2|e| < atol).  Catch it by requiring
+    #      the per-Gaussian dot product (cuda . ref) > 0 for any Gaussian
+    #      with significant gradient magnitude.
+    # Knobs:
+    #   - magnitude floor 1% of max(ref) admits the small-magnitude tail
+    #     where rasterizer FP noise dominates (worst observed ratio
+    #     1.6e-2 at this floor).
+    #   - min_ratio 5e-3 catches zero/200x-explosion sparsity bugs.
     vis_g = visible_mask[0, :, 0]  # [N]
 
     def _per_gaussian_mag(t):
@@ -3164,6 +3157,12 @@ def test_rasterize_to_pixels_eval3d(
         while m.ndim > 1:
             m = m.sum(dim=0)
         return m  # [N]
+
+    def _per_gaussian_dot(a, b):
+        s = (a * b).sum(dim=-1)
+        while s.ndim > 1:
+            s = s.sum(dim=0)
+        return s  # [N]
 
     for name, vc, vt in [
         ("v_means", v_means, _v_means),
@@ -3187,33 +3186,96 @@ def test_rasterize_to_pixels_eval3d(
                 f"eval3d {name}: {n_bad} significant Gaussians with >200x "
                 f"grad-magnitude mismatch (worst ratio {ratio.min().item():.4e})"
             )
+            dot = _per_gaussian_dot(vc, vt)[vis_g][sig]
+            n_neg = int((dot < 0).sum().item())
+            n_sig = int(sig.sum().item())
+            # 1% cap: a few outlier Gaussians out of thousands are
+            # noise; a systematic sign flip pushes n_neg toward n_sig.
+            assert n_neg <= max(2, int(n_sig * 1e-2)), (
+                f"eval3d {name}: {n_neg}/{n_sig} significant Gaussians with "
+                f"negative dot(cuda, ref) (>1% indicates sign-flip class)"
+            )
+        # Aggregate-magnitude check: per-Gaussian noise averages out across
+        # thousands of visible Gaussians, so the ratio of total |grad| sums
+        # is a stable summary statistic that catches systematic magnitude
+        # bias on small-|e| elements (which the per-element fail_cap absorbs).
+        total_c = mag_c.sum().item()
+        total_t = mag_t.sum().item()
+        if total_t > 0:
+            agg_ratio = total_c / total_t
+            assert 0.99 <= agg_ratio <= 1.01, (
+                f"eval3d {name}: aggregate |cuda|/|ref| = {agg_ratio:.4f} "
+                f"outside [0.99, 1.01] (systematic magnitude bias)"
+            )
 
-    # Compare backward gradients, excluding the ones that fall above the quantile threshold.
-    torch.testing.assert_close(
-        v_means * means_mask.float(),
-        _v_means * means_mask.float(),
-        rtol=0,
+    # Per-element strict bound check + fail-rate cap.
+    #
+    # The previous quantile=0.9/0.99 mask + atol-only assert_close was
+    # degenerate: when most elements are 0 on both sides (typical of a
+    # rasterizer backward), the X-th percentile of |a-e| is 0, so the mask
+    # kept only exact-match elements and admitted any systematic bias.
+    # Replace it with an explicit per-element bound (atol + rtol*|e|) and
+    # cap the fail rate over visible elements.  rtol catches percentage
+    # bias on large-magnitude elements; atol absorbs the absolute noise
+    # floor on small-magnitude elements; fail_cap admits the rasterizer's
+    # tile-edge accumulation noise.  Knobs derived from the
+    # observed baseline fail-rate distribution per gradient.
+    quat_atol = 1e-4
+    opacity_atol = 1e-4
+
+    def _bounded_fail_check(name, a, e, vmask, atol, rtol, fail_cap):
+        diff = (a - e).abs()
+        bound = atol + rtol * e.abs()
+        fail = (diff > bound) & vmask
+        n_fail = int(fail.sum().item())
+        n_tot = int(vmask.sum().item())
+        fr = n_fail / max(n_tot, 1)
+        assert fr <= fail_cap, (
+            f"eval3d {name}: fail-rate {fr:.3%} > cap {fail_cap:.3%} "
+            f"(atol={atol:.1e}, rtol={rtol}, {n_fail}/{n_tot})"
+        )
+
+    # fail_cap = 1.05 x worst observed baseline fail-rate:
+    #   v_means    0.527% -> 0.55%
+    #   v_scales   1.598% (L40S) -> 1.68%
+    #   v_quats    0.18%  -> 0.19%
+    #   v_colors   0.067% -> 0.071%
+    #   v_opacities 0.056% -> 0.059%
+    _bounded_fail_check(
+        "v_means",
+        v_means,
+        _v_means,
+        visible_mask.expand_as(v_means),
         atol=1e-3 * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.0055,
     )
-    torch.testing.assert_close(
-        v_scales * scales_mask.float(),
-        _v_scales * scales_mask.float(),
-        rtol=0,
+    _bounded_fail_check(
+        "v_scales",
+        v_scales,
+        _v_scales,
+        visible_mask.expand_as(v_scales),
         atol=1e-3 * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.0168,
     )
-    quat_atol = 6e-3 if use_hit_distance else 5e-4
-    opacity_atol = 1e-3 if use_hit_distance else 1.5e-4
-    torch.testing.assert_close(
-        v_quats * quats_mask.float(),
-        _v_quats * quats_mask.float(),
-        rtol=0,
+    _bounded_fail_check(
+        "v_quats",
+        v_quats,
+        _v_quats,
+        visible_mask.expand_as(v_quats),
         atol=quat_atol * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.0019,
     )
-    torch.testing.assert_close(
-        v_colors * colors_mask.float(),
-        _v_colors * colors_mask.float(),
-        rtol=0,
+    _bounded_fail_check(
+        "v_colors",
+        v_colors,
+        _v_colors,
+        visible_mask.expand_as(v_colors),
         atol=1e-4 * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.00071,
     )
     # Structural invariant for use_hit_distance:
     # - fwd overwrites pix_out[..., -1] with per-pixel hit_distance,
@@ -3232,11 +3294,14 @@ def test_rasterize_to_pixels_eval3d(
             f"{last_grad.abs().max().item():.3e}, mean="
             f"{last_grad.abs().mean().item():.3e}."
         )
-    torch.testing.assert_close(
-        v_opacities * opacities_mask.float(),
-        _v_opacities * opacities_mask.float(),
-        rtol=0,
+    _bounded_fail_check(
+        "v_opacities",
+        v_opacities,
+        _v_opacities,
+        visible_mask.expand_as(v_opacities),
         atol=opacity_atol * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.00059,
     )
     torch.testing.assert_close(
         v_backgrounds_struct * backgrounds_mask.float(),
