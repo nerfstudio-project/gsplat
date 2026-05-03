@@ -921,18 +921,45 @@ class TestCameraModels:
         test_times = test_camera.shutter_relative_frame_time(image_points)
         ref_times = ref_camera.shutter_relative_frame_time(image_points)
 
-        # Tolerances based on camera type
-        # Values set ~20% above observed maximums for tight margin
+        # LiDAR has an angle-wraparound boundary at 0 == 2*pi where the
+        # angles_to_columns_map covers the same angle twice; isolate that
+        # boundary into a band so the off-band tolerance can stay tight.
+        # Other cameras have no such discontinuity.
         if isinstance(ref_camera, _RowOffsetStructuredSpinningLidarModel):
-            # Only 1 mismatched element (out of 3252. It could be due to
-            # the angles_to_columns_map covering the angle 0 (==2*pi) twice
-            # The expectation is that once this is fixed, the atol can be set back to 5e-3.
-            atol, rtol = 3.5e-02, 3.5e-02
+            # 99.99% of rays are bit-exact between CUDA and ref. Worst arm has
+            # ~1 column-boundary outlier with ~3% rel-diff at an unrelated t.
+            # Use a tight per-element bound + outlier-magnitude guard, plus a
+            # band-flip-rate cap at the wraparound (t near 0 or 1).
+            diff = (test_times - ref_times).abs()
+            band = (ref_times.abs() < 5e-3) | ((ref_times - 1.0).abs() < 5e-3)
+            interior = ~band
+            # Tight bound: bit-exact baseline => any non-zero diff fires.
+            bound = 1e-6 + 1e-6 * ref_times.abs()
+            interior_fail = (diff > bound) & interior
+            fr = interior_fail.float().sum().item() / max(int(interior.sum().item()), 1)
+            # Cap = 1.05x worst observed (8/32196 = 2.48e-4).
+            assert fr <= 2.6e-4, (
+                f"shutter_relative_frame_time (lidar): interior fail-rate "
+                f"{fr:.4%} > cap 0.026% ({int(interior_fail.sum().item())} "
+                f"elements > 1e-6 + 1e-6*|ref|)"
+            )
+            # Outlier-magnitude guard: 1.05x worst observed (3.0e-2).
+            assert (diff <= 3.2e-2).all(), (
+                f"shutter_relative_frame_time (lidar): outlier diff "
+                f"{diff.max().item():.4e} > 3.2e-2"
+            )
+            # Band: 0 flips observed; cap is a guard.
+            band_diff = diff[band]
+            if band_diff.numel() > 0:
+                band_flips = (band_diff > 5e-3).sum().item()
+                band_n = band_diff.numel()
+                assert band_flips / max(band_n, 1) <= 1e-3, (
+                    f"shutter_relative_frame_time (lidar): band flip-rate "
+                    f"{band_flips}/{band_n} > 0.1%"
+                )
         else:
             # Other cameras: observed atol ~1e-06, rtol ~1e-06
-            atol, rtol = 2e-06, 2e-06
-
-        assert_close(test_times, ref_times, atol=atol, rtol=rtol)
+            assert_close(test_times, ref_times, atol=2e-06, rtol=2e-06)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -998,10 +1025,57 @@ class TestCameraModelsShutterPose:
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
 
-        # Relaxed tolerances to account for numerical precision in shutter pose calculations
-        # These tolerances handle accumulated errors from pose interpolation and projection
-        # Values set ~20% above observed maximums for tight margin
-        # Observed: atol=3.43e-03, rtol=0.717
-        assert_close(test_img[all_valid], ref_img[all_valid], atol=4.2e-03, rtol=0.87)
+        # Worst interior outlier (pre-redesign): rel=1.292e-2, abs=0.116 px at
+        # |e|=9 px (1 per ~9k rays). Root cause: 10-iter RS refinement uses
+        # floor(image_point[shutter_axis]); ULP shifts at integer flip floor()
+        # into a different basin -> ~0.1 px drift on the converged point.
+        # Band:
+        #   - |e_norm| < 1 px (principal-point FP cancellation)
+        #   - shutter-axis frac < 1e-2 (catches the floor() cross)
+        # Cross predicate verifies in-band disagreements are floor() straddles.
+        a = test_img[all_valid]
+        e = ref_img[all_valid]
+        e_norm = e.abs().max(dim=-1).values
+        rs_axis = {
+            RollingShutterType.GLOBAL: None,
+            RollingShutterType.ROLLING_LEFT_TO_RIGHT: 0,
+            RollingShutterType.ROLLING_RIGHT_TO_LEFT: 0,
+            RollingShutterType.ROLLING_TOP_TO_BOTTOM: 1,
+            RollingShutterType.ROLLING_BOTTOM_TO_TOP: 1,
+        }[ref_camera.shutter_type]
+        near_floor_pt = torch.zeros_like(e_norm, dtype=torch.bool)
+        if rs_axis is not None:
+            frac_t = (a[..., rs_axis] - a[..., rs_axis].round()).abs()
+            frac_r = (e[..., rs_axis] - e[..., rs_axis].round()).abs()
+            near_floor_pt = torch.minimum(frac_t, frac_r) < 1e-2
+        band = ((e_norm < 1.0) | near_floor_pt)[..., None].expand(-1, 2)
+        nz_thresh = e.abs().max().item() * 1e-5
+
+        def _is_true_cross(band_mask, _a=a, _e=e, _ax=rs_axis):
+            if _ax is None:
+                return torch.zeros(
+                    int(band_mask.sum().item()), dtype=torch.bool, device=_a.device
+                )
+            pt_cross = _a[..., _ax].floor() != _e[..., _ax].floor()
+            return pt_cross[..., None].expand(-1, 2)[band_mask]
+
+        # Knobs:
+        #   - interior_rtol=3e-3: 1.05x post-band worst (2.85e-3, atol-absorbed)
+        #   - max_flip_ratio=0.10: ~6x observed 1.75% on R2L bd1
+        #   - symmetry disabled: a cross drifts a point's x AND y in the same
+        #     direction (pose-interp coupling); n=2-4 makes |mean(sign)|~1
+        #     regardless of bug-vs-noise. Cross predicate is the stronger guard.
+        assert_close_with_boundary_band(
+            a,
+            e,
+            boundary_mask=band,
+            interior_atol=nz_thresh,
+            interior_rtol=3e-3,
+            boundary_max_flip_ratio=0.10,
+            boundary_symmetry_tol=1.0,
+            flip_predicate=None,  # default: |a - e| > interior_atol
+            boundary_cross_predicate=_is_true_cross if rs_axis is not None else None,
+            msg="world_point_to_image_point_shutter_pose imgpts",
+        )
 
         assert_mismatch_ratio(test_valid, ref_valid, max=1e-05)
