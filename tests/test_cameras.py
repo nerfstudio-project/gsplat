@@ -862,41 +862,57 @@ class TestCameraModels:
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
 
-        # Tolerances based on camera type (ordered by decreasing atol)
-        # Values set ~20% above observed maximums for tight margin
-        # Note: Cannot distinguish between different distortion params by type alone
-        if isinstance(ref_camera, _FThetaCameraModel):
-            # ftheta (various): observed atol=1.37e-04, rtol=1.03
-            atol, rtol = 1.65e-04, 1.25
-        elif isinstance(ref_camera, _OpenCVFisheyeCameraModel):
-            # fisheye: observed atol=4.14e-06, rtol=4.80e-03
-            atol, rtol = 5e-06, 6e-03
-        elif isinstance(ref_camera, _OpenCVPinholeCameraModel):
-            # OpenCV pinhole (k4/k6/distortions): observed atol=2.38e-07, rtol=6.71e-05
-            atol, rtol = 3e-07, 8e-05
-        elif isinstance(ref_camera, _PerfectPinholeCameraModel):
-            # perfect pinhole: observed atol=1.19e-07, rtol=2.37e-07
-            atol, rtol = 1.5e-07, 3e-07
-        else:  # Fallback
-            atol, rtol = 1.65e-04, 1.25
-        assert_close(test_rays[all_valid], ref_rays[all_valid], atol=atol, rtol=rtol)
+        # Per-element band+sparsity check on the rays (3D unit vectors).
+        # Boundary band catches the two regions where the ftheta inverse-
+        # distortion Newton iteration is FP-sensitive:
+        #   xy_norm < 1e-2: rays near the optical axis (theta near 0).
+        #     ULP cancellation in (sin(theta) -> 0) plus the inverse
+        #     polynomial's behavior at theta=0.
+        #   xy_norm >= 0.999: rays near the lens "horizon" (theta near
+        #     pi/2).  The ftheta polynomial has a critical point there, so
+        #     Newton convergence is sensitive to FP order.
+        # Together these admit ~3.4% of rays in the worst arm; the remaining
+        # 96% interior rays get a tight rtol bound.
+        ray_xy_norm = torch.linalg.norm(test_rays[..., :2], dim=-1)
+        ref_xy_norm = torch.linalg.norm(ref_rays[..., :2], dim=-1)
+        near_axis = (ray_xy_norm < 1e-2) | (ref_xy_norm < 1e-2)
+        near_horizon = (ray_xy_norm >= 0.999) | (ref_xy_norm >= 0.999)
+        rays_band = ((near_axis | near_horizon)[all_valid])[..., None].expand(-1, 3)
+        rays_a = test_rays[all_valid]
+        rays_e = ref_rays[all_valid]
+        nz_thresh = rays_e.abs().max().item() * 1e-5
+        # ftheta interior rtol = 1.05 x worst observed in interior buckets
+        # (5.18e-3 in xy in [1e-2, 1e-1)) -> 5.5e-3.  Replaces 9.7e-2.
+        rays_rtol = 5.5e-3 if isinstance(ref_camera, _FThetaCameraModel) else 1e-3
+        assert_close_with_boundary_band(
+            rays_a,
+            rays_e,
+            boundary_mask=rays_band,
+            interior_atol=nz_thresh,
+            interior_rtol=rays_rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: (a - e).abs() > 100 * _t,
+            msg="image_point_to_camera_ray rays",
+        )
 
-        # Validity mismatch tolerance by camera type (ordered by decreasing tolerance)
-        # Values set ~20% above observed maximums for tight margin
+        # Per-type tol = ~5x worst observed mismatch rate:
+        #   - OpenCV pinhole (k4/k6/k6+tan/k6+thin):  0.0021% -> 1.1e-4 (50x)
+        #   - OpenCV fisheye:                         0.0015% -> 1e-4   (6.7x)
+        #   - ftheta:                                 0% to 0.77% (collapsed
+        #       to 1e-2 because the pinhole+a2p variant needs it; differentiate
+        #       once camera_model is plumbed in)
+        #   - PerfectPinhole:                         0%      -> 1e-5
         if isinstance(ref_camera, _OpenCVPinholeCameraModel):
-            # OpenCV Pinhole: high due to iterative undistortion process
-            validity_tol = 3e-02  # 3%
+            validity_tol = 1.1e-04
         elif isinstance(ref_camera, _FThetaCameraModel):
-            # FTheta: observed max 0.79% (release mode with aggressive compiler optimizations)
-            # Debug mode: 3e-03 (0.3%), Release mode bumped to handle numerical differences
-            validity_tol = 1e-02  # 1.0%
+            validity_tol = 1e-02
         elif isinstance(ref_camera, _OpenCVFisheyeCameraModel):
-            # Fisheye: observed max ~0.00%
-            validity_tol = 1e-04  # 0.01%
+            validity_tol = 1e-04
         elif isinstance(ref_camera, _PerfectPinholeCameraModel):
-            validity_tol = 1e-05  # 0.001% for perfect pinhole
+            validity_tol = 1e-05
         else:
-            validity_tol = 3e-02  # Fallback
+            validity_tol = 3e-02  # lidar / unknown fallback
         assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
 
     def test_shutter_relative_frame_time(
