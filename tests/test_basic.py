@@ -280,6 +280,19 @@ def test_proj(
     # Per-element band+sparsity check (cluster-A pattern: rel-diff blows up
     # at near-zero gradient values; off-band tight rtol catches systematic
     # bias / sign flip / sparsity bug, in-band absorbs FP noise).
+    #
+    # Fisheye-only geometric band: forward-facing fisheye is undefined at
+    # theta = atan2(xy, z) > pi/2 (z <= 0, ray pointing backward). The
+    # projection `focal * theta * (x,y) / xy_len` is FP-sensitive there:
+    # small xy_norm with z<0 amplifies CUDA-vs-torch ULP differences into
+    # ~1e3-magnitude v_means disagreements. v_covars stays clean because
+    # the bilinear J^T*v*J cancels.
+    if camera_model == "fisheye":
+        geom_band_pt = means.detach()[..., 2] <= 0  # [..., n_gauss]
+    else:
+        geom_band_pt = torch.zeros(
+            means.shape[:-1], dtype=torch.bool, device=means.device
+        )
     for name, vc, vt in [
         ("v_means", v_means, _v_means),
         ("v_covars", v_covars, _v_covars),
@@ -291,17 +304,32 @@ def test_proj(
         nz_thresh = vt.abs().max().item() * 1e-5
         # interior_rtol envelope x 1.05:
         #   RTX PRO 2000  rtol_req=0       (atol absorbs all on pinhole/ortho)
-        #   RTX PRO 6000  rtol_req=6.5e-4  (fisheye v_means; the geom-band
-        #                                    carve-out arrives in a later commit)
+        #   RTX PRO 6000  rtol_req=6.5e-4  (fisheye v_means)
+        gb = geom_band_pt
+        while gb.ndim < vc.ndim:
+            gb = gb[..., None]
+        boundary_mask = (vt.abs() < nz_thresh) | gb.expand_as(vc)
+        # flip_predicate: magnitude-based predicate ("CUDA overflowed where
+        # ref was zero") works for the magnitude-only band; the fisheye geom
+        # band catches z<=0 Gaussians with legitimately large magnitudes in
+        # both impls, where disagreement is the meaningful flip signal.
+        # symmetry: disabled for fisheye (single-digit n_flips, all drift in
+        # the same direction due to projection-formula coupling).
+        if camera_model == "fisheye":
+            flip_pred = lambda a, e, _t=nz_thresh: (a - e).abs() > 10 * _t
+            sym_tol = 1.0
+        else:
+            flip_pred = lambda a, e: a.abs() > 10 * nz_thresh
+            sym_tol = 0.5
         assert_close_with_boundary_band(
             vc,
             vt,
-            boundary_mask=vt.abs() < nz_thresh,
+            boundary_mask=boundary_mask,
             interior_atol=nz_thresh,
             interior_rtol=7e-4,
             boundary_max_flip_ratio=1e-3,
-            boundary_symmetry_tol=0.5,
-            flip_predicate=lambda a, e: a.abs() > 10 * nz_thresh,
+            boundary_symmetry_tol=sym_tol,
+            flip_predicate=flip_pred,
             msg=f"{name} backward (proj)",
         )
 
