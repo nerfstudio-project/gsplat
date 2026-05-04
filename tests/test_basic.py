@@ -3132,6 +3132,208 @@ def test_fwd_chunk_state_c0_matches_terminal_after_early_exit(tile_size):
     )
 
 
+@pytest.fixture
+def _ghost_lobe_scene():
+    """Single needle gaussian + 32x32 pinhole camera at the origin."""
+    means = torch.tensor([[0.4, 0.0, 1.0]], device=device, dtype=torch.float32)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=torch.float32)
+    scales = torch.tensor([[0.01, 0.01, 0.5]], device=device, dtype=torch.float32)
+    opacities = torch.tensor([0.99], device=device, dtype=torch.float32)
+    width, height = 32, 32
+    fx = 64.0
+    cx = width / 2.0
+    Ks = torch.tensor(
+        [[[fx, 0.0, cx], [0.0, fx, height / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=torch.float32,
+    )
+    viewmats = torch.eye(4, device=device, dtype=torch.float32)[None]
+    return SimpleNamespace(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        opacities_broadcast=opacities[None, :],
+        colors=torch.ones(1, 1, 3, device=device, dtype=torch.float32),
+        backgrounds=torch.zeros(1, 3, device=device, dtype=torch.float32),
+        Ks=Ks,
+        viewmats=viewmats,
+        width=width,
+        height=height,
+        cx_int=int(cx),
+    )
+
+
+@pytest.fixture
+def _ghost_lobe_isect(_ghost_lobe_scene):
+    """Intersection list with radii inflated to cover every tile."""
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+    )
+
+    s = _ghost_lobe_scene
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        s.means,
+        s.quats,
+        s.scales,
+        s.opacities,
+        s.viewmats,
+        s.Ks,
+        s.width,
+        s.height,
+        camera_model="pinhole",
+    )
+    radii = radii.clone()
+    radii[..., 0] = s.width
+    radii[..., 1] = s.height
+    tile_size = 16
+    tw = math.ceil(s.width / tile_size)
+    th = math.ceil(s.height / tile_size)
+    _, isect_ids, flatten_ids = isect_tiles(means2d, radii, depths, tile_size, tw, th)
+    isect_offsets = isect_offset_encode(isect_ids, 1, tw, th).reshape(1, th, tw)
+    return SimpleNamespace(
+        isect_offsets=isect_offsets,
+        flatten_ids=flatten_ids,
+        tile_size=tile_size,
+    )
+
+
+@pytest.fixture
+def _ghost_lobe_rays(_ghost_lobe_scene):
+    """Rays tensor: left half → ghost direction (hit_t<0), right half → visible.
+
+    Ghost ray analysis (iscl_rot = diag(100,100,2), gro = (-40,0,-2)):
+      hit_t = -dot(grd_n, gro) ≈ -40 < 0  →  GHOST; |cross|² ≈ 7.84
+    """
+    s = _ghost_lobe_scene
+    ray_ghost = torch.tensor([-1.0, 0.0, 1.0], device=device, dtype=torch.float32)
+    ray_ghost /= ray_ghost.norm()
+    ray_visible = torch.tensor([1.0, 0.0, 1.0], device=device, dtype=torch.float32)
+    ray_visible /= ray_visible.norm()
+    col_idx = torch.arange(s.width, device=device)
+    ghost_mask = (col_idx < s.cx_int)[:, None]
+    rays_d = torch.where(ghost_mask, ray_ghost, ray_visible)  # [W, 3]
+    rays_d = rays_d.unsqueeze(0).expand(s.height, -1, -1)  # [H, W, 3]
+    rays_o = torch.zeros(s.height * s.width, 3, device=device, dtype=torch.float32)
+    return torch.cat([rays_o, rays_d.reshape(-1, 3)], dim=-1).reshape(
+        1, 1, s.height, s.width, 6
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterize_eval3d_no_behind_camera_ghost_lobe(
+    _ghost_lobe_scene, _ghost_lobe_isect, _ghost_lobe_rays
+):
+    """A 3DGUT gaussian with hit_t = -dot(grd, gro) < 0 must contribute zero
+    alpha (fwd) and zero gradient (bwd) to that pixel.
+
+    The alpha formula uses |cross(grd, gro)|² — distance to the infinite ray
+    line — so without a hit_t >= 0 clamp it produces a bilateral ghost lobe.
+    """
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.cuda._wrapper import (
+        rasterize_to_pixels_eval3d_extra,
+        RollingShutterType,
+    )
+
+    s, isect, rays = _ghost_lobe_scene, _ghost_lobe_isect, _ghost_lobe_rays
+
+    _, cuda_alphas, *_ = rasterize_to_pixels_eval3d_extra(
+        s.means,
+        s.quats,
+        s.scales,
+        s.colors,
+        s.opacities_broadcast,
+        s.viewmats,
+        s.Ks,
+        s.width,
+        s.height,
+        isect.tile_size,
+        isect.isect_offsets,
+        isect.flatten_ids,
+        backgrounds=s.backgrounds,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        use_hit_distance=False,
+        return_normals=False,
+        camera_model="pinhole",
+        rays=rays,
+    )
+    _, ref_alphas, *_ = _rasterize_to_pixels_eval3d(
+        s.means,
+        s.quats,
+        s.scales,
+        s.colors,
+        s.opacities_broadcast,
+        s.viewmats,
+        s.Ks,
+        s.width,
+        s.height,
+        tile_size=isect.tile_size,
+        isect_offsets=isect.isect_offsets,
+        flatten_ids=isect.flatten_ids,
+        backgrounds=s.backgrounds,
+        rs_type=RollingShutterType.GLOBAL,
+        use_hit_distance=False,
+        return_normals=False,
+        rays=rays,
+    )
+
+    # Precondition: right half must have visible alpha (otherwise test is vacuous).
+    for tag, alphas in [("CUDA", cuda_alphas), ("ref", ref_alphas)]:
+        assert (
+            alphas[..., s.cx_int :, :].max().item() > ALPHA_THRESHOLD
+        ), f"{tag}: visible-direction pixels have no alpha — test setup is degenerate."
+
+    # Fwd invariant: ghost-direction pixels (hit_t<0) must have zero alpha.
+    for tag, alphas in [("CUDA", cuda_alphas), ("ref", ref_alphas)]:
+        left_max = alphas[..., : s.cx_int, :].max().item()
+        assert left_max < ALPHA_THRESHOLD, (
+            f"{tag}: ghost lobe present (max alpha={left_max:.4e}). "
+            f"The 3DGUT formula must skip gaussians with hit_t < 0."
+        )
+
+    # Bwd invariant: gradients from ghost pixels must be zero.
+    means_bwd = s.means.detach().requires_grad_(True)
+    quats_bwd = s.quats.detach().requires_grad_(True)
+    scales_bwd = s.scales.detach().requires_grad_(True)
+    opac_bwd = s.opacities_broadcast.detach().requires_grad_(True)
+    _, alphas_bwd, *_ = rasterize_to_pixels_eval3d_extra(
+        means_bwd,
+        quats_bwd,
+        scales_bwd,
+        s.colors,
+        opac_bwd,
+        s.viewmats,
+        s.Ks,
+        s.width,
+        s.height,
+        isect.tile_size,
+        isect.isect_offsets,
+        isect.flatten_ids,
+        backgrounds=s.backgrounds,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        use_hit_distance=False,
+        return_normals=False,
+        camera_model="pinhole",
+        rays=rays,
+    )
+    alphas_bwd[..., : s.cx_int, :].sum().backward()
+    for name, tensor in [
+        ("means", means_bwd),
+        ("quats", quats_bwd),
+        ("scales", scales_bwd),
+        ("opacities", opac_bwd),
+    ]:
+        grad_max = tensor.grad.abs().max().item() if tensor.grad is not None else 0.0
+        assert grad_max == 0.0, (
+            f"CUDA bwd: nonzero gradient into {name} from hit_t<0 pixels "
+            f"(max |grad|={grad_max:.4e})."
+        )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(

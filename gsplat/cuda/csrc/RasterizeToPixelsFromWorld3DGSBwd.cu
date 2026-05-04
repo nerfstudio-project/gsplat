@@ -690,7 +690,7 @@ __global__ void rasterize_gradient_bwd_kernel(
             vec4 quat;
             mat3 Mt;
             vec3 o_minus_mu, gro, grd, grd_n, gcrod;
-            float grayDist, power;
+            float grayDist, power, hit_t = 0.f;
             // Per-pixel hit distance — stored in a register, NOT in shared memory
             // rgbs_batch, because hit_distance depends on ray_o/ray_d (per-pixel)
             // while rgbs_batch is per-Gaussian (shared across all pixels in the tile).
@@ -719,20 +719,27 @@ __global__ void rasterize_gradient_bwd_kernel(
                 gro = Mt * o_minus_mu;
                 grd = Mt * ray_d;
                 grd_n = safe_normalize(grd);
-                gcrod = glm::cross(grd_n, gro);
-                grayDist = glm::dot(gcrod, gcrod);
-                power = -0.5f * grayDist;
-
-                vis = __expf(power);
-                alpha = min(MAX_ALPHA, opac * vis);
-                if (power > 0.f || alpha < ALPHA_THRESHOLD) {
+                // hit_t < 0 → closest approach behind camera; skip this gaussian.
+                // Declared in outer scope so the hit-distance VJP block can reuse it.
+                hit_t = -glm::dot(grd_n, gro);
+                if (hit_t < 0.f) {
                     valid = false;
                 }
+                else {
+                    gcrod = glm::cross(grd_n, gro);
+                    grayDist = glm::dot(gcrod, gcrod);
+                    power = -0.5f * grayDist;
 
-                if (use_hit_distance) {
-                    const float hit_t = glm::dot(grd_n, -gro);
-                    const vec3 grds = scale * (grd_n * hit_t);
-                    local_hit_dist = glm::length(grds);
+                    vis = __expf(power);
+                    alpha = min(MAX_ALPHA, opac * vis);
+                    if (power > 0.f || alpha < ALPHA_THRESHOLD) {
+                        valid = false;
+                    }
+
+                    if (use_hit_distance) {
+                        const vec3 grds = scale * (grd_n * hit_t);
+                        local_hit_dist = glm::length(grds);
+                    }
                 }
             }
 
@@ -827,8 +834,8 @@ __global__ void rasterize_gradient_bwd_kernel(
                     // v_render_c instead of reading the zeroed slot.
                     const float v_depth = fac * v_render_c[CDIM - 1];
 
-                    // From forward:
-                    const float hit_t = glm::dot(grd_n, -gro);
+                    // From forward: grds = scale * grd_n * hit_t; hit_dist = length(grds).
+                    // hit_t >= 0 is guaranteed here (valid=false path was skipped above).
                     const vec3 grds = scale * (grd_n * hit_t);
                     const float hit_dist_len = glm::length(grds);
 
