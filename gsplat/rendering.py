@@ -277,6 +277,37 @@ def compute_directions(
     return F.normalize(dirs, p=2, dim=-1)
 
 
+def _resolve_tile_size(
+    tile_size: Optional[int], with_eval3d: bool, width: int, height: int
+) -> int:
+    """Resolve a None-valued tile_size to the path-correct default.
+
+    The 3DGS kernel is compiled with TILE_SIZE=16 only; the 3DGUT kernel
+    dispatches at compile time on tile_size in {8, 16} and the optimum is
+    workload-dependent:
+      - tile=8 (CTA=32, PPT=2) is the compact-CTA path. Wins below 1080p
+        where smaller per-tile shmem lets many CTAs co-reside per SM and
+        intersect+sort cost is small.
+      - tile=16 (CTA=256, PPT=1) is one thread per pixel. Wins at 1080p+
+        where intersect+sort dominates and fewer/larger tiles shrink it.
+
+    Spinning lidar grids are wide but shallow (e.g. pandar128 = 128 rows x
+    3600 cols, at128 = 128 x 1200); min gates on the row count keeps lidar at
+    tile=8 alongside sub-1080p cameras. Cameras at 1080p+ have min(W,H) >= 1080
+    and pick tile=16.
+
+    Callers must pass `width`/`height` AFTER any lidar dim override so the
+    gate sees the right dims for lidar.
+
+    Explicit non-None tile_size is returned unchanged (caller override wins).
+    """
+    if tile_size is not None:
+        return tile_size
+    if with_eval3d:
+        return 16 if min(width, height) >= 1080 else 8
+    return 16
+
+
 @trace_function("render")
 @capture_inputs(envvar="GSPLAT_INPUT_CAPTURE_RASTERIZATION")
 def rasterization(
@@ -297,7 +328,7 @@ def rasterization(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     packed: bool = True,
-    tile_size: int = 16,
+    tile_size: Optional[int] = None,
     backgrounds: Optional[Tensor] = None,
     render_mode: RenderMode = "RGB",
     sparse_grad: bool = False,
@@ -582,6 +613,8 @@ def rasterization(
     if lidar_coeffs is not None:
         width = lidar_coeffs.n_columns
         height = lidar_coeffs.n_rows
+
+    tile_size = _resolve_tile_size(tile_size, with_eval3d, width, height)
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
@@ -1390,7 +1423,7 @@ def _rasterization(
     far_plane: float = 1e10,
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
-    tile_size: int = 16,
+    tile_size: Optional[int] = None,
     rays: Optional[
         Tensor
     ] = None,  # [..., C, H, W, 6] -> ox, oy, oz, dx*spread, dy*spread, dz*spread
@@ -1434,6 +1467,8 @@ def _rasterization(
     if lidar_coeffs is not None:
         width = lidar_coeffs.n_columns
         height = lidar_coeffs.n_rows
+
+    tile_size = _resolve_tile_size(tile_size, with_eval3d, width, height)
 
     has_color = render_mode_has_color(render_mode)
 
