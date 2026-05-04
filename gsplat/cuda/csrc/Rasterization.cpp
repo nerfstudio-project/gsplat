@@ -597,10 +597,10 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 
 // fwd impl returns (renders, alphas, last_ids, chunks_per_tile, chunk_offsets,
 // fwd_chunk_state). The last three comprise the CSR-packed chunk state that
-// the backward pass consumes to skip the duplicated K1-lite / K1.5' / K2
-// preamble work; they are lifted from the bwd impl (previously recomputed
-// every backward) and pinned in `ctx.save_for_backward` so fwd pays this cost
-// exactly once per iteration instead of once per backward.
+// the backward pass consumes to skip the per-Gaussian preamble work it would
+// otherwise have to recompute; they are lifted from the bwd impl (previously
+// recomputed every backward) and pinned in `ctx.save_for_backward` so fwd
+// pays this cost exactly once per iteration instead of once per backward.
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd_impl(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]

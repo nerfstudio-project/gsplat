@@ -2066,7 +2066,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             chunk_offsets,
             fwd_chunk_state,
         ) = ctx.saved_tensors
-        # Bwd consumes `fwd_chunk_state` directly in K2's preamble — no
+        # Bwd consumes `fwd_chunk_state` directly in its preamble — no
         # separate state-scan / prefix-scan kernels. The tensor carries
         # per-chunk cumulative (T, pix_out, normal_out) from fwd at every
         # CHUNK_BATCHES boundary.
