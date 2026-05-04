@@ -2014,7 +2014,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     opacities.requires_grad = True
     backgrounds.requires_grad = True
 
-    # forward
+    # CUDA forward
     render_colors, render_alphas = rasterize_to_pixels(
         means2d,
         conics,
@@ -2027,6 +2027,19 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         flatten_ids,
         backgrounds=backgrounds,
     )
+    v_render_colors = torch.randn_like(render_colors)
+    v_render_alphas = torch.randn_like(render_alphas)
+
+    # CUDA backward — `torch.autograd.grad` defaults to retain_graph=False,
+    # so the saved-for-backward tensors of the CUDA forward graph are released
+    # here. The reference forward below builds its own independent graph.
+    v_means2d, v_conics, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
+        (render_colors * v_render_colors).sum()
+        + (render_alphas * v_render_alphas).sum(),
+        (means2d, conics, colors, opacities, backgrounds),
+    )
+
+    # Reference forward
     _render_colors, _render_alphas = _rasterize_to_pixels(
         means2d,
         conics,
@@ -2039,18 +2052,15 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         flatten_ids,
         backgrounds=backgrounds,
     )
+
+    # Compare values, then drop the CUDA-pass renders before the reference
+    # backward runs; keeping both render buffers live is what made the heavy
+    # arms (channels=128, batch_dims=(2,)/(1,2)) peak above the laptop VRAM.
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
+    del render_colors, render_alphas
 
-    # backward
-    v_render_colors = torch.randn_like(render_colors)
-    v_render_alphas = torch.randn_like(render_alphas)
-
-    v_means2d, v_conics, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
-        (render_colors * v_render_colors).sum()
-        + (render_alphas * v_render_alphas).sum(),
-        (means2d, conics, colors, opacities, backgrounds),
-    )
+    # Reference backward
     (
         _v_means2d,
         _v_conics,
@@ -3469,7 +3479,7 @@ def test_rasterization_explicit_tile_size_overrides_auto_3dgut(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_sh(test_data, sh_degree: int, batch_dims: Tuple[int, ...]):
+def test_sh(sh_degree: int, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
 
