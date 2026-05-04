@@ -108,6 +108,19 @@ def pytest_addoption(parser):
             "analysis. Only meaningful with --mem-track."
         ),
     )
+    group.addoption(
+        "--xfail-oom",
+        action="store_true",
+        default=False,
+        help=(
+            "Convert tests that fail with torch.cuda.OutOfMemoryError into "
+            "XFAIL instead of FAIL. Useful on memory-constrained hosts where "
+            "some test parametrizations exceed the allocator cap. Detection "
+            "is strict: only torch.cuda.OutOfMemoryError counts; allocation "
+            "failures from sub-libraries that surface as plain RuntimeError "
+            "still fail."
+        ),
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -239,6 +252,22 @@ def _track_cuda_memory_peak(request):
                 "device_peak": sampler.peak_used_bytes,
             }
         )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Reroute torch CUDA OOM failures to XFAIL when --xfail-oom is set."""
+    outcome = yield
+    report = outcome.get_result()
+    if (
+        report.when == "call"
+        and report.failed
+        and call.excinfo is not None
+        and item.config.getoption("--xfail-oom")
+        and isinstance(call.excinfo.value, torch.cuda.OutOfMemoryError)
+    ):
+        report.outcome = "skipped"
+        report.wasxfail = "torch.cuda.OutOfMemoryError (--xfail-oom)"
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
