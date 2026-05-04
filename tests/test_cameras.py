@@ -995,11 +995,12 @@ class TestCameraModelsShutterPose:
         assert_close(
             test_rays_org[all_valid], ref_rays_org[all_valid], atol=4e-06, rtol=3.5e-06
         )
-        # rays_dir is a unit 3-vector. Worst observed max_abs=1.013e-6 across
-        # all |e| buckets (FP32 noise floor is bounded). atol carries it; rtol
-        # would only inflate at small |e| (near-axis rays) without constraining.
+        # rays_dir is a unit 3-vector. Worst observed max_abs across all |e|
+        # buckets (FP32 noise floor is bounded): RTX PRO 6000=1.013e-6,
+        # L40S=1.1325e-6. atol carries it; rtol would only inflate at small
+        # |e| (near-axis rays) without constraining.
         assert_close(
-            test_rays_dir[all_valid], ref_rays_dir[all_valid], atol=1.1e-06, rtol=0
+            test_rays_dir[all_valid], ref_rays_dir[all_valid], atol=1.2e-06, rtol=0
         )
 
         assert_mismatch_ratio(test_valid, ref_valid, max=1e-05)
