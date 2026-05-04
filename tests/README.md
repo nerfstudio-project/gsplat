@@ -242,6 +242,127 @@ Combine with feature flags to pre-configure the build environment:
 
 **Note:** After rebuilding the Docker image, the SSH host keys will change. Run `ssh-keygen -R '[localhost]:2222'` on the host to clear the old entry from `~/.ssh/known_hosts`.
 
+## Running on memory-constrained machines
+
+A few tests in `tests/test_basic.py` (notably `test_rasterize_to_pixels` with
+`channels=128` and a non-empty `batch_dims`) push past 4–6 GB of GPU memory at
+peak. On hosts with 8 GB or less of dedicated VRAM, the PyTorch CUDA caching
+allocator can spill into shared/system memory, which is orders of magnitude
+slower and stalls the entire host.
+
+The conftest installs a session-scoped CUDA-memory cap at **100% of the VRAM
+that is actually free after torch's CUDA context has initialized** (queried
+via `torch.cuda.mem_get_info(...)`). Sizing off *free* memory rather than
+*total* memory means the cap automatically accounts for driver / cuBLAS /
+cuDNN overhead (~1 GB on modern stacks) and for any other process already
+using the GPU at session start. The cap turns would-be spills into the
+shared/system memory pool into a clean `OutOfMemoryError`, so the host stays
+responsive. Lower the fraction via the `--cuda-mem-fraction` CLI flag when
+other processes on the box need headroom:
+
+```bash
+# Tighten to 80% of free (busy host with other GPU consumers):
+pytest --cuda-mem-fraction=0.80 -sv
+
+# Tighten further to 50% of free (heavily contended GPU):
+pytest --cuda-mem-fraction=0.50 -sv
+```
+
+Two additional host-side knobs help without changing what is tested:
+
+```bash
+# 1. Use the expandable-segments allocator. Greatly reduces fragmentation
+#    across long parametrize sweeps.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# 2. Run the test files separately so the allocator pool resets between them.
+pytest tests/test_basic.py -sv
+pytest tests/test_rasterization.py -sv
+pytest libs/geometry/functional -sv
+```
+
+These knobs are pure runtime hygiene — they do not deselect or shrink any
+test. CI does not need them and is unaffected (CI GPUs have ample headroom
+under the 100%-of-free cap).
+
+### Per-test peak memory tracking
+
+Per-test memory tracking is **opt-in** via the `--mem-track` pytest flag.
+When omitted, default pytest output is unchanged and the tracking fixture
+is a no-op (no sampler thread, no overhead). Pass the flag to enable it:
+
+```bash
+pytest --mem-track -sv
+```
+
+When enabled, two peaks are recorded for every test:
+
+- **`torch_peak`** — bytes managed by torch's caching allocator at the
+  moment of peak (`torch.cuda.max_memory_allocated`). Tightly attributed
+  to the test's torch operations.
+- **`device_peak`** — total VRAM in use as seen by the CUDA driver,
+  sampled from a background thread at ~20 Hz. Includes context overhead
+  and any other CUDA allocator on the same device.
+
+At session end pytest prints a sorted summary of the heaviest tests:
+
+```
+======================== CUDA memory peaks (top 25 of 412 tests) =========================
+session max:  device=  3548.2 MiB   torch=  2487.0 MiB
+   device_peak    torch_peak   test
+    3548.2 MiB    2487.0 MiB   tests/test_basic.py::test_rasterize_to_pixels[batch_dims2-128]
+    3401.7 MiB    2340.5 MiB   tests/test_basic.py::test_rasterize_to_pixels[batch_dims1-128]
+    1620.4 MiB     559.2 MiB   tests/test_basic.py::test_rasterize_to_pixels[batch_dims2-32]
+    ...
+```
+
+`--mem-track` also enables the cap-fixture's startup announcement, so the
+chosen cap (and the GPU it was sized against) is logged alongside the
+per-test peaks.
+
+Knobs (CLI flags; only meaningful when `--mem-track` is on):
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--mem-track-interval=SECONDS` | `0.05` | Sampler poll interval. Lower = catches shorter spikes, more overhead. |
+| `--mem-track-top=N` | `25` | How many tests to print in the summary. |
+| `--mem-track-csv=PATH` | unset | Path to dump full per-test peaks as CSV for offline analysis. |
+
+Run `pytest --help | grep -A1 'gsplat-mem'` to see the full list with
+descriptions.
+
+### Live external monitoring
+
+For a real-time view of GPU memory while a long pytest run executes (e.g.
+to spot when the host begins to crawl), run one of these in a separate
+terminal:
+
+```bash
+# Compact one-line-per-second update — best for tailing.
+nvidia-smi --query-gpu=memory.used,memory.free,utilization.gpu \
+           --format=csv,noheader -l 1
+
+# Curses-style dashboard, useful for graphing trends.
+nvidia-smi dmon -s mu
+
+# Or refresh the full table every second.
+watch -n 1 nvidia-smi
+```
+
+These show **dedicated VRAM only** — they don't include the Windows
+"Shared GPU memory" pool. That's intentional: with the 100%-of-free cap
+in place, anything that would have spilled into shared memory now OOMs
+cleanly inside torch instead, and `torch_peak` from the per-test summary
+will show which test hit the limit.
+
+If you specifically need to see Windows shared-GPU-memory consumption (to
+confirm nothing spilled), open Windows Task Manager → Performance → GPU,
+or from PowerShell on the host:
+
+```powershell
+Get-Counter '\GPU Process Memory(*)\Shared Usage' -SampleInterval 1 -Continuous
+```
+
 ## Troubleshooting
 
 ### docker: Error response from daemon: driver failed programming external connectivity on endpoint ...: Bind for 0.0.0.0:8080 failed: port is already allocated.
