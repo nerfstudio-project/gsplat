@@ -21,20 +21,21 @@ script_dir="$(cd "$(dirname "${script_path}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 script_name="$(basename "${BASH_SOURCE[0]}")"
 
-full_mode=false
-git_mode_args=()
+full_mode=true
+changed_base=""
 black_args=()
 
 usage() {
     cat <<EOF
 Format code in the gsplat repository.
 
-Usage: ${script_name} [--check] [--full] [--help|-h]
+Usage: ${script_name} [--check] [--full] [--changed <ref>] [--help|-h]
 
 Options:
-  --check      Check formatting without modifying files.
-  --full       Format all tracked Python files instead of only modified tracked files.
-  --help, -h   Show this help message.
+  --check          Check formatting without modifying files.
+  --full           Format all tracked Python files (default).
+  --changed <ref>  Format only Python files changed since <ref> (e.g. for CI).
+  --help, -h       Show this help message.
 EOF
 }
 
@@ -56,7 +57,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --full)
             full_mode=true
+            changed_base=""
             shift
+            ;;
+        --changed)
+            [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die "--changed requires a git ref argument"
+            full_mode=false
+            changed_base="$2"
+            shift 2
             ;;
         --help|-h)
             usage
@@ -82,7 +90,7 @@ find_repo_files() {
     else
         git_diff_args=(
             --diff-filter=ACMR
-            HEAD
+            "${changed_base}"
         )
     fi
 
