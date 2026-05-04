@@ -768,21 +768,20 @@ class TestCameraModels:
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
 
-        # Tolerances based on camera type (ordered by decreasing atol)
-        # Values set ~20% above observed maximums for tight margin
+        # Tolerances based on camera type, set to 1.05 x observed maximum.
         if isinstance(ref_camera, _OpenCVFisheyeCameraModel):
             # fisheye: observed atol=4.96e-05, rtol=1.45e-03
-            atol, rtol = 6e-05, 1.8e-03
+            atol, rtol = 5.2e-05, 1.52e-03
         elif isinstance(
             ref_camera, (_OpenCVPinholeCameraModel, _PerfectPinholeCameraModel)
         ):
             # OpenCV pinhole & perfect pinhole: observed atol=3.05e-05, rtol=2.47e-03
-            atol, rtol = 3.7e-05, 3e-03
+            atol, rtol = 3.2e-05, 2.6e-03
         elif isinstance(ref_camera, _FThetaCameraModel):
             # ftheta: observed atol=1.53e-05, rtol=1.69e-07
-            atol, rtol = 1.9e-05, 2.5e-07
+            atol, rtol = 1.6e-05, 1.8e-07
         elif isinstance(ref_camera, _RowOffsetStructuredSpinningLidarModel):
-            atol, rtol = 5e-03, 2e-03
+            atol, rtol = 5e-03, 2e-03  # not yet calibrated to observed
         else:  # Fallback
             atol, rtol = None, None
         assert_close(test_imgpt[all_valid], ref_imgpt[all_valid], atol=atol, rtol=rtol)
@@ -963,6 +962,8 @@ class TestCameraModels:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+# Pinhole-only: shutter-pose composition is camera-type-agnostic (defined on
+# _BaseCameraModel); per-type projection is covered in TestCameraModels.
 @pytest.mark.parametrize("camera_model", ["pinhole"])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (2, 3)])
 @pytest.mark.parametrize("image_dims", [(127, 257)])
@@ -990,26 +991,18 @@ class TestCameraModelsShutterPose:
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
 
-        # Observed errors from shutter pose interpolation and projection
-        # Values set ~20% above observed maximums for tight margin
-        # rays_org: observed atol=3.34e-06, rtol=2.70e-06
-        # rays_dir: observed atol=7.75e-07, rtol varies (high due to small components)
+        # rays_org: observed atol=3.34e-06, rtol=2.70e-06 -> ~20% margin.
         assert_close(
             test_rays_org[all_valid], ref_rays_org[all_valid], atol=4e-06, rtol=3.5e-06
         )
+        # rays_dir is a unit 3-vector. Worst observed max_abs=1.013e-6 across
+        # all |e| buckets (FP32 noise floor is bounded). atol carries it; rtol
+        # would only inflate at small |e| (near-axis rays) without constraining.
         assert_close(
-            test_rays_dir[all_valid], ref_rays_dir[all_valid], atol=1e-06, rtol=1e-03
+            test_rays_dir[all_valid], ref_rays_dir[all_valid], atol=1.1e-06, rtol=0
         )
 
-        # Tolerance for validity mismatches in shutter pose calculations
-        # Higher for OpenCV models with distortion
-        if isinstance(ref_camera, _OpenCVPinholeCameraModel):
-            validity_tol = 3e-02  # 3% for OpenCV pinhole models
-        elif isinstance(ref_camera, (_OpenCVFisheyeCameraModel, _FThetaCameraModel)):
-            validity_tol = 1e-03  # 0.1% for fisheye/ftheta
-        else:
-            validity_tol = 1e-05  # 0.001% for perfect pinhole
-        assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
+        assert_mismatch_ratio(test_valid, ref_valid, max=1e-05)
 
     def test_world_point_to_image_point_shutter_pose(
         self, world_points, pose_start, pose_end, test_camera, ref_camera
