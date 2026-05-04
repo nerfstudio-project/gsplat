@@ -22,7 +22,7 @@ import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add
+from .ops import inject_noise_to_position, relocate, remove, sample_add
 
 
 @dataclass
@@ -143,6 +143,11 @@ class MCMCStrategy(Strategy):
             and step > self.refine_start_iter
             and step % self.refine_every == 0
         ):
+            # prune if over cap (e.g. when initialized from SfM with too many points)
+            n_pruned = self._prune_to_cap(params, optimizers)
+            if self.verbose and n_pruned > 0:
+                print(f"Step {step}: Pruned {n_pruned} GSs to reach cap_max.")
+
             # teleport GSs
             n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
             if self.verbose:
@@ -213,3 +218,21 @@ class MCMCStrategy(Strategy):
                 min_opacity=self.min_opacity,
             )
         return n_gs
+
+    @torch.no_grad()
+    def _prune_to_cap(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+    ) -> int:
+        """Prune lowest-opacity Gaussians when count exceeds cap_max."""
+        current_n = len(params["means"])
+        if current_n <= self.cap_max:
+            return 0
+        n_prune = current_n - self.cap_max
+        opacities = torch.sigmoid(params["opacities"].flatten())
+        _, indices = torch.topk(opacities, n_prune, largest=False)
+        mask = torch.zeros(current_n, dtype=torch.bool, device=opacities.device)
+        mask[indices] = True
+        remove(params=params, optimizers=optimizers, state={}, mask=mask)
+        return n_prune
