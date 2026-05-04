@@ -691,6 +691,11 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
                     const vec3 gro = iscl_rot * (ray_o[p] - xyz);
                     const vec3 grd = safe_normalize(iscl_rot * ray_d[p]);
+                    // hit_t < 0: closest approach is behind the camera origin — skip.
+                    const float hit_t = -glm::dot(grd, gro);
+                    if (hit_t < 0.f) {
+                        continue;
+                    }
                     const vec3 gcrod = glm::cross(grd, gro);
                     const float grayDist = glm::dot(gcrod, gcrod);
                     const float power = -0.5f * grayDist;
@@ -703,7 +708,6 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
                     float hit_distance = 0.0f;
                     if (use_hit_distance) {
-                        const float hit_t = glm::dot(grd, -gro);
                         const vec3 grds = scale * (grd * hit_t);
                         hit_distance = glm::length(grds);
                     }
