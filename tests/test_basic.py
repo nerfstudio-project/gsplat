@@ -4094,13 +4094,13 @@ def test_projection_ut_zero_quaternion(nan_test_data):
     # Valid Gaussians must match between CUDA and Python ref
     if sel.any():
         torch.testing.assert_close(
-            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+            means2d_gpu[sel], means2d_ref[sel], rtol=2e-3, atol=1e-3
         )
         torch.testing.assert_close(
             depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
         )
         torch.testing.assert_close(
-            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+            conics_gpu[sel], conics_ref[sel], rtol=1e-4, atol=1e-4
         )
 
     # End-to-end: render and verify no pixel exceeds the opacity bound.
@@ -4194,13 +4194,13 @@ def test_projection_ut_zero_scale_single_axis(nan_test_data):
     # Valid Gaussians must match between CUDA and Python ref
     if sel.any():
         torch.testing.assert_close(
-            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+            means2d_gpu[sel], means2d_ref[sel], rtol=2e-3, atol=1e-3
         )
         torch.testing.assert_close(
             depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
         )
         torch.testing.assert_close(
-            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+            conics_gpu[sel], conics_ref[sel], rtol=1e-4, atol=1e-4
         )
 
     # End-to-end: render and verify no pixel exceeds the opacity bound.
@@ -4401,13 +4401,13 @@ def test_projection_ut_python_ref_no_nan(nan_test_data):
 
         # CUDA and ref must agree on valid Gaussian outputs
         torch.testing.assert_close(
-            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+            means2d_gpu[sel], means2d_ref[sel], rtol=2e-3, atol=1e-3
         )
         torch.testing.assert_close(
             depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
         )
         torch.testing.assert_close(
-            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+            conics_gpu[sel], conics_ref[sel], rtol=1e-4, atol=1e-4
         )
 
 
