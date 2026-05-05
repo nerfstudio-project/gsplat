@@ -682,11 +682,22 @@ __global__ void rasterize_gradient_bwd_kernel(
             vec4 quat;
             mat3 Mt;
             vec3 o_minus_mu, gro, grd, grd_n, gcrod;
-            float grayDist, power, hit_t = 0.f;
-            // Per-pixel hit distance — stored in a register, NOT in shared memory
-            // rgbs_batch, because hit_distance depends on ray_o/ray_d (per-pixel)
-            // while rgbs_batch is per-Gaussian (shared across all pixels in the tile).
-            float local_hit_dist = 0.f;
+            float grayDist, power;
+            // Per-pixel hit-distance state. Three values:
+            // - `hit_distance`: world-frame length of `grds` (per-pixel)
+            // - `hit_t`:        whitened parametric closest-point distance
+            // - `grds`:         scale-weighted whitened ray direction
+            //
+            // Held in registers (not in shmem `rgbs_batch`) because they
+            // depend on ray_o/ray_d (per-pixel), whereas `rgbs_batch` is
+            // per-Gaussian (shared across all pixels in the tile).
+            //
+            // Computed once in the alpha-recompute block below and reused by:
+            // - the per-pixel rgb-render-dot path (hit_distance only)
+            // - the hit-distance VJP block       (all three)
+            float hit_distance = 0.f;
+            float hit_t = 0.f;
+            vec3 grds = vec3(0.f);
             if (valid) {
                 const vec4 xyz_opac = xyz_opacity_batch[t];
                 opac = xyz_opac[3];
@@ -747,8 +758,8 @@ __global__ void rasterize_gradient_bwd_kernel(
                     }
 
                     if (use_hit_distance) {
-                        const vec3 grds = scale * (grd_n * hit_t);
-                        local_hit_dist = glm::length(grds);
+                        grds = scale * (grd_n * hit_t);
+                        hit_distance = glm::length(grds);
                     }
                 }
             }
@@ -810,10 +821,10 @@ __global__ void rasterize_gradient_bwd_kernel(
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     // For the last channel with use_hit_distance, use the per-pixel
-                    // local_hit_dist instead of per-Gaussian rgbs_batch (which is
+                    // hit_distance instead of per-Gaussian rgbs_batch (which is
                     // shared memory and would race across pixels in the tile).
                     const float rgb_k = (use_hit_distance && k == CDIM - 1)
-                        ? local_hit_dist
+                        ? hit_distance
                         : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                     rgb_render_dot += rgb_k * v_render_c[k];
                 }
@@ -846,15 +857,14 @@ __global__ void rasterize_gradient_bwd_kernel(
                     // v_render_c instead of reading the zeroed slot.
                     const float v_depth = fac * v_render_c[CDIM - 1];
 
-                    // From forward: grds = scale * grd_n * hit_t; hit_dist = length(grds).
-                    // hit_t >= 0 is guaranteed here (valid=false path was skipped above).
-                    const vec3 grds = scale * (grd_n * hit_t);
-                    const float hit_dist_len = glm::length(grds);
+                    // hit_t / grds / hit_distance were computed in the
+                    // alpha-recompute block above and hoisted to outer scope;
+                    // reuse them here to avoid recomputation.
 
                     // Backward through length(grds)
                     vec3 v_grds = vec3(0.f);
-                    if (hit_dist_len > 1e-8f) {
-                        v_grds = (grds / hit_dist_len) * v_depth;
+                    if (hit_distance > 1e-8f) {
+                        v_grds = (grds / hit_distance) * v_depth;
                     }
 
                     // Backward through grds = scale * grd_n * hit_t (element-wise multiply)
