@@ -1050,9 +1050,10 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     }
 
     const int32_t channels = colors.size(-1);
-    TORCH_CHECK(SupportedChannels::contains(channels),
-        "Unsupported number of channels: ", channels,
-        " (check GSPLAT_NUM_CHANNELS)");
+    TORCH_CHECK_VALUE(SupportedChannels::contains(channels),
+        "Unsupported number of color channels: ", channels,
+        ". To add support, rebuild gsplat with this channel count included "
+        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h).");
 
     const uint32_t pixels_per_tile = tile_size * tile_size;
     const uint32_t num_tiles = I * tile_height * tile_width;
