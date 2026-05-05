@@ -706,7 +706,17 @@ __global__ void rasterize_gradient_bwd_kernel(
                     0.f,
                     1.0f / scale[2]
                 );
-                Mt = glm::transpose(R * S);
+                // Match fwd's Mt construction expression form (S * Rᵀ vs
+                // (R * S)ᵀ are mathematically equal for diagonal S, but
+                // compilers may pick different FFMA fusions per source
+                // form). Today nvcc emits identical SASS for both — this
+                // is forward-defensive: a future compiler / surrounding-
+                // code change could break the bit-equivalence we get
+                // today, and source-form match keeps it stable. Softer
+                // guarantee than `safe_normalize`'s explicit-intrinsic
+                // pinning, but no intrinsics exist for matrix
+                // construction expressions.
+                Mt = S * glm::transpose(R);
                 o_minus_mu = ray_o - xyz;
                 gro = Mt * o_minus_mu;
                 grd = Mt * ray_d;
@@ -724,7 +734,15 @@ __global__ void rasterize_gradient_bwd_kernel(
 
                     vis = __expf(power);
                     alpha = min(MAX_ALPHA, opac * vis);
-                    if (power > 0.f || alpha < ALPHA_THRESHOLD) {
+                    // grayDist = dot(gcrod, gcrod) is a sum of three squares, so
+                    // grayDist >= 0 and therefore power = -0.5 * grayDist <= 0
+                    // under any IEEE-754 evaluation order on finite inputs.
+                    // Assert the invariant and use the same skip predicate as
+                    // fwd. The assert also fires on NaN power, which would
+                    // itself indicate an upstream numerics bug feeding NaN
+                    // into gcrod.
+                    assert(power <= 0.f);
+                    if (alpha < ALPHA_THRESHOLD) {
                         valid = false;
                     }
 
