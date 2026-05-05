@@ -800,9 +800,31 @@ inline __device__ void fisheye_proj_vjp(
     v_mean3d.z += dL_dtz_raw;
 }
 
+// FMA-stable normalize.
+//
+// The natural `dot(v,v) + rsqrtf + (v * inv)` form leaves the dot's
+// three multiplies and two adds open to nvcc's statement-scope FMA
+// contraction pass, which fuses `a*b + c` greedily at AST-node level.
+// Two callers compiled in different contexts (e.g. the fwd vs bwd
+// rasterize-to-pixels-from-world kernels) can land on different
+// fusion choices, producing 1-ULP-divergent outputs for bit-identical
+// inputs — which downstream amplifies through cross + dot + exp into
+// 30-1500 ULP drift on alpha.
+//
+// `__fmul_rn` / `__fmaf_rn` are explicit per-op intrinsics that the
+// contraction pass treats as opaque, so every caller emits the same
+// FFMA + MUFU.RSQ + FMUL sequence regardless of context.
 inline __device__ vec3 safe_normalize(vec3 v) {
-    const float l = v.x * v.x + v.y * v.y + v.z * v.z;
-    return l > 0.0f ? (v * rsqrtf(l)) : v;
+    float l = __fmul_rn(v.x, v.x);
+    l = __fmaf_rn(v.y, v.y, l);
+    l = __fmaf_rn(v.z, v.z, l);
+    if (l > 0.0f) {
+        const float inv = rsqrtf(l);
+        return vec3(__fmul_rn(v.x, inv),
+                    __fmul_rn(v.y, inv),
+                    __fmul_rn(v.z, inv));
+    }
+    return v;
 }
 
 inline __device__ vec3 safe_normalize_bw(const vec3 &v, const vec3 &d_out) {
