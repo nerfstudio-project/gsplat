@@ -801,17 +801,24 @@ __global__ void rasterize_gradient_bwd_kernel(
                     v_rgb_local[CDIM - 1] = 0.f;
                 }
 
-                // Precompute normal if needed (for both v_alpha contribution and gradient)
+                // Precompute normal if needed. Used by:
+                // - v_alpha computation (this block)
+                // - normal-gradient VJP block below
+                //
+                // Hoist `flipped` and `unnormalized_flipped` to outer scope so
+                // the gradient block reuses the values without recomputing
+                // R[2] / the dot / the flip.
                 bool flipped = false;
+                vec3 unnormalized_flipped = vec3(0.f);
                 if (v_render_normals != nullptr) {
                     // Recompute normal from forward pass
                     // normal = R * (0, 0, 1) = R[:, 2] (third column)
                     const vec3 unnormalized_normal = R[2];
-                    
+
                     // Direction resolution: flip if facing away from ray
                     flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
-                    const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
-                    
+                    unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+
                     // Normalize
                     normal = safe_normalize(unnormalized_flipped);
                 }
@@ -912,10 +919,10 @@ __global__ void rasterize_gradient_bwd_kernel(
                         const vec3 v_normal_local = v_render_n * fac;
                         
                         // Forward: normal = safe_normalize(unnormalized_flipped)
-                        const vec3 unnormalized_normal = R[2];
-                        const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+                        // unnormalized_flipped was computed in the v_alpha
+                        // precompute block above and reused here.
                         const vec3 v_unnormalized_flipped = safe_normalize_bw(unnormalized_flipped, v_normal_local);
-                        
+
                         // Forward: unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal
                         const vec3 v_unnormalized = flipped ? -v_unnormalized_flipped : v_unnormalized_flipped;
 
