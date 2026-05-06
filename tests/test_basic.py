@@ -3373,6 +3373,195 @@ def test_rasterize_to_pixels_eval3d(
         )
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
+def test_eval3d_masked_tile_writes_safe_defaults(tile_size):
+    # The public binding allocates outputs internally with at::empty. If a
+    # kernel store is accidentally skipped, stale allocator contents could
+    # still match these expected defaults and let this test pass.
+    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+
+    width = height = tile_size
+    channels = 3
+
+    means = torch.tensor([[0.0, 0.0, 1.0]], device=device)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+    scales = torch.ones((1, 3), device=device)
+    colors = torch.zeros((1, 1, channels), device=device)
+    opacities = torch.ones((1, 1), device=device)
+    backgrounds = torch.tensor([[0.2, 0.4, 0.6]], device=device)
+    masks = torch.zeros((1, 1, 1), dtype=torch.bool, device=device)
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [
+            [
+                [float(width), 0.0, width / 2.0],
+                [0.0, float(height), height / 2.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ],
+        device=device,
+    )
+    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
+
+    (
+        render_colors,
+        render_alphas,
+        last_ids,
+        sample_counts,
+        render_normals,
+    ) = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+        masks=masks,
+        return_sample_counts=True,
+        return_normals=True,
+    )
+
+    expected_background = backgrounds.reshape(1, 1, 1, channels).expand_as(
+        render_colors
+    )
+    torch.testing.assert_close(render_colors, expected_background)
+    torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
+    torch.testing.assert_close(render_normals, torch.zeros_like(render_normals))
+    torch.testing.assert_close(last_ids, torch.full_like(last_ids, -1))
+    torch.testing.assert_close(sample_counts, torch.zeros_like(sample_counts))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
+def test_eval3d_unsafe_masked_tile_outputs_match_safe_outputs_on_active_tiles(
+    tile_size,
+):
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+    )
+
+    # Exercise several active/masked tile transitions in a single row.
+    mask_pattern = [True, False, False, True, False, True]
+    tile_width = len(mask_pattern)
+    tile_height = 1
+    active_tile_xs = [i for i, is_active in enumerate(mask_pattern) if is_active]
+
+    width = tile_size * tile_width
+    height = tile_size
+    channels = 3
+
+    active_tile_centers = torch.tensor(
+        [(tile_x + 0.5) * tile_size for tile_x in active_tile_xs],
+        device=device,
+    )
+    xs = (active_tile_centers - width / 2.0) / width
+    means = torch.stack(
+        [xs, torch.zeros_like(xs), torch.ones_like(xs)],
+        dim=-1,
+    )
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device).expand(
+        len(active_tile_xs), -1
+    )
+    scales = torch.full((len(active_tile_xs), 3), 0.2, device=device)
+    colors = torch.tensor(
+        [[[0.7, 0.1, 0.3], [0.1, 0.8, 0.2], [0.2, 0.3, 0.9]]],
+        device=device,
+    )
+    opacities = torch.full((1, len(active_tile_xs)), 0.8, device=device)
+    backgrounds = torch.tensor([[0.2, 0.4, 0.6]], device=device)
+    masks = torch.tensor([[mask_pattern]], dtype=torch.bool, device=device)
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [
+            [
+                [float(width), 0.0, width / 2.0],
+                [0.0, float(height), height / 2.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ],
+        device=device,
+    )
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means,
+        quats,
+        scales,
+        opacities[0],
+        viewmats,
+        Ks,
+        width,
+        height,
+    )
+    _tpg, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+    isect_offsets = isect_offsets.reshape(1, tile_height, tile_width)
+
+    def run(unsafe_masked_tile_outputs):
+        return rasterize_to_pixels_eval3d_extra(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            masks=masks,
+            return_sample_counts=True,
+            return_normals=True,
+            unsafe_masked_tile_outputs=unsafe_masked_tile_outputs,
+        )
+
+    safe_outputs = run(False)
+    unsafe_outputs = run(True)
+
+    for active_tile_x in active_tile_xs:
+        # Compare only active tile pixels; masked tile outputs are undefined
+        # when unsafe_masked_tile_outputs=True.
+        active = (
+            slice(None),
+            slice(None),
+            slice(active_tile_x * tile_size, (active_tile_x + 1) * tile_size),
+        )
+        active_with_channels = active + (slice(None),)
+
+        assert torch.any(safe_outputs[1][active_with_channels] > 0.0)
+        assert torch.any(safe_outputs[2][active] >= 0)
+        assert torch.any(safe_outputs[3][active] > 0)
+
+        for safe, unsafe in zip(safe_outputs, unsafe_outputs):
+            active_slice = active_with_channels if safe.ndim == 4 else active
+            if safe.is_floating_point():
+                torch.testing.assert_close(
+                    unsafe[active_slice], safe[active_slice], rtol=0.0, atol=1e-6
+                )
+            else:
+                assert torch.equal(unsafe[active_slice], safe[active_slice])
+
+
 @pytest.fixture
 def _ghost_lobe_scene():
     """Single needle gaussian + 32x32 pinhole camera at the origin."""

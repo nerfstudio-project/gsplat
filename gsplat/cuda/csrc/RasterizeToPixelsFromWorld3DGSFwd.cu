@@ -39,6 +39,23 @@
 namespace gsplat {
 
 using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
+using SupportedTileSizes = dispatch::IntParam<8, 16>;
+using MaskedOutputSafetyModes = dispatch::IntParam<0, 1>;
+
+// TILE_SIZE and CTA_SIZE are a tuned launch-variant pair. Add a specialization
+// here whenever a new supported tile size needs its own CTA size.
+template <uint32_t TILE_SIZE>
+struct CtaSizeForTile;
+
+template <>
+struct CtaSizeForTile<8u> {
+    static constexpr uint32_t value = 32u;
+};
+
+template <>
+struct CtaSizeForTile<16u> {
+    static constexpr uint32_t value = 256u;
+};
 
 ////////////////////////////////////////////////////////////////
 // Forward
@@ -149,7 +166,11 @@ constexpr uint32_t min_blocks_for_cdim() {
     }
 }
 
-template <uint32_t CDIM, uint32_t TILE_SIZE, uint32_t CTA_SIZE>
+template <
+    uint32_t CDIM,
+    uint32_t TILE_SIZE,
+    uint32_t CTA_SIZE,
+    bool SAFE_MASKED_OUTPUTS = true>
 __global__ void __launch_bounds__(CTA_SIZE, min_blocks_for_cdim<CDIM, CTA_SIZE>())
 rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const uint32_t C,
@@ -230,6 +251,20 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const uint32_t tile_y = blockIdx.y;
     const int32_t tile_id = blockIdx.y * grid_width + blockIdx.z;
 
+    bool masked_tile = false;
+    if (masks != nullptr) {
+        masks += iid * grid_height * grid_width;
+        masked_tile = !masks[tile_id];
+        if constexpr (!SAFE_MASKED_OUTPUTS) {
+            if (masked_tile) {
+                // Non-safe masked outputs: bwd's rasterize_gradient_bwd_kernel
+                // returns on the same mask gate before reading CSR-backed
+                // fwd_chunk_state, so we intentionally leave it unseeded.
+                return;
+            }
+        }
+    }
+
     const uint32_t tid = threadIdx.x;
     const uint32_t thread_x = tid & TILE_MASK;  // X & 0xF(15) == X % 16
     const uint32_t thread_y = tid >> TILE_SHIFT; // X >> 4 == X / 16
@@ -250,28 +285,11 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     if (backgrounds != nullptr) {
         backgrounds += iid * CDIM;
     }
-    if (masks != nullptr) {
-        masks += iid * grid_height * grid_width;
-    }
-    if (rays != nullptr) {
-        rays += iid * image_height * image_width * 6;
-    }
 
-    // Rolling shutter parameter (loop-invariant across pixel slots)
-    auto rs_params = RollingShutterParameters(
-        viewmats0 + iid * 16,
-        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16
-    );
-
-    // Per-pixel coordinate + ray setup. pc[p] holds (row, col, pix_id,
+    // Per-pixel coordinate setup. pc[p] holds (row, col, pix_id,
     // inside) for the p-th pixel slot of this thread. (row, col) live
-    // only inside this loop iteration — they're consumed by
-    // compute_world_ray and not used downstream — so the fused loop
-    // lets the compiler keep them scope-local rather than spanning two
-    // PPT loops.
+    // only until ray setup; masked tiles only need pix_id for empty outputs.
     PixelCoords pc[PIXELS_PER_THREAD];
-    vec3 ray_o[PIXELS_PER_THREAD] = {};
-    vec3 ray_d[PIXELS_PER_THREAD] = {};
     uint32_t done_mask = 0;
 #pragma unroll
     for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
@@ -283,7 +301,58 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             done_mask |= (1u << p);
             continue;
         }
+    }
 
+    // When the mask is provided, skip Gaussian rasterization for inactive
+    // tiles. The default public behavior writes deterministic empty-render
+    // outputs after pix_id is known; expert unsafe mode returned earlier and
+    // leaves masked output pixels undefined.
+    if constexpr (SAFE_MASKED_OUTPUTS) {
+        if (masked_tile) {
+#pragma unroll
+            for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
+                if (pc[p].inside) {
+                    render_alphas[pc[p].pix_id] = 0.0f;
+#pragma unroll
+                    for (uint32_t k = 0; k < CDIM; ++k) {
+                        render_colors[pc[p].pix_id * CDIM + k] =
+                            backgrounds == nullptr ? 0.0f : backgrounds[k];
+                    }
+                    if (render_normals != nullptr) {
+#pragma unroll
+                        for (uint32_t k = 0; k < 3; ++k) {
+                            render_normals[pc[p].pix_id * 3 + k] = 0.0f;
+                        }
+                    }
+                    last_ids[pc[p].pix_id] = -1;
+                    if (sample_counts != nullptr) {
+                        sample_counts[pc[p].pix_id] = 0;
+                    }
+                }
+            }
+        }
+        if (masked_tile) {
+            return;
+        }
+    }
+
+    if (rays != nullptr) {
+        rays += iid * image_height * image_width * 6;
+    }
+
+    // Rolling shutter parameter (loop-invariant across pixel slots)
+    auto rs_params = RollingShutterParameters(
+        viewmats0 + iid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16
+    );
+
+    vec3 ray_o[PIXELS_PER_THREAD] = {};
+    vec3 ray_d[PIXELS_PER_THREAD] = {};
+#pragma unroll
+    for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
+        if (done_mask & (1u << p)) {
+            continue;
+        }
         WorldRay ray = compute_world_ray<float>(
             iid, pc[p].col, pc[p].row, pc[p].pix_id, /*inside=*/true, rs_params,
             rays, Ks,
@@ -299,24 +368,6 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             ray_o[p] = ray.ray_org;
             ray_d[p] = ray.ray_dir;
         }
-    }
-
-    // When the mask is provided, render the background color and return
-    // if this tile is labeled as False
-    if (masks != nullptr && !masks[tile_id]) {
-        if (done_mask != ALL_DONE) {
-#pragma unroll
-            for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-                if (!(done_mask & (1u << p))) {
-#pragma unroll
-                    for (uint32_t k = 0; k < CDIM; ++k) {
-                        render_colors[pc[p].pix_id * CDIM + k] =
-                            backgrounds == nullptr ? 0.0f : backgrounds[k];
-                    }
-                }
-            }
-        }
-        return;
     }
 
     // Gaussian range for this tile
@@ -541,6 +592,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const at::Tensor isect_offsets, // [..., C, grid_h, grid_w]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
+    const bool unsafe_masked_tile_outputs,
     // CSR chunk structure (precomputed by caller, shared with bwd)
     const at::Tensor chunks_per_tile, // [num_tiles] int32
     const at::Tensor chunk_offsets,   // [num_tiles + 1] int32
@@ -592,10 +644,29 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         ". To add support, rebuild gsplat with this channel count included "
         "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h).");
 
-    auto launch_kernel = [&]<typename ChannelsT>() {
-        constexpr uint32_t CDIM = ChannelsT::value;
+    TORCH_CHECK_VALUE(
+        SupportedTileSizes::contains(tile_size),
+        "Unsupported tile_size ", tile_size,
+        "; supported values are {8, 16}."
+    );
 
-        auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>() {
+    // NOTE: Two (TILE_SIZE, CTA_SIZE) variants are kept because the optimum
+    // differs by workload. tile_size=8 (CTA=32, PPT=2) is the compact-CTA
+    // path: wins on training (mixed CDIM cameras + lidar) by keeping per-CTA
+    // shmem small so many CTAs co-reside per SM. tile_size=16 (CTA=256,
+    // PPT=1) is one thread per pixel: wins on render-only workloads where
+    // fewer/larger tiles shrink the intersect+sort cost. Especially true with
+    // 1080p and 4K resolutions. The kernel body is identical between the two;
+    // only the templated constants change. min_blocks_for_cdim is re-derived
+    // from CTA_SIZE so the schedule stays valid past CTA=32.
+    const int safe_masked_outputs = unsafe_masked_tile_outputs ? 0 : 1;
+    auto launch_kernel =
+        [&]<typename ChannelsT, typename TileSizeT, typename SafeMaskedOutputsT>() {
+            constexpr uint32_t CDIM = ChannelsT::value;
+            constexpr uint32_t TILE_SIZE = TileSizeT::value;
+            constexpr uint32_t CTA_SIZE = CtaSizeForTile<TILE_SIZE>::value;
+            constexpr bool SAFE_MASKED_OUTPUTS = SafeMaskedOutputsT::value != 0;
+
             const dim3 threads = {CTA_SIZE, 1, 1};
             const dim3 grid = {I, grid_h, grid_w};
             // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch + scale_batch + normal_batch
@@ -603,7 +674,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 CTA_SIZE * (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3) + sizeof(vec3));
 
             if (cudaFuncSetAttribute(
-                rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
+                rasterize_to_pixels_from_world_3dgs_fwd_kernel<
+                    CDIM, TILE_SIZE, CTA_SIZE, SAFE_MASKED_OUTPUTS>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
                 shmem_size
             ) != cudaSuccess) {
@@ -614,7 +686,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 );
             }
 
-            rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
+            rasterize_to_pixels_from_world_3dgs_fwd_kernel<
+                CDIM, TILE_SIZE, CTA_SIZE, SAFE_MASKED_OUTPUTS>
                 <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
                     C,
                     N,
@@ -674,29 +747,12 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                         : nullptr
                 );
         };
-
-        // NOTE: Two (TILE_SIZE, CTA_SIZE) variants are kept because the
-        // optimum differs by workload. tile_size=8 (CTA=32, PPT=2) is the
-        // compact-CTA path: wins on training (mixed CDIM cameras + lidar) by
-        // keeping per-CTA shmem small so many CTAs co-reside per SM.
-        // tile_size=16 (CTA=256, PPT=1) is one thread per pixel: wins on
-        // render-only workloads where fewer/larger tiles shrink the
-        // intersect+sort cost. Espectially true with 1080p and 4K resolutions.
-        // The kernel body is identical between the two; only the templated
-        // constants change. min_blocks_for_cdim is re-derived from CTA_SIZE
-        // so the schedule stays valid past CTA=32.
-        if (tile_size == 8u) {
-            launch_variant.template operator()<8u, 32u>();
-        } else if (tile_size == 16u) {
-            launch_variant.template operator()<16u, 256u>();
-        } else {
-            AT_ERROR(
-                "Unsupported tile_size ", tile_size,
-                "; supported values are {8, 16}."
-            );
-        }
-    };
-    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    const bool dispatched = dispatch::dispatch(
+        SupportedChannels{channels},
+        SupportedTileSizes{static_cast<int>(tile_size)},
+        MaskedOutputSafetyModes{safe_masked_outputs},
+        std::move(launch_kernel)
+    );
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 
