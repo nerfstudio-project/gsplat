@@ -636,7 +636,8 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
     const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
-    const at::optional<at::Tensor> normals // [..., C, image_height, image_width, 3] optional output tensor
+    const at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3] optional output tensor
+    const bool unsafe_masked_tile_outputs
 ) {
 #if !GSPLAT_BUILD_3DGUT
     TORCH_CHECK(
@@ -743,6 +744,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
         rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         ftheta_coeffs, lidar_coeffs, external_distortion_params,
         tile_offsets, flatten_ids, use_hit_distance,
+        unsafe_masked_tile_outputs,
         chunks_per_tile, chunk_offsets, total_chunks,
         renders, alphas, last_ids,
         sample_counts, normals, fwd_chunk_state
@@ -848,7 +850,7 @@ public:
         FWD_OPACITIES   = 4,
         FWD_BACKGROUNDS = 5,
         FWD_RAYS        = 16,
-        FWD_COUNT       = 28,
+        FWD_COUNT       = 29,
     };
 
     // Tensor-input slot map: positions in the Tensor-only subsequence of
@@ -912,9 +914,20 @@ public:
         // intersections
         const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
         const at::Tensor &flatten_ids,  // [n_isects]
-        bool return_sample_counts, bool use_hit_distance, bool return_normals
+        bool return_sample_counts,
+        bool use_hit_distance,
+        bool return_normals,
+        bool unsafe_masked_tile_outputs
     ) {
         ctx->set_materialize_grads(false);
+
+        TORCH_CHECK(
+            !(unsafe_masked_tile_outputs &&
+              masks.has_value() &&
+              backgrounds.has_value() &&
+              backgrounds.value().requires_grad()),
+            "unsafe_masked_tile_outputs is not supported with differentiable backgrounds"
+        );
 
         // --- Run shared forward -------------------------------------------
         auto optional_outputs = allocate_eval3d_optional_outputs(
@@ -933,7 +946,8 @@ public:
             rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids,
-            use_hit_distance, optional_outputs.sample_counts, optional_outputs.normals
+            use_hit_distance, optional_outputs.sample_counts, optional_outputs.normals,
+            unsafe_masked_tile_outputs
         );
 
         // --- Save tensor state for backward -------------------------------
@@ -1229,7 +1243,10 @@ rasterize_to_pixels_from_world_3dgs(
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor &flatten_ids,  // [n_isects]
-    bool return_sample_counts, bool use_hit_distance, bool return_normals
+    bool return_sample_counts,
+    bool use_hit_distance,
+    bool return_normals,
+    bool unsafe_masked_tile_outputs
 ) {
 #if !GSPLAT_BUILD_3DGUT
     TORCH_CHECK(
@@ -1265,7 +1282,8 @@ rasterize_to_pixels_from_world_3dgs(
         rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         ftheta_coeffs, lidar_coeffs, external_distortion_params,
         tile_offsets, flatten_ids,
-        use_hit_distance, optional_outputs.sample_counts, optional_outputs.normals
+        use_hit_distance, optional_outputs.sample_counts, optional_outputs.normals,
+        unsafe_masked_tile_outputs
     );
 
     return std::make_tuple(fwd.renders, fwd.alphas, fwd.last_ids,
@@ -1303,7 +1321,10 @@ rasterize_to_pixels_from_world_3dgs_autograd(
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor &flatten_ids,  // [n_isects]
-    bool return_sample_counts, bool use_hit_distance, bool return_normals
+    bool return_sample_counts,
+    bool use_hit_distance,
+    bool return_normals,
+    bool unsafe_masked_tile_outputs
 ) {
 #if !GSPLAT_BUILD_3DGUT
     TORCH_CHECK(
@@ -1325,7 +1346,8 @@ rasterize_to_pixels_from_world_3dgs_autograd(
         rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         ftheta_coeffs, lidar_coeffs, external_distortion_params,
         tile_offsets, flatten_ids,
-        return_sample_counts, use_hit_distance, return_normals
+        return_sample_counts, use_hit_distance, return_normals,
+        unsafe_masked_tile_outputs
     );
 
     return std::make_tuple(

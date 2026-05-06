@@ -278,8 +278,8 @@ TEST_P(FwdChunkStateTest, C0MatchesTerminalAfterEarlyExit)
             scene.flatten_ids,
             false, // use_hit_distance
             c10::nullopt, // sample_counts
-            c10::nullopt); // normals
-
+            c10::nullopt, // normals
+            false); // unsafe_masked_tile_outputs
     // If this precondition fails, the synthetic scene stopped exercising the
     // multi-chunk path and the terminal-slot padding invariant is meaningless.
     ASSERT_EQ(raster.chunks_per_tile.numel(), 1);

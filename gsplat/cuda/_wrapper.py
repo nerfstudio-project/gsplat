@@ -1049,6 +1049,7 @@ def rasterize_to_pixels_eval3d_extra(
     return_sample_counts: bool = False,
     use_hit_distance: bool = False,
     return_normals: bool = False,
+    unsafe_masked_tile_outputs: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
@@ -1065,6 +1066,11 @@ def rasterize_to_pixels_eval3d_extra(
         return_normals: If True, compute and return accumulated normals per pixel.
             Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
             transformed by rotation, flipped if facing away from ray). Default: False.
+        unsafe_masked_tile_outputs: If True, outputs for masked tiles are left undefined
+            and must not be read by the caller. Default False writes per-pixel safe
+            values for masked tiles: render_colors = backgrounds (or 0.0 when no
+            backgrounds are provided), render_alphas = 0.0, render_normals = 0.0,
+            last_ids = -1, sample_counts = 0.
 
     Returns:
         A tuple (contents depend on return flags):
@@ -1203,6 +1209,7 @@ def rasterize_to_pixels_eval3d_extra(
         return_sample_counts,  # Pass flag to forward
         use_hit_distance,
         return_normals,  # Pass return_normals flag to forward
+        unsafe_masked_tile_outputs,
     )
 
     return render_colors, render_alphas, last_ids, sample_counts, render_normals
