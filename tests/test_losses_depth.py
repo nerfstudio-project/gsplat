@@ -195,3 +195,25 @@ def test_masked_ssim_gradient_flows():
     loss = masked_ssim(pred, gt, mask)
     loss.backward()
     assert pred.grad is not None
+
+
+def test_masked_ssim_partial_mask_loss_near_zero():
+    """Partial mask: identical inputs in the active half, mismatch in the masked-out half.
+
+    `masked_ssim` zeros both inputs in the masked-out region before SSIM, so
+    pred*mask and gt*mask are identical everywhere (matching values in the
+    active half; both zeroed in the inactive half). SSIM ≈ 1 → loss ≈ 0.
+
+    This pins the "masked-out region is excluded" semantic against any
+    future drift to a crop-then-SSIM alternative.
+    """
+    pred = torch.rand(2, 3, 32, 32)
+    gt = pred.clone()
+    # Inject a deliberate mismatch only in the left half (masked-out).
+    gt[..., :16] = torch.rand(2, 3, 32, 16)
+
+    mask = torch.zeros(2, 1, 32, 32)
+    mask[..., 16:] = 1.0  # active region: right half only
+
+    loss = masked_ssim(pred, gt, mask)
+    assert loss.item() < 1e-3

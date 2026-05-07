@@ -129,8 +129,9 @@ cases. Tests follow the flat layout and pytest conventions already in
 ``gsplat/tests/`` (``conftest.py``, seed 42, CUDA-aware).
 
 See the component × test-case matrix in
-``planning/gsharp_gsplat_plan.md`` and the shareable HTML summary at
-``planning/gsharp_gsplat_plan.html``.
+``planning/gsharp_gsplat_plan.md``. (A shareable HTML preview can be
+rendered from that markdown locally; it is intentionally not tracked in
+the repo.)
 
 Risks
 -----
