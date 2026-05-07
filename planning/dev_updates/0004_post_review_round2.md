@@ -56,5 +56,5 @@ Resumption of TDD step 2 (regularizers) — was the planned next chunk before th
 - `gsplat/regularizers.py`:
   - `compute_tv_loss_targeted` — occlusion-targeted TV regularizer.
   - `dilate_mask` — torch max-pool replacement for OpenCV mask dilation.
-  - `create_invisible_mask_from_paths` — intersection of inverse masks across training frames.
+  - `create_invisible_mask` — union of per-frame instrument masks (regions chronically occluded by tools across the dataset).
 - Un-skip `tests/test_regularizers_occlusion.py`.

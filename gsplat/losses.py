@@ -339,6 +339,11 @@ def masked_ssim(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
     G-SHARP training-loop convention (mask the rendered output and the GT,
     then take an unmasked SSIM over the zeroed pair).
 
+    Note that the mean is taken over the full image, so the loss magnitude
+    scales with mask coverage — sparse masks dilute the reported loss in
+    proportion to the masked-out fraction. This bias is intentional and
+    matches the upstream G-SHARP convention.
+
     Args:
         pred: Predicted image batch ``[B, C, H, W]``, values in ``[0, 1]``.
         gt: Ground-truth image batch, same shape as *pred*.
