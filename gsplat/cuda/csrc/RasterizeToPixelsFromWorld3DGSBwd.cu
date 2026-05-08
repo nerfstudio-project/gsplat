@@ -682,11 +682,22 @@ __global__ void rasterize_gradient_bwd_kernel(
             vec4 quat;
             mat3 Mt;
             vec3 o_minus_mu, gro, grd, grd_n, gcrod;
-            float grayDist, power, hit_t = 0.f;
-            // Per-pixel hit distance — stored in a register, NOT in shared memory
-            // rgbs_batch, because hit_distance depends on ray_o/ray_d (per-pixel)
-            // while rgbs_batch is per-Gaussian (shared across all pixels in the tile).
-            float local_hit_dist = 0.f;
+            float grayDist, power;
+            // Per-pixel hit-distance state. Three values:
+            // - `hit_distance`: world-frame length of `grds` (per-pixel)
+            // - `hit_t`:        whitened parametric closest-point distance
+            // - `grds`:         scale-weighted whitened ray direction
+            //
+            // Held in registers (not in shmem `rgbs_batch`) because they
+            // depend on ray_o/ray_d (per-pixel), whereas `rgbs_batch` is
+            // per-Gaussian (shared across all pixels in the tile).
+            //
+            // Computed once in the alpha-recompute block below and reused by:
+            // - the per-pixel rgb-render-dot path (hit_distance only)
+            // - the hit-distance VJP block       (all three)
+            float hit_distance = 0.f;
+            float hit_t = 0.f;
+            vec3 grds = vec3(0.f);
             if (valid) {
                 const vec4 xyz_opac = xyz_opacity_batch[t];
                 opac = xyz_opac[3];
@@ -706,7 +717,17 @@ __global__ void rasterize_gradient_bwd_kernel(
                     0.f,
                     1.0f / scale[2]
                 );
-                Mt = glm::transpose(R * S);
+                // Match fwd's Mt construction expression form (S * Rᵀ vs
+                // (R * S)ᵀ are mathematically equal for diagonal S, but
+                // compilers may pick different FFMA fusions per source
+                // form). Today nvcc emits identical SASS for both — this
+                // is forward-defensive: a future compiler / surrounding-
+                // code change could break the bit-equivalence we get
+                // today, and source-form match keeps it stable. Softer
+                // guarantee than `safe_normalize`'s explicit-intrinsic
+                // pinning, but no intrinsics exist for matrix
+                // construction expressions.
+                Mt = S * glm::transpose(R);
                 o_minus_mu = ray_o - xyz;
                 gro = Mt * o_minus_mu;
                 grd = Mt * ray_d;
@@ -724,13 +745,21 @@ __global__ void rasterize_gradient_bwd_kernel(
 
                     vis = __expf(power);
                     alpha = min(MAX_ALPHA, opac * vis);
-                    if (power > 0.f || alpha < ALPHA_THRESHOLD) {
+                    // grayDist = dot(gcrod, gcrod) is a sum of three squares, so
+                    // grayDist >= 0 and therefore power = -0.5 * grayDist <= 0
+                    // under any IEEE-754 evaluation order on finite inputs.
+                    // Assert the invariant and use the same skip predicate as
+                    // fwd. The assert also fires on NaN power, which would
+                    // itself indicate an upstream numerics bug feeding NaN
+                    // into gcrod.
+                    assert(power <= 0.f);
+                    if (alpha < ALPHA_THRESHOLD) {
                         valid = false;
                     }
 
                     if (use_hit_distance) {
-                        const vec3 grds = scale * (grd_n * hit_t);
-                        local_hit_dist = glm::length(grds);
+                        grds = scale * (grd_n * hit_t);
+                        hit_distance = glm::length(grds);
                     }
                 }
             }
@@ -772,17 +801,24 @@ __global__ void rasterize_gradient_bwd_kernel(
                     v_rgb_local[CDIM - 1] = 0.f;
                 }
 
-                // Precompute normal if needed (for both v_alpha contribution and gradient)
+                // Precompute normal if needed. Used by:
+                // - v_alpha computation (this block)
+                // - normal-gradient VJP block below
+                //
+                // Hoist `flipped` and `unnormalized_flipped` to outer scope so
+                // the gradient block reuses the values without recomputing
+                // R[2] / the dot / the flip.
                 bool flipped = false;
+                vec3 unnormalized_flipped = vec3(0.f);
                 if (v_render_normals != nullptr) {
                     // Recompute normal from forward pass
                     // normal = R * (0, 0, 1) = R[:, 2] (third column)
                     const vec3 unnormalized_normal = R[2];
-                    
+
                     // Direction resolution: flip if facing away from ray
                     flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
-                    const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
-                    
+                    unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+
                     // Normalize
                     normal = safe_normalize(unnormalized_flipped);
                 }
@@ -792,10 +828,10 @@ __global__ void rasterize_gradient_bwd_kernel(
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     // For the last channel with use_hit_distance, use the per-pixel
-                    // local_hit_dist instead of per-Gaussian rgbs_batch (which is
+                    // hit_distance instead of per-Gaussian rgbs_batch (which is
                     // shared memory and would race across pixels in the tile).
                     const float rgb_k = (use_hit_distance && k == CDIM - 1)
-                        ? local_hit_dist
+                        ? hit_distance
                         : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                     rgb_render_dot += rgb_k * v_render_c[k];
                 }
@@ -828,15 +864,14 @@ __global__ void rasterize_gradient_bwd_kernel(
                     // v_render_c instead of reading the zeroed slot.
                     const float v_depth = fac * v_render_c[CDIM - 1];
 
-                    // From forward: grds = scale * grd_n * hit_t; hit_dist = length(grds).
-                    // hit_t >= 0 is guaranteed here (valid=false path was skipped above).
-                    const vec3 grds = scale * (grd_n * hit_t);
-                    const float hit_dist_len = glm::length(grds);
+                    // hit_t / grds / hit_distance were computed in the
+                    // alpha-recompute block above and hoisted to outer scope;
+                    // reuse them here to avoid recomputation.
 
                     // Backward through length(grds)
                     vec3 v_grds = vec3(0.f);
-                    if (hit_dist_len > 1e-8f) {
-                        v_grds = (grds / hit_dist_len) * v_depth;
+                    if (hit_distance > 1e-8f) {
+                        v_grds = (grds / hit_distance) * v_depth;
                     }
 
                     // Backward through grds = scale * grd_n * hit_t (element-wise multiply)
@@ -884,10 +919,10 @@ __global__ void rasterize_gradient_bwd_kernel(
                         const vec3 v_normal_local = v_render_n * fac;
                         
                         // Forward: normal = safe_normalize(unnormalized_flipped)
-                        const vec3 unnormalized_normal = R[2];
-                        const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+                        // unnormalized_flipped was computed in the v_alpha
+                        // precompute block above and reused here.
                         const vec3 v_unnormalized_flipped = safe_normalize_bw(unnormalized_flipped, v_normal_local);
-                        
+
                         // Forward: unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal
                         const vec3 v_unnormalized = flipped ? -v_unnormalized_flipped : v_unnormalized_flipped;
 
