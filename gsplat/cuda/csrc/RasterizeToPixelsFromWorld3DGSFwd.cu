@@ -30,6 +30,7 @@
 #include "ExternalDistortion.cuh"
 #include "Rasterization.h"
 #include "RasterizeChunkCSR.h"
+#include "RasterizeToPixelsFromWorld3DGS.cuh"
 #include "Cameras.cuh"
 #include "Lidars.cuh"
 #include "Utils.cuh"
@@ -256,215 +257,41 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         rays += iid * image_height * image_width * 6;
     }
 
-    // Per-pixel coordinate setup.
-    // For non-LIDAR: regular rectangular tile mapping (same as 3DGS compact CTA).
-    // For LIDAR: arbitrary pixel mapping from tiles_to_elements_map.
-    uint32_t pix_j[PIXELS_PER_THREAD];
-    uint32_t pix_i[PIXELS_PER_THREAD];
-    int32_t pix_id[PIXELS_PER_THREAD];
-    uint32_t done_mask = 0;
-
-    if (camera_model_type == CameraModelType::LIDAR) {
-        assert(lidar_device_coeffs);
-        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
-        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
-#pragma unroll
-        for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-            const int elem = tid + p * CTA_SIZE;
-            if (elem < element_count) {
-                pix_j[p] = lidar_device_coeffs->tiles_to_elements_map[element_start + elem].x;
-                pix_i[p] = lidar_device_coeffs->tiles_to_elements_map[element_start + elem].y;
-                pix_id[p] = pix_i[p] * image_width + pix_j[p];
-            } else {
-                // Idle pad: mark out-of-bounds so the final `inside` check
-                // (pix_i < H && pix_j < W) rejects the write. Leaving (0,0)
-                // would race with the active thread covering pix (row=0, col=0).
-                pix_j[p] = image_width;
-                pix_i[p] = image_height;
-                pix_id[p] = 0;
-                done_mask |= (1u << p);
-            }
-        }
-    } else {
-        const uint32_t out_x = tile_x * TILE_SIZE + thread_x;
-        done_mask = (out_x >= image_width) ? ALL_DONE : 0;
-#pragma unroll
-        for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-            const uint32_t out_y = tile_y * TILE_SIZE + thread_y + p * ROW_STRIDE;
-            pix_j[p] = out_x;
-            pix_i[p] = out_y;
-            pix_id[p] = out_y * image_width + out_x;
-            if (out_y >= image_height) {
-                done_mask |= (1u << p);
-            }
-        }
-    }
-
-    // Create rolling shutter parameter (shared across all pixels of this thread)
+    // Rolling shutter parameter (loop-invariant across pixel slots)
     auto rs_params = RollingShutterParameters(
         viewmats0 + iid * 16,
         viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16
     );
 
-    // Per-pixel ray computation
+    // Per-pixel coordinate + ray setup. pc[p] holds (row, col, pix_id,
+    // inside) for the p-th pixel slot of this thread. (row, col) live
+    // only inside this loop iteration — they're consumed by
+    // compute_world_ray and not used downstream — so the fused loop
+    // lets the compiler keep them scope-local rather than spanning two
+    // PPT loops.
+    PixelCoords pc[PIXELS_PER_THREAD];
     vec3 ray_o[PIXELS_PER_THREAD] = {};
     vec3 ray_d[PIXELS_PER_THREAD] = {};
-
+    uint32_t done_mask = 0;
 #pragma unroll
     for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-        if (done_mask & (1u << p)) {
+        pc[p] = compute_pixel_coords(
+            camera_model_type, tile_id, tile_y, tile_x, TILE_SIZE,
+            thread_y + p * ROW_STRIDE, thread_x, tid + p * CTA_SIZE,
+            image_width, image_height, lidar_device_coeffs);
+        if (!pc[p].inside) {
+            done_mask |= (1u << p);
             continue;
         }
 
-        const uint32_t j = pix_j[p];
-        const uint32_t i = pix_i[p];
-        WorldRay ray;
-
-        // TODO: this should be templated on the sensor type or whether we're using rays as input.
-        if (rays == nullptr) {
-            // Create ray from pixel.
-            // Each camera model's element_to_image_point converts (j, i) pixel
-            // indices to the image-point convention it expects: pixel centers for
-            // cameras, scaled-angle coordinates for lidar.
-            if (camera_model_type == CameraModelType::PINHOLE) {
-                if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-                    if (external_distortion_device_params.has_value()) {
-                        using CameraModel = PerfectPinholeCameraModel<extdist::BivariateWindshieldModel>;
-                        CameraModel::KernelParameters kernel_params = {
-                            {
-                                {image_width, image_height},
-                                rs_type,
-                                *external_distortion_device_params,
-                            },
-                            Ks,
-                        };
-                        CameraModel camera_model(kernel_params, iid);
-                        ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                    } else {
-                        using CameraModel = PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
-                        CameraModel::KernelParameters kernel_params = {
-                            {
-                                {image_width, image_height},
-                                rs_type,
-                                {},
-                            },
-                            Ks,
-                        };
-                        CameraModel camera_model(kernel_params, iid);
-                        ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                    }
-                }
-                else {
-                    if (external_distortion_device_params.has_value()) {
-                        using CameraModel = OpenCVPinholeCameraModel<extdist::BivariateWindshieldModel>;
-                        CameraModel::KernelParameters kernel_params = {
-                            {
-                                {image_width, image_height},
-                                rs_type,
-                                *external_distortion_device_params,
-                            },
-                            Ks,
-                            radial_coeffs,
-                            tangential_coeffs,
-                            thin_prism_coeffs,
-                        };
-                        CameraModel camera_model(kernel_params, iid);
-                        ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                    } else {
-                        using CameraModel = OpenCVPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
-                        CameraModel::KernelParameters kernel_params = {
-                            {
-                                {image_width, image_height},
-                                rs_type,
-                                {},
-                            },
-                            Ks,
-                            radial_coeffs,
-                            tangential_coeffs,
-                            thin_prism_coeffs,
-                        };
-                        CameraModel camera_model(kernel_params, iid);
-                        ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                    }
-                }
-            }
-            else if (camera_model_type == CameraModelType::FISHEYE) {
-                if (external_distortion_device_params.has_value()) {
-                    using CameraModel = OpenCVFisheyeCameraModel<extdist::BivariateWindshieldModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        {
-                            {image_width, image_height},
-                            rs_type,
-                            *external_distortion_device_params,
-                        },
-                        Ks,
-                        radial_coeffs,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                } else {
-                    using CameraModel = OpenCVFisheyeCameraModel<extdist::EmptyExternalDistortionModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        {
-                            {image_width, image_height},
-                            rs_type,
-                            {},
-                        },
-                        Ks,
-                        radial_coeffs,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                }
-            }
-            else if (camera_model_type == CameraModelType::FTHETA) {
-                if (external_distortion_device_params.has_value()) {
-                    using CameraModel = FThetaCameraModel<extdist::BivariateWindshieldModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        {
-                            {image_width, image_height},
-                            rs_type,
-                            *external_distortion_device_params,
-                        },
-                        Ks,
-                        ftheta_device_coeffs,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                } else {
-                    using CameraModel = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        {
-                            {image_width, image_height},
-                            rs_type,
-                            {},
-                        },
-                        Ks,
-                        ftheta_device_coeffs,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                }
-            }
-            else if (camera_model_type == CameraModelType::LIDAR) {
-                using CameraModel = RowOffsetStructuredSpinningLidarModel;
-                assert(lidar_device_coeffs);
-                CameraModel::KernelParameters kernel_params = {
-                    *lidar_device_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            }
-            else {
-                assert(false);
-                return;
-            }
-        }
-        else {
-            ray.ray_org = {rays[pix_id[p]*6+0], rays[pix_id[p]*6+1], rays[pix_id[p]*6+2]};
-            ray.ray_dir = {rays[pix_id[p]*6+3], rays[pix_id[p]*6+4], rays[pix_id[p]*6+5]};
-            ray.valid_flag = true;
-        }
+        WorldRay ray = compute_world_ray<float>(
+            iid, pc[p].col, pc[p].row, pc[p].pix_id, /*inside=*/true, rs_params,
+            rays, Ks,
+            image_width, image_height,
+            camera_model_type, rs_type,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            ftheta_device_coeffs, lidar_device_coeffs,
+            external_distortion_device_params);
 
         if (!ray.valid_flag) {
             done_mask |= (1u << p);
@@ -483,7 +310,7 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 if (!(done_mask & (1u << p))) {
 #pragma unroll
                     for (uint32_t k = 0; k < CDIM; ++k) {
-                        render_colors[pix_id[p] * CDIM + k] =
+                        render_colors[pc[p].pix_id * CDIM + k] =
                             backgrounds == nullptr ? 0.0f : backgrounds[k];
                     }
                 }
@@ -525,8 +352,6 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const uint32_t tile_linear =
         iid * grid_height * grid_width + tile_id;
     const uint32_t pixels_per_tile = TILE_SIZE * TILE_SIZE;
-    const uint32_t state_dim =
-        FWD_CHUNK_STATE_PIX_OFFSET + CDIM + FWD_CHUNK_STATE_NORMAL_EXTRA;
     // chunk_base_slot is the slot index in fwd_chunk_state for this tile's
     // c=0 entry (i.e., the terminal state). Later c entries follow
     // contiguously in the CSR.
@@ -566,51 +391,23 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     float pix_out[PIXELS_PER_THREAD][CDIM] = {0.f};
     vec3 normal_out[PIXELS_PER_THREAD] = {};
 
-    // Lambda that persists the CURRENT per-pixel cumulative state (T, pix_out,
-    // normal_out) to chunk slot c (c in [0, num_chunks)). All threads in the
-    // block call this together — one slot row per thread (tr), with thread
-    // rank tr indexing the pixels_per_tile axis. Threads where `inside ==
-    // false` write their trivial (T=1, pix_out=0, normal_out=0) state into
-    // the slot; the bwd gradient kernel reads the slot unconditionally but
-    // ignores out-of-bounds pixels in its downstream gradient walk via the
-    // same `inside` check, so the trivial values never propagate. The
-    // writes are kept so the memory layout stays fully populated.
+    // Per-chunk persist of the CURRENT per-pixel cumulative state to CSR
+    // slot c is delegated to `persist_chunk_state` in
+    // `RasterizeToPixelsFromWorld3DGS.cuh`. All threads in the block call
+    // it together — one slot row per thread (tr = tid + p * CTA_SIZE),
+    // with thread rank tr indexing the pixels_per_tile axis. Threads
+    // where `inside == false` write their trivial (T=1, pix_out=0,
+    // normal_out=0) state into the slot; the bwd gradient kernel reads
+    // the slot unconditionally but ignores out-of-bounds pixels in its
+    // downstream gradient walk via the same `inside` check, so the
+    // trivial values never propagate. The writes are kept so the memory
+    // layout stays fully populated. Caller (this kernel) gates on
+    // `persist_chunks`.
     //
-    // `c=0` corresponds to the terminal state (what bwd chunk 0 starts from);
-    // `c=num_chunks-1` corresponds to the earliest persistable state. The
-    // boundary-formula derivation is documented in `RasterizeChunkCSR.h`.
-    auto persist_state = [&](uint32_t c) {
-        if (!persist_chunks) {
-            return;
-        }
-
-#pragma unroll
-        for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-            const uint32_t tr = tid + p * CTA_SIZE;
-            const int64_t slot = chunk_base_slot + static_cast<int64_t>(c);
-            const int64_t base = slot * static_cast<int64_t>(pixels_per_tile) *
-                                    static_cast<int64_t>(state_dim) +
-                                static_cast<int64_t>(tr) *
-                                    static_cast<int64_t>(state_dim);
-            fwd_chunk_state[base + FWD_CHUNK_STATE_T_OFFSET] = T[p];
-#pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k) {
-                fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + k] = pix_out[p][k];
-            }
-            // Always zero-fill the normal slot when return_normals is false, so
-            // bwd consumers can read it unconditionally without branching on a
-            // template flag they may not know.
-            if (return_normals) {
-                fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = normal_out[p].x;
-                fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = normal_out[p].y;
-                fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = normal_out[p].z;
-            } else {
-                fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = 0.0f;
-                fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = 0.0f;
-                fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = 0.0f;
-            }
-        }
-    };
+    // `c=0` corresponds to the terminal state (what bwd chunk 0 starts
+    // from); `c=num_chunks-1` corresponds to the earliest persistable
+    // state. The boundary-formula derivation is documented in
+    // `RasterizeChunkCSR.h`.
 
 #pragma unroll 1
     for (uint32_t lb = 0; lb < num_logical_batches; ++lb) {
@@ -620,135 +417,20 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         // cooperative fetch rounds of FETCH_SIZE (= CTA_SIZE) gaussians each
         // — this is what keeps the CTA at one warp.
         const uint32_t logical_batch_start = range_start + LOGICAL_BATCH * lb;
-#pragma unroll
-        for (uint32_t r = 0; r < FETCHES_PER_BATCH; ++r) {
-            const uint32_t batch_start = logical_batch_start + FETCH_SIZE * r;
-            // Skip rounds that fall past the tile's gaussian range (last
-            // logical batch may be partial). Each thread votes "no fetch"
-            // uniformly via the per-thread `idx >= range_end` guard below;
-            // here we only skip the cooperative fetch entirely when the
-            // whole round is past range_end.
-            if (batch_start >= (uint32_t)range_end) {
-                break;
-            }
-
-            // Each thread fetches 1 gaussian from front to back
-            const uint32_t idx = batch_start + tid;
-            if (idx < range_end) {
-                // TODO: only support 1 camera for now so it is ok to abuse the index.
-                int32_t isect_id = flatten_ids[idx];
-                int32_t isect_bid = isect_id / (C * N);
-                int32_t isect_gid = isect_id % N;
-                id_batch[tid] = isect_id;
-                const vec3 xyz = means[isect_bid * N + isect_gid];
-                const float opac = opacities[isect_id];
-                xyz_opacity_batch[tid] = {xyz.x, xyz.y, xyz.z, opac};
-
-                const vec4 quat = quats[isect_bid * N + isect_gid];
-                vec3 scale = scales[isect_bid * N + isect_gid];
-
-                // Projection kernel culls degenerate Gaussians (zero quaternion,
-                // zero scale) by setting radii = 0, preventing them from entering
-                // the intersection list. Assert the preconditions here.
-                assert(glm::dot(quat, quat) > 0.f);
-                assert(scale[0] > 0.f && scale[1] > 0.f && scale[2] > 0.f);
-
-                mat3 R = quat_to_rotmat(quat);
-                mat3 S = mat3(
-                    1.0f / scale[0], 0.f, 0.f,
-                    0.f, 1.0f / scale[1], 0.f,
-                    0.f, 0.f, 1.0f / scale[2]
-                );
-                iscl_rot_batch[tid] = S * glm::transpose(R);
-                scale_batch[tid] = scale;
-
-                // Normal = R * (0, 0, 1) = third column of R.
-                if (return_normals) {
-                    normal_batch[tid] = R[2];
-                }
-            }
-
-            if constexpr (CTA_SIZE == 32) {
-                __syncwarp();
-            } else {
-                __syncthreads();
-            }
-
-            // Process gaussians in this fetch round
-            const uint32_t batch_size = min(FETCH_SIZE, ((uint32_t)range_end - batch_start));
-            for (uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t) {
-                const vec4 xyz_opac = xyz_opacity_batch[t];
-                const float opac = xyz_opac[3];
-                const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
-                const mat3 iscl_rot = iscl_rot_batch[t];
-                const vec3 scale = scale_batch[t];
-
-#pragma unroll
-                for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-                    if (done_mask & (1u << p)) {
-                        continue;
-                    }
-
-                    const vec3 gro = iscl_rot * (ray_o[p] - xyz);
-                    const vec3 grd = safe_normalize(iscl_rot * ray_d[p]);
-                    // hit_t < 0: closest approach is behind the camera origin — skip.
-                    const float hit_t = -glm::dot(grd, gro);
-                    if (hit_t < 0.f) {
-                        continue;
-                    }
-                    const vec3 gcrod = glm::cross(grd, gro);
-                    const float grayDist = glm::dot(gcrod, gcrod);
-                    const float power = -0.5f * grayDist;
-                    float max_response = __expf(power);
-                    float alpha = min(MAX_ALPHA, opac * max_response);
-
-                    if (alpha < ALPHA_THRESHOLD) {
-                        continue;
-                    }
-
-                    float hit_distance = 0.0f;
-                    if (use_hit_distance) {
-                        const vec3 grds = scale * (grd * hit_t);
-                        hit_distance = glm::length(grds);
-                    }
-
-                    const float next_T = T[p] * (1.0f - alpha);
-                    if (next_T <= TRANSMITTANCE_THRESHOLD) {
-                        done_mask |= (1u << p);
-                        continue;
-                    }
-
-                    int32_t isect_id = id_batch[t];
-                    const float vis = alpha * T[p];
-                    const float *c_ptr = colors + isect_id * CDIM;
-
-                    if (use_hit_distance) {
-#pragma unroll
-                        for (uint32_t k = 0; k < CDIM; ++k) {
-                            const float value = (k == CDIM - 1) ? hit_distance : c_ptr[k];
-                            pix_out[p][k] += value * vis;
-                        }
-                    } else {
-#pragma unroll
-                        for (uint32_t k = 0; k < CDIM; ++k) {
-                            pix_out[p][k] += c_ptr[k] * vis;
-                        }
-                    }
-
-                    if (return_normals) {
-                        const vec3 unnormalized_normal = normal_batch[t];
-                        const bool flipped = glm::dot(unnormalized_normal, ray_d[p]) > 0.0f;
-                        const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
-                        const vec3 normal = safe_normalize(unnormalized_flipped);
-                        normal_out[p] += normal * vis;
-                    }
-
-                    cur_idx[p] = batch_start + t;
-                    n_accumulated[p]++;
-                    T[p] = next_T;
-                }
-            }
-        }
+        const bool all_done = process_logical_batch_gaussians<
+            CDIM, LOGICAL_BATCH, FETCH_SIZE, CTA_SIZE,
+            PIXELS_PER_THREAD, /*CHECK_THRESHOLD=*/true, float>(
+            tid,
+            id_batch, xyz_opacity_batch, iscl_rot_batch,
+            scale_batch, normal_batch,
+            logical_batch_start, range_end,
+            flatten_ids, means, quats, scales, opacities, colors,
+            C, N,
+            ray_o, ray_d,
+            use_hit_distance, return_normals,
+            ALL_DONE,
+            T, pix_out, normal_out,
+            cur_idx, n_accumulated, done_mask);
 
         // --- Chunk-boundary persist ---------------------------------------
         // After finishing logical batch `lb`, if this batch is a persist
@@ -757,20 +439,26 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         // - lb) is a non-negative multiple of CHUNK_BATCHES; the corresponding
         // chunk index is c = (num_logical_batches - 1 - lb) / CHUNK_BATCHES.
         //
-        // The lambda is called uniformly across all threads in the block
-        // (no divergent control): every thread's T/pix_out/normal_out is
-        // valid at this program point since we're outside the per-Gaussian
-        // inner loop. This keeps the writes coalesced per CSR row.
+        // `persist_chunk_state` is called uniformly across all threads in
+        // the block (no divergent control): every thread's T/pix_out/
+        // normal_out is valid at this program point since we're outside
+        // the per-Gaussian inner loop. This keeps the writes coalesced
+        // per CSR row.
         if (persist_chunks) {
             const int32_t diff = static_cast<int32_t>(num_logical_batches) - 1 -
                                  static_cast<int32_t>(lb);
             if (diff >= 0 && (diff % CHUNK_BATCHES) == 0) {
-                persist_state(static_cast<uint32_t>(diff) / CHUNK_BATCHES);
+                persist_chunk_state<CDIM, PIXELS_PER_THREAD, CTA_SIZE>(
+                    static_cast<uint32_t>(diff) / CHUNK_BATCHES,
+                    chunk_base_slot, pixels_per_tile, tid, return_normals,
+                    T, pix_out, normal_out, fwd_chunk_state);
             }
         }
 
-        // Block-level early exit + inter-batch sync barrier
-        if (__syncthreads_count(done_mask == ALL_DONE) >= CTA_SIZE) {
+        // Block-level early exit (the all-done vote was already done
+        // inside process_logical_batch_gaussians via cta_sync_count, so
+        // no extra `__syncthreads_count` is needed here).
+        if (all_done) {
             // Block-level early exit: every pixel has hit T <=
             // TRANSMITTANCE_THRESHOLD (or was never inside). Remaining
             // persist boundaries therefore all reflect the terminal state
@@ -784,7 +472,10 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                         static_cast<int32_t>(num_logical_batches) - 1 -
                         static_cast<int32_t>(lbb);
                     if (diff >= 0 && (diff % CHUNK_BATCHES) == 0) {
-                        persist_state(static_cast<uint32_t>(diff) / CHUNK_BATCHES);
+                        persist_chunk_state<CDIM, PIXELS_PER_THREAD, CTA_SIZE>(
+                            static_cast<uint32_t>(diff) / CHUNK_BATCHES,
+                            chunk_base_slot, pixels_per_tile, tid, return_normals,
+                            T, pix_out, normal_out, fwd_chunk_state);
                     }
                 }
             }
@@ -795,27 +486,23 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // Write outputs for each in-bounds pixel
 #pragma unroll
     for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-        // For non-LIDAR: explicit bounds check (same as 3DGS compact CTA).
-        // For LIDAR: pixels assigned from the map are guaranteed in-bounds;
-        // OOB pixels had done_mask set from the start and pix_id[p]=0.
-        const bool inside = (pix_i[p] < image_height && pix_j[p] < image_width);
-        if (inside) {
-            render_alphas[pix_id[p]] = 1.0f - T[p];
+        if (pc[p].inside) {
+            render_alphas[pc[p].pix_id] = 1.0f - T[p];
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
-                render_colors[pix_id[p] * CDIM + k] =
+                render_colors[pc[p].pix_id * CDIM + k] =
                     backgrounds == nullptr ? pix_out[p][k]
                                            : (pix_out[p][k] + T[p] * backgrounds[k]);
             }
             if (render_normals != nullptr) {
 #pragma unroll
                 for (uint32_t k = 0; k < 3; ++k) {
-                    render_normals[pix_id[p] * 3 + k] = normal_out[p][k];
+                    render_normals[pc[p].pix_id * 3 + k] = normal_out[p][k];
                 }
             }
-            last_ids[pix_id[p]] = static_cast<int32_t>(cur_idx[p]);
+            last_ids[pc[p].pix_id] = static_cast<int32_t>(cur_idx[p]);
             if (sample_counts != nullptr) {
-                sample_counts[pix_id[p]] = n_accumulated[p];
+                sample_counts[pc[p].pix_id] = n_accumulated[p];
             }
         }
     }
