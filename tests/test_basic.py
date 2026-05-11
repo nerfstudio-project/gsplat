@@ -64,7 +64,6 @@ from gsplat.cuda._wrapper import (
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
 from gsplat.cuda._constants import ALPHA_THRESHOLD
-from tests.test_cameras import parse_lidar_camera
 from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
 
 device = torch.device("cuda:0")
@@ -1024,6 +1023,7 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
         ANGLE_TO_PIXEL_SCALING_FACTOR,
     )
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles_lidar
+    from tests.test_cameras import parse_lidar_camera
 
     torch.manual_seed(42)
 
@@ -2723,6 +2723,8 @@ def test_rasterize_to_pixels_eval3d(
 
     # Setup lidar
     if camera_model == "lidar":
+        from tests.test_cameras import parse_lidar_camera
+
         # This test consumes randomness before lidar setup, so fix the lidar
         # param seed explicitly to keep the preprocessing cache reusable.
         lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
