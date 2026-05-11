@@ -69,10 +69,23 @@ def get_build_parameters():
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Include paths -----------------------------------
-    extra_include_paths = [
-        os.path.join(PATH, "include/"),
-        os.path.join(current_dir, "csrc", "third_party", "glm"),
-    ]
+    if torch.version.hip:
+        # hipify generates a parallel gsplat/hip/{include,csrc} tree; the
+        # original cuda/... paths must stay visible for hipify's header walk.
+        # Hipified paths go FIRST so the compiler prefers them and <glm/...>
+        # resolves to a single tree (else `#pragma once` fails across paths).
+        hip_root = os.path.normpath(os.path.join(PATH, "..", "hip"))
+        extra_include_paths = [
+            os.path.join(hip_root, "include"),
+            os.path.join(hip_root, "csrc", "third_party", "glm"),
+            os.path.join(PATH, "include/"),
+            os.path.join(current_dir, "csrc", "third_party", "glm"),
+        ]
+    else:
+        extra_include_paths = [
+            os.path.join(PATH, "include/"),
+            os.path.join(current_dir, "csrc", "third_party", "glm"),
+        ]
 
     # Source files ------------------------------------
     sources = (
@@ -103,7 +116,10 @@ def get_build_parameters():
         extra_cflags += ["-arch", "arm64"]
         extra_ldflags += ["-arch", "arm64"]
 
-    extra_cuda_cflags += ["--forward-unknown-opts"]
+    if not torch.version.hip:
+        # nvcc-only: forward unrecognized flags to the host compiler.
+        # hipcc/clang++ rejects this argument.
+        extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
     # MSVC (cl) does not support -O3/-O0; use -O2/-Od (torch converts - to /)
@@ -131,7 +147,9 @@ def get_build_parameters():
 
     # Silencing of warnings
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
-    extra_cuda_cflags += ["-diag-suppress", "20012,186"]
+    if not torch.version.hip:
+        # nvcc-only diagnostic suppression. hipcc/clang++ uses -Wno-* instead.
+        extra_cuda_cflags += ["-diag-suppress", "20012,186"]
     if not os.name == "nt":
         extra_cflags += ["-Wno-attributes"]
         # #pragma unroll is standard CUDA idiom but unknown to gcc
@@ -171,6 +189,11 @@ def get_build_parameters():
         # USE_ROCM was added to later versions of PyTorch.
         # Define here to support older PyTorch versions as well:
         extra_cflags += ["-DUSE_ROCM", "-U__HIP_NO_HALF_CONVERSIONS__"]
+        extra_cuda_cflags += ["-DUSE_ROCM", "-U__HIP_NO_HALF_CONVERSIONS__"]
+        # Do NOT add -DGLM_FORCE_PURE — it disables GLM ext functions
+        # (length, quat_cast, rotate, slerp, mat3_cast, outerProduct,
+        # normalize) that gsplat needs. GLM's hipcc-rejection is fixed
+        # via the simd/platform.h source-patch below.
     else:
         extra_cuda_cflags += ["--expt-relaxed-constexpr"]
 
@@ -218,8 +241,50 @@ def get_build_parameters():
     )
 
 
+def _mirror_files_for_hip():
+    """Copy files that PyTorch's hipify pass skips into the auto-generated
+    `gsplat/hip/` tree so the hipified sources compile.
+
+    PyTorch's `cpp_extension.load()` auto-translates `.cu/.cuh/.cpp` under
+    `gsplat/cuda/csrc/` to `gsplat/hip/csrc/` when `torch.version.hip` is set,
+    but it skips:
+      - GLM `.inl` template-implementation files (relative-included from `.hpp`)
+      - `gsplat/cuda/csrc/*.h` declarations (Config.h, Rasterization.h, etc.)
+    Both must be present alongside the hipified sources for compilation.
+
+    This is a build-time mirror, idempotent, and creates no permanent state
+    in the source tree beyond the auto-generated `gsplat/hip/` directory.
+    """
+    cuda_csrc = os.path.join(PATH, "csrc")
+    hip_csrc = os.path.normpath(os.path.join(PATH, "..", "hip", "csrc"))
+    if not os.path.isdir(hip_csrc):
+        # First build: pre-create destination so mirror writes land here;
+        # cpp_extension.load() populates the rest on top.
+        os.makedirs(hip_csrc, exist_ok=True)
+
+    # Mirror GLM .inl files (preserve subdir structure)
+    glm_root = os.path.join(cuda_csrc, "third_party", "glm")
+    if os.path.isdir(glm_root):
+        for src in glob.glob(os.path.join(glm_root, "**", "*.inl"), recursive=True):
+            rel = os.path.relpath(src, cuda_csrc)
+            dst = os.path.join(hip_csrc, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
+                shutil.copy2(src, dst)
+
+    # Mirror csrc/*.h headers (declarations — no CUDA-only code in them)
+    for src in glob.glob(os.path.join(cuda_csrc, "*.h")):
+        dst = os.path.join(hip_csrc, os.path.basename(src))
+        if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
+            shutil.copy2(src, dst)
+
+
+
 def build_and_load_gsplat():
     build_params = get_build_parameters()
+
+    if torch.version.hip:
+        _mirror_files_for_hip()
 
     build_dir = jit._get_build_directory(build_params.name, verbose=False)
 

@@ -951,7 +951,7 @@ compute_opencv_fisheye_max_angle(float a, float b, float c) {
                 float angle = theta + i * two_third_pi;
                 float s = (t3 * std::cos(angle) - boc) / 3.0f;
                 if (s > 0.0f) {
-                    soln = std::min(soln, s);
+                    soln = std::fmin(soln, s);
                 }
             }
             return soln;
@@ -989,10 +989,10 @@ struct OpenCVFisheyeCameraModel
         dforward_poly_even = {1, 3 * k1, 5 * k2, 7 * k3, 9 * k4};
 
         auto const max_diag_x =
-            max(parameters.resolution[0] - parameters.principal_point[0],
+            std::fmax(parameters.resolution[0] - parameters.principal_point[0],
                 parameters.principal_point[0]);
         auto const max_diag_y =
-            max(parameters.resolution[1] - parameters.principal_point[1],
+            std::fmax(parameters.resolution[1] - parameters.principal_point[1],
                 parameters.principal_point[1]);
         auto const max_radius_pixels =
             std::sqrt(max_diag_x * max_diag_x + max_diag_y * max_diag_y);
@@ -1021,14 +1021,14 @@ struct OpenCVFisheyeCameraModel
         }
 
         max_angle =
-            min(max_angle,
-                max(max_radius_pixels / parameters.focal_length[0],
+            std::fmin(max_angle,
+                std::fmax(max_radius_pixels / parameters.focal_length[0],
                     max_radius_pixels / parameters.focal_length[1]));
 
         // approximate backward poly (mapping normalized distances to angles)
         // *very crudely* by linear interpolation / equidistant angle model
         // (also assuming image-centered principal point)
-        auto const max_normalized_dist = std::max(
+        auto const max_normalized_dist = std::fmax(
             parameters.resolution[0] / 2.f / parameters.focal_length[0],
             parameters.resolution[1] / 2.f / parameters.focal_length[1]
         );
