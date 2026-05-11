@@ -24,6 +24,13 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <cub/cub.cuh>
 
+#ifdef USE_ROCM
+// PyTorch's hipify translates `<cub/cub.cuh>` → `<hipcub/hipcub.hpp>` and
+// some `cub::Foo` symbols, but misses others (e.g. `cub::DoubleBuffer`).
+// This namespace alias lets all `cub::` references resolve to `hipcub::`.
+namespace cub = hipcub;
+#endif
+
 #include "Common.h"
 #include "Intersect.h"
 #include "Utils.cuh"

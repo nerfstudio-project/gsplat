@@ -146,8 +146,12 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     // each thread loads one gaussian at a time before rasterizing
     const uint32_t tr = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+#ifdef USE_ROCM
+    const int32_t warp_bin_final = _warp_butterfly_max(bin_final);
+#else
     const int32_t warp_bin_final =
         cg::reduce(warp, bin_final, cg::greater<int>());
+#endif
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before writing next batch of shared mem
         block.sync();

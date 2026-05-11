@@ -20,10 +20,17 @@
 
 #include "Common.h"
 
+#ifdef USE_ROCM
+// HIP: cg + reduce in one header; cuda/std/* doesn't exist (use libstdc++).
+#include <hip/hip_cooperative_groups.h>
+#include <limits>
+#include <type_traits>
+#else
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cuda/std/limits>
 #include <cuda/std/type_traits>
+#endif
 
 namespace gsplat {
 
@@ -34,11 +41,19 @@ namespace cg = cooperative_groups;
 template <typename T>
 __host__ __device__ constexpr bool is_near_zero(T x)
 {
+#ifdef USE_ROCM
+    static_assert(
+        std::is_floating_point_v<T>,
+        "is_near_zero requires a floating-point type"
+    );
+    return abs(x) < std::numeric_limits<T>::epsilon();
+#else
     static_assert(
         cuda::std::is_floating_point_v<T>,
         "is_near_zero requires a floating-point type"
     );
     return abs(x) < cuda::std::numeric_limits<T>::epsilon();
+#endif
 }
 
 ///////////////////////////////
@@ -115,34 +130,60 @@ inline __device__ void covarW2C_VJP(
 // Reduce
 ///////////////////////////////
 
+#ifdef USE_ROCM
+// HIP: ROCm cg lacks cg::reduce/plus/greater; manual butterfly via
+// __shfl_xor_sync (works on both backends). WarpT is unused under HIP —
+// warpSize is inferred (32 on RDNA3/4, 64 on CDNA); mask is 64-bit on AMD.
+template <typename T> inline __device__ T _warp_butterfly_sum(T val) {
+#pragma unroll
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        val += __shfl_xor_sync(0xffffffffffffffffULL, val, offset);
+    }
+    return val;
+}
+template <typename T> inline __device__ T _warp_butterfly_max(T val) {
+#pragma unroll
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+        T other = __shfl_xor_sync(0xffffffffffffffffULL, val, offset);
+        val = (val > other) ? val : other;
+    }
+    return val;
+}
+#define _GSPLAT_WARP_SUM(warp, v) _warp_butterfly_sum(v)
+#define _GSPLAT_WARP_MAX(warp, v) _warp_butterfly_max(v)
+#else
+#define _GSPLAT_WARP_SUM(warp, v) cg::reduce((warp), (v), cg::plus<float>())
+#define _GSPLAT_WARP_MAX(warp, v) cg::reduce((warp), (v), cg::greater<float>())
+#endif
+
 template <uint32_t DIM, class WarpT>
 inline __device__ void warpSum(float *val, WarpT &warp) {
 #pragma unroll
     for (uint32_t i = 0; i < DIM; i++) {
-        val[i] = cg::reduce(warp, val[i], cg::plus<float>());
+        val[i] = _GSPLAT_WARP_SUM(warp, val[i]);
     }
 }
 
 template <class WarpT> inline __device__ void warpSum(float &val, WarpT &warp) {
-    val = cg::reduce(warp, val, cg::plus<float>());
+    val = _GSPLAT_WARP_SUM(warp, val);
 }
 
 template <class WarpT> inline __device__ void warpSum(vec4 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
-    val.z = cg::reduce(warp, val.z, cg::plus<float>());
-    val.w = cg::reduce(warp, val.w, cg::plus<float>());
+    val.x = _GSPLAT_WARP_SUM(warp, val.x);
+    val.y = _GSPLAT_WARP_SUM(warp, val.y);
+    val.z = _GSPLAT_WARP_SUM(warp, val.z);
+    val.w = _GSPLAT_WARP_SUM(warp, val.w);
 }
 
 template <class WarpT> inline __device__ void warpSum(vec3 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
-    val.z = cg::reduce(warp, val.z, cg::plus<float>());
+    val.x = _GSPLAT_WARP_SUM(warp, val.x);
+    val.y = _GSPLAT_WARP_SUM(warp, val.y);
+    val.z = _GSPLAT_WARP_SUM(warp, val.z);
 }
 
 template <class WarpT> inline __device__ void warpSum(vec2 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
+    val.x = _GSPLAT_WARP_SUM(warp, val.x);
+    val.y = _GSPLAT_WARP_SUM(warp, val.y);
 }
 
 template <class WarpT> inline __device__ void warpSum(mat4 &val, WarpT &warp) {
@@ -164,7 +205,7 @@ template <class WarpT> inline __device__ void warpSum(mat2 &val, WarpT &warp) {
 }
 
 template <class WarpT> inline __device__ void warpMax(float &val, WarpT &warp) {
-    val = cg::reduce(warp, val, cg::greater<float>());
+    val = _GSPLAT_WARP_MAX(warp, val);
 }
 
 ///////////////////////////////

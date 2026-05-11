@@ -278,6 +278,33 @@ def _mirror_files_for_hip():
         if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
             shutil.copy2(src, dst)
 
+    # GLM's `simd/platform.h` checks `__CUDACC__` before `__HIP__`. hipcc
+    # defines both, so the CUDA branch wins and rejects with
+    # "GLM requires CUDA 7.0 or higher". Patch the SOURCE platform.h in
+    # the GLM submodule to gate the CUDA branch on `!defined(__HIP__)`
+    # (works under nvcc — `__HIP__` isn't defined there — and under
+    # hipcc — branch falls through to `__HIP__` block setting
+    # GLM_COMPILER_HIP). Idempotent.
+    #
+    # NOTE: this modifies the vendored GLM submodule. The change shows
+    # up as a dirty submodule in `git status`. To revert run
+    # `git submodule update --init gsplat/cuda/csrc/third_party/glm`.
+    # We patch the source (not the hipified copy) because PyTorch
+    # hipify reads the source each build and would otherwise overwrite
+    # any dest-side patch.
+    src_glm_platform = os.path.join(
+        cuda_csrc, "third_party", "glm", "glm", "simd", "platform.h"
+    )
+    if os.path.exists(src_glm_platform):
+        with open(src_glm_platform, "r") as f:
+            content = f.read()
+        original = "#elif defined(__CUDACC__)\n"
+        patched = "#elif defined(__CUDACC__) && !defined(__HIP__)\n"
+        if original in content and patched not in content:
+            new_content = content.replace(original, patched, 1)
+            with open(src_glm_platform, "w") as f:
+                f.write(new_content)
+
 
 
 def build_and_load_gsplat():

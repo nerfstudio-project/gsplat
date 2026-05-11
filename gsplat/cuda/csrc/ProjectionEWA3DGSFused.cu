@@ -488,6 +488,50 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     posW2C_VJP(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
     covarW2C_VJP(R, covar, v_covar_c, v_R, v_covar);
 
+#ifdef USE_ROCM
+    // HIP: ROCm cg lacks labeled_partition; emit per-thread atomicAdd.
+    if (v_means != nullptr) {
+        auto* p = v_means + bid * N * 3 + gid * 3;
+#pragma unroll
+        for (uint32_t i = 0; i < 3; i++) {
+            gpuAtomicAdd(p + i, v_mean[i]);
+        }
+    }
+    if (v_covars != nullptr) {
+        auto* p = v_covars + bid * N * 6 + gid * 6;
+        gpuAtomicAdd(p, v_covar[0][0]);
+        gpuAtomicAdd(p + 1, v_covar[0][1] + v_covar[1][0]);
+        gpuAtomicAdd(p + 2, v_covar[0][2] + v_covar[2][0]);
+        gpuAtomicAdd(p + 3, v_covar[1][1]);
+        gpuAtomicAdd(p + 4, v_covar[1][2] + v_covar[2][1]);
+        gpuAtomicAdd(p + 5, v_covar[2][2]);
+    } else {
+        mat3 rotmat = quat_to_rotmat(quat);
+        vec4 v_quat(0.f);
+        vec3 v_scale(0.f);
+        quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
+        auto* pq = v_quats + bid * N * 4 + gid * 4;
+        auto* ps = v_scales + bid * N * 3 + gid * 3;
+        gpuAtomicAdd(pq, v_quat[0]);
+        gpuAtomicAdd(pq + 1, v_quat[1]);
+        gpuAtomicAdd(pq + 2, v_quat[2]);
+        gpuAtomicAdd(pq + 3, v_quat[3]);
+        gpuAtomicAdd(ps, v_scale[0]);
+        gpuAtomicAdd(ps + 1, v_scale[1]);
+        gpuAtomicAdd(ps + 2, v_scale[2]);
+    }
+    if (v_viewmats != nullptr) {
+        auto* p = v_viewmats + bid * C * 16 + cid * 16;
+#pragma unroll
+        for (uint32_t i = 0; i < 3; i++) {
+#pragma unroll
+            for (uint32_t j = 0; j < 3; j++) {
+                gpuAtomicAdd(p + i * 4 + j, v_R[j][i]);
+            }
+            gpuAtomicAdd(p + i * 4 + 3, v_t[i]);
+        }
+    }
+#else
     // #if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
@@ -550,6 +594,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
             }
         }
     }
+#endif
 }
 
 void launch_projection_ewa_3dgs_fused_bwd_kernel(
