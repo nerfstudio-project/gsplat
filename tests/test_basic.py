@@ -62,7 +62,10 @@ from gsplat.cuda._wrapper import (
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
 from gsplat.cuda._constants import ALPHA_THRESHOLD
-from tests.test_cameras import parse_lidar_camera
+try:
+    from tests.test_cameras import parse_lidar_camera
+except pytest.skip.Exception:
+    parse_lidar_camera = None  # CameraWrappers not built; lidar tests will skip individually
 from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
 
 device = torch.device("cuda:0")
