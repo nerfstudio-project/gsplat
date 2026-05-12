@@ -21,7 +21,6 @@ freshly-reloaded copy of the module (to reset the process-wide
 ``_pending_captures`` / ``_next_capture_id`` state between cases).
 """
 
-import contextlib
 import glob
 import importlib
 import os
@@ -42,23 +41,13 @@ def load_profile(monkeypatch):
 
     Importing ``gsplat.profile`` via the real package would run ``gsplat``'s
     init (which pulls in CUDA-heavy modules unrelated to the decorator under
-    test). Instead, we stub ``gsplat`` with a minimal package shell and supply
-    a no-op ``gsplat.trace`` — the only symbol ``profile`` imports from it is
-    ``trace_range``, used solely by ``main()`` which these tests don't exercise.
+    test). Instead, we stub ``gsplat`` with a minimal package shell so the
+    submodule import resolves without triggering the full package init.
     """
 
     gsplat_pkg = types.ModuleType("gsplat")
     gsplat_pkg.__path__ = [str(PROFILE_PATH.parent)]
     monkeypatch.setitem(sys.modules, "gsplat", gsplat_pkg)
-
-    trace_module = types.ModuleType("gsplat.trace")
-
-    @contextlib.contextmanager
-    def _trace_range(*_args, **_kwargs):
-        yield
-
-    trace_module.trace_range = _trace_range
-    monkeypatch.setitem(sys.modules, "gsplat.trace", trace_module)
 
     sys.modules.pop("gsplat.profile", None)
     module = importlib.import_module("gsplat.profile")
