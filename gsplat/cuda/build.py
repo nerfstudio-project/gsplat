@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import os
+import re
 import shutil
 import time
 import glob
@@ -37,6 +38,19 @@ except ImportError as e:
             "Alternatively, upgrade to PyTorch >= 2.9."
         ) from e
     raise
+
+# `jit._get_build_directory` is a private/internal PyTorch helper (underscore
+# prefix; not in `torch.utils.cpp_extension.__all__`). Pin the dependency with
+# an attribute check so a torch upgrade that drops or renames it fails loudly
+# here instead of silently misdirecting the gtest harness to an empty build
+# directory.
+if not hasattr(jit, "_get_build_directory"):
+    raise RuntimeError(
+        "torch.utils.cpp_extension.jit._get_build_directory is missing — "
+        "PyTorch upgrade broke a private API gsplat relied on. Update "
+        "get_gsplat_build_directory in gsplat/cuda/build.py."
+    )
+
 from contextlib import nullcontext, contextmanager
 
 try:
@@ -241,10 +255,71 @@ def get_build_parameters():
     )
 
 
+def get_gsplat_build_directory(build_params=None):
+    if build_params is None:
+        build_params = get_build_parameters()
+    return jit._get_build_directory(build_params.name, verbose=False)
+
+
+def _objects_in_build(build_dir):
+    # Object files in `build_dir` that the current build.ninja still
+    # references. PyTorch's JIT doesn't clean stale `.o` files when a
+    # source is renamed or removed, so a raw glob would pick up dead
+    # intermediates. A `.o` whose basename no longer appears as a
+    # word-delimited token in `build.ninja` is no longer part of the
+    # current build graph. The word-boundary anchor prevents a future
+    # rename from silently matching a basename that is a substring of
+    # another (e.g. `Foo.o` matching inside `BarFoo.o`).
+    ninja_path = os.path.join(build_dir, "build.ninja")
+    if not os.path.exists(ninja_path):
+        raise RuntimeError(f"Expected JIT build file does not exist: {ninja_path}")
+
+    with open(ninja_path, "r", encoding="utf-8") as f:
+        ninja_text = f.read()
+
+    objects = sorted(
+        glob.glob(os.path.join(build_dir, "*.o"))
+        + glob.glob(os.path.join(build_dir, "*.obj"))
+    )
+    return [
+        obj
+        for obj in objects
+        if re.search(r"\b" + re.escape(os.path.basename(obj)) + r"\b", ninja_text)
+    ]
+
+
+def get_gsplat_core_objects(build_params=None, build_dir=None):
+    if build_params is None:
+        build_params = get_build_parameters()
+    if build_dir is None:
+        build_dir = get_gsplat_build_directory(build_params)
+
+    objects = _objects_in_build(build_dir)
+    core_objects = []
+    for obj in objects:
+        base = os.path.basename(obj)
+        # ext.cpp owns the Python module entrypoint and dispatcher registration.
+        # Native tests link against implementation objects directly.
+        if base.startswith("ext."):
+            continue
+        core_objects.append(obj)
+
+    missing = [obj for obj in core_objects if not os.path.exists(obj)]
+    if missing:
+        raise RuntimeError(
+            "JIT build did not produce expected gsplat objects:\n" + "\n".join(missing)
+        )
+    if not core_objects:
+        raise RuntimeError(
+            "No reusable gsplat core objects were found in the JIT build"
+        )
+    return core_objects
+
+
 def build_and_load_gsplat():
     build_params = get_build_parameters()
 
-    build_dir = jit._get_build_directory(build_params.name, verbose=False)
+    build_dir = get_gsplat_build_directory(build_params)
 
     # If JIT is interrupted it might leave a lock in the build directory.
     # We dont want it to exist in any case.
@@ -365,4 +440,9 @@ def build_and_load_gsplat():
                 os.environ.pop(envvar)
 
 
-__all__ = ["get_build_parameters"]
+__all__ = [
+    "build_and_load_gsplat",
+    "get_build_parameters",
+    "get_gsplat_build_directory",
+    "get_gsplat_core_objects",
+]
