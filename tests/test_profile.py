@@ -23,6 +23,7 @@ freshly-reloaded copy of the module (to reset the process-wide
 
 import glob
 import importlib
+import math
 import os
 import re
 import sys
@@ -384,3 +385,46 @@ def test_exit_waits_for_all_pending_decorators(load_profile, monkeypatch, tmp_pa
     with pytest.raises(SystemExit):
         fn_b(torch.tensor([0.0]))
     assert len(_saved_files(stem_b)) == 1
+
+
+# --- Override-parsing helpers (`_parse_override_value`, `_parse_input_override`)
+# Reached via the ``load_profile`` fixture so the gsplat package init (which
+# pulls in CUDA-heavy modules) is not triggered at test-collection time.
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("8", 8),
+        ("8.5", 8.5),
+        ("true", True),
+        ("False", False),
+        ("null", None),
+        ("None", None),
+        ("[1, 2, 3]", [1, 2, 3]),
+        ("(1, 2)", (1, 2)),
+        ('"pinhole"', "pinhole"),
+        ("pinhole", "pinhole"),
+        ("", ""),
+    ],
+)
+def test_parse_override_value(raw, expected, load_profile):
+    assert load_profile._parse_override_value(raw) == expected
+
+
+def test_parse_override_value_nan(load_profile):
+    assert math.isnan(load_profile._parse_override_value("nan"))
+
+
+def test_parse_input_override(load_profile):
+    assert load_profile._parse_input_override("tile_size=8") == ("tile_size", 8)
+    assert load_profile._parse_input_override(" camera_model = ftheta ") == (
+        "camera_model",
+        "ftheta",
+    )
+
+
+@pytest.mark.parametrize("raw", ["tile_size", "=8", "camera.foo=1", "a[0]=1"])
+def test_parse_input_override_rejects_bad_names(raw, load_profile):
+    with pytest.raises(ValueError):
+        load_profile._parse_input_override(raw)

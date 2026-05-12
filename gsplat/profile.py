@@ -137,7 +137,9 @@ kernel filters as needed.
 
 """
 
+import ast
 import inspect
+import json
 import os
 import time
 from functools import wraps
@@ -171,6 +173,49 @@ profiler = {}
 
 # Parameter names that should have requires_grad=True for backward pass
 _GRAD_PARAMS = {"means", "quats", "scales", "opacities", "colors", "extra_signals"}
+
+
+def _parse_override_value(raw: str) -> Any:
+    """Parse a command-line override value into a Python scalar/container."""
+    value = raw.strip()
+    if not value:
+        return ""
+
+    lowered = value.lower()
+    if lowered == "none":
+        return None
+    if lowered == "nan":
+        return float("nan")
+    if lowered == "inf":
+        return float("inf")
+    if lowered == "-inf":
+        return float("-inf")
+
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        pass
+
+    try:
+        return ast.literal_eval(value)
+    except (SyntaxError, ValueError):
+        return value
+
+
+def _parse_input_override(raw: str) -> tuple[str, Any]:
+    """Parse a single NAME=VALUE replay-input override."""
+    if "=" not in raw:
+        raise ValueError(f"expected NAME=VALUE, got {raw!r}")
+    name, raw_value = raw.split("=", 1)
+    name = name.strip()
+    if not name:
+        raise ValueError(f"override name cannot be empty in {raw!r}")
+    if "." in name or "[" in name or "]" in name:
+        raise ValueError(
+            f"override name must be a top-level rasterization argument, got {name!r}"
+        )
+    return name, _parse_override_value(raw_value)
+
 
 # --- Input capture registry ---
 # Tracks all active capture_inputs decorators so the program only exits when
@@ -470,6 +515,20 @@ def main() -> None:
             "Mutually exclusive with --ensure-rays."
         ),
     )
+    parser.add_argument(
+        "--set",
+        "--override",
+        dest="overrides",
+        metavar="NAME=VALUE",
+        action="append",
+        default=[],
+        help=(
+            "Override a top-level rasterization replay argument. Values are "
+            "parsed as JSON/Python literals when possible, with unquoted "
+            "strings left as strings. May be passed multiple times, e.g. "
+            "--set tile_size=8 --set packed=False."
+        ),
+    )
     args = parser.parse_args()
     if args.ensure_rays and args.no_rays:
         parser.error("--ensure-rays and --no-rays are mutually exclusive")
@@ -487,6 +546,22 @@ def main() -> None:
             and inputs[k].is_floating_point()
         ):
             inputs[k] = inputs[k].requires_grad_(True)
+
+    rasterization_params = inspect.signature(rasterization).parameters
+    for raw_override in args.overrides:
+        try:
+            name, value = _parse_input_override(raw_override)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if name not in rasterization_params:
+            parser.error(
+                f"unknown rasterization argument {name!r}; "
+                f"expected one of {', '.join(rasterization_params)}"
+            )
+        inputs[name] = value
+        print(
+            f"[gsplat.profile] override {name}={value!r} " f"({type(value).__name__})"
+        )
 
     if args.no_rays:
         if inputs.get("rays") is None:
