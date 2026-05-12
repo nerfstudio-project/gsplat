@@ -3736,6 +3736,56 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...]):
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("sh_degree", [1, 3])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_rasterization_packed(test_data, sh_degree: int, batch_dims: Tuple[int, ...]):
+    # Regression for the deduplicated SH layout. With B = prod(batch_dims) > 1
+    # and packed=True, `colors.view(B, N, K, 3)` on shape [N, K, 3] used to
+    # fail (only N*K*3 elements). Verifies both rasterization paths run and
+    # agree, and that gradients flow back into the shared [N, K, 3] buffer.
+    torch.manual_seed(42)
+
+    N = test_data["means"].shape[-2]
+    K = (sh_degree + 1) ** 2
+
+    data = expand(test_data, batch_dims)
+    # SH coeffs are deduplicated: [N, K, 3] regardless of batch_dims.
+    coeffs = torch.randn(N, K, 3, device=device, requires_grad=True)
+
+    common = dict(
+        means=data["means"],
+        quats=data["quats"],
+        scales=data["scales"],
+        opacities=data["opacities"],
+        viewmats=data["viewmats"],
+        Ks=data["Ks"],
+        width=data["width"],
+        height=data["height"],
+        sh_degree=sh_degree,
+    )
+
+    out_packed, alpha_packed, _ = gsplat.rasterization(
+        colors=coeffs, packed=True, **common
+    )
+    v_coeffs_packed = torch.autograd.grad(out_packed.sum(), coeffs)[0]
+
+    out_unpacked, alpha_unpacked, _ = gsplat.rasterization(
+        colors=coeffs, packed=False, **common
+    )
+    v_coeffs_unpacked = torch.autograd.grad(out_unpacked.sum(), coeffs)[0]
+
+    assert out_packed.shape == out_unpacked.shape, (
+        out_packed.shape,
+        out_unpacked.shape,
+    )
+    torch.testing.assert_close(out_packed, out_unpacked, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(alpha_packed, alpha_unpacked, rtol=1e-4, atol=1e-4)
+    assert v_coeffs_packed.shape == (N, K, 3), v_coeffs_packed.shape
+    torch.testing.assert_close(v_coeffs_packed, v_coeffs_unpacked, rtol=1e-3, atol=1e-3)
+
+
 # ============================================================================
 # NaN/wrong-value safety tests for the 3DGUT code path
 # ============================================================================
