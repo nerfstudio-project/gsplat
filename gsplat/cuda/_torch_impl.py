@@ -769,20 +769,16 @@ def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):
 
 def _spherical_harmonics(
     degrees_to_use: int,
-    dirs: torch.Tensor,  # [..., 3]
-    coeffs: torch.Tensor,  # [..., K, 3]
+    dirs: torch.Tensor,  # [..., N, 3]
+    coeffs: torch.Tensor,  # [N, K, 3]
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.spherical_harmonics()`."""
-    assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
-    batch_dims = dirs.shape[:-1]
-    assert dirs.shape == batch_dims + (3,), dirs.shape
-    assert (
-        (len(coeffs.shape) == len(batch_dims) + 2)
-        and coeffs.shape[:-2] == batch_dims
-        and coeffs.shape[-1] == 3
-    ), coeffs.shape
+    from ._wrapper import _validate_sh_shapes
+
+    _validate_sh_shapes(degrees_to_use, dirs, coeffs, masks=None)
+    K = coeffs.shape[1]
     dirs = F.normalize(dirs, p=2, dim=-1)
     num_bases = (degrees_to_use + 1) ** 2
-    bases = torch.zeros_like(coeffs[..., 0])
+    bases = coeffs.new_zeros(dirs.shape[:-1] + (K,))
     bases[..., :num_bases] = _eval_sh_bases_fast(num_bases, dirs)
     return (bases[..., None] * coeffs).sum(dim=-2)
