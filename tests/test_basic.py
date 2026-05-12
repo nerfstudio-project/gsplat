@@ -3712,18 +3712,13 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...]):
     torch.manual_seed(42)
 
     N = 1000
-    test_data = {
-        "coeffs": torch.randn(N, (4 + 1) ** 2, 3, device=device),
-        "dirs": torch.randn(N, 3, device=device),
-    }
-    test_data = expand(test_data, batch_dims)
-    coeffs = test_data["coeffs"]
-    dirs = test_data["dirs"]
-    coeffs.requires_grad = True
-    dirs.requires_grad = True
+    K = (4 + 1) ** 2
+    coeffs = torch.randn(N, K, 3, device=device, requires_grad=True)
+    dirs = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
 
     colors = spherical_harmonics(sh_degree, dirs, coeffs)
     _colors = _spherical_harmonics(sh_degree, dirs, coeffs)
+    assert colors.shape == (*batch_dims, N, 3), colors.shape
     torch.testing.assert_close(colors, _colors, rtol=1e-4, atol=1e-4)
 
     v_colors = torch.randn_like(colors)
@@ -3734,8 +3729,10 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...]):
     _v_coeffs, _v_dirs = torch.autograd.grad(
         (_colors * v_colors).sum(), (coeffs, dirs), retain_graph=True, allow_unused=True
     )
+    assert v_coeffs.shape == (N, K, 3), v_coeffs.shape
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
+        assert v_dirs.shape == dirs.shape, v_dirs.shape
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
 
 
