@@ -148,7 +148,12 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 import torch
 from torch.utils._pytree import tree_map
 
-from gsplat.trace import trace_range
+# NOTE: do NOT import anything from the ``gsplat`` package at module scope —
+# importing ``gsplat`` runs its ``__init__.py``, which pulls in the CUDA
+# wrapper modules and triggers JIT compilation of the C++ extension. Users
+# of ``capture_inputs`` (notably ``gsplat.rendering``) should be able to
+# decorate their functions without paying that cost up-front. All gsplat
+# imports must be performed lazily inside the functions that need them.
 
 
 def _detach_for_capture(x: Any) -> Any:
@@ -429,6 +434,7 @@ def main() -> None:
     import argparse
 
     from gsplat.rendering import rasterization
+    from gsplat.trace import trace_range
 
     parser = argparse.ArgumentParser(description="GSplat profiling harness")
     parser.add_argument(
