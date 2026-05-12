@@ -675,23 +675,12 @@ def rasterization(
                     features.dim() == num_batch_dims + 2
                 ), f"Distributed mode only supports per-Gaussian {name}."
         else:
-            # treat features as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
-            # Allowing for activating partial SH bands
+            # treat features as SH coefficients in the deduplicated [N, K, 3] layout,
+            # shared across batch and camera dims. Allowing for activating partial SH bands.
             assert (
-                features.dim() == num_batch_dims + 3
-                and features.shape[:-2] == batch_dims + (N,)
-                and channels == 3
-            ) or (
-                features.dim() == num_batch_dims + 4
-                and features.shape[:-2] == batch_dims + (C, N)
-                and channels == 3
-            ), f"{name}'s shape {features.shape=} must be either {(*batch_dims, N, 3)} or {(*batch_dims, C, N, 3)}"
-
+                features.dim() == 3 and features.shape[0] == N and channels == 3
+            ), f"{name}'s shape {features.shape=} must be (N, K, 3) with N={N}"
             assert (sh_degree + 1) ** 2 <= features.shape[-2], features.shape
-            if distributed:
-                assert (
-                    features.dim() == num_batch_dims + 3
-                ), f"Distributed mode only supports per-Gaussian {name}."
 
     # Skip colors validation for depth-only modes (colors are ignored/overwritten)
     if has_color:
@@ -942,9 +931,7 @@ def rasterization(
             trace_push("colors")
             if colors_sh_degree is not None:
                 if gaussian_ids is not None:
-                    colors = colors.view(B, N, *colors.shape[-2:])[
-                        batch_ids, gaussian_ids
-                    ]
+                    colors = colors[gaussian_ids]
                 colors = spherical_harmonics(
                     colors_sh_degree, dirs, colors, masks=valid_gaussians
                 )
@@ -968,9 +955,7 @@ def rasterization(
             trace_push("extra")
             if extra_signals_sh_degree is not None:
                 if gaussian_ids is not None:
-                    extra_signals = extra_signals.view(B, N, *extra_signals.shape[-2:])[
-                        batch_ids, gaussian_ids
-                    ]
+                    extra_signals = extra_signals[gaussian_ids]
                 extra_signals = spherical_harmonics(
                     extra_signals_sh_degree,
                     dirs,
@@ -2276,7 +2261,7 @@ def rasterization_2dgs(
         if packed:
             dirs = means[..., gaussian_ids, :] - camtoworlds[..., camera_ids, :3, 3]
             # Gather per-Gaussian coeffs to match the [nnz, K, 3] dirs.
-            shs = colors.view(B, N, *colors.shape[-2:])[batch_ids, gaussian_ids]
+            shs = colors[gaussian_ids]
         else:
             dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]
             shs = colors
