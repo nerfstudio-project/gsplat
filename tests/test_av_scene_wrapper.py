@@ -18,12 +18,64 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 
 from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
+
+
+@pytest.fixture
+def av_train_env(monkeypatch, tmp_path):
+    """Patch av_trainer.train() for CPU-only control-flow tests.
+
+    This bypasses real scene loading, Gaussian initialization, rendering, and
+    CUDA memory stats. It does not exercise real AV training or gsplat
+    rasterization.
+    """
+    scene = make_av_scene()
+    result_dir = str(tmp_path / "av_train")
+
+    def fake_load_scene(path: str, device: str = "cuda") -> SimpleNamespace:
+        del path, device
+        return scene
+
+    def fake_init_gaussians_from_lidar(
+        loaded_scene: SimpleNamespace, device: str = "cuda", **_kwargs
+    ) -> torch.nn.ParameterDict:
+        del loaded_scene, device
+        return make_av_splats()
+
+    def fake_render_gaussians(*_args, splats=None, **kwargs):
+        height = kwargs.get("H", 8)
+        width = kwargs.get("W", 8)
+        base = splats["means"].sum() * 0.0
+        return (
+            base + torch.full((1, height, width, 4), 0.25),
+            base + torch.full((1, height, width, 1), 0.5),
+            {},
+            torch.exp(splats["scales"]),
+            torch.sigmoid(splats["opacities"]),
+        )
+
+    monkeypatch.setattr(av_trainer, "load_scene", fake_load_scene)
+    monkeypatch.setattr(
+        av_trainer, "init_gaussians_from_lidar", fake_init_gaussians_from_lidar
+    )
+    monkeypatch.setattr(av_trainer, "render_gaussians", fake_render_gaussians)
+    monkeypatch.setattr(
+        torch.cuda, "reset_peak_memory_stats", lambda: None, raising=False
+    )
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0, raising=False)
+
+    return SimpleNamespace(
+        av_trainer=av_trainer,
+        scene=scene,
+        result_dir=result_dir,
+        monkeypatch=monkeypatch,
+    )
 
 
 def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
