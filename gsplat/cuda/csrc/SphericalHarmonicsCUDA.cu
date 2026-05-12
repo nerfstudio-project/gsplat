@@ -429,7 +429,8 @@ void launch_spherical_harmonics_fwd_kernel(
 ) {
     const uint32_t K = coeffs.size(-2);
     const uint32_t N = coeffs.size(-3);
-    const uint32_t B = dirs.numel() / (N * 3);
+    const uint32_t B =
+        c10::multiply_integers(dirs.sizes().slice(0, dirs.dim() - 2));
 
     // parallelize over B * N * 3
     int64_t n_elements = B * N * 3;
@@ -522,7 +523,8 @@ void launch_spherical_harmonics_bwd_kernel(
 ) {
     const uint32_t K = coeffs.size(-2);
     const uint32_t N = coeffs.size(-3);
-    const uint32_t B = dirs.numel() / (N * 3);
+    const uint32_t B =
+        c10::multiply_integers(dirs.sizes().slice(0, dirs.dim() - 2));
 
     // parallelize over B * N * 3
     int64_t n_elements = B * N * 3;
