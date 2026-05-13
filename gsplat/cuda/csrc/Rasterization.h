@@ -19,7 +19,9 @@
 #pragma once
 
 #include <cstdint>
+#include <tuple>
 #include "Cameras.h"
+#include "Config.h"
 #include "Ops.h"
 #include "ExternalDistortion.h"
 
@@ -212,103 +214,116 @@ void launch_rasterize_to_indices_2dgs_kernel(
 // rasterize_to_pixels_from_world_3dgs
 ///////////////////////////////////////////////////
 
-void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
-    // Gaussian parameters
+struct RasterizeToPixelsFromWorld3DGSFwdResult {
+    at::Tensor renders;
+    at::Tensor alphas;
+    at::Tensor last_ids;
+    at::Tensor chunks_per_tile;
+    at::Tensor chunk_offsets;
+    at::Tensor fwd_chunk_state;
+};
+
+// Internal C++ forward entry point. Returns fwd_chunk_state so callers
+// that drive backward can reuse the CSR layout forward already paid the
+// D2H sync for; forward-only callers discard it.
+RasterizeToPixelsFromWorld3DGSFwdResult
+rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor means,     // [..., N, 3]
     const at::Tensor quats,     // [..., N, 4]
     const at::Tensor scales,    // [..., N, 3]
     const at::Tensor colors,    // [..., C, N, channels] or [nnz, channels]
-    const at::Tensor opacities, // [..., C, N]  or [nnz]
+    const at::Tensor opacities, // [..., C, N] or [nnz]
     const at::optional<at::Tensor> backgrounds, // [..., C, channels]
     const at::optional<at::Tensor> masks,       // [..., C, tile_height, tile_width]
-    // image size
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const uint32_t tile_size,
-    // camera
+    uint32_t image_width, uint32_t image_height, uint32_t tile_size,
     const at::Tensor viewmats0,               // [..., C, 4, 4]
     const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
     const at::Tensor Ks,                      // [..., C, 3, 3]
-    const CameraModelType camera_model,
-    // uncented transform
+    CameraModelType camera_model,
     const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
-    const at::optional<at::Tensor> rays, // [..., C, H, W, 6]
+    const at::optional<at::Tensor> rays,              // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
-    // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
-    const bool use_hit_distance,
-    // CSR chunk structure (precomputed by caller, shared with bwd)
-    const at::Tensor chunks_per_tile, // [num_tiles] int32
-    const at::Tensor chunk_offsets,   // [num_tiles + 1] int32
-    const int64_t total_chunks,       // scalar; equals chunk_offsets[num_tiles]
-    // outputs
-    at::Tensor renders, // [..., C, image_height, image_width, channels]
-    at::Tensor alphas,  // [..., C, image_height, image_width]
-    at::Tensor last_ids, // [..., C, image_height, image_width]
-    at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
-    at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3]
-    at::Tensor fwd_chunk_state // [total_chunks, pixels_per_tile, 1 + CDIM + 3] fp32, persisted cumulative state for bwd reuse
+    bool use_hit_distance,
+    const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
+    const at::optional<at::Tensor> normals // [..., C, image_height, image_width, 3] optional output tensor
 );
 
-void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
-    // Gaussian parameters
-    const at::Tensor means,  // [..., N, 3]
-    const at::Tensor quats,  // [..., N, 4]
-    const at::Tensor scales, // [..., N, 3]
-    const at::Tensor colors,                    // [..., C, N, 3] or [nnz, 3]
-    const at::Tensor opacities,                 // [..., C, N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., C, 3]
-    const at::optional<at::Tensor> masks,       // [..., C, tile_height, tile_width]
-    // image size
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const uint32_t tile_size,
-    // camera
-    const at::Tensor viewmats0,               // [..., C, 4, 4]
-    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
-    const at::Tensor Ks,                      // [..., C, 3, 3]
-    const CameraModelType camera_model,
-    // uncented transform
+// Public op result type. The dispatcher entry points below return this and
+// the pybind binding TU resolves their symbols through this header.
+using RasterizeToPixelsFromWorld3DGSResult = std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::optional<at::Tensor>,
+    at::optional<at::Tensor>>;
+
+// CUDA-key dispatcher entry for rasterize_to_pixels_from_world_3dgs.
+// Defined in Rasterization.cpp; bound to the public op in ext.cpp.
+RasterizeToPixelsFromWorld3DGSResult
+rasterize_to_pixels_from_world_3dgs(
+    const at::Tensor &means,     // [..., N, 3]
+    const at::Tensor &quats,     // [..., N, 4]
+    const at::Tensor &scales,    // [..., N, 3]
+    const at::Tensor &colors,    // [..., C, N, channels] or [nnz, channels]
+    const at::Tensor &opacities, // [..., C, N] or [nnz]
+    const at::optional<at::Tensor> &backgrounds, // [..., C, channels]
+    const at::optional<at::Tensor> &masks,       // [..., C, tile_height, tile_width]
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> &viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor &Ks,                      // [..., C, 3, 3]
+    int64_t camera_model,
     const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
-    ShutterType rs_type,
-    const at::optional<at::Tensor> rays, // [..., C, H, W, 6]
-    const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
-    const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    int64_t rs_type,
+    const at::optional<at::Tensor> &rays,              // [..., C, H, W, 6]
+    const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> &thin_prism_coeffs, // [..., C, 4] optional
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
-    // intersections
-    const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
-    const bool use_hit_distance,
-    // forward outputs
-    const at::Tensor render_alphas, // [..., C, image_height, image_width, 1]
-    const at::Tensor last_ids,      // [..., C, image_height, image_width]
-    // gradients of outputs
-    const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
-    const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
-    const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
-    // CSR chunk structure (precomputed by forward)
-    const at::Tensor chunks_per_tile, // [num_tiles] int32
-    const at::Tensor chunk_offsets,   // [num_tiles + 1] int32
-    const int64_t total_chunks,       // scalar; equals chunk_offsets[num_tiles]
-    // Per-chunk cumulative (T, pix_out, normal_out) persisted by the fwd pass.
-    const at::Tensor fwd_chunk_state, // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
-    // outputs
-    at::Tensor v_means,      // [..., N, 3]
-    at::Tensor v_quats,      // [..., N, 4]
-    at::Tensor v_scales,     // [..., N, 3]
-    at::Tensor v_colors,     // [..., C, N, 3] or [nnz, 3]
-    at::Tensor v_opacities,  // [..., C, N] or [nnz]
-    at::optional<at::Tensor> v_rays // [..., C, image_height, image_width, 6]
-) ;
+    const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    bool return_sample_counts, bool use_hit_distance, bool return_normals
+);
+
+// Autograd-key dispatcher entry for rasterize_to_pixels_from_world_3dgs.
+// Routes through the C++ custom autograd Function so backward is owned by
+// the extension. Defined in Rasterization.cpp; bound in ext.cpp.
+RasterizeToPixelsFromWorld3DGSResult
+rasterize_to_pixels_from_world_3dgs_autograd(
+    const at::Tensor &means,     // [..., N, 3]
+    const at::Tensor &quats,     // [..., N, 4]
+    const at::Tensor &scales,    // [..., N, 3]
+    const at::Tensor &colors,    // [..., C, N, channels] or [nnz, channels]
+    const at::Tensor &opacities, // [..., C, N] or [nnz]
+    const at::optional<at::Tensor> &backgrounds, // [..., C, channels]
+    const at::optional<at::Tensor> &masks,       // [..., C, tile_height, tile_width]
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> &viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor &Ks,                      // [..., C, 3, 3]
+    int64_t camera_model,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &rays,              // [..., C, H, W, 6]
+    const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> &thin_prism_coeffs, // [..., C, 4] optional
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    bool return_sample_counts, bool use_hit_distance, bool return_normals
+);
 
 } // namespace gsplat

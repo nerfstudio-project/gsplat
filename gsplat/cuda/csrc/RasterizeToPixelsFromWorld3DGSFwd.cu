@@ -28,8 +28,8 @@
 
 #include "Common.h"
 #include "ExternalDistortion.cuh"
-#include "Rasterization.h"
 #include "RasterizeChunkCSR.h"
+#include "RasterizeToPixelsFromWorld3DGS.h"
 #include "RasterizeToPixelsFromWorld3DGS.cuh"
 #include "Cameras.cuh"
 #include "Lidars.cuh"

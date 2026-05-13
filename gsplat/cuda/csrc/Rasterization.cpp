@@ -23,12 +23,15 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/csrc/autograd/custom_function.h>
 
 #include "Config.h"
 #include "Common.h"
 #include "Ops.h"
 #include "Rasterization.h"
 #include "RasterizeChunkCSR.h"
+#include "RasterizeToPixelsFromWorld3DGS.h"
+#include "TorchUtils.h"
 #include "Cameras.h"
 
 namespace gsplat {
@@ -593,15 +596,15 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 // 3DGS (from world)
 ////////////////////////////////////////////////////
 
-#if GSPLAT_BUILD_3DGUT
+// Keep the eval3d dispatcher entry points out of Ops.h. `ext.cpp` declares only
+// the public schema; this translation unit registers the CUDA and AutogradCUDA
+// kernels below. Native C++ tests include Rasterization.h for the internal
+// functions they intentionally exercise.
 
-// fwd impl returns (renders, alphas, last_ids, chunks_per_tile, chunk_offsets,
-// fwd_chunk_state). The last three comprise the CSR-packed chunk state that
-// the backward pass consumes to skip the per-Gaussian preamble work it would
-// otherwise have to recompute; they are lifted from the bwd impl (previously
-// recomputed every backward) and pinned in `ctx.save_for_backward` so fwd
-// pays this cost exactly once per iteration instead of once per backward.
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd_impl(
+// The forward result includes public render outputs plus the CSR-packed chunk
+// state that backward consumes to skip per-Gaussian preamble work it would
+// otherwise have to recompute.
+RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
     const at::Tensor quats,     // [..., N, 4]
@@ -611,18 +614,17 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     const at::optional<at::Tensor> backgrounds, // [..., C, channels]
     const at::optional<at::Tensor> masks,       // [..., C, tile_height, tile_width]
     // image size
-    const uint32_t image_width,
-    const uint32_t image_height,
+    const uint32_t image_width, const uint32_t image_height,
     const uint32_t tile_size,
     // camera
     const at::Tensor viewmats0,               // [..., C, 4, 4]
     const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
     const at::Tensor Ks,                      // [..., C, 3, 3]
     const CameraModelType camera_model,
-    // uncented transform
+    // unscented transform
     const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
-    const at::optional<at::Tensor> rays, // [..., C, H, W, 6]
+    const at::optional<at::Tensor> rays,              // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
@@ -636,6 +638,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> normals // [..., C, image_height, image_width, 3] optional output tensor
 ) {
+#if !GSPLAT_BUILD_3DGUT
+    TORCH_CHECK(
+        false,
+        "rasterize_to_pixels_from_world_3dgs_fwd requires "
+        "GSPLAT_BUILD_3DGUT=1"
+    );
+    return {};
+#else
+    // --- Validate inputs ---------------------------------------------------
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     CHECK_INPUT(quats);
@@ -664,6 +675,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
         CHECK_INPUT(sample_counts.value());
     }
 
+    // --- Allocate public forward outputs ----------------------------------
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
     uint32_t C = viewmats0.size(-3);     // number of cameras
@@ -682,12 +694,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     last_ids_shape.append({C, image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_shape, opt.dtype(at::kInt));
 
-    // --- CSR chunk structure + fwd persistence buffer ---------------------
-    // Compute (chunks_per_tile, chunk_offsets, total_chunks) here so both
-    // fwd and bwd share the same CSR layout. Previously bwd recomputed
-    // these on every backward; pulling them into fwd lets us reuse the
-    // result via `save_for_backward`. The shared helper lives in
-    // `RasterizeChunkCSR.h` (impl in bwd `.cu`).
+    // --- Build CSR chunk structure + forward persistence buffer -----------
+    // Compute (chunks_per_tile, chunk_offsets, total_chunks) here so bwd can
+    // reuse the same CSR layout via save_for_backward. The blocking
+    // chunk_offsets[-1].item() D2H sync happens once across fwd+bwd instead
+    // of twice. The shared helper lives in `RasterizeChunkCSR.h` (impl in
+    // bwd `.cu`).
     const uint32_t tile_height = static_cast<uint32_t>(tile_offsets.size(-2));
     const uint32_t tile_width = static_cast<uint32_t>(tile_offsets.size(-1));
     int64_t batch_prod = 1;
@@ -719,51 +731,476 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
         {total_chunks, static_cast<int64_t>(pixels_per_tile), state_dim},
         opt.dtype(at::kFloat));
 
+    // --- Launch shared forward kernel -------------------------------------
+    // CUDA dispatch returns only the public outputs; AutogradCUDA also saves
+    // the chunk state for backward.
     launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
-        means,
-        quats,
-        scales,
-        colors,
-        opacities,
-        backgrounds,
-        masks,
-        image_width,
-        image_height,
-        tile_size,
-        viewmats0,
-        viewmats1,
-        Ks,
-        camera_model,
-        ut_params,
-        rs_type,
-        rays,
-        radial_coeffs,
-        tangential_coeffs,
-        thin_prism_coeffs,
-        ftheta_coeffs,
-        lidar_coeffs,
-        external_distortion_params,
-        tile_offsets,
-        flatten_ids,
-        use_hit_distance,
-        chunks_per_tile,
-        chunk_offsets,
-        total_chunks,
-        renders,
-        alphas,
-        last_ids,
-        sample_counts,
-        normals,
-        fwd_chunk_state
+        means, quats, scales, colors, opacities,
+        backgrounds, masks,
+        image_width, image_height, tile_size,
+        viewmats0, viewmats1, Ks,
+        camera_model, ut_params, rs_type,
+        rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        ftheta_coeffs, lidar_coeffs, external_distortion_params,
+        tile_offsets, flatten_ids, use_hit_distance,
+        chunks_per_tile, chunk_offsets, total_chunks,
+        renders, alphas, last_ids,
+        sample_counts, normals, fwd_chunk_state
     );
 
-    return std::make_tuple(renders, alphas, last_ids, chunks_per_tile,
-                           chunk_offsets, fwd_chunk_state);
+    return {
+        .renders = renders,
+        .alphas = alphas,
+        .last_ids = last_ids,
+        .chunks_per_tile = chunks_per_tile,
+        .chunk_offsets = chunk_offsets,
+        .fwd_chunk_state = fwd_chunk_state,
+    };
+#endif // !GSPLAT_BUILD_3DGUT
+}
+
+#if GSPLAT_BUILD_3DGUT
+
+namespace {
+
+struct Eval3DOptionalOutputs {
+    at::optional<at::Tensor> sample_counts;
+    at::optional<at::Tensor> normals;
 };
 
-#endif
+Eval3DOptionalOutputs
+allocate_eval3d_optional_outputs(
+    const at::Tensor &means,
+    const at::Tensor &viewmats0,
+    int64_t image_width,
+    int64_t image_height,
+    bool return_sample_counts,
+    bool return_normals
+) {
+    at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
+    const int64_t C = viewmats0.size(-3);
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd(
+    at::optional<at::Tensor> sample_counts = c10::nullopt;
+    if (return_sample_counts) {
+        at::DimVector sample_counts_shape(batch_dims);
+        sample_counts_shape.append({C, image_height, image_width});
+        sample_counts = at::empty(
+            sample_counts_shape, means.options().dtype(at::kInt));
+    }
+
+    at::optional<at::Tensor> normals = c10::nullopt;
+    if (return_normals) {
+        at::DimVector normals_shape(batch_dims);
+        normals_shape.append({C, image_height, image_width, 3});
+        normals = at::empty(normals_shape, means.options().dtype(at::kFloat));
+    }
+
+    return {
+        .sample_counts = sample_counts,
+        .normals = normals,
+    };
+}
+
+class RasterizeToPixelsFromWorld3DGSAutograd
+    : public torch::autograd::Function<RasterizeToPixelsFromWorld3DGSAutograd> {
+public:
+    // Positional slot map for ctx->save_for_backward() / get_saved_variables().
+    // Every write in forward() and every read in backward() uses these names;
+    // the enum is the single source of truth for the saved-tensor layout.
+    // SAVED_COUNT auto-tracks the enumerator count and drives both the
+    // variable_list size and the saved.size() check.
+    enum SavedSlot {
+        SAVED_MEANS = 0,
+        SAVED_QUATS,
+        SAVED_SCALES,
+        SAVED_COLORS,
+        SAVED_OPACITIES,
+        SAVED_BACKGROUNDS,         // undefined-tensor sentinel when nullopt
+        SAVED_MASKS,               // undefined-tensor sentinel when nullopt
+        SAVED_VIEWMATS0,
+        SAVED_VIEWMATS1,           // undefined-tensor sentinel when nullopt
+        SAVED_KS,
+        SAVED_RAYS,                // undefined-tensor sentinel when nullopt
+        SAVED_RADIAL_COEFFS,       // undefined-tensor sentinel when nullopt
+        SAVED_TANGENTIAL_COEFFS,   // undefined-tensor sentinel when nullopt
+        SAVED_THIN_PRISM_COEFFS,   // undefined-tensor sentinel when nullopt
+        SAVED_TILE_OFFSETS,
+        SAVED_FLATTEN_IDS,
+        SAVED_ALPHAS,
+        SAVED_LAST_IDS,
+        SAVED_CHUNKS_PER_TILE,
+        SAVED_CHUNK_OFFSETS,
+        SAVED_FWD_CHUNK_STATE,
+        SAVED_COUNT,
+    };
+
+    // Forward-input slot map: positions in the full forward argument list,
+    // including non-Tensor args (scalars, configs, intrusive_ptr holders).
+    // Used to size and address backward()'s returned variable_list, which
+    // must mirror the forward signature one-to-one. Slots not named here
+    // are non-differentiable inputs left as undefined Tensors. FWD_COUNT
+    // is the public op's full forward arg count.
+    enum FwdInputs {
+        FWD_MEANS       = 0,
+        FWD_QUATS       = 1,
+        FWD_SCALES      = 2,
+        FWD_COLORS      = 3,
+        FWD_OPACITIES   = 4,
+        FWD_BACKGROUNDS = 5,
+        FWD_RAYS        = 16,
+        FWD_COUNT       = 28,
+    };
+
+    // Tensor-input slot map: positions in the Tensor-only subsequence of
+    // the forward signature (at::Tensor, at::optional<at::Tensor>; scalars,
+    // intrusive_ptr holders, and non-Tensor optionals are skipped). This
+    // is the index space torch::autograd::AutogradContext::needs_input_grad
+    // addresses. Distinct from FwdInputs because needs_input_grad collapses
+    // non-Tensor args out; the two enums coincide for slots 0..6 only
+    // because forward args 0..6 are all Tensor-typed and diverge from
+    // position 7 onward.
+    enum TensorInputs {
+        TENSOR_MEANS = 0,
+        TENSOR_QUATS,
+        TENSOR_SCALES,
+        TENSOR_COLORS,
+        TENSOR_OPACITIES,
+        TENSOR_BACKGROUNDS,
+        TENSOR_MASKS,
+        TENSOR_VIEWMATS0,
+        TENSOR_VIEWMATS1,
+        TENSOR_KS,
+        TENSOR_RAYS,
+        TENSOR_RADIAL,
+        TENSOR_TANGENTIAL,
+        TENSOR_THIN_PRISM,
+        TENSOR_TILE_OFFSETS,
+        TENSOR_FLATTEN_IDS,
+        TENSOR_COUNT,
+    };
+
+    // C++ custom autograd Function for the rasterize_to_pixels_from_world_3dgs
+    // operator. Owns the save_for_backward contract and calls the private CUDA
+    // backward kernel directly.
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        // Gaussian parameters
+        const at::Tensor &means,     // [..., N, 3]
+        const at::Tensor &quats,     // [..., N, 4]
+        const at::Tensor &scales,    // [..., N, 3]
+        const at::Tensor &colors,    // [..., C, N, channels] or [nnz, channels]
+        const at::Tensor &opacities, // [..., C, N] or [nnz]
+        const at::optional<at::Tensor> &backgrounds, // [..., C, channels]
+        const at::optional<at::Tensor> &masks,       // [..., C, tile_height, tile_width]
+        // image size
+        int64_t image_width, int64_t image_height, int64_t tile_size,
+        // camera
+        const at::Tensor &viewmats0,               // [..., C, 4, 4]
+        const at::optional<at::Tensor> &viewmats1, // [..., C, 4, 4] optional for rolling shutter
+        const at::Tensor &Ks,                      // [..., C, 3, 3]
+        int64_t camera_model,
+        // unscented transform
+        const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+        int64_t rs_type,
+        const at::optional<at::Tensor> &rays,              // [..., C, H, W, 6]
+        const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+        const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
+        const at::optional<at::Tensor> &thin_prism_coeffs, // [..., C, 4] optional
+        const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+        const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+        const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+        // intersections
+        const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
+        const at::Tensor &flatten_ids,  // [n_isects]
+        bool return_sample_counts, bool use_hit_distance, bool return_normals
+    ) {
+        ctx->set_materialize_grads(false);
+
+        // --- Run shared forward -------------------------------------------
+        auto optional_outputs = allocate_eval3d_optional_outputs(
+            means, viewmats0, image_width, image_height,
+            return_sample_counts, return_normals
+        );
+
+        auto fwd = rasterize_to_pixels_from_world_3dgs_fwd(
+            means, quats, scales, colors, opacities,
+            backgrounds, masks,
+            static_cast<uint32_t>(image_width), static_cast<uint32_t>(image_height),
+            static_cast<uint32_t>(tile_size),
+            viewmats0, viewmats1, Ks,
+            static_cast<CameraModelType>(camera_model), ut_params,
+            static_cast<ShutterType>(rs_type),
+            rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            ftheta_coeffs, lidar_coeffs, external_distortion_params,
+            tile_offsets, flatten_ids,
+            use_hit_distance, optional_outputs.sample_counts, optional_outputs.normals
+        );
+
+        // --- Save tensor state for backward -------------------------------
+        // Optional Tensor arguments cannot be stored in save_for_backward as
+        // optionals, so use undefined tensors as sentinels and reconstruct
+        // c10::optional values in backward.
+        torch::autograd::variable_list saved(SAVED_COUNT);
+        saved[SAVED_MEANS]              = means;
+        saved[SAVED_QUATS]              = quats;
+        saved[SAVED_SCALES]             = scales;
+        saved[SAVED_COLORS]             = colors;
+        saved[SAVED_OPACITIES]          = opacities;
+        saved[SAVED_BACKGROUNDS]        = as_tensor(backgrounds);
+        saved[SAVED_MASKS]              = as_tensor(masks);
+        saved[SAVED_VIEWMATS0]          = viewmats0;
+        saved[SAVED_VIEWMATS1]          = as_tensor(viewmats1);
+        saved[SAVED_KS]                 = Ks;
+        saved[SAVED_RAYS]               = as_tensor(rays);
+        saved[SAVED_RADIAL_COEFFS]      = as_tensor(radial_coeffs);
+        saved[SAVED_TANGENTIAL_COEFFS]  = as_tensor(tangential_coeffs);
+        saved[SAVED_THIN_PRISM_COEFFS]  = as_tensor(thin_prism_coeffs);
+        saved[SAVED_TILE_OFFSETS]       = tile_offsets;
+        saved[SAVED_FLATTEN_IDS]        = flatten_ids;
+        saved[SAVED_ALPHAS]             = fwd.alphas;
+        saved[SAVED_LAST_IDS]           = fwd.last_ids;
+        saved[SAVED_CHUNKS_PER_TILE]    = fwd.chunks_per_tile;
+        saved[SAVED_CHUNK_OFFSETS]      = fwd.chunk_offsets;
+        saved[SAVED_FWD_CHUNK_STATE]    = fwd.fwd_chunk_state;
+        ctx->save_for_backward(std::move(saved));
+
+        // --- Save non-tensor state for backward ---------------------------
+        ctx->saved_data["image_width"] = image_width;
+        ctx->saved_data["image_height"] = image_height;
+        ctx->saved_data["tile_size"] = tile_size;
+        ctx->saved_data["camera_model"] = camera_model;
+        ctx->saved_data["rs_type"] = rs_type;
+        ctx->saved_data["ut_params"] = ut_params;
+        ctx->saved_data["ftheta_coeffs"] = ftheta_coeffs;
+        ctx->saved_data["use_hit_distance"] = use_hit_distance;
+        if (lidar_coeffs.has_value()) {
+            ctx->saved_data["lidar_coeffs"] = lidar_coeffs.value();
+        }
+        if (external_distortion_params.has_value()) {
+            ctx->saved_data["external_distortion_params"] =
+                external_distortion_params.value();
+        }
+
+        // --- Normalize optional outputs for autograd ----------------------
+        // torch::autograd::Function forward returns Tensor or variable_list,
+        // not optional<Tensor>. Zero-length tensors preserve the output count
+        // for autograd; the dispatcher adapter converts them back to nullopt
+        // for the public schema when the caller did not request them.
+        at::Tensor sample_counts_output = optional_outputs.sample_counts.value_or(
+            at::empty({0}, means.options().dtype(at::kInt)));
+        at::Tensor normals_output = optional_outputs.normals.value_or(
+            at::empty({0}, means.options().dtype(at::kFloat)));
+
+        if (!return_normals) {
+            ctx->mark_non_differentiable({normals_output});
+        }
+
+        return {
+            fwd.renders,
+            fwd.alphas,
+            fwd.last_ids,
+            sample_counts_output,
+            normals_output,
+        };
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        // --- Validate autograd state --------------------------------------
+        TORCH_CHECK(
+            grad_outputs.size() == 5,
+            "rasterize_to_pixels_from_world_3dgs backward expected 5 grad outputs, got ",
+            grad_outputs.size()
+        );
+
+        auto saved = ctx->get_saved_variables();
+        TORCH_CHECK(
+            saved.size() == SAVED_COUNT,
+            "rasterize_to_pixels_from_world_3dgs saved tensor count mismatch"
+        );
+
+        // --- Restore tensor state -----------------------------------------
+        const at::Tensor &means = saved[SAVED_MEANS];
+        const at::Tensor &quats = saved[SAVED_QUATS];
+        const at::Tensor &scales = saved[SAVED_SCALES];
+        const at::Tensor &colors = saved[SAVED_COLORS];
+        const at::Tensor &opacities = saved[SAVED_OPACITIES];
+        at::optional<at::Tensor> backgrounds = as_optional_tensor(saved[SAVED_BACKGROUNDS]);
+        at::optional<at::Tensor> masks = as_optional_tensor(saved[SAVED_MASKS]);
+        const at::Tensor &viewmats0 = saved[SAVED_VIEWMATS0];
+        at::optional<at::Tensor> viewmats1 = as_optional_tensor(saved[SAVED_VIEWMATS1]);
+        const at::Tensor &Ks = saved[SAVED_KS];
+        at::optional<at::Tensor> rays = as_optional_tensor(saved[SAVED_RAYS]);
+        at::optional<at::Tensor> radial_coeffs = as_optional_tensor(saved[SAVED_RADIAL_COEFFS]);
+        at::optional<at::Tensor> tangential_coeffs = as_optional_tensor(saved[SAVED_TANGENTIAL_COEFFS]);
+        at::optional<at::Tensor> thin_prism_coeffs = as_optional_tensor(saved[SAVED_THIN_PRISM_COEFFS]);
+        const at::Tensor &tile_offsets = saved[SAVED_TILE_OFFSETS];
+        const at::Tensor &flatten_ids = saved[SAVED_FLATTEN_IDS];
+        const at::Tensor &render_alphas = saved[SAVED_ALPHAS];
+        const at::Tensor &last_ids = saved[SAVED_LAST_IDS];
+        const at::Tensor &chunks_per_tile = saved[SAVED_CHUNKS_PER_TILE];
+        const at::Tensor &chunk_offsets = saved[SAVED_CHUNK_OFFSETS];
+        const at::Tensor &fwd_chunk_state = saved[SAVED_FWD_CHUNK_STATE];
+
+        // --- Restore scalar and custom-class state ------------------------
+        const int64_t image_width = ctx->saved_data["image_width"].toInt();
+        const int64_t image_height = ctx->saved_data["image_height"].toInt();
+        const int64_t tile_size = ctx->saved_data["tile_size"].toInt();
+        const auto camera_model = static_cast<CameraModelType>(
+            ctx->saved_data["camera_model"].toInt());
+        const auto rs_type = static_cast<ShutterType>(
+            ctx->saved_data["rs_type"].toInt());
+        const auto ut_params =
+            ctx->saved_data["ut_params"].toCustomClass<UnscentedTransformParameters>();
+        const auto ftheta_coeffs =
+            ctx->saved_data["ftheta_coeffs"].toCustomClass<FThetaCameraDistortionParameters>();
+        const bool use_hit_distance =
+            ctx->saved_data["use_hit_distance"].toBool();
+
+        at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>>
+            lidar_coeffs = c10::nullopt;
+        auto lidar_it = ctx->saved_data.find("lidar_coeffs");
+        if (lidar_it != ctx->saved_data.end()) {
+            lidar_coeffs =
+                lidar_it->second.toCustomClass<RowOffsetStructuredSpinningLidarModelParametersExt>();
+        }
+
+        at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>
+            external_distortion_params = c10::nullopt;
+        auto ext_it = ctx->saved_data.find("external_distortion_params");
+        if (ext_it != ctx->saved_data.end()) {
+            external_distortion_params =
+                ext_it->second.toCustomClass<extdist::BivariateWindshieldModelParameters>();
+        }
+
+        // --- Materialize output gradients ---------------------------------
+        // set_materialize_grads is false and the CUDA kernel expects dense
+        // color/alpha gradients.
+        at::Tensor v_render_colors;
+        if (grad_outputs[0].defined()) {
+            v_render_colors = grad_outputs[0].contiguous();
+        } else {
+            at::DimVector color_grad_shape(render_alphas.sizes());
+            color_grad_shape[color_grad_shape.size() - 1] = colors.size(-1);
+            v_render_colors = at::zeros(color_grad_shape, colors.options());
+        }
+
+        at::Tensor v_render_alphas;
+        if (grad_outputs[1].defined()) {
+            v_render_alphas = grad_outputs[1].contiguous();
+        } else {
+            v_render_alphas = at::zeros_like(render_alphas);
+        }
+
+        at::optional<at::Tensor> v_render_normals = c10::nullopt;
+        if (grad_outputs[4].defined()) {
+            v_render_normals = grad_outputs[4].contiguous();
+        }
+
+        // --- Validate restored CUDA inputs --------------------------------
+        DEVICE_GUARD(means);
+        CHECK_INPUT(means);
+        CHECK_INPUT(quats);
+        CHECK_INPUT(scales);
+        CHECK_INPUT(colors);
+        CHECK_INPUT(opacities);
+        CHECK_INPUT(tile_offsets);
+        CHECK_INPUT(flatten_ids);
+        CHECK_INPUT(render_alphas);
+        CHECK_INPUT(last_ids);
+        CHECK_INPUT(v_render_colors);
+        CHECK_INPUT(v_render_alphas);
+        CHECK_INPUT(chunks_per_tile);
+        CHECK_INPUT(chunk_offsets);
+        CHECK_INPUT(fwd_chunk_state);
+        if (backgrounds.has_value()) {
+            CHECK_INPUT(backgrounds.value());
+        }
+        if (masks.has_value()) {
+            CHECK_INPUT(masks.value());
+        }
+        if (rays.has_value()) {
+            CHECK_INPUT(rays.value());
+        }
+        if (v_render_normals.has_value()) {
+            CHECK_INPUT(v_render_normals.value());
+        }
+
+        if (external_distortion_params.has_value()) {
+            const auto& params = external_distortion_params.value();
+            TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
+            CHECK_CONTIGUOUS(params->horizontal_poly);
+            CHECK_CONTIGUOUS(params->vertical_poly);
+            CHECK_CONTIGUOUS(params->horizontal_poly_inverse);
+            CHECK_CONTIGUOUS(params->vertical_poly_inverse);
+        }
+
+        at::Tensor v_means = at::zeros_like(means);
+        at::Tensor v_quats = at::zeros_like(quats);
+        at::Tensor v_scales = at::zeros_like(scales);
+        at::Tensor v_colors = at::zeros_like(colors);
+        at::Tensor v_opacities = at::zeros_like(opacities);
+        at::optional<at::Tensor> v_rays =
+            rays.has_value() ? at::optional<at::Tensor>(at::zeros_like(rays.value()))
+                             : at::optional<at::Tensor>();
+
+        // --- Launch private backward kernel -------------------------------
+        launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+            means, quats, scales, colors, opacities,
+            backgrounds, masks,
+            static_cast<uint32_t>(image_width), static_cast<uint32_t>(image_height),
+            static_cast<uint32_t>(tile_size),
+            viewmats0, viewmats1, Ks,
+            camera_model, ut_params, rs_type,
+            rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            ftheta_coeffs, lidar_coeffs, external_distortion_params,
+            tile_offsets, flatten_ids,
+            use_hit_distance,
+            render_alphas, last_ids,
+            v_render_colors, v_render_alphas, v_render_normals,
+            chunks_per_tile, chunk_offsets,
+            fwd_chunk_state.size(0), fwd_chunk_state,
+            v_means, v_quats, v_scales, v_colors, v_opacities, v_rays
+        );
+
+        // --- Compute background gradient ----------------------------------
+        // Background contribution is not produced by the CUDA backward kernel.
+        // It is the incoming color gradient weighted by the unoccluded alpha.
+        at::Tensor v_backgrounds = at::Tensor{};
+        if (backgrounds.has_value() && ctx->needs_input_grad(TENSOR_BACKGROUNDS)) {
+            const at::Tensor one_minus_alpha =
+                at::sub(
+                    at::ones_like(render_alphas).to(at::kFloat),
+                    render_alphas.to(at::kFloat));
+            v_backgrounds =
+                at::mul(v_render_colors, one_minus_alpha).sum({-3, -2});
+        }
+
+        // --- Return gradients in forward-input order ----------------------
+        // The gradient list size matches the public op's forward arg count.
+        // Slots not assigned here stay as undefined Tensors (non-differentiable
+        // scalar/config inputs); only differentiable Tensor inputs that the
+        // backward kernel computes are populated.
+        torch::autograd::variable_list grad_inputs(FWD_COUNT);
+        grad_inputs[FWD_MEANS]       = v_means;
+        grad_inputs[FWD_QUATS]       = v_quats;
+        grad_inputs[FWD_SCALES]      = v_scales;
+        grad_inputs[FWD_COLORS]      = v_colors;
+        grad_inputs[FWD_OPACITIES]   = v_opacities;
+        grad_inputs[FWD_BACKGROUNDS] = v_backgrounds;
+        grad_inputs[FWD_RAYS]        = as_tensor(v_rays);
+        return grad_inputs;
+    }
+};
+
+} // namespace
+
+#endif // GSPLAT_BUILD_3DGUT
+
+RasterizeToPixelsFromWorld3DGSResult
+rasterize_to_pixels_from_world_3dgs(
     // Gaussian parameters
     const at::Tensor &means,     // [..., N, 3]
     const at::Tensor &quats,     // [..., N, 4]
@@ -773,9 +1210,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     const at::optional<at::Tensor> &backgrounds, // [..., C, channels]
     const at::optional<at::Tensor> &masks,       // [..., C, tile_height, tile_width]
     // image size
-    int64_t image_width,
-    int64_t image_height,
-    int64_t tile_size,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
     // camera
     const at::Tensor &viewmats0,               // [..., C, 4, 4]
     const at::optional<at::Tensor> &viewmats1, // [..., C, 4, 4] optional for rolling shutter
@@ -784,298 +1219,123 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     // unscented transform
     const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     int64_t rs_type,
-    const at::optional<at::Tensor> &rays, // [..., C, H, W, 6]
+    const at::optional<at::Tensor> &rays,              // [..., C, H, W, 6]
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
-    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
-    // intersections
-    const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
-    const at::Tensor &flatten_ids,   // [n_isects]
-    bool use_hit_distance,
-    const at::optional<at::Tensor> &sample_counts, // [..., C, image_height, image_width] optional
-    const at::optional<at::Tensor> &normals // [..., C, image_height, image_width, 3] optional output tensor
-) {
-#if !GSPLAT_BUILD_3DGUT
-    TORCH_CHECK(
-        false,
-        "rasterize_to_pixels_from_world_3dgs_fwd requires "
-        "GSPLAT_BUILD_3DGUT=1"
-    );
-    return {};
-#else
-    return rasterize_to_pixels_from_world_3dgs_fwd_impl(
-        means,
-        quats,
-        scales,
-        colors,
-        opacities,
-        backgrounds,
-        masks,
-        image_width,
-        image_height,
-        tile_size,
-        viewmats0,
-        viewmats1,
-        Ks,
-        static_cast<CameraModelType>(camera_model),
-        ut_params,
-        static_cast<ShutterType>(rs_type),
-        rays,
-        radial_coeffs,
-        tangential_coeffs,
-        thin_prism_coeffs,
-        ftheta_coeffs,
-        lidar_coeffs,
-        external_distortion_params,
-        tile_offsets,
-        flatten_ids,
-        use_hit_distance,
-        sample_counts,
-        normals
-    );
-#endif
-}
-
-#if GSPLAT_BUILD_3DGUT
-
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
-rasterize_to_pixels_from_world_3dgs_bwd_impl(
-    // Gaussian parameters
-    const at::Tensor means,  // [..., N, 3]
-    const at::Tensor quats,  // [..., N, 4]
-    const at::Tensor scales, // [..., N, 3]
-    const at::Tensor colors,                    // [..., C, N, 3] or [nnz, 3]
-    const at::Tensor opacities,                 // [..., C, N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., C, 3]
-    const at::optional<at::Tensor> masks,       // [..., C, tile_height, tile_width]
-    // image size
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const uint32_t tile_size,
-    // camera
-    const at::Tensor viewmats0,               // [..., C, 4, 4]
-    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
-    const at::Tensor Ks,                      // [..., C, 3, 3]
-    const CameraModelType camera_model,
-    // uncented transform
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
-    ShutterType rs_type,
-    const at::optional<at::Tensor> rays,    // [..., C, H, W, 6]
-    const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
-    const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
-    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
-    // intersections
-    const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
-    const bool use_hit_distance,
-    // forward outputs
-    const at::Tensor render_alphas, // [..., C, image_height, image_width, 1]
-    const at::Tensor last_ids,      // [..., C, image_height, image_width]
-    // gradients of outputs
-    const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
-    const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
-    const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
-    // CSR chunk structure (precomputed by fwd; threaded through save_for_backward)
-    const at::Tensor chunks_per_tile, // [num_tiles] int32
-    const at::Tensor chunk_offsets,   // [num_tiles + 1] int32
-    const int64_t total_chunks,       // scalar
-    // Per-chunk cumulative (T, pix_out, normal_out) persisted by the fwd pass.
-    const at::Tensor fwd_chunk_state  // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
-) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(colors);
-    CHECK_INPUT(opacities);
-    CHECK_INPUT(tile_offsets);
-    CHECK_INPUT(flatten_ids);
-    CHECK_INPUT(render_alphas);
-    CHECK_INPUT(last_ids);
-    CHECK_INPUT(v_render_colors);
-    CHECK_INPUT(v_render_alphas);
-    CHECK_INPUT(chunks_per_tile);
-    CHECK_INPUT(chunk_offsets);
-    CHECK_INPUT(fwd_chunk_state);
-    if (backgrounds.has_value()) {
-        CHECK_INPUT(backgrounds.value());
-    }
-    if (masks.has_value()) {
-        CHECK_INPUT(masks.value());
-    }
-    if (rays.has_value()) {
-        CHECK_INPUT(rays.value());
-    }
-    if (v_render_normals.has_value()) {
-        CHECK_INPUT(v_render_normals.value());
-    }
-
-    if (external_distortion_params.has_value()) {
-        const auto& params = external_distortion_params.value();
-        TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
-        CHECK_CONTIGUOUS(params->horizontal_poly);
-        CHECK_CONTIGUOUS(params->vertical_poly);
-        CHECK_CONTIGUOUS(params->horizontal_poly_inverse);
-        CHECK_CONTIGUOUS(params->vertical_poly_inverse);
-    }
-
-    at::Tensor v_means = at::zeros_like(means);
-    at::Tensor v_quats = at::zeros_like(quats);
-    at::Tensor v_scales = at::zeros_like(scales);
-    at::Tensor v_colors = at::zeros_like(colors);
-    at::Tensor v_opacities = at::zeros_like(opacities);
-    at::optional<at::Tensor> v_rays = rays.has_value() ? at::optional<at::Tensor>(at::zeros_like(rays.value())) : at::optional<at::Tensor>();
-    
-    launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
-        means,
-        quats,
-        scales,
-        colors,
-        opacities,
-        backgrounds,
-        masks,
-        image_width,
-        image_height,
-        tile_size,
-        viewmats0,
-        viewmats1,
-        Ks,
-        camera_model,
-        ut_params,
-        rs_type,
-        rays,
-        radial_coeffs,
-        tangential_coeffs,
-        thin_prism_coeffs,
-        ftheta_coeffs,
-        lidar_coeffs,
-        external_distortion_params,
-        tile_offsets,
-        flatten_ids,
-        use_hit_distance,
-        render_alphas,
-        last_ids,
-        v_render_colors,
-        v_render_alphas,
-        v_render_normals,
-        chunks_per_tile,
-        chunk_offsets,
-        total_chunks,
-        fwd_chunk_state,
-        v_means,
-        v_quats,
-        v_scales,
-        v_colors,
-        v_opacities,
-        v_rays
-    );
-
-    return std::make_tuple(
-        v_means, v_quats, v_scales, v_colors, v_opacities, v_rays
-    );
-}
-
-#endif
-
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
-rasterize_to_pixels_from_world_3dgs_bwd(
-    // Gaussian parameters
-    const at::Tensor &means,  // [..., N, 3]
-    const at::Tensor &quats,  // [..., N, 4]
-    const at::Tensor &scales, // [..., N, 3]
-    const at::Tensor &colors,                    // [..., C, N, 3] or [nnz, 3]
-    const at::Tensor &opacities,                 // [..., C, N] or [nnz]
-    const at::optional<at::Tensor> &backgrounds, // [..., C, 3]
-    const at::optional<at::Tensor> &masks,       // [..., C, tile_height, tile_width]
-    // image size
-    int64_t image_width,
-    int64_t image_height,
-    int64_t tile_size,
-    // camera
-    const at::Tensor &viewmats0,               // [..., C, 4, 4]
-    const at::optional<at::Tensor> &viewmats1, // [..., C, 4, 4] optional for rolling shutter
-    const at::Tensor &Ks,                      // [..., C, 3, 3]
-    int64_t camera_model,
-    // unscented transform
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
-    int64_t rs_type,
-    const at::optional<at::Tensor> &rays,    // [..., C, H, W, 6]
-    const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
-    const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
+    const at::optional<at::Tensor> &thin_prism_coeffs, // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor &flatten_ids,  // [n_isects]
-    bool use_hit_distance,
-    // forward outputs
-    const at::Tensor &render_alphas, // [..., C, image_height, image_width, 1]
-    const at::Tensor &last_ids,      // [..., C, image_height, image_width]
-    // gradients of outputs
-    const at::Tensor &v_render_colors, // [..., C, image_height, image_width, 3]
-    const at::Tensor &v_render_alphas, // [..., C, image_height, image_width, 1]
-    const at::optional<at::Tensor> &v_render_normals, // [..., C, image_height, image_width, 3]
-    // CSR chunk structure (from fwd, threaded via save_for_backward)
-    const at::Tensor &chunks_per_tile,
-    const at::Tensor &chunk_offsets,
-    int64_t total_chunks,
-    // Per-chunk cumulative (T, pix_out, normal_out) persisted by the fwd pass.
-    const at::Tensor &fwd_chunk_state
+    bool return_sample_counts, bool use_hit_distance, bool return_normals
 ) {
 #if !GSPLAT_BUILD_3DGUT
     TORCH_CHECK(
         false,
-        "rasterize_to_pixels_from_world_3dgs_bwd requires "
+        "rasterize_to_pixels_from_world_3dgs requires GSPLAT_BUILD_3DGUT=1"
+    );
+    return {};
+#else
+    // CUDA dispatch is the forward-only implementation. When autograd is
+    // active, the dispatcher selects the AutogradCUDA registration below,
+    // whose forward calls the same rasterize_to_pixels_from_world_3dgs_fwd
+    // helper.
+    //
+    // --- Allocate optional public outputs ---------------------------------
+    // Allocate optional public outputs first so both dispatch paths use the
+    // same shapes and dtypes.
+    auto optional_outputs = allocate_eval3d_optional_outputs(
+        means, viewmats0, image_width, image_height,
+        return_sample_counts, return_normals
+    );
+
+    // --- Run shared forward ------------------------------------------------
+    // The chunk tensors are only useful to autograd, so the forward-only
+    // dispatcher path drops them.
+    auto fwd = rasterize_to_pixels_from_world_3dgs_fwd(
+        means, quats, scales, colors, opacities,
+        backgrounds, masks,
+        static_cast<uint32_t>(image_width), static_cast<uint32_t>(image_height),
+        static_cast<uint32_t>(tile_size),
+        viewmats0, viewmats1, Ks,
+        static_cast<CameraModelType>(camera_model), ut_params,
+        static_cast<ShutterType>(rs_type),
+        rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        ftheta_coeffs, lidar_coeffs, external_distortion_params,
+        tile_offsets, flatten_ids,
+        use_hit_distance, optional_outputs.sample_counts, optional_outputs.normals
+    );
+
+    return std::make_tuple(fwd.renders, fwd.alphas, fwd.last_ids,
+                           optional_outputs.sample_counts, optional_outputs.normals);
+#endif // !GSPLAT_BUILD_3DGUT
+}
+
+RasterizeToPixelsFromWorld3DGSResult
+rasterize_to_pixels_from_world_3dgs_autograd(
+    // Gaussian parameters
+    const at::Tensor &means,     // [..., N, 3]
+    const at::Tensor &quats,     // [..., N, 4]
+    const at::Tensor &scales,    // [..., N, 3]
+    const at::Tensor &colors,    // [..., C, N, channels] or [nnz, channels]
+    const at::Tensor &opacities, // [..., C, N] or [nnz]
+    const at::optional<at::Tensor> &backgrounds, // [..., C, channels]
+    const at::optional<at::Tensor> &masks,       // [..., C, tile_height, tile_width]
+    // image size
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    // camera
+    const at::Tensor &viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> &viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor &Ks,                      // [..., C, 3, 3]
+    int64_t camera_model,
+    // unscented transform
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &rays,              // [..., C, H, W, 6]
+    const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> &thin_prism_coeffs, // [..., C, 4] optional
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    // intersections
+    const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    bool return_sample_counts, bool use_hit_distance, bool return_normals
+) {
+#if !GSPLAT_BUILD_3DGUT
+    TORCH_CHECK(
+        false,
+        "rasterize_to_pixels_from_world_3dgs_autograd requires "
         "GSPLAT_BUILD_3DGUT=1"
     );
     return {};
 #else
-    return rasterize_to_pixels_from_world_3dgs_bwd_impl(
-        means,
-        quats,
-        scales,
-        colors,
-        opacities,
-        backgrounds,
-        masks,
-        image_width,
-        image_height,
-        tile_size,
-        viewmats0,
-        viewmats1,
-        Ks,
-        static_cast<CameraModelType>(camera_model),
-        ut_params,
-        static_cast<ShutterType>(rs_type),
-        rays,
-        radial_coeffs,
-        tangential_coeffs,
-        thin_prism_coeffs,
-        ftheta_coeffs,
-        lidar_coeffs,
-        external_distortion_params,
-        tile_offsets,
-        flatten_ids,
-        use_hit_distance,
-        render_alphas,
-        last_ids,
-        v_render_colors,
-        v_render_alphas,
-        v_render_normals,
-        chunks_per_tile,
-        chunk_offsets,
-        total_chunks,
-        fwd_chunk_state
+    // Adapter between dispatcher schema and C++ custom Function: apply()
+    // returns a variable_list, while the public operator schema has optional
+    // trailing outputs.
+    auto outputs = RasterizeToPixelsFromWorld3DGSAutograd::apply(
+        means, quats, scales, colors, opacities,
+        backgrounds, masks,
+        image_width, image_height, tile_size,
+        viewmats0, viewmats1, Ks,
+        camera_model, ut_params, rs_type,
+        rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        ftheta_coeffs, lidar_coeffs, external_distortion_params,
+        tile_offsets, flatten_ids,
+        return_sample_counts, use_hit_distance, return_normals
     );
-#endif
+
+    return std::make_tuple(
+        outputs[0],
+        outputs[1],
+        outputs[2],
+        return_sample_counts ? at::optional<at::Tensor>(outputs[3]) : c10::nullopt,
+        return_normals ? at::optional<at::Tensor>(outputs[4]) : c10::nullopt
+    );
+#endif // !GSPLAT_BUILD_3DGUT
 }
 
 } // namespace gsplat

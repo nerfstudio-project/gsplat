@@ -1155,13 +1155,21 @@ def rasterize_to_pixels_eval3d_extra(
             tile_width * tile_size >= image_width
         ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
+    camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
+    ftheta_coeffs = (
+        ftheta_coeffs
+        if ftheta_coeffs is not None
+        else FThetaCameraDistortionParameters()
+    )
+    lidar_coeffs = lidar_coeffs.to_cpp() if lidar_coeffs is not None else None
+
     (
         render_colors,
         render_alphas,
         last_ids,
         sample_counts,
         render_normals,
-    ) = _RasterizeToPixelsEval3D.apply(
+    ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_3dgs")(
         means.contiguous(),
         quats.contiguous(),
         scales.contiguous(),
@@ -1169,15 +1177,15 @@ def rasterize_to_pixels_eval3d_extra(
         opacities.contiguous(),
         backgrounds.contiguous() if backgrounds is not None else None,
         masks.contiguous() if masks is not None else None,
-        viewmats.contiguous(),
-        Ks.contiguous(),
         image_width,
         image_height,
         tile_size,
-        isect_offsets.contiguous(),
-        flatten_ids.contiguous(),
-        camera_model,
+        viewmats.contiguous(),
+        viewmats_rs.contiguous() if viewmats_rs is not None else None,
+        Ks.contiguous(),
+        camera_model_type,
         ut_params,
+        rolling_shutter,
         rays.contiguous() if rays is not None else None,
         # distortion
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
@@ -1186,9 +1194,8 @@ def rasterize_to_pixels_eval3d_extra(
         ftheta_coeffs,
         lidar_coeffs,
         external_distortion_coeffs,
-        # rolling shutter
-        rolling_shutter,
-        viewmats_rs.contiguous() if viewmats_rs is not None else None,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
         # Forward is always collecting the last_ids for the backward pass,
         # no need to tell it to do it.
         return_sample_counts,  # Pass flag to forward
@@ -1765,304 +1772,6 @@ class _RasterizeToPixels(torch.autograd.Function):
             None,  # isect_offsets
             None,  # flatten_ids
             None,  # absgrad
-        )
-
-
-class _RasterizeToPixelsEval3D(torch.autograd.Function):
-    """Rasterize gaussians"""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means: Tensor,  # [..., N, 3]
-        quats: Tensor,  # [..., N, 4]
-        scales: Tensor,  # [..., N, 3]
-        colors: Tensor,  # [..., C, N, D] or [nnz, D]
-        opacities: Tensor,  # [..., C, N] or [nnz]
-        backgrounds: Tensor,  # [..., C, D], Optional
-        masks: Tensor,  # [..., C, tile_height, tile_width], Optional
-        viewmats: Tensor,  # [..., C, 4, 4]
-        Ks: Tensor,  # [..., C, 3, 3]
-        width: int,
-        height: int,
-        tile_size: int,
-        isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
-        flatten_ids: Tensor,  # [..., n_isects]
-        camera_model: CameraModel = "pinhole",
-        ut_params: Optional[UnscentedTransformParameters] = None,
-        rays: Optional[Tensor] = None,  # [..., C, P, 6]
-        # distortion
-        radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
-        tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-        thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
-        ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
-        lidar_coeffs: Optional[
-            RowOffsetStructuredSpinningLidarModelParametersExt
-        ] = None,
-        external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
-        # rolling shutter
-        rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-        viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
-        return_sample_counts: bool = False,
-        use_hit_distance: bool = False,
-        return_normals: bool = False,
-    ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
-        if ut_params is None:
-            ut_params = UnscentedTransformParameters()
-
-        camera_model_type = _make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
-        ftheta_coeffs = (
-            ftheta_coeffs
-            if ftheta_coeffs is not None
-            else FThetaCameraDistortionParameters()
-        )
-
-        lidar_coeffs = lidar_coeffs.to_cpp() if lidar_coeffs is not None else None
-
-        # Extract batch_dims for sample_counts allocation
-        batch_dims = means.shape[:-2]
-        C = viewmats.size(-3)
-
-        # Conditionally allocate sample_counts based on flag
-        if return_sample_counts:
-            # Allocate with correct final shape (batch_dims, C, H, W)
-            sample_counts = torch.empty(
-                batch_dims + (C, height, width), dtype=torch.int32, device=means.device
-            )
-        else:
-            sample_counts = None
-
-        # Conditionally allocate normals based on flag
-        if return_normals:
-            render_normals = torch.empty(
-                batch_dims + (C, height, width, 3),
-                dtype=torch.float32,
-                device=means.device,
-            )
-        else:
-            render_normals = None
-
-        # Fwd emits the CSR chunk structure (chunks_per_tile, chunk_offsets)
-        # and the `fwd_chunk_state` tensor that bwd consumes. Computing CSR
-        # offsets once per forward — instead of once per backward — shares
-        # the one blocking `chunk_offsets[-1].item()` D2H across both passes,
-        # and exposes the persisted per-chunk cumulative state so the bwd
-        # kernel can skip rebuilding it.
-        (
-            render_colors,
-            render_alphas,
-            last_ids,
-            chunks_per_tile,
-            chunk_offsets,
-            fwd_chunk_state,
-        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_3dgs_fwd")(
-            means,
-            quats,
-            scales,
-            colors,
-            opacities,
-            backgrounds,
-            masks,
-            width,
-            height,
-            tile_size,
-            viewmats,
-            viewmats_rs,
-            Ks,
-            camera_model_type,
-            ut_params,
-            rolling_shutter,
-            rays,
-            radial_coeffs,
-            tangential_coeffs,
-            thin_prism_coeffs,
-            ftheta_coeffs,
-            lidar_coeffs,
-            external_distortion_coeffs,
-            isect_offsets,
-            flatten_ids,
-            use_hit_distance,
-            sample_counts,
-            render_normals,
-        )
-
-        ctx.save_for_backward(
-            means,
-            quats,
-            scales,
-            colors,
-            opacities,
-            backgrounds,
-            masks,
-            viewmats,
-            viewmats_rs,
-            Ks,
-            rays,
-            radial_coeffs,
-            tangential_coeffs,
-            thin_prism_coeffs,
-            isect_offsets,
-            flatten_ids,
-            render_alphas,
-            last_ids,
-            chunks_per_tile,
-            chunk_offsets,
-            fwd_chunk_state,
-        )
-        # total_chunks is recoverable from the fwd_chunk_state leading dim
-        # (avoids a second D2H sync — fwd already read it to size this tensor).
-        ctx.total_chunks = int(fwd_chunk_state.size(0))
-        ctx.width = width
-        ctx.height = height
-        ctx.ut_params = ut_params
-        ctx.rs_type = rolling_shutter
-        ctx.camera_model_type = camera_model_type
-        ctx.tile_size = tile_size
-        ctx.ftheta_coeffs = ftheta_coeffs
-        ctx.lidar_coeffs = lidar_coeffs
-        ctx.external_distortion_coeffs = external_distortion_coeffs
-        ctx.use_hit_distance = use_hit_distance
-
-        return render_colors, render_alphas, last_ids, sample_counts, render_normals
-
-    @staticmethod
-    @trace_function("raster3D-bwd")
-    def backward(
-        ctx,
-        v_render_colors: Tensor,  # [..., C, H, W, 3]
-        v_render_alphas: Tensor,  # [..., C, H, W, 1]
-        v_last_ids: Optional[Tensor],  # None - last_ids is integer (non-differentiable)
-        v_sample_counts: Optional[
-            Tensor
-        ],  # None - sample_counts is integer (non-differentiable)
-        v_render_normals: Optional[Tensor],  # [..., C, H, W, 3]
-    ):
-        (
-            means,
-            quats,
-            scales,
-            colors,
-            opacities,
-            backgrounds,
-            masks,
-            viewmats,
-            viewmats_rs,
-            Ks,
-            rays,
-            radial_coeffs,
-            tangential_coeffs,
-            thin_prism_coeffs,
-            isect_offsets,
-            flatten_ids,
-            render_alphas,
-            last_ids,
-            chunks_per_tile,
-            chunk_offsets,
-            fwd_chunk_state,
-        ) = ctx.saved_tensors
-        # Bwd consumes `fwd_chunk_state` directly in its preamble — no
-        # separate state-scan / prefix-scan kernels. The tensor carries
-        # per-chunk cumulative (T, pix_out, normal_out) from fwd at every
-        # CHUNK_BATCHES boundary.
-        width = ctx.width
-        height = ctx.height
-        ut_params = ctx.ut_params
-        rs_type = ctx.rs_type
-        camera_model_type = ctx.camera_model_type
-        tile_size = ctx.tile_size
-        ftheta_coeffs = ctx.ftheta_coeffs
-        lidar_coeffs = ctx.lidar_coeffs
-        external_distortion_coeffs = ctx.external_distortion_coeffs
-        use_hit_distance = ctx.use_hit_distance
-        total_chunks = ctx.total_chunks
-
-        (
-            v_means,
-            v_quats,
-            v_scales,
-            v_colors,
-            v_opacities,
-            v_rays,
-        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_3dgs_bwd")(
-            means,
-            quats,
-            scales,
-            colors,
-            opacities,
-            backgrounds,
-            masks,
-            width,
-            height,
-            tile_size,
-            viewmats,
-            viewmats_rs,
-            Ks,
-            camera_model_type,
-            ut_params,
-            rs_type,
-            rays,
-            radial_coeffs,
-            tangential_coeffs,
-            thin_prism_coeffs,
-            ftheta_coeffs,
-            lidar_coeffs,  # already converted to C++ in forward
-            external_distortion_coeffs,
-            isect_offsets,
-            flatten_ids,
-            use_hit_distance,
-            render_alphas,
-            last_ids,
-            v_render_colors.contiguous(),
-            v_render_alphas.contiguous(),
-            v_render_normals.contiguous() if v_render_normals is not None else None,
-            chunks_per_tile,
-            chunk_offsets,
-            total_chunks,
-            fwd_chunk_state,
-        )
-
-        if ctx.needs_input_grad[5]:  # backgrounds
-            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
-                dim=(-3, -2)
-            )
-        else:
-            v_backgrounds = None
-
-        # Check not needed anymore because we return v_rays directly
-        # if ctx.needs_input_grad[7]:  # viewmats
-        #    raise NotImplementedError
-
-        return (
-            v_means,
-            v_quats,
-            v_scales,
-            v_colors,
-            v_opacities,
-            v_backgrounds,
-            None,  # masks
-            None,  # viewmats
-            None,  # Ks
-            None,  # width
-            None,  # height
-            None,  # tile_size
-            None,  # isect_offsets
-            None,  # flatten_ids
-            None,  # camera_model
-            None,  # ut_params
-            v_rays,  # rays
-            None,  # radial_coeffs
-            None,  # tangential_coeffs
-            None,  # thin_prism_coeffs
-            None,  # ftheta_coeffs
-            None,  # lidar_coeffs
-            None,  # external_distortion_coeffs
-            None,  # rolling_shutter
-            None,  # viewmats_rs
-            None,  # return_sample_counts (flag, no gradient)
-            None,  # use_hit_distance
-            None,  # return_normals (flag, no gradient)
         )
 
 

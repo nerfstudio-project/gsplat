@@ -30,8 +30,8 @@
 
 #include "Common.h"
 #include "ExternalDistortion.cuh"
-#include "Rasterization.h"
 #include "RasterizeChunkCSR.h"
+#include "RasterizeToPixelsFromWorld3DGS.h"
 #include "RasterizeToPixelsFromWorld3DGS.cuh"
 #include "Utils.cuh"
 #include "Cameras.cuh"
@@ -860,7 +860,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     at::Tensor v_means,      // [..., N, 3]
     at::Tensor v_quats,      // [..., N, 4]
     at::Tensor v_scales,     // [..., N, 3]
-    at::Tensor v_colors,     // [..., C, N, 3] or [nnz, 3]
+    at::Tensor v_colors,     // [..., C, N, channels] or [nnz, channels]
     at::Tensor v_opacities,  // [..., C, N] or [nnz]
     at::optional<at::Tensor> v_rays // [..., C, image_height, image_width, 6]
 ) {
