@@ -926,9 +926,7 @@ TORCH_LIBRARY(gsplat, m) {
 
     m.def("intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? conics, Tensor? opacities, Tensor? image_ids, Tensor? gaussian_ids, int I, int tile_size, int tile_width, int tile_height, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
     m.def("intersect_offset(Tensor isect_ids, int I, int tile_width, int tile_height) -> Tensor");
-#if GSPLAT_BUILD_3DGUT
     m.def("intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int I, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
-#endif
 
 #if GSPLAT_BUILD_3DGS
     m.def("projection_ewa_simple_fwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> (Tensor, Tensor)");
@@ -965,11 +963,9 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("relocation(Tensor opacities, Tensor scales, Tensor ratios, Tensor binoms, int n_max) -> (Tensor, Tensor)");
 #endif
 
-#if GSPLAT_BUILD_3DGUT
     m.def("projection_ut_3dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor? opacities, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model, bool global_z_order, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
     m.def("rasterize_to_pixels_from_world_3dgs_fwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor? sample_counts, Tensor? normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
     m.def("rasterize_to_pixels_from_world_3dgs_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor? v_render_normals, Tensor chunks_per_tile, Tensor chunk_offsets, int total_chunks, Tensor fwd_chunk_state) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)");
-#endif
 
 #if GSPLAT_BUILD_3DGS
     m.def("mcmc_perturb_positions(Tensor(a!) positions, Tensor quats, Tensor scales, Tensor opacities, Tensor noise, float scaler) -> ()");
@@ -1028,12 +1024,10 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
     m.impl("relocation", &gsplat::relocation);
 #endif
 
-#if GSPLAT_BUILD_3DGUT
     m.impl("projection_ut_3dgs_fused", &gsplat::projection_ut_3dgs_fused);
     m.impl("rasterize_to_pixels_from_world_3dgs_fwd", &gsplat::rasterize_to_pixels_from_world_3dgs_fwd);
     m.impl("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
     m.impl("intersect_tile_lidar", &gsplat::intersect_tile_lidar);
-#endif
 
 #if GSPLAT_BUILD_3DGS
     m.impl("mcmc_perturb_positions", &gsplat::mcmc_perturb_positions);

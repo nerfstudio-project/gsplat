@@ -589,11 +589,11 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 
 #endif
 
-#if GSPLAT_BUILD_3DGUT
-
 ////////////////////////////////////////////////////
 // 3DGS (from world)
 ////////////////////////////////////////////////////
+
+#if GSPLAT_BUILD_3DGUT
 
 // fwd impl returns (renders, alphas, last_ids, chunks_per_tile, chunk_offsets,
 // fwd_chunk_state). The last three comprise the CSR-packed chunk state that
@@ -761,6 +761,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                            chunk_offsets, fwd_chunk_state);
 };
 
+#endif
+
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor &means,     // [..., N, 3]
@@ -796,6 +798,14 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     const at::optional<at::Tensor> &sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> &normals // [..., C, image_height, image_width, 3] optional output tensor
 ) {
+#if !GSPLAT_BUILD_3DGUT
+    TORCH_CHECK(
+        false,
+        "rasterize_to_pixels_from_world_3dgs_fwd requires "
+        "GSPLAT_BUILD_3DGUT=1"
+    );
+    return {};
+#else
     return rasterize_to_pixels_from_world_3dgs_fwd_impl(
         means,
         quats,
@@ -826,7 +836,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
         sample_counts,
         normals
     );
+#endif
 }
+
+#if GSPLAT_BUILD_3DGUT
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
 rasterize_to_pixels_from_world_3dgs_bwd_impl(
@@ -968,6 +981,8 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
     );
 }
 
+#endif
+
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
 rasterize_to_pixels_from_world_3dgs_bwd(
     // Gaussian parameters
@@ -1015,6 +1030,14 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     // Per-chunk cumulative (T, pix_out, normal_out) persisted by the fwd pass.
     const at::Tensor &fwd_chunk_state
 ) {
+#if !GSPLAT_BUILD_3DGUT
+    TORCH_CHECK(
+        false,
+        "rasterize_to_pixels_from_world_3dgs_bwd requires "
+        "GSPLAT_BUILD_3DGUT=1"
+    );
+    return {};
+#else
     return rasterize_to_pixels_from_world_3dgs_bwd_impl(
         means,
         quats,
@@ -1052,8 +1075,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
         total_chunks,
         fwd_chunk_state
     );
-}
-
 #endif
+}
 
 } // namespace gsplat
