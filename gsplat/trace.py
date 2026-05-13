@@ -54,6 +54,18 @@ _F = TypeVar("_F", bound=Callable)
 _ENABLED = nvtx is not None and nvtx.enabled()
 _DOMAIN = None if not _ENABLED else nvtx.get_domain("gsplat")
 
+# Some nvtx builds (notably the one shipped with the NGC pytorch:25.06-py3
+# / torch 2.8 stack) drop the per-domain push_range / pop_range methods. If
+# any required Domain method is missing, fall back to the no-op path below
+# so importing gsplat does not crash; profiler annotations for the affected
+# ranges will simply be absent.
+if _ENABLED and not all(
+    callable(getattr(_DOMAIN, _m, None))
+    for _m in ("push_range", "pop_range", "get_event_attributes")
+):
+    _ENABLED = False
+    _DOMAIN = None
+
 if not _ENABLED:
 
     def trace_range(name: str, **kwargs: Any) -> ContextManager[None]:
