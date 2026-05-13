@@ -432,6 +432,104 @@ def splat2ply_bytes(
     return buffer.getvalue()
 
 
+def load_ply_to_splats(path: str) -> dict:
+    """Read a 3D Gaussian Splatting PLY file into splat parameter tensors.
+
+    Inverse of :func:`splat2ply_bytes`. Reads the standard 3DGS PLY format
+    used by the INRIA 3DGS authors and trained models from gsplat and other
+    splat trainers. The ``f_rest_*`` properties are interpreted in
+    channel-major order (the INRIA-3DGS convention): first all R basis
+    coefficients (1..K-1), then all G, then all B, where K = (sh_degree+1)^2
+    and the DC term (k=0) lives in ``f_dc_0..f_dc_2`` separately.
+
+    Parsing adapted from FastGS (MIT License) — see
+    https://github.com/fastgs/FastGS/blob/main/scene/gaussian_model.py.
+
+    Args:
+        path: Path to the PLY file.
+
+    Returns:
+        Dict with float32 CPU tensors:
+            - ``means``: ``(N, 3)`` xyz positions.
+            - ``scales``: ``(N, 3)`` log-scales.
+            - ``quats``: ``(N, 4)`` quaternions as stored (unnormalized).
+            - ``opacities``: ``(N,)`` logit-opacities.
+            - ``sh0``: ``(N, 1, 3)`` DC SH coefficient (RGB).
+            - ``shN``: ``(N, K-1, 3)`` higher-order SH coefficients
+              (basis-major). Empty along dim 1 when the file only stores
+              the DC term (SH degree 0).
+    """
+    try:
+        from plyfile import PlyData
+    except ImportError as exc:
+        raise ImportError(
+            "load_ply_to_splats requires the 'plyfile' package. "
+            "Install it with `pip install plyfile`."
+        ) from exc
+
+    ply = PlyData.read(str(path))
+    vertex = ply.elements[0]
+    n_splats = len(vertex)
+
+    means = np.stack(
+        [
+            np.asarray(vertex["x"]),
+            np.asarray(vertex["y"]),
+            np.asarray(vertex["z"]),
+        ],
+        axis=1,
+    )
+    opacities = np.asarray(vertex["opacity"])
+    sh0 = np.stack(
+        [
+            np.asarray(vertex["f_dc_0"]),
+            np.asarray(vertex["f_dc_1"]),
+            np.asarray(vertex["f_dc_2"]),
+        ],
+        axis=1,
+    )  # (N, 3) — DC term
+
+    f_rest_names = sorted(
+        (p.name for p in vertex.properties if p.name.startswith("f_rest_")),
+        key=lambda s: int(s.split("_")[-1]),
+    )
+    if f_rest_names:
+        if len(f_rest_names) % 3 != 0:
+            raise ValueError(
+                f"f_rest property count ({len(f_rest_names)}) is not a "
+                "multiple of 3 (RGB channels); cannot reshape SH coefficients."
+            )
+        f_rest = np.stack(
+            [np.asarray(vertex[name]) for name in f_rest_names], axis=1
+        )  # (N, 3 * (K - 1)) channel-major
+        k_minus_1 = len(f_rest_names) // 3
+        f_rest = f_rest.reshape(n_splats, 3, k_minus_1).swapaxes(1, 2)
+        # Now (N, K - 1, 3) in (basis, channel) order
+    else:
+        f_rest = np.zeros((n_splats, 0, 3), dtype=np.float32)
+
+    scale_names = sorted(
+        (p.name for p in vertex.properties if p.name.startswith("scale_")),
+        key=lambda s: int(s.split("_")[-1]),
+    )
+    scales = np.stack([np.asarray(vertex[name]) for name in scale_names], axis=1)
+
+    rot_names = sorted(
+        (p.name for p in vertex.properties if p.name.startswith("rot_")),
+        key=lambda s: int(s.split("_")[-1]),
+    )
+    quats = np.stack([np.asarray(vertex[name]) for name in rot_names], axis=1)
+
+    return {
+        "means": torch.from_numpy(np.ascontiguousarray(means)).float(),
+        "scales": torch.from_numpy(np.ascontiguousarray(scales)).float(),
+        "quats": torch.from_numpy(np.ascontiguousarray(quats)).float(),
+        "opacities": torch.from_numpy(np.ascontiguousarray(opacities)).float(),
+        "sh0": torch.from_numpy(np.ascontiguousarray(sh0[:, None, :])).float(),
+        "shN": torch.from_numpy(np.ascontiguousarray(f_rest)).float(),
+    }
+
+
 def splat2splat_bytes(
     means: torch.Tensor,
     scales: torch.Tensor,
