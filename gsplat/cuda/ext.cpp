@@ -47,6 +47,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("BIVARIATE_WINDSHIELD", gsplat::extdist::ModelType::BIVARIATE_WINDSHIELD);
 
     m.def("null", &gsplat::null);
+    m.def("build_config", []() {
+        py::dict config;
+        config["3dgs"] = static_cast<bool>(GSPLAT_BUILD_3DGS);
+        config["2dgs"] = static_cast<bool>(GSPLAT_BUILD_2DGS);
+        config["3dgut"] = static_cast<bool>(GSPLAT_BUILD_3DGUT);
+        config["adam"] = static_cast<bool>(GSPLAT_BUILD_ADAM);
+        config["reloc"] = static_cast<bool>(GSPLAT_BUILD_RELOC);
+        config["losses"] = static_cast<bool>(GSPLAT_BUILD_LOSSES);
+        config["camera_wrappers"] = static_cast<bool>(GSPLAT_BUILD_CAMERA_WRAPPERS);
+        return config;
+    });
 }
 
 namespace {
