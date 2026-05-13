@@ -14,12 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import math
+import types
 import warnings
 from dataclasses import dataclass
 from enum import IntEnum
 from abc import ABC
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Mapping, Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -162,54 +164,50 @@ class BivariateWindshieldModelParameters(ExternalDistortionModelParameters):
         return cls._cuda_cls()
 
 
-def has_camera_wrappers():
-    from ._backend import _C
-
-    # PyTorch will throw a RuntimeError if the class is not registered
-    # but that's okay in this case because we're just checking if it exists
+@functools.lru_cache(maxsize=1)
+def _build_config() -> Mapping[str, bool]:
     try:
-        return hasattr(torch.classes.gsplat, "BaseCameraModel")
-    except RuntimeError:
-        return False
+        from ._backend import _C
+
+        return (
+            types.MappingProxyType(_C.build_config())
+            if _C is not None
+            else types.MappingProxyType({})
+        )
+    except (ImportError, AttributeError):
+        return types.MappingProxyType({})
+
+
+def _has_build_feature(name: str) -> bool:
+    return _build_config().get(name, False)
+
+
+def has_camera_wrappers():
+    return _has_build_feature("camera_wrappers")
 
 
 def has_2dgs():
-    from ._backend import _C
-
-    return hasattr(torch.ops.gsplat, "projection_2dgs_fused_fwd")
+    return _has_build_feature("2dgs")
 
 
 def has_3dgs():
-    from ._backend import _C
-
-    return hasattr(torch.ops.gsplat, "projection_ewa_simple_fwd")
+    return _has_build_feature("3dgs")
 
 
 def has_3dgut():
-    from ._backend import _C
-
-    return hasattr(torch.ops.gsplat, "projection_ut_3dgs_fused")
+    return _has_build_feature("3dgut")
 
 
 def has_adam():
-    from ._backend import _C
-
-    return hasattr(torch.ops.gsplat, "adam")
+    return _has_build_feature("adam")
 
 
 def has_reloc():
-    from ._backend import _C
-
-    return hasattr(torch.ops.gsplat, "relocation")
+    return _has_build_feature("reloc")
 
 
 def has_losses():
-    try:
-        from ._backend import _C  # noqa: F401
-
-        return hasattr(torch.ops.gsplat, "gaussian_losses_fwd")
-    except (ImportError, AttributeError):
-        return False
+    return _has_build_feature("losses")
 
 
 def create_camera_model(
