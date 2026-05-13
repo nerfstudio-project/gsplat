@@ -32,8 +32,6 @@ using torch::indexing::Slice;
 // Pytest still owns discovery and execution through tests/test_cpp.py; the
 // assertions below call the gsplat C++ entry points directly.
 
-#if GSPLAT_BUILD_3DGUT
-
 c10::intrusive_ptr<FThetaCameraDistortionParameters> default_ftheta_coeffs()
 {
     // The pinhole path does not consume f-theta coefficients, but the 3DGUT
@@ -52,8 +50,6 @@ float max_abs_diff(const at::Tensor &actual, const at::Tensor &expected)
     return (actual - expected).abs().max().cpu().item<float>();
 }
 
-#endif // GSPLAT_BUILD_3DGUT
-
 } // namespace
 
 class FwdChunkStateTest
@@ -70,9 +66,9 @@ protected:
 
 #if !GSPLAT_BUILD_3DGUT
         GTEST_SKIP() << "3DGUT support is not built in";
-#else
-        m_scene = make_scene(GetParam());
 #endif
+
+        m_scene = make_scene(GetParam());
     }
 
     struct Eval3DScene {
@@ -101,7 +97,6 @@ protected:
 private:
     Eval3DScene m_scene;
 
-#if GSPLAT_BUILD_3DGUT
     // Build the synthetic scene used by every parameter instance. Kept off the
     // SetUp path so the fixture body advertises only the runtime skip rules.
     static Eval3DScene make_scene(int tile_size)
@@ -238,7 +233,6 @@ private:
             .ftheta_coeffs = ftheta_coeffs,
         };
     }
-#endif // GSPLAT_BUILD_3DGUT
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -249,11 +243,6 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(FwdChunkStateTest, C0MatchesTerminalAfterEarlyExit)
 {
-#if !GSPLAT_BUILD_3DGUT
-    // SetUp() has already reported the skip. This return keeps builds without
-    // 3DGUT from compiling/linking calls to 3DGUT-only operators below.
-    return;
-#else
     Eval3DScene &scene = this->scene();
     SCOPED_TRACE("tile_size=" + std::to_string(scene.tile_size));
 
@@ -326,5 +315,4 @@ TEST_P(FwdChunkStateTest, C0MatchesTerminalAfterEarlyExit)
     EXPECT_LE(max_abs_diff(actual_pix, expected_pix), 1.0e-5f)
         << "slot c=0 pix_out values differ from render_colors. Most likely "
            "the fwd early-exit padding is broken and slot c=0 was never written.";
-#endif // GSPLAT_BUILD_3DGUT
 }

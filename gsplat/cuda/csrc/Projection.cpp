@@ -1059,6 +1059,8 @@ projection_ut_3dgs_fused_impl(
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
 
+#endif // GSPLAT_BUILD_3DGUT
+
 std::tuple<
     at::Tensor,
     at::Tensor,
@@ -1091,6 +1093,13 @@ projection_ut_3dgs_fused(
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
+#if !GSPLAT_BUILD_3DGUT
+    TORCH_CHECK(
+        false,
+        "projection_ut_3dgs_fused requires GSPLAT_BUILD_3DGUT=1"
+    );
+    return {};
+#else
     return projection_ut_3dgs_fused_impl(
         means,
         quats,
@@ -1117,8 +1126,7 @@ projection_ut_3dgs_fused(
         lidar_coeffs,
         external_distortion_params
     );
+#endif // !GSPLAT_BUILD_3DGUT
 }
-
-#endif
 
 } // namespace gsplat
