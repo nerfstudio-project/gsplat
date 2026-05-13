@@ -15,6 +15,7 @@
 
 #include "Config.h"
 #include "Ops.h"
+#include "Rasterization.h"
 
 namespace {
 
@@ -246,49 +247,43 @@ TEST_P(FwdChunkStateTest, C0MatchesTerminalAfterEarlyExit)
     Eval3DScene &scene = this->scene();
     SCOPED_TRACE("tile_size=" + std::to_string(scene.tile_size));
 
-    using RasterResult =
-        std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>;
-
     // backgrounds=None makes the terminal accumulated pixel color equal the
     // public render_colors output, which gives a direct invariant for slot c=0.
-    RasterResult raster = gsplat::rasterize_to_pixels_from_world_3dgs_fwd(
-        scene.means,
-        scene.quats,
-        scene.scales,
-        scene.colors,
-        scene.opacities_bc,
-        c10::nullopt, // backgrounds
-        c10::nullopt, // masks
-        scene.width,
-        scene.height,
-        scene.tile_size,
-        scene.viewmats,
-        c10::nullopt, // viewmats1
-        scene.Ks,
-        static_cast<int64_t>(gsplat::PINHOLE),
-        scene.ut_params,
-        static_cast<int64_t>(ShutterType::GLOBAL),
-        c10::nullopt, // rays
-        c10::nullopt, // radial_coeffs
-        c10::nullopt, // tangential_coeffs
-        c10::nullopt, // thin_prism_coeffs
-        scene.ftheta_coeffs,
-        c10::nullopt, // lidar_coeffs
-        c10::nullopt, // external_distortion_params
-        scene.isect_offsets,
-        scene.flatten_ids,
-        false, // use_hit_distance
-        c10::nullopt, // sample_counts
-        c10::nullopt); // normals
-    const at::Tensor &render_colors = std::get<0>(raster);
-    const at::Tensor &render_alphas = std::get<1>(raster);
-    const at::Tensor &chunks_per_tile = std::get<3>(raster);
-    const at::Tensor &fwd_chunk_state = std::get<5>(raster);
+    gsplat::RasterizeToPixelsFromWorld3DGSFwdResult raster =
+        gsplat::rasterize_to_pixels_from_world_3dgs_fwd(
+            scene.means,
+            scene.quats,
+            scene.scales,
+            scene.colors,
+            scene.opacities_bc,
+            c10::nullopt, // backgrounds
+            c10::nullopt, // masks
+            scene.width,
+            scene.height,
+            scene.tile_size,
+            scene.viewmats,
+            c10::nullopt, // viewmats1
+            scene.Ks,
+            gsplat::PINHOLE,
+            scene.ut_params,
+            ShutterType::GLOBAL,
+            c10::nullopt, // rays
+            c10::nullopt, // radial_coeffs
+            c10::nullopt, // tangential_coeffs
+            c10::nullopt, // thin_prism_coeffs
+            scene.ftheta_coeffs,
+            c10::nullopt, // lidar_coeffs
+            c10::nullopt, // external_distortion_params
+            scene.isect_offsets,
+            scene.flatten_ids,
+            false, // use_hit_distance
+            c10::nullopt, // sample_counts
+            c10::nullopt); // normals
 
     // If this precondition fails, the synthetic scene stopped exercising the
     // multi-chunk path and the terminal-slot padding invariant is meaningless.
-    ASSERT_EQ(chunks_per_tile.numel(), 1);
-    const int num_chunks = chunks_per_tile.cpu().item<int>();
+    ASSERT_EQ(raster.chunks_per_tile.numel(), 1);
+    const int num_chunks = raster.chunks_per_tile.cpu().item<int>();
     ASSERT_GE(num_chunks, 2)
         << "expected num_chunks >= 2 to exercise multi-chunk padding";
 
@@ -297,14 +292,14 @@ TEST_P(FwdChunkStateTest, C0MatchesTerminalAfterEarlyExit)
     // that batch, slot c=0 is only ever written by the padding pass. Broken
     // padding leaves at::empty garbage in slot c=0, which diverges from the
     // public render outputs for every pixel in the tile.
-    const at::Tensor terminal_slot = fwd_chunk_state.select(0, 0);
+    const at::Tensor terminal_slot = raster.fwd_chunk_state.select(0, 0);
     const at::Tensor expected_T =
-        1.0f - render_alphas.reshape({scene.height, scene.width});
+        1.0f - raster.alphas.reshape({scene.height, scene.width});
     const at::Tensor actual_T =
         terminal_slot.index({Slice(), 0})
             .reshape({scene.tile_size, scene.tile_size});
     const at::Tensor expected_pix =
-        render_colors.reshape({scene.height, scene.width, scene.channels});
+        raster.renders.reshape({scene.height, scene.width, scene.channels});
     const at::Tensor actual_pix =
         terminal_slot.index({Slice(), Slice(1, 1 + scene.channels)})
             .reshape({scene.tile_size, scene.tile_size, scene.channels});
