@@ -347,20 +347,6 @@ def adam(
     )
 
 
-def _validate_sh_shapes(
-    degrees_to_use: int,
-    dirs: Tensor,  # [..., N, 3]
-    coeffs: Tensor,  # [N, K, 3]
-    masks: Optional[Tensor],  # [..., N]
-) -> None:
-    assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
-    assert coeffs.dim() == 3 and coeffs.shape[-1] == 3, coeffs.shape
-    assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
-    assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
-    if masks is not None:
-        assert masks.shape == dirs.shape[:-1], (masks.shape, dirs.shape[:-1])
-
-
 @trace_function("sh-fwd")
 def spherical_harmonics(
     degrees_to_use: int,
@@ -379,8 +365,12 @@ def spherical_harmonics(
     Returns:
         Spherical harmonics. ``[..., N, 3]``.
     """
-    _validate_sh_shapes(degrees_to_use, dirs, coeffs, masks)
+    assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
+    assert coeffs.dim() == 3 and coeffs.shape[-1] == 3, coeffs.shape
+    assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
+    assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
     if masks is not None:
+        assert masks.shape == dirs.shape[:-1], (masks.shape, dirs.shape[:-1])
         masks = masks.contiguous()
     return _SphericalHarmonics.apply(
         degrees_to_use, dirs.contiguous(), coeffs.contiguous(), masks
