@@ -192,9 +192,15 @@ def test_endonerf_dataset_getitem_returns_expected_keys(endonerf_dir: Path):
     assert item["time"].ndim == 0
 
 
-def test_endonerf_dataset_mask_is_tool_convention(endonerf_dir: Path):
-    """Frame 0 on-disk mask is all 0 → tool mask is all 1 after the 1 - mask/255 inversion.
-    Frame 1 on-disk mask is all 255 → tool mask is all 0."""
+def test_endonerf_dataset_mask_is_tissue_include_convention(endonerf_dir: Path):
+    """EndoNeRF / G-SHARP convention: on-disk 0 = tissue, 255 = tool.
+
+    After ``1 - mask/255`` in the dataset, the returned mask is a
+    tissue-include mask: ``1`` where we should keep (tissue), ``0`` where
+    the pixel is a tool (drop). Frame 0 on-disk is all 0 → returned all 1
+    (keep everything); frame 1 on-disk is all 255 → returned all 0 (drop
+    everything).
+    """
     parser = EndoNeRFParser(data_dir=endonerf_dir)
     ds = EndoNeRFDataset(parser, split="video")
     assert torch.allclose(ds[0]["mask"], torch.ones(8, 8), atol=1e-6)
