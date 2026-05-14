@@ -36,6 +36,23 @@
 
 namespace gsplat {
 
+#if GSPLAT_BUILD_3DGUT
+namespace {
+
+RendererConfig parse_renderer_config(const int64_t renderer_config)
+{
+    switch (renderer_config) {
+    case static_cast<int64_t>(RendererConfig::MIXED_BATCH):
+        return RendererConfig::MIXED_BATCH;
+    default:
+        TORCH_CHECK(false, "unsupported 3DGUT renderer_config: ", renderer_config);
+        return RendererConfig::MIXED_BATCH;
+    }
+}
+
+} // namespace
+#endif // GSPLAT_BUILD_3DGUT
+
 #if GSPLAT_BUILD_3DGS
 
 ////////////////////////////////////////////////////
@@ -635,6 +652,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
+    const RendererConfig renderer_config,
     const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3] optional output tensor
     const bool unsafe_masked_tile_outputs
@@ -647,6 +665,11 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     );
     return {};
 #else
+    TORCH_CHECK(
+        renderer_config == RendererConfig::MIXED_BATCH,
+        "only RendererConfig.MIXED_BATCH is supported in this commit"
+    );
+
     // --- Validate inputs ---------------------------------------------------
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -850,7 +873,9 @@ public:
         FWD_OPACITIES   = 4,
         FWD_BACKGROUNDS = 5,
         FWD_RAYS        = 16,
-        FWD_COUNT       = 29,
+        FWD_RENDERER_CONFIG = 28,
+        // unsafe_masked_tile_outputs is op input 29 (no grad slot needed).
+        FWD_COUNT       = 30,
     };
 
     // Tensor-input slot map: positions in the Tensor-only subsequence of
@@ -917,9 +942,12 @@ public:
         bool return_sample_counts,
         bool use_hit_distance,
         bool return_normals,
+        int64_t renderer_config,
         bool unsafe_masked_tile_outputs
     ) {
         ctx->set_materialize_grads(false);
+        const RendererConfig parsed_renderer_config =
+            parse_renderer_config(renderer_config);
 
         TORCH_CHECK(
             !(unsafe_masked_tile_outputs &&
@@ -946,7 +974,8 @@ public:
             rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids,
-            use_hit_distance, optional_outputs.sample_counts, optional_outputs.normals,
+            use_hit_distance, parsed_renderer_config,
+            optional_outputs.sample_counts, optional_outputs.normals,
             unsafe_masked_tile_outputs
         );
 
@@ -987,6 +1016,7 @@ public:
         ctx->saved_data["ut_params"] = ut_params;
         ctx->saved_data["ftheta_coeffs"] = ftheta_coeffs;
         ctx->saved_data["use_hit_distance"] = use_hit_distance;
+        ctx->saved_data["renderer_config"] = renderer_config;
         if (lidar_coeffs.has_value()) {
             ctx->saved_data["lidar_coeffs"] = lidar_coeffs.value();
         }
@@ -1072,6 +1102,9 @@ public:
             ctx->saved_data["ftheta_coeffs"].toCustomClass<FThetaCameraDistortionParameters>();
         const bool use_hit_distance =
             ctx->saved_data["use_hit_distance"].toBool();
+        const RendererConfig renderer_config = parse_renderer_config(
+            ctx->saved_data["renderer_config"].toInt());
+        (void)renderer_config;
 
         at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>>
             lidar_coeffs = c10::nullopt;
@@ -1246,6 +1279,7 @@ rasterize_to_pixels_from_world_3dgs(
     bool return_sample_counts,
     bool use_hit_distance,
     bool return_normals,
+    int64_t renderer_config,
     bool unsafe_masked_tile_outputs
 ) {
 #if !GSPLAT_BUILD_3DGUT
@@ -1255,6 +1289,9 @@ rasterize_to_pixels_from_world_3dgs(
     );
     return {};
 #else
+    const RendererConfig parsed_renderer_config =
+        parse_renderer_config(renderer_config);
+
     // CUDA dispatch is the forward-only implementation. When autograd is
     // active, the dispatcher selects the AutogradCUDA registration below,
     // whose forward calls the same rasterize_to_pixels_from_world_3dgs_fwd
@@ -1282,7 +1319,8 @@ rasterize_to_pixels_from_world_3dgs(
         rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         ftheta_coeffs, lidar_coeffs, external_distortion_params,
         tile_offsets, flatten_ids,
-        use_hit_distance, optional_outputs.sample_counts, optional_outputs.normals,
+        use_hit_distance, parsed_renderer_config,
+        optional_outputs.sample_counts, optional_outputs.normals,
         unsafe_masked_tile_outputs
     );
 
@@ -1324,6 +1362,7 @@ rasterize_to_pixels_from_world_3dgs_autograd(
     bool return_sample_counts,
     bool use_hit_distance,
     bool return_normals,
+    int64_t renderer_config,
     bool unsafe_masked_tile_outputs
 ) {
 #if !GSPLAT_BUILD_3DGUT
@@ -1347,6 +1386,7 @@ rasterize_to_pixels_from_world_3dgs_autograd(
         ftheta_coeffs, lidar_coeffs, external_distortion_params,
         tile_offsets, flatten_ids,
         return_sample_counts, use_hit_distance, return_normals,
+        renderer_config,
         unsafe_masked_tile_outputs
     );
 

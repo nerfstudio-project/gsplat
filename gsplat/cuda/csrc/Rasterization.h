@@ -252,6 +252,7 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     bool use_hit_distance,
+    RendererConfig renderer_config,
     const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3] optional output tensor
     bool unsafe_masked_tile_outputs
@@ -296,6 +297,7 @@ rasterize_to_pixels_from_world_3dgs(
     bool return_sample_counts,
     bool use_hit_distance,
     bool return_normals,
+    int64_t renderer_config,
     bool unsafe_masked_tile_outputs
 );
 
@@ -330,6 +332,7 @@ rasterize_to_pixels_from_world_3dgs_autograd(
     bool return_sample_counts,
     bool use_hit_distance,
     bool return_normals,
+    int64_t renderer_config,
     bool unsafe_masked_tile_outputs
 );
 

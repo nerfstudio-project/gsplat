@@ -585,6 +585,13 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
                   "LOGICAL_BATCH_T must be a multiple of FETCH_SIZE_T");
     constexpr uint32_t FETCHES_PER_BATCH = LOGICAL_BATCH_T / FETCH_SIZE_T;
     static_assert(FETCHES_PER_BATCH >= 1, "FETCHES_PER_BATCH must be >= 1");
+    // The multi-fetch path (FETCHES_PER_BATCH > 1) carries no inter-round
+    // barrier and is race-free only at warp width. Both forward kernels honor
+    // this: tile8 -> CTA_SIZE 32 (FETCHES 2), tile16 -> CTA_SIZE 256 (FETCHES 1).
+    static_assert(
+        CTA_SIZE_T == 32 || FETCHES_PER_BATCH == 1,
+        "CTA_SIZE_T > 32 requires FETCHES_PER_BATCH == 1; the multi-fetch path "
+        "relies on warp-synchronous execution (no inter-round barrier).");
 
 #pragma unroll
     for (uint32_t r = 0; r < FETCHES_PER_BATCH; ++r) {

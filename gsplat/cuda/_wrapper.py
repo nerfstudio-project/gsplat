@@ -106,6 +106,32 @@ def _make_lazy_cuda_obj(name: str) -> Any:
     return obj
 
 
+def renderer_config_mixed_batch() -> Any:
+    """Return the CUDA enum value for the MixedBatch renderer config."""
+    return _make_lazy_cuda_obj("RendererConfig.MIXED_BATCH")
+
+
+def _renderer_config_to_cuda(renderer_config: Any) -> Any:
+    if renderer_config is None:
+        return renderer_config_mixed_batch()
+
+    # RendererConfig lives in gsplat.rendering, which imports this module.
+    # Import lazily here so the public low-level wrapper accepts the same
+    # config objects as gsplat.rasterization without creating an import cycle.
+    from gsplat.rendering import (  # pylint: disable=import-outside-toplevel
+        RendererConfig,
+        RendererConfig_MixedBatch,
+    )
+
+    if isinstance(renderer_config, RendererConfig_MixedBatch):
+        return renderer_config_mixed_batch()
+    if isinstance(renderer_config, RendererConfig):
+        raise NotImplementedError(
+            f"Unsupported renderer_config type: {type(renderer_config).__name__}."
+        )
+    return renderer_config
+
+
 class RollingShutterType(IntEnum):
     ROLLING_TOP_TO_BOTTOM = 0
     ROLLING_LEFT_TO_RIGHT = 1
@@ -964,6 +990,7 @@ def rasterize_to_pixels_eval3d(
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     use_hit_distance: bool = False,
     return_normals: bool = False,
+    renderer_config: Any = None,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -1013,6 +1040,7 @@ def rasterize_to_pixels_eval3d(
         return_sample_counts=False,
         use_hit_distance=use_hit_distance,
         return_normals=return_normals,
+        renderer_config=renderer_config,
     )
     return colors, alphas
 
@@ -1049,6 +1077,7 @@ def rasterize_to_pixels_eval3d_extra(
     return_sample_counts: bool = False,
     use_hit_distance: bool = False,
     return_normals: bool = False,
+    renderer_config: Any = None,
     unsafe_masked_tile_outputs: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
@@ -1083,6 +1112,7 @@ def rasterize_to_pixels_eval3d_extra(
     """
     if ut_params is None:
         ut_params = UnscentedTransformParameters()
+    renderer_config = _renderer_config_to_cuda(renderer_config)
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
@@ -1209,6 +1239,7 @@ def rasterize_to_pixels_eval3d_extra(
         return_sample_counts,  # Pass flag to forward
         use_hit_distance,
         return_normals,  # Pass return_normals flag to forward
+        renderer_config,
         unsafe_masked_tile_outputs,
     )
 

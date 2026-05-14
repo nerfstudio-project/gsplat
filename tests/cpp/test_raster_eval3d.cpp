@@ -277,6 +277,7 @@ TEST_P(FwdChunkStateTest, C0MatchesTerminalAfterEarlyExit)
             scene.isect_offsets,
             scene.flatten_ids,
             false, // use_hit_distance
+            gsplat::RendererConfig::MIXED_BATCH,
             c10::nullopt, // sample_counts
             c10::nullopt, // normals
             false); // unsafe_masked_tile_outputs

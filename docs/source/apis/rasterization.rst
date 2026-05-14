@@ -43,6 +43,10 @@ are the focal lengths of the camera.
 
 .. autofunction:: rasterization
 
+.. autoclass:: RendererConfig
+
+.. autoclass:: RendererConfig_MixedBatch
+
 2DGS
 ------
 
