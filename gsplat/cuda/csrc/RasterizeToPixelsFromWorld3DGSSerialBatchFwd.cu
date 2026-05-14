@@ -170,6 +170,8 @@ template <
     uint32_t CDIM,
     uint32_t TILE_SIZE,
     uint32_t CTA_SIZE,
+    bool ReturnNormals,
+    bool UseHitDistance,
     bool SAFE_MASKED_OUTPUTS = true>
 __global__ void __launch_bounds__(CTA_SIZE, min_blocks_for_cdim<CDIM, CTA_SIZE>())
 rasterize_to_pixels_from_world_3dgs_fwd_kernel(
@@ -204,7 +206,6 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // intersections
     const int32_t *__restrict__ isect_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const bool use_hit_distance,
     float *__restrict__ render_colors,        // [B, C, image_height, image_width, CDIM]
     float *__restrict__ render_alphas,        // [B, C, image_height, image_width, 1]
     float *__restrict__ render_normals,       // [B, C, image_height, image_width, 3] optional
@@ -269,13 +270,11 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const uint32_t thread_x = tid & TILE_MASK;  // X & 0xF(15) == X % 16
     const uint32_t thread_y = tid >> TILE_SHIFT; // X >> 4 == X / 16
 
-    const bool return_normals = render_normals != nullptr;
-
     // Offset pointers to current image
     isect_offsets += iid * grid_height * grid_width;
     render_colors += iid * image_height * image_width * CDIM;
     render_alphas += iid * image_height * image_width;
-    if (render_normals != nullptr) {
+    if constexpr (ReturnNormals) {
         render_normals += iid * image_height * image_width * 3;
     }
     last_ids += iid * image_height * image_width;
@@ -470,7 +469,8 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const uint32_t logical_batch_start = range_start + LOGICAL_BATCH * lb;
         const bool all_done = process_logical_batch_gaussians<
             CDIM, LOGICAL_BATCH, FETCH_SIZE, CTA_SIZE,
-            PIXELS_PER_THREAD, /*CHECK_THRESHOLD=*/true, float>(
+            PIXELS_PER_THREAD, /*CHECK_THRESHOLD=*/true,
+            UseHitDistance, ReturnNormals, float>(
             tid,
             id_batch, xyz_opacity_batch, iscl_rot_batch,
             scale_batch, normal_batch,
@@ -478,7 +478,6 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             flatten_ids, means, quats, scales, opacities, colors,
             C, N,
             ray_o, ray_d,
-            use_hit_distance, return_normals,
             ALL_DONE,
             T, pix_out, normal_out,
             cur_idx, n_accumulated, done_mask);
@@ -499,9 +498,9 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             const int32_t diff = static_cast<int32_t>(num_logical_batches) - 1 -
                                  static_cast<int32_t>(lb);
             if (diff >= 0 && (diff % CHUNK_BATCHES) == 0) {
-                persist_chunk_state<CDIM, PIXELS_PER_THREAD, CTA_SIZE>(
+                persist_chunk_state<CDIM, PIXELS_PER_THREAD, CTA_SIZE, ReturnNormals>(
                     static_cast<uint32_t>(diff) / CHUNK_BATCHES,
-                    chunk_base_slot, pixels_per_tile, tid, return_normals,
+                    chunk_base_slot, pixels_per_tile, tid,
                     T, pix_out, normal_out, fwd_chunk_state);
             }
         }
@@ -523,9 +522,9 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                         static_cast<int32_t>(num_logical_batches) - 1 -
                         static_cast<int32_t>(lbb);
                     if (diff >= 0 && (diff % CHUNK_BATCHES) == 0) {
-                        persist_chunk_state<CDIM, PIXELS_PER_THREAD, CTA_SIZE>(
+                        persist_chunk_state<CDIM, PIXELS_PER_THREAD, CTA_SIZE, ReturnNormals>(
                             static_cast<uint32_t>(diff) / CHUNK_BATCHES,
-                            chunk_base_slot, pixels_per_tile, tid, return_normals,
+                            chunk_base_slot, pixels_per_tile, tid,
                             T, pix_out, normal_out, fwd_chunk_state);
                     }
                 }
@@ -545,7 +544,7 @@ rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                     backgrounds == nullptr ? pix_out[p][k]
                                            : (pix_out[p][k] + T[p] * backgrounds[k]);
             }
-            if (render_normals != nullptr) {
+            if constexpr (ReturnNormals) {
 #pragma unroll
                 for (uint32_t k = 0; k < 3; ++k) {
                     render_normals[pc[p].pix_id * 3 + k] = normal_out[p][k];
@@ -660,11 +659,15 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // only the templated constants change. min_blocks_for_cdim is re-derived
     // from CTA_SIZE so the schedule stays valid past CTA=32.
     const int safe_masked_outputs = unsafe_masked_tile_outputs ? 0 : 1;
+    const bool return_normals = normals.has_value();
     auto launch_kernel =
-        [&]<typename ChannelsT, typename TileSizeT, typename SafeMaskedOutputsT>() {
+        [&]<typename ChannelsT, typename TileSizeT, typename ReturnNormalsT,
+            typename UseHitDistanceT, typename SafeMaskedOutputsT>() {
             constexpr uint32_t CDIM = ChannelsT::value;
             constexpr uint32_t TILE_SIZE = TileSizeT::value;
             constexpr uint32_t CTA_SIZE = CtaSizeForTile<TILE_SIZE>::value;
+            constexpr bool ReturnNormals = static_cast<bool>(ReturnNormalsT::value);
+            constexpr bool UseHitDistance = static_cast<bool>(UseHitDistanceT::value);
             constexpr bool SAFE_MASKED_OUTPUTS = SafeMaskedOutputsT::value != 0;
 
             const dim3 threads = {CTA_SIZE, 1, 1};
@@ -675,7 +678,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
             if (cudaFuncSetAttribute(
                 rasterize_to_pixels_from_world_3dgs_fwd_kernel<
-                    CDIM, TILE_SIZE, CTA_SIZE, SAFE_MASKED_OUTPUTS>,
+                    CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, SAFE_MASKED_OUTPUTS>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
                 shmem_size
             ) != cudaSuccess) {
@@ -687,7 +690,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             }
 
             rasterize_to_pixels_from_world_3dgs_fwd_kernel<
-                CDIM, TILE_SIZE, CTA_SIZE, SAFE_MASKED_OUTPUTS>
+                CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, SAFE_MASKED_OUTPUTS>
                 <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
                     C,
                     N,
@@ -728,7 +731,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                     // intersections
                     isect_offsets.const_data_ptr<int32_t>(),
                     flatten_ids.const_data_ptr<int32_t>(),
-                    use_hit_distance,
                     renders.data_ptr<float>(),
                     alphas.data_ptr<float>(),
                     normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
@@ -750,6 +752,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const bool dispatched = dispatch::dispatch(
         SupportedChannels{channels},
         SupportedTileSizes{static_cast<int>(tile_size)},
+        dispatch::IntParam<0, 1>{return_normals ? 1 : 0},
+        dispatch::IntParam<0, 1>{use_hit_distance ? 1 : 0},
         MaskedOutputSafetyModes{safe_masked_outputs},
         std::move(launch_kernel)
     );
