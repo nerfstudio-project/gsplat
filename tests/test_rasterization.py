@@ -22,6 +22,7 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
+import inspect
 from itertools import product, chain
 from types import SimpleNamespace
 from typing import Optional, Tuple
@@ -33,6 +34,8 @@ import torch
 from tests.test_cameras import parse_lidar_camera
 from gsplat.rendering import (
     RenderMode,
+    RendererConfig,
+    RendererConfig_MixedBatch,
     render_mode_has_color,
     render_mode_has_depth_channel,
     render_mode_has_hit_distance,
@@ -40,6 +43,75 @@ from gsplat.rendering import (
 from gsplat.cuda._constants import ALPHA_THRESHOLD
 
 device = torch.device("cuda:0")
+
+
+def _minimal_rasterization_args():
+    return dict(
+        means=None,
+        quats=None,
+        scales=None,
+        opacities=None,
+        colors=None,
+        viewmats=None,
+        Ks=None,
+        width=1,
+        height=1,
+    )
+
+
+def test_renderer_config_base_public_api():
+    assert gsplat.RendererConfig is RendererConfig
+    with pytest.raises(TypeError, match="RendererConfig_MixedBatch"):
+        RendererConfig()
+
+
+@pytest.mark.parametrize(
+    "config_type",
+    [RendererConfig_MixedBatch],
+    ids=["mixed_batch"],
+)
+def test_renderer_config_public_api(config_type):
+    assert getattr(gsplat, config_type.__name__) is config_type
+    assert issubclass(config_type, RendererConfig)
+
+
+def test_rasterization_default_renderer_config():
+    renderer_config = inspect.signature(gsplat.rasterization).parameters[
+        "renderer_config"
+    ]
+    assert renderer_config.default is None
+
+
+class RendererConfig_Future(RendererConfig):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("renderer_config", "error_type", "match"),
+    [
+        pytest.param(object(), TypeError, "renderer_config", id="object"),
+        pytest.param(
+            RendererConfig_Future(),
+            NotImplementedError,
+            "RendererConfig_Future",
+            id="unsupported_subclass",
+        ),
+    ],
+)
+def test_rasterization_rejects_invalid_renderer_config(
+    renderer_config, error_type, match
+):
+    with pytest.raises(error_type, match=match):
+        gsplat.rasterization(
+            **_minimal_rasterization_args(),
+            renderer_config=renderer_config,
+        )
+
+
+def _rasterization_param_id(value):
+    if type(value) is RendererConfig_MixedBatch:
+        return "mixed_batch"
+    return None
 
 
 @pytest.fixture
@@ -137,7 +209,7 @@ def gaussians(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
-    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed,C,N",
+    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed,C,N,renderer_config",
     [
         pytest.param(
             *params,
@@ -183,6 +255,7 @@ def gaussians(
                 [False],  # distributed
                 [3],  # C (number of cameras)
                 [10_000],  # N (number of gaussians)
+                [RendererConfig_MixedBatch()],
             ),
             # 3DGUT
             product(
@@ -202,6 +275,7 @@ def gaussians(
                 [False],  # distributed
                 [3],  # C (number of cameras)
                 [10_000],  # N (number of gaussians)
+                [RendererConfig_MixedBatch()],
             ),
             # 3DGUT hit-distance modes: exercises `use_hit_distance` with the
             # extra-signals plumbing. Channel counts produced (e.g. 24 = 3 RGB
@@ -220,6 +294,7 @@ def gaussians(
                 [False],  # distributed
                 [3],  # C (number of cameras)
                 [10_000],  # N (number of gaussians)
+                [RendererConfig_MixedBatch()],
             ),
             # Distributed rendering (single-rank): exercises the all-gather /
             # scatter code path.  Constraints: batch_dims=(), no per_view_color.
@@ -236,9 +311,11 @@ def gaussians(
                 [True],  # distributed
                 [3],  # C (number of cameras)
                 [10_000],  # N (number of gaussians)
+                [RendererConfig_MixedBatch()],
             ),
         )
     ],
+    ids=_rasterization_param_id,
 )
 def test_rasterization(
     per_view_color: bool,
@@ -253,6 +330,7 @@ def test_rasterization(
     distributed: bool,
     C: int,
     N: int,
+    renderer_config: RendererConfig,
     sensor_model: SimpleNamespace,
     gaussians: SimpleNamespace,
     dist_init,
@@ -283,6 +361,7 @@ def test_rasterization(
         extra_signals=gaussians.extra_signals,
         extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
         distributed=distributed,
+        renderer_config=renderer_config,
     )
 
     expected_channels = 0

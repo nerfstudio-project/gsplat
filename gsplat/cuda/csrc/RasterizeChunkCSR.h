@@ -11,7 +11,7 @@
  *
  * The tiny chunk-count device kernel `compute_chunks_per_tile_kernel` and
  * the host helper `compute_chunk_csr` that wraps it live in
- * `RasterizeToPixelsFromWorld3DGSBwd.cu` (a `.cu` translation unit, so that
+ * `RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu` (a `.cu` translation unit, so that
  * nvcc can emit the kernel launch). This header only exposes the constants
  * + declarations so both `.cu` files and `Rasterization.cpp` (a pure C++
  * TU) can agree on the layout.
@@ -50,7 +50,7 @@ constexpr uint32_t FWD_CHUNK_STATE_NORMAL_EXTRA = 3;
 // `dummy_options` supplies the target device; typically `means.options()`.
 // Returns {chunks_per_tile [num_tiles] int32, chunk_offsets [num_tiles+1]
 // int32, total_chunks int64}. Definition lives in
-// `RasterizeToPixelsFromWorld3DGSBwd.cu` so the CUDA kernel launch +
+// `RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu` so the CUDA kernel launch +
 // cumsum can be emitted by nvcc.
 std::tuple<at::Tensor, at::Tensor, int64_t>
 compute_chunk_csr(

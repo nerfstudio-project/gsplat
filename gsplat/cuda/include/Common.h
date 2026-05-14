@@ -70,6 +70,10 @@ enum CameraModelType {
     LIDAR = 4,
 };
 
+enum RendererConfig {
+    MIXED_BATCH = 0,
+};
+
 #define N_THREADS_PACKED 256
 #define ALPHA_THRESHOLD (1.f / 255.f)
 // GAUSSIAN_EXTEND determines where the gaussian is truncated in standard deviations."
