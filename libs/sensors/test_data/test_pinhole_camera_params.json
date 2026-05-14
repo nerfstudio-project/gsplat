@@ -1,0 +1,332 @@
+{
+  "camera_front_left@synthetic_av_rig_v1": {
+    "logical_sensor_name": "camera_front_left",
+    "sequence_id": "synthetic_av_rig_v1",
+    "unique_sensor_idx": 0,
+    "camera_model_type": "opencv-pinhole",
+    "resolution": [
+      1920,
+      1280
+    ],
+    "shutter_type": "1",
+    "T_sensor_rig": [
+      [
+        0.70710678,
+        0.0,
+        0.70710678,
+        1.49
+      ],
+      [
+        -0.70710678,
+        0.0,
+        0.70710678,
+        0.09
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0,
+        2.12
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "intrinsics": {
+      "principal_point": [
+        960.0,
+        640.0
+      ],
+      "focal_length": [
+        2050.0,
+        2050.0
+      ],
+      "radial_coeffs": [
+        0.04,
+        -0.3,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "tangential_coeffs": [
+        0.001,
+        0.001
+      ],
+      "thin_prism_coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "external_distortion": null
+  },
+  "camera_front@synthetic_av_rig_v1": {
+    "logical_sensor_name": "camera_front",
+    "sequence_id": "synthetic_av_rig_v1",
+    "unique_sensor_idx": 1,
+    "camera_model_type": "opencv-pinhole",
+    "resolution": [
+      1920,
+      1280
+    ],
+    "shutter_type": "1",
+    "T_sensor_rig": [
+      [
+        0.0,
+        0.0,
+        1.0,
+        1.54
+      ],
+      [
+        -1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0,
+        2.12
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "intrinsics": {
+      "principal_point": [
+        960.0,
+        640.0
+      ],
+      "focal_length": [
+        2050.0,
+        2050.0
+      ],
+      "radial_coeffs": [
+        0.04,
+        -0.3,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "tangential_coeffs": [
+        0.001,
+        0.001
+      ],
+      "thin_prism_coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "external_distortion": null
+  },
+  "camera_front_right@synthetic_av_rig_v1": {
+    "logical_sensor_name": "camera_front_right",
+    "sequence_id": "synthetic_av_rig_v1",
+    "unique_sensor_idx": 2,
+    "camera_model_type": "opencv-pinhole",
+    "resolution": [
+      1920,
+      1280
+    ],
+    "shutter_type": "1",
+    "T_sensor_rig": [
+      [
+        -0.70710678,
+        0.0,
+        0.70710678,
+        1.49
+      ],
+      [
+        -0.70710678,
+        0.0,
+        -0.70710678,
+        -0.09
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0,
+        2.12
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "intrinsics": {
+      "principal_point": [
+        960.0,
+        640.0
+      ],
+      "focal_length": [
+        2050.0,
+        2050.0
+      ],
+      "radial_coeffs": [
+        0.04,
+        -0.3,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "tangential_coeffs": [
+        0.001,
+        0.001
+      ],
+      "thin_prism_coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "external_distortion": null
+  },
+  "camera_side_left@synthetic_av_rig_v1": {
+    "logical_sensor_name": "camera_side_left",
+    "sequence_id": "synthetic_av_rig_v1",
+    "unique_sensor_idx": 3,
+    "camera_model_type": "opencv-pinhole",
+    "resolution": [
+      1920,
+      886
+    ],
+    "shutter_type": "1",
+    "T_sensor_rig": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        1.43
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.11
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0,
+        2.12
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "intrinsics": {
+      "principal_point": [
+        960.0,
+        443.0
+      ],
+      "focal_length": [
+        2060.0,
+        2060.0
+      ],
+      "radial_coeffs": [
+        0.045,
+        -0.32,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "tangential_coeffs": [
+        0.0005,
+        -0.0005
+      ],
+      "thin_prism_coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "external_distortion": null
+  },
+  "camera_side_right@synthetic_av_rig_v1": {
+    "logical_sensor_name": "camera_side_right",
+    "sequence_id": "synthetic_av_rig_v1",
+    "unique_sensor_idx": 4,
+    "camera_model_type": "opencv-pinhole",
+    "resolution": [
+      1920,
+      886
+    ],
+    "shutter_type": "1",
+    "T_sensor_rig": [
+      [
+        -1.0,
+        0.0,
+        0.0,
+        1.43
+      ],
+      [
+        0.0,
+        0.0,
+        -1.0,
+        -0.11
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0,
+        2.12
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "intrinsics": {
+      "principal_point": [
+        960.0,
+        443.0
+      ],
+      "focal_length": [
+        2060.0,
+        2060.0
+      ],
+      "radial_coeffs": [
+        0.045,
+        -0.32,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "tangential_coeffs": [
+        0.0005,
+        -0.0005
+      ],
+      "thin_prism_coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "external_distortion": null
+  }
+}

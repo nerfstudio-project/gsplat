@@ -90,6 +90,7 @@ test:
     # Install shared libraries needed by the active test surface.
     - libs/install.sh geometry
     - libs/install.sh scene
+    - libs/install.sh sensors
     - libs/install.sh stage
     # pytest.ini testpaths covers tests/ and all colocated lib test directories.
     - pytest -sv
