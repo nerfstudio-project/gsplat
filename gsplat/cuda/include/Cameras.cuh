@@ -845,26 +845,28 @@ struct OpenCVPinholeCameraModel
         float fy = d * y + 2 * p2 * x * y + p1 * (r + 2 * y * y) + s3 * r +
                    s4 * r2 - yd;
 
-        // Compute derivative of alpha, beta over r.
-        const float alpha_r = k1 + r * (2.0 * k2 + r * (3.0 * k3));
-        const float beta_r = k4 + r * (2.0 * k5 + r * (3.0 * k6));
+        // Compute derivative of alpha, beta over r. `f` suffixes pin the
+        // multiply chain to fp32 (unsuffixed literals would promote each
+        // multiply to fp64).
+        const float alpha_r = k1 + r * (2.0f * k2 + r * (3.0f * k3));
+        const float beta_r = k4 + r * (2.0f * k5 + r * (3.0f * k6));
 
         // Compute derivative of d over [x, y]
         const float d_r = (alpha_r * beta - alpha * beta_r) / (beta * beta);
-        const float d_x = 2.0 * x * d_r;
-        const float d_y = 2.0 * y * d_r;
+        const float d_x = 2.0f * x * d_r;
+        const float d_y = 2.0f * y * d_r;
 
         // Compute derivative of fx over x and y.
-        float fx_x = d + d_x * x + 2.0 * p1 * y + 6.0 * p2 * x;
-        fx_x += 2.0 * x * (s1 + 2.0 * s2 * r);
-        float fx_y = d_y * x + 2.0 * p1 * x + 2.0 * p2 * y;
-        fx_y += 2.0 * y * (s1 + 2.0 * s2 * r);
+        float fx_x = d + d_x * x + 2.0f * p1 * y + 6.0f * p2 * x;
+        fx_x += 2.0f * x * (s1 + 2.0f * s2 * r);
+        float fx_y = d_y * x + 2.0f * p1 * x + 2.0f * p2 * y;
+        fx_y += 2.0f * y * (s1 + 2.0f * s2 * r);
 
         // Compute derivative of fy over x and y.
-        float fy_x = d_x * y + 2.0 * p2 * y + 2.0 * p1 * x;
-        fy_x += 2.0 * x * (s3 + 2.0 * s4 * r);
-        float fy_y = d + d_y * y + 2.0 * p2 * x + 6.0 * p1 * y;
-        fy_y += 2.0 * y * (s3 + 2.0 * s4 * r);
+        float fy_x = d_x * y + 2.0f * p2 * y + 2.0f * p1 * x;
+        fy_x += 2.0f * x * (s3 + 2.0f * s4 * r);
+        float fy_y = d + d_y * y + 2.0f * p2 * x + 6.0f * p1 * y;
+        fy_y += 2.0f * y * (s3 + 2.0f * s4 * r);
 
         return {fx, fy, fx_x, fx_y, fy_x, fy_y, true};
     }
