@@ -20,6 +20,7 @@
 #
 # Install order matters for editable dev: stage depends on scene, so
 # `./install.sh scene` before `./install.sh stage` to pick up local edits.
+# sensors depends on geometry: `./install.sh geometry` before `./install.sh sensors`.
 
 set -e
 
@@ -30,6 +31,7 @@ if [ $# -eq 0 ]; then
     echo "Available packages:"
     echo "  - geometry"
     echo "  - scene"
+    echo "  - sensors"
     echo "  - stage"
     echo ""
     echo "Usage: $0 <package_name>"
@@ -38,6 +40,13 @@ if [ $# -eq 0 ]; then
 fi
 
 PACKAGE=$1
+
+check_no_build_isolation_deps() {
+    python -c "import setuptools, wheel" >/dev/null 2>&1 || {
+        echo "setuptools and wheel must be installed before using --no-build-isolation" >&2
+        exit 1
+    }
+}
 
 case $PACKAGE in
     geometry)
@@ -48,13 +57,22 @@ case $PACKAGE in
         echo "Installing gsplat-scene..."
         (cd "$SCRIPT_DIR/scene" && pip install -e .)
         ;;
+    sensors)
+        python -c "import importlib.metadata as m; m.version('gsplat-geometry')" >/dev/null 2>&1 || {
+            echo "gsplat-geometry must be installed first: bash libs/install.sh geometry" >&2
+            exit 1
+        }
+        echo "Installing gsplat-sensors..."
+        check_no_build_isolation_deps
+        (cd "$SCRIPT_DIR/sensors" && pip install --no-build-isolation -e .)
+        ;;
     stage)
         echo "Installing gsplat-stage..."
         (cd "$SCRIPT_DIR/stage" && pip install -e .)
         ;;
     *)
-        echo "Unknown package: $PACKAGE"
-        echo "Available packages: geometry, scene, stage"
+        echo "Unknown package: $PACKAGE" >&2
+        echo "Available packages: geometry, scene, sensors, stage" >&2
         exit 1
         ;;
 esac
