@@ -331,6 +331,7 @@ __device__ __forceinline__ WorldRay compute_world_ray(
 template <
     uint32_t FETCH_SIZE_T,
     uint32_t CTA_SIZE_T,
+    bool ReturnNormals,
     typename scalar_t
 >
 __device__ __forceinline__ void cooperative_load_fetch_round(
@@ -348,8 +349,7 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
     const vec3 *__restrict__ scales,
     const scalar_t *__restrict__ opacities,
     const uint32_t C,
-    const uint32_t N,
-    const bool return_normals
+    const uint32_t N
 ) {
     // FETCH_SIZE_T > CTA_SIZE_T would leave shared-memory slots in
     // [CTA_SIZE_T, FETCH_SIZE_T) unloaded; downstream readers would
@@ -401,7 +401,7 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
         scale_batch[tid] = scale;
 
         // Normal = R * (0, 0, 1) = third column of R.
-        if (return_normals) {
+        if constexpr (ReturnNormals) {
             normal_batch[tid] = R[2];
         }
     }
@@ -428,6 +428,8 @@ template <
     uint32_t CDIM,
     uint32_t PIXELS_PER_THREAD_T,
     bool CHECK_THRESHOLD,
+    bool UseHitDistance,
+    bool ReturnNormals,
     typename scalar_t
 >
 __device__ __forceinline__ void process_fetch_round_blend(
@@ -441,8 +443,6 @@ __device__ __forceinline__ void process_fetch_round_blend(
     const scalar_t *__restrict__ colors,
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
     const vec3 (&ray_d)[PIXELS_PER_THREAD_T],
-    const bool use_hit_distance,
-    const bool return_normals,
     const uint32_t ALL_DONE,
     float (&T)[PIXELS_PER_THREAD_T],
     float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
@@ -482,7 +482,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
             }
 
             float hit_distance = 0.0f;
-            if (use_hit_distance) {
+            if constexpr (UseHitDistance) {
                 const vec3 grds = scale * (grd * hit_t);
                 hit_distance = glm::length(grds);
             }
@@ -499,7 +499,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
             const float vis = alpha * T[p];
             const float *c_ptr = colors + isect_id * CDIM;
 
-            if (use_hit_distance) {
+            if constexpr (UseHitDistance) {
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     const float value = (k == CDIM - 1) ? hit_distance : c_ptr[k];
@@ -512,7 +512,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
                 }
             }
 
-            if (return_normals) {
+            if constexpr (ReturnNormals) {
                 const vec3 unnormalized_normal = normal_batch[t];
                 const bool flipped = glm::dot(unnormalized_normal, ray_d[p]) > 0.0f;
                 const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
@@ -550,6 +550,8 @@ template <
     uint32_t CTA_SIZE_T,
     uint32_t PIXELS_PER_THREAD_T,
     bool CHECK_THRESHOLD,
+    bool UseHitDistance,
+    bool ReturnNormals,
     typename scalar_t
 >
 __device__ __forceinline__ bool process_logical_batch_gaussians(
@@ -571,8 +573,6 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     const uint32_t N,
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
     const vec3 (&ray_d)[PIXELS_PER_THREAD_T],
-    const bool use_hit_distance,
-    const bool return_normals,
     const uint32_t ALL_DONE,
     float (&T)[PIXELS_PER_THREAD_T],
     float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
@@ -606,23 +606,24 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
             break;
         }
 
-        cooperative_load_fetch_round<FETCH_SIZE_T, CTA_SIZE_T, scalar_t>(
+        cooperative_load_fetch_round<FETCH_SIZE_T, CTA_SIZE_T, ReturnNormals, scalar_t>(
             tid,
             id_batch, xyz_opacity_batch, iscl_rot_batch,
             scale_batch, normal_batch,
             batch_start, range_end,
             flatten_ids, means, quats, scales, opacities,
-            C, N, return_normals);
+            C, N);
 
         cta_sync<CTA_SIZE_T>();
 
         const uint32_t batch_size = min(FETCH_SIZE_T, ((uint32_t)range_end - batch_start));
-        process_fetch_round_blend<CDIM, PIXELS_PER_THREAD_T, CHECK_THRESHOLD, scalar_t>(
+        process_fetch_round_blend<
+            CDIM, PIXELS_PER_THREAD_T, CHECK_THRESHOLD,
+            UseHitDistance, ReturnNormals, scalar_t>(
             id_batch, xyz_opacity_batch, iscl_rot_batch,
             scale_batch, normal_batch,
             batch_start, batch_size,
             colors, ray_o, ray_d,
-            use_hit_distance, return_normals,
             ALL_DONE,
             T, pix_out, normal_out,
             cur_idx, n_accumulated, done_mask);
@@ -655,14 +656,14 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
 template <
     uint32_t CDIM,
     uint32_t PIXELS_PER_THREAD_T,
-    uint32_t CTA_SIZE_T
+    uint32_t CTA_SIZE_T,
+    bool ReturnNormals
 >
 __device__ __forceinline__ void persist_chunk_state(
     uint32_t c,
     int64_t chunk_base_slot,
     uint32_t pixels_per_tile,
     uint32_t tid,
-    bool return_normals,
     const float (&T)[PIXELS_PER_THREAD_T],
     const float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     const vec3  (&normal_out)[PIXELS_PER_THREAD_T],
@@ -683,7 +684,7 @@ __device__ __forceinline__ void persist_chunk_state(
         for (uint32_t k = 0; k < CDIM; ++k) {
             fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + k] = pix_out[p][k];
         }
-        if (return_normals) {
+        if constexpr (ReturnNormals) {
             fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = normal_out[p].x;
             fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = normal_out[p].y;
             fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = normal_out[p].z;

@@ -199,7 +199,7 @@ __device__ __forceinline__ uint32_t find_tile_for_block(
 //
 // Grid: 1D {total_chunks, 1, 1}; each CTA's (tile_linear, chunk_id) is decoded
 // via a binary search on chunk_offsets in the preamble.
-template <uint32_t CDIM, typename scalar_t>
+template <uint32_t CDIM, bool ReturnNormals, bool UseHitDistance, typename scalar_t>
 __global__ void rasterize_gradient_bwd_kernel(
     const uint32_t B,
     const uint32_t C,
@@ -234,7 +234,6 @@ __global__ void rasterize_gradient_bwd_kernel(
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const bool use_hit_distance,
     // fwd outputs
     const scalar_t
         *__restrict__ render_alphas,      // [B, C, image_height, image_width, 1]
@@ -283,7 +282,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     last_ids += iid * image_height * image_width;
     v_render_colors += iid * image_height * image_width * CDIM;
     v_render_alphas += iid * image_height * image_width;
-    if (v_render_normals != nullptr) {
+    if constexpr (ReturnNormals) {
         v_render_normals += iid * image_height * image_width * 3;
     }
     if (backgrounds != nullptr) {
@@ -357,10 +356,12 @@ __global__ void rasterize_gradient_bwd_kernel(
     const float v_render_a = pixel_valid ? v_render_alphas[pix_id] : 0.f;
 
     vec3 v_render_n = vec3(0.f);
-    if (v_render_normals != nullptr && pixel_valid) {
-        v_render_n.x = v_render_normals[pix_id * 3 + 0];
-        v_render_n.y = v_render_normals[pix_id * 3 + 1];
-        v_render_n.z = v_render_normals[pix_id * 3 + 2];
+    if constexpr (ReturnNormals) {
+        if (pixel_valid) {
+            v_render_n.x = v_render_normals[pix_id * 3 + 0];
+            v_render_n.y = v_render_normals[pix_id * 3 + 1];
+            v_render_n.z = v_render_normals[pix_id * 3 + 2];
+        }
     }
 
     // ---- Materialise chunk-start state from `fwd_chunk_state` ----------------
@@ -408,11 +409,11 @@ __global__ void rasterize_gradient_bwd_kernel(
     }
 
     // normal_accum_dot = dot(v_render_n, normal_final - normal_boundary).
-    // fwd always zero-fills the normal slot when `return_normals` is false,
-    // so reading unconditionally is safe. Guarded by the nullptr check to
+    // fwd always zero-fills the normal slot when ReturnNormals is false,
+    // so reading unconditionally is safe. Guarded by the constexpr flag to
     // skip three loads + three muls when normals are disabled.
     float normal_accum_dot = 0.f;
-    if (v_render_normals != nullptr) {
+    if constexpr (ReturnNormals) {
         const float nx_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 0];
         const float ny_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 1];
         const float nz_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 2];
@@ -575,7 +576,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                         valid = false;
                     }
 
-                    if (use_hit_distance) {
+                    if constexpr (UseHitDistance) {
                         grds = scale * (grd_n * hit_t);
                         hit_distance = glm::length(grds);
                     }
@@ -600,23 +601,21 @@ __global__ void rasterize_gradient_bwd_kernel(
                 T *= ra;
                 // Per-Gaussian color VJP: v_rgb_local[k] = fac * v_render_c[k].
                 //
-                // Last-channel special case when `use_hit_distance` is on:
+                // Last-channel special case when UseHitDistance is on:
                 // - fwd substitutes per-pixel hit_distance for colors[g,CDIM-1]
                 //   in pix_out, so colors[..., CDIM-1] is structurally absent
                 //   from the rendered output.
                 // - Therefore d(loss)/d(colors[..., CDIM-1]) = 0.
-                // - Zero v_rgb_local[CDIM-1] so the warp-reduced atomic add
-                //   leaves v_colors[..., CDIM-1] at 0.
+                // - Stop the loop one channel short so the zero-initialized
+                //   v_rgb_local[CDIM-1] stays 0.
                 // - The hit_distance VJP below pulls the depth-channel
                 //   gradient straight from v_render_c[CDIM-1], not from this
                 //   slot.
                 const float fac = alpha * T;
+                constexpr uint32_t kRgbWriteCount = UseHitDistance ? CDIM - 1u : CDIM;
 #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
+                for (uint32_t k = 0; k < kRgbWriteCount; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
-                }
-                if (use_hit_distance) {
-                    v_rgb_local[CDIM - 1] = 0.f;
                 }
 
                 // Precompute normal if needed. Used by:
@@ -628,7 +627,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 // R[2] / the dot / the flip.
                 bool flipped = false;
                 vec3 unnormalized_flipped = vec3(0.f);
-                if (v_render_normals != nullptr) {
+                if constexpr (ReturnNormals) {
                     // Recompute normal from forward pass
                     // normal = R * (0, 0, 1) = R[:, 2] (third column)
                     const vec3 unnormalized_normal = R[2];
@@ -645,10 +644,10 @@ __global__ void rasterize_gradient_bwd_kernel(
                 float rgb_render_dot = 0.f;
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    // For the last channel with use_hit_distance, use the per-pixel
+                    // For the last channel with UseHitDistance, use the per-pixel
                     // hit_distance instead of per-Gaussian rgbs_batch (which is
                     // shared memory and would race across pixels in the tile).
-                    const float rgb_k = (use_hit_distance && k == CDIM - 1)
+                    const float rgb_k = (UseHitDistance && k == CDIM - 1)
                         ? hit_distance
                         : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                     rgb_render_dot += rgb_k * v_render_c[k];
@@ -658,7 +657,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 // Gaussian's normal vector — used in the product-rule term for
                 // v_alpha below.
                 float normal_render_dot = 0.f;
-                if (v_render_normals != nullptr) {
+                if constexpr (ReturnNormals) {
                     normal_render_dot = glm::dot(normal, v_render_n);
                 }
                 
@@ -667,16 +666,16 @@ __global__ void rasterize_gradient_bwd_kernel(
                               + T_final * ra * v_alpha_ind_coeff;
                 // Forward: render_normals += normal * vis (where vis = alpha * T)
                 // So v_alpha_normals = dot(normal * T - normal_accum * ra, v_render_n)
-                if (v_render_normals != nullptr) {
+                if constexpr (ReturnNormals) {
                     v_alpha += normal_render_dot * T - normal_accum_dot * ra;
                 }
 
                 // Add contribution from hit distance (if enabled)
                 vec3 v_grd_n_hit = vec3(0.f);
                 vec3 v_gro_hit = vec3(0.f);
-                if (use_hit_distance) {
+                if constexpr (UseHitDistance) {
                     // Depth-channel gradient for the hit_distance VJP.
-                    // v_rgb_local[CDIM-1] was zeroed above (fwd replaces
+                    // v_rgb_local[CDIM-1] was left at 0 above (fwd replaces
                     // that color channel with hit_distance, so the color
                     // VJP must be 0). Compute v_depth directly from
                     // v_render_c instead of reading the zeroed slot.
@@ -731,7 +730,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                     
                     // Compute normal gradient contribution (if computing normals)
                     // Note: normal was precomputed above for v_alpha contribution
-                    if (v_render_normals != nullptr) {
+                    if constexpr (ReturnNormals) {
                         // Compute gradient contribution
                         // Forward: render_normals += normal * fac (where fac = alpha * T)
                         const vec3 v_normal_local = v_render_n * fac;
@@ -755,7 +754,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 render_accum_dot += rgb_render_dot * fac;
                 
                 // Accumulate normal contribution (for product rule in next iterations).
-                if (v_render_normals != nullptr) {
+                if constexpr (ReturnNormals) {
                     normal_accum_dot += normal_render_dot * fac;
                 }
             }
@@ -921,8 +920,13 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     TORCH_CHECK(chunk_offsets.numel() == static_cast<int64_t>(num_tiles) + 1,
                 "chunk_offsets has wrong size");
 
-    auto launch_kernel = [&]<typename ChannelsT>() {
+    const bool return_normals = v_render_normals.has_value();
+    auto launch_kernel = [&]<typename ChannelsT,
+                             typename ReturnNormalsT,
+                             typename UseHitDistanceT>() {
         constexpr uint32_t CDIM = ChannelsT::value;
+        constexpr bool ReturnNormals = static_cast<bool>(ReturnNormalsT::value);
+        constexpr bool UseHitDistance = static_cast<bool>(UseHitDistanceT::value);
 
         int64_t shmem_size =
             tile_size * tile_size *
@@ -996,13 +1000,15 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         // CSR slot read per chunk (the terminal slot).
         dim3 grad_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
         if (cudaFuncSetAttribute(
-                rasterize_gradient_bwd_kernel<CDIM, float>,
+                rasterize_gradient_bwd_kernel<
+                    CDIM, ReturnNormals, UseHitDistance, float>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
                 shmem_size) != cudaSuccess) {
             AT_ERROR("Failed to set shmem for gradient kernel (",
                      shmem_size, " bytes).");
         }
-        rasterize_gradient_bwd_kernel<CDIM, float>
+        rasterize_gradient_bwd_kernel<
+            CDIM, ReturnNormals, UseHitDistance, float>
             <<<grad_grid, threads, shmem_size,
                at::cuda::getCurrentCUDAStream()>>>(
                 B, C, N, n_isects,
@@ -1019,14 +1025,17 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 ftheta_device_coeffs, lidar_device_coeffs,
                 external_distortion_device_params,
                 tile_off_gpu, flatten_ptr,
-                use_hit_distance,
                 render_alphas_ptr, last_ids_ptr,
                 v_render_c_ptr, v_render_a_ptr, v_render_n_ptr,
                 v_means_ptr, v_quats_ptr, v_scales_ptr,
                 v_colors_ptr, v_opacities_ptr, v_rays_ptr,
                 fwd_chunk_state_ptr, chunk_offsets_ptr);
     };
-    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    const bool dispatched = dispatch::dispatch(
+        SupportedChannels{channels},
+        dispatch::IntParam<0, 1>{return_normals ? 1 : 0},
+        dispatch::IntParam<0, 1>{use_hit_distance ? 1 : 0},
+        std::move(launch_kernel));
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 
