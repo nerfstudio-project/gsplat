@@ -139,9 +139,10 @@ def test_dynamic_strategy_post_backward_without_init_raises():
 
 @pytest.mark.skip(
     reason=(
-        "vnath_gsharp: requires rasterization (CUDA) + deform-net wiring; "
-        "covered by examples/dynamic_surgical_trainer.py integration test "
-        "in TDD step 9."
+        "Activated as tests/test_dynamic_surgical_trainer.py::"
+        "test_trainer_one_step_train_no_nan (CUDA + ENDONERF_DATA_DIR-gated). "
+        "Kept here as a marker so anyone scanning DynamicStrategy tests can "
+        "find the integration counterpart."
     )
 )
 def test_dynamic_strategy_one_step_train_no_nan():

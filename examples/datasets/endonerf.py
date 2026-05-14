@@ -27,13 +27,15 @@ Conventions matched against G-SHARP:
 
 - ``poses_bounds.npy`` row format: 17 floats per frame — 15 = ``poses[3, 5]``
   flattened (``[R | t | (H, W, focal)]``); last 2 = near/far bounds.
-- ``masks/`` is in **tissue=1, tool=0 on-disk** convention; the dataset
-  inverts to **tissue=1, tool=0 → tool=1, tissue=0** at load time so the
-  resulting mask matches ``gsplat.regularizers.create_invisible_mask``
-  (tool=1) and the trainer's mask-aware loss helpers (mask=1 means keep).
-  Wait — re-check: G-SHARP does ``mask = 1 - np.array(mask) / 255.0`` in
-  the dataset (`endo_loader.py:179`) which inverts to **tool=1**.
-  Confirmed: the dataset returns a *tool* mask.
+- ``masks/`` is in **tool=255 on-disk** convention (EndoNeRF / G-SHARP:
+  white = tool, black = tissue). The dataset applies ``1 - mask/255``
+  (matching ``gsplat_train.py:2102`` and ``endo_loader.py:179`` —
+  G-SHARP's own ``# 1=tissue, 0=tool`` comment) so the returned tensor
+  is a **tissue-include mask** (``1`` = keep tissue, ``0`` = drop tool).
+  This is the convention the mask-aware loss helpers
+  (:func:`gsplat.losses.masked_l1`, :func:`masked_ssim`,
+  :func:`binocular_disparity_l1`) expect — ``mask != 0`` means "include
+  this pixel in the loss".
 - ``time = idx / n_frames`` per frame.
 - ``test_every`` controls train/test split: frame ``i`` is test if
   ``(i - 1) % test_every == 0``.
@@ -197,9 +199,10 @@ class EndoNeRFDataset(torch.utils.data.Dataset):
 
     - ``image``: ``(H, W, 3)`` float32 in ``[0, 1]``.
     - ``depth``: ``(H, W)`` float32 metric depth (0 = no measurement).
-    - ``mask``: ``(H, W)`` float32 tool mask (1 = tool, 0 = tissue),
-      matching G-SHARP's ``1 - mask/255`` convention at
-      ``endo_loader.py:179``.
+    - ``mask``: ``(H, W)`` float32 tissue-include mask (``1`` = keep
+      tissue, ``0`` = drop tool), matching G-SHARP's ``1 - mask/255``
+      inversion at ``endo_loader.py:179`` (which has its own
+      ``# 1=tissue, 0=tool`` comment).
     - ``camtoworld``: ``(4, 4)`` float32 camera-to-world.
     - ``K``: ``(3, 3)`` float32 intrinsics.
     - ``time``: scalar float32 timestamp in ``[0, 1)``.
@@ -237,7 +240,8 @@ class EndoNeRFDataset(torch.utils.data.Dataset):
         mask_raw = np.array(Image.open(self.parser.mask_paths[idx]))
         if mask_raw.ndim == 3:
             mask_raw = mask_raw[..., 0]
-        # G-SHARP convention: 1 - mask/255 → tool=1, tissue=0.
+        # G-SHARP convention (endo_loader.py:179 ``# 1=tissue, 0=tool``):
+        # 1 - mask/255 → returned tensor is a tissue-include mask.
         mask = 1.0 - mask_raw.astype(np.float32) / 255.0
 
         return {
