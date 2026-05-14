@@ -773,9 +773,10 @@ def _spherical_harmonics(
     coeffs: torch.Tensor,  # [N, K, 3]
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.spherical_harmonics()`."""
-    from ._wrapper import _validate_sh_shapes
-
-    _validate_sh_shapes(degrees_to_use, dirs, coeffs, masks=None)
+    assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
+    assert coeffs.dim() == 3 and coeffs.shape[-1] == 3, coeffs.shape
+    assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
+    assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
     K = coeffs.shape[1]
     dirs = F.normalize(dirs, p=2, dim=-1)
     num_bases = (degrees_to_use + 1) ** 2
