@@ -447,10 +447,12 @@ rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
     // Per-pixel state
     int32_t cur_idx[PIXELS_PER_THREAD];
     float T[PIXELS_PER_THREAD];
+    float transmittance_threshold[PIXELS_PER_THREAD];
 #pragma unroll
     for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
         cur_idx[p] = -1;
         T[p] = 1.0f;
+        transmittance_threshold[p] = TRANSMITTANCE_THRESHOLD;
     }
     int32_t n_accumulated[PIXELS_PER_THREAD] = {0};
     float pix_out[PIXELS_PER_THREAD][CDIM] = {0.f};
@@ -488,7 +490,7 @@ rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
                 // Gaussian inputs.
                 flatten_ids, means, quats, scales, opacities, colors, C, N,
                 // Per-pixel rays and accumulation state.
-                ray_o, ray_d, ALL_DONE,
+                ray_o, ray_d, ALL_DONE, transmittance_threshold,
                 T, pix_out, normal_out,
                 cur_idx, n_accumulated, done_mask);
 

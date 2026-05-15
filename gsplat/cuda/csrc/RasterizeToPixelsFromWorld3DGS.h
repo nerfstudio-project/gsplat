@@ -107,6 +107,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     // CSR batch structure (precomputed by caller, shared with bwd)
     const at::Tensor batches_per_tile, // [num_tiles] int32
     const at::Tensor batch_offsets,   // [num_tiles + 1] int32
+    const at::Tensor bid_to_slot,     // [total_batches] int32
     const int64_t total_batches,       // scalar; equals batch_offsets[num_tiles]
     // outputs
     at::Tensor renders, // [..., C, image_height, image_width, channels]
@@ -117,7 +118,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     at::Tensor fwd_batch_state, // [total_batches, state_dim, pixels_per_tile] fp32
     at::Tensor partials_meta, // [total_batches, pixels_per_tile, 2] uint16
     at::Tensor batch_replay_preamble, // [num_tiles, pixels_per_tile, 2] int32
-    at::Tensor compose_c_stop // [num_tiles, pixels_per_tile] uint16
+    at::Tensor compose_c_stop, // [num_tiles, pixels_per_tile] uint16
+    at::Tensor priming_state // [..., C, H, W] int32, temporary ParallelBatch fwd chain
 );
 
 void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(

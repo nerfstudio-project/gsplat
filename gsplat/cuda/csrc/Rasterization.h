@@ -225,6 +225,7 @@ struct RasterizeToPixelsFromWorld3DGSFwdResult {
     // Defined only for ParallelBatch. MixedBatch uses the serial forward path,
     // while ParallelBatch stores the per-pixel saturation handoff batch here.
     at::Tensor compose_c_stop;
+    at::Tensor priming_state;
 };
 
 // Internal C++ forward entry point. When `persist_batch_state` is true (or the

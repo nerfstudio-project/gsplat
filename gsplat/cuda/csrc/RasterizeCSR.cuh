@@ -101,6 +101,16 @@ compute_batch_csr(
     at::TensorOptions dummy_options
 );
 
+// Build a round-major launch permutation for ParallelBatch forward kernels.
+// The returned tensor has shape `[total_batches]` and maps a launch-order block
+// id to the tile-major batch slot used by `fwd_batch_state`.
+at::Tensor compute_bid_to_slot(
+    const at::Tensor &batches_per_tile,
+    const at::Tensor &batch_offsets,
+    int64_t total_batches,
+    at::TensorOptions dummy_options
+);
+
 #ifdef __CUDACC__
 template <uint32_t CDIM, bool ReturnNormals, typename scalar_t>
 class FwdBatchSlotView {

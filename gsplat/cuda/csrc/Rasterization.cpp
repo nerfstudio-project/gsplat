@@ -29,6 +29,7 @@
 #include "Config.h"
 #include "Common.h"
 #include "Ops.h"
+#include "PrimingChainEncoding.cuh"
 #include "Rasterization.h"
 #include "RasterizeCSR.cuh"
 #include "RasterizeToPixelsFromWorld3DGS.h"
@@ -52,6 +53,13 @@ RendererConfig parse_renderer_config(const int64_t renderer_config)
         return RendererConfig::MIXED_BATCH;
     }
 }
+
+constexpr int32_t kMaxParallelBatchesPerTile =
+    static_cast<int32_t>(COMPOSE_C_STOP_INVALID_RAY);
+
+static_assert(
+    priming::detail::K_LIMIT - 1 == kMaxParallelBatchesPerTile,
+    "ParallelBatch priming and compose-stop packing limits must match");
 
 } // namespace
 #endif // GSPLAT_BUILD_3DGUT
@@ -717,6 +725,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     at::Tensor last_ids = at::empty(last_ids_shape, opt.dtype(at::kInt));
 
     at::Tensor compose_c_stop;
+    at::Tensor priming_state;
     const int32_t pixels_per_tile = tile_size * tile_size;
     const bool return_normals = normals.has_value();
     const bool needs_batch_state =
@@ -801,6 +810,33 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
         compose_c_stop = at::empty(
             {num_tiles_for_compose, pixels_per_tile},
             opt.dtype(at::kUInt16));
+        // Per-pixel priming-chain state for ParallelBatch partials. Each int32
+        // packs `(!sat, float16 T_cum, uint16 -next_batch)`. Partials publish
+        // with atomicMin, so saturated entries win first, then the smallest
+        // non-negative T wins, and ties prefer the larger batch key through the
+        // negated low lane. The initial state means "no writer yet" with T=1.
+        // The same producer-side cap also protects `compose_c_stop`: its real
+        // batch ids are one lower than priming's `next_batch` ids.
+        const int32_t max_batches_per_tile =
+            batches_per_tile.max().item<int32_t>();
+        TORCH_CHECK(
+            max_batches_per_tile <= kMaxParallelBatchesPerTile,
+            "max batches per tile must be <= ",
+            kMaxParallelBatchesPerTile,
+            " for u16-packed ParallelBatch priming/compose state (got ",
+            max_batches_per_tile,
+            ")");
+        const int32_t priming_state_init =
+            static_cast<int32_t>(gsplat::priming::INIT_PACKED);
+        at::DimVector priming_shape(batch_dims);
+        priming_shape.append({C, image_height, image_width});
+        priming_state = at::full(
+            priming_shape, priming_state_init, opt.dtype(at::kInt));
+        // Round-major launch permutation for the ParallelBatch partials and
+        // batch-replay kernels. The persisted state remains tile-major; only
+        // the order in which CTAs are issued changes.
+        at::Tensor bid_to_slot = compute_bid_to_slot(
+            batches_per_tile, batch_offsets, total_batches, opt);
         launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
             means, quats, scales, colors, opacities,
             backgrounds, masks,
@@ -810,10 +846,10 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
             rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids, use_hit_distance,
-            batches_per_tile, batch_offsets, total_batches,
+            batches_per_tile, batch_offsets, bid_to_slot, total_batches,
             renders, alphas, last_ids,
             sample_counts, normals, fwd_batch_state, partials_meta,
-            batch_replay_preamble, compose_c_stop
+            batch_replay_preamble, compose_c_stop, priming_state
         );
     }
 
@@ -825,6 +861,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
         .batch_offsets = batch_offsets,
         .fwd_batch_state = fwd_batch_state,
         .compose_c_stop = compose_c_stop,
+        .priming_state = priming_state,
     };
 #endif // !GSPLAT_BUILD_3DGUT
 }
