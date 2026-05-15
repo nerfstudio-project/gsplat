@@ -161,6 +161,10 @@ def gaussians(
                     params[0] == True and not render_mode_has_color(params[2]),
                     reason="per_view_color requires colors, invalid with depth-only render_mode",
                 ),
+                pytest.mark.skipif(
+                    params[0] == True and params[1] is not None,
+                    reason="per_view_color is a no-op when sh_degree is set; skip the duplicate",
+                ),
             ],
         )
         for params in
