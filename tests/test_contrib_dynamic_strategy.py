@@ -13,17 +13,14 @@ from gsplat.contrib.dynamic.deformation import DeformationTable
 from gsplat.contrib.dynamic.strategy import DynamicStrategy
 
 
-def _make_params_optimizers(num_gaussians: int = 10, include_dynamic_keys: bool = True):
-    """Build the params + optimizers pair expected by ``check_sanity``."""
+def _make_params_optimizers(num_gaussians: int = 10):
+    """Build the per-Gaussian params + optimizers pair expected by ``check_sanity``."""
     params: dict[str, torch.nn.Parameter] = {
         "means": torch.nn.Parameter(torch.randn(num_gaussians, 3)),
         "scales": torch.nn.Parameter(torch.randn(num_gaussians, 3)),
         "quats": torch.nn.Parameter(torch.randn(num_gaussians, 4)),
         "opacities": torch.nn.Parameter(torch.randn(num_gaussians, 1)),
     }
-    if include_dynamic_keys:
-        params["hexplane_params"] = torch.nn.Parameter(torch.randn(8, 8, 4))
-        params["deform_mlp_params"] = torch.nn.Parameter(torch.randn(16, 8))
     optimizers = {k: torch.optim.Adam([p], lr=1e-3) for k, p in params.items()}
     return params, optimizers
 
@@ -34,15 +31,23 @@ def _make_params_optimizers(num_gaussians: int = 10, include_dynamic_keys: bool 
 
 
 def test_dynamic_strategy_check_sanity_passes_on_well_formed_params():
+    """DynamicStrategy.check_sanity has the same per-Gaussian requirements
+    as the parent — means/scales/quats/opacities must be present and
+    optimizer keys must match. HexPlane / DeformNet trainables live
+    outside *params* (see DynamicStrategy class docstring)."""
     strategy = DynamicStrategy()
     params, optimizers = _make_params_optimizers()
     strategy.check_sanity(params, optimizers)  # must not raise
 
 
-def test_dynamic_strategy_check_sanity_fails_on_missing_keys():
+def test_dynamic_strategy_check_sanity_fails_on_missing_per_gaussian_keys():
+    """The parent's check still fires if a per-Gaussian key is missing."""
     strategy = DynamicStrategy()
-    params, optimizers = _make_params_optimizers(include_dynamic_keys=False)
-    with pytest.raises(AssertionError, match="hexplane_params"):
+    params, optimizers = _make_params_optimizers()
+    # Drop means (required by DefaultStrategy.check_sanity).
+    del params["means"]
+    del optimizers["means"]
+    with pytest.raises(AssertionError, match="means"):
         strategy.check_sanity(params, optimizers)
 
 

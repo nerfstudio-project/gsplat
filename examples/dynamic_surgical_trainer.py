@@ -124,6 +124,12 @@ class Config:
     seed: int = 42
     device: str = "cuda"
 
+    # Render-GIF (post-training)
+    render_gif_after_train: bool = False
+    gif_filename: str = "preview.gif"
+    gif_fps: int = 10
+    gif_frame_indices: Optional[Tuple[int, ...]] = None  # None = parser.video_idxs
+
     def __post_init__(self) -> None:
         self.data_dir = Path(self.data_dir)
         self.output_dir = Path(self.output_dir)
@@ -224,10 +230,10 @@ def build_splats_from_parser(
     logit_opa = math.log(cfg.init_opacity / max(1.0 - cfg.init_opacity, 1e-12))
     opacities = torch.full((n, 1), logit_opa, device=device)
 
-    # Bookkeeping placeholders so DynamicStrategy.check_sanity passes.
-    hexplane_placeholder = torch.zeros(1, device=device)
-    deform_placeholder = torch.zeros(1, device=device)
-
+    # Strategy params are *per-Gaussian only* — gsplat densification ops
+    # iterate every entry and split/duplicate/prune per-Gaussian. HexPlane
+    # plane grids and DeformNet MLP weights belong to separate optimizers
+    # managed by :func:`build_deform_modules`.
     params = nn.ParameterDict(
         {
             "means": nn.Parameter(xyz.contiguous()),
@@ -235,8 +241,6 @@ def build_splats_from_parser(
             "scales": nn.Parameter(log_scales),
             "opacities": nn.Parameter(opacities),
             "colors": nn.Parameter(rgb.contiguous()),
-            "hexplane_params": nn.Parameter(hexplane_placeholder),
-            "deform_mlp_params": nn.Parameter(deform_placeholder),
         }
     )
     optimizers = {
@@ -245,14 +249,6 @@ def build_splats_from_parser(
         "scales": torch.optim.Adam([params["scales"]], lr=cfg.lr_scales),
         "opacities": torch.optim.Adam([params["opacities"]], lr=cfg.lr_opacities),
         "colors": torch.optim.Adam([params["colors"]], lr=cfg.lr_colors),
-        # Placeholders use the hexplane / deform LRs so check_sanity is happy;
-        # the real grids / MLP get their own optimizers from build_deform_modules.
-        "hexplane_params": torch.optim.Adam(
-            [params["hexplane_params"]], lr=cfg.lr_hexplane
-        ),
-        "deform_mlp_params": torch.optim.Adam(
-            [params["deform_mlp_params"]], lr=cfg.lr_deform_mlp
-        ),
     }
     return params, optimizers
 
@@ -426,6 +422,98 @@ def train_step(
 
 
 # ---------------------------------------------------------------------------
+# Render helpers (post-training)
+# ---------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def render_frame(
+    parser: EndoNeRFParser,
+    frame_idx: int,
+    params: nn.ParameterDict,
+    hexplane: HexPlaneField,
+    deform_net: DeformNetwork,
+    device: torch.device,
+) -> np.ndarray:
+    """Render a single frame at its native time. Returns ``(H, W, 3)`` uint8."""
+    camtoworld = torch.from_numpy(parser.camtoworlds[frame_idx]).to(device).unsqueeze(0)
+    K = torch.from_numpy(parser.K).to(device).unsqueeze(0)
+    t = torch.tensor(float(parser.times[frame_idx]), device=device).view(1)
+
+    means = params["means"]
+    quats = params["quats"]
+    log_scales = params["scales"]
+    opacities_logit = params["opacities"]
+    colors = params["colors"]
+
+    n = means.shape[0]
+    t_per_g = t.expand(n).unsqueeze(-1)
+    xyzt = torch.cat([means, t_per_g], dim=-1)
+    plane_features = hexplane(xyzt)
+    means_d, quats_d, opacities_d_logit = deform_net(
+        means, quats, opacities_logit, t_per_g, plane_features
+    )
+
+    viewmats = torch.linalg.inv(camtoworld)
+    render_colors, _, _ = rasterization(
+        means=means_d,
+        quats=quats_d,
+        scales=torch.exp(log_scales),
+        opacities=torch.sigmoid(opacities_d_logit).squeeze(-1),
+        colors=colors,
+        viewmats=viewmats,
+        Ks=K,
+        width=parser.width,
+        height=parser.height,
+        sh_degree=None,
+        render_mode="RGB+ED",
+        packed=True,
+    )
+    image = render_colors[..., :3].squeeze(0).clamp(0.0, 1.0)
+    return (image * 255).to(torch.uint8).cpu().numpy()
+
+
+def render_gif(
+    parser: EndoNeRFParser,
+    params: nn.ParameterDict,
+    hexplane: HexPlaneField,
+    deform_net: DeformNetwork,
+    output_path: Path,
+    device: torch.device,
+    frame_indices: Optional[list[int]] = None,
+    fps: int = 10,
+) -> Path:
+    """Render frames across the dataset and write an animated GIF.
+
+    Args:
+        parser: A parsed :class:`EndoNeRFParser`.
+        params / hexplane / deform_net: Trained trainer components.
+        output_path: Destination GIF path. Parent is created if missing.
+        device: CUDA device.
+        frame_indices: Iterable of parser-relative frame indices to render.
+            Defaults to ``parser.video_idxs`` (every frame).
+        fps: Output GIF frames-per-second.
+
+    Returns:
+        The resolved output path.
+    """
+    import imageio.v2 as imageio
+
+    if frame_indices is None:
+        frame_indices = list(parser.video_idxs)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    frames: list[np.ndarray] = []
+    for idx in tqdm.tqdm(frame_indices, desc=f"rendering -> {output_path.name}"):
+        frames.append(render_frame(parser, idx, params, hexplane, deform_net, device))
+
+    imageio.mimsave(str(output_path), frames, duration=max(1, int(1000 / fps)), loop=0)
+    print(f"Saved GIF: {output_path} ({len(frames)} frames @ {fps} fps)")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
 # Train loop / entry point
 # ---------------------------------------------------------------------------
 
@@ -481,6 +569,21 @@ def train(cfg: Config) -> None:
                 loss=f"{losses['loss']:.4f}",
                 n=int(params["means"].shape[0]),
             )
+
+    if cfg.render_gif_after_train:
+        gif_path = cfg.output_dir / cfg.gif_filename
+        render_gif(
+            parser=parser,
+            params=params,
+            hexplane=hexplane,
+            deform_net=deform_net,
+            output_path=gif_path,
+            device=device,
+            frame_indices=list(cfg.gif_frame_indices)
+            if cfg.gif_frame_indices is not None
+            else None,
+            fps=cfg.gif_fps,
+        )
 
 
 def main() -> None:
