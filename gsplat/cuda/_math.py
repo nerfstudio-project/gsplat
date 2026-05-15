@@ -224,7 +224,13 @@ def _eval_poly_inverse_horner_newton(
 
     Returns:
         x: [...] inverted values
-        converged: [...] convergence mask
+        converged: [...] True where |dx| dropped below the inner threshold
+            (1e-6). Treat as advisory: for well-behaved polynomial fits
+            Newton's `x` is accurate to FP32 even when |dx| oscillates at
+            the polynomial-evaluation noise floor (typically ~10⁻⁵ in
+            x-units) without ever reaching 1e-6. Callers that gate on this
+            flag should also consider trusting Newton's result directly
+            (see `_FThetaCameraModel.camera_ray_to_image_point`).
     """
     # Preconditions
     B = poly.coeffs.shape[:-1]
