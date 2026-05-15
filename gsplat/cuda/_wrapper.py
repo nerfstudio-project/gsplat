@@ -350,31 +350,27 @@ def adam(
 @trace_function("sh-fwd")
 def spherical_harmonics(
     degrees_to_use: int,
-    dirs: Tensor,  # [..., 3]
-    coeffs: Tensor,  # [..., K, 3]
-    masks: Optional[Tensor] = None,  # [...,]
+    dirs: Tensor,  # [..., N, 3]
+    coeffs: Tensor,  # [N, K, 3]
+    masks: Optional[Tensor] = None,  # [..., N]
 ) -> Tensor:
     """Computes spherical harmonics.
 
     Args:
-        degrees_to_use: The degree to be used.
-        dirs: Directions. [..., 3]
-        coeffs: Coefficients. [..., K, 3]
-        masks: Optional boolen masks to skip some computation. [...,] Default: None.
+        degrees_to_use: SH degree to evaluate.
+        dirs: View directions. ``[..., N, 3]``; any leading shape, rank ≥ 2.
+        coeffs: SH coefficients. ``[N, K, 3]``.
+        masks: Optional boolean masks. ``[..., N]`` matching ``dirs.shape[:-1]``.
 
     Returns:
-        Spherical harmonics. [..., 3]
+        Spherical harmonics. ``[..., N, 3]``.
     """
+    assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
+    assert coeffs.dim() == 3 and coeffs.shape[-1] == 3, coeffs.shape
+    assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
     assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
-    batch_dims = dirs.shape[:-1]
-    assert dirs.shape == batch_dims + (3,), dirs.shape
-    assert (
-        (len(coeffs.shape) == len(batch_dims) + 2)
-        and coeffs.shape[:-2] == batch_dims
-        and coeffs.shape[-1] == 3
-    ), coeffs.shape
     if masks is not None:
-        assert masks.shape == batch_dims, masks.shape
+        assert masks.shape == dirs.shape[:-1], (masks.shape, dirs.shape[:-1])
         masks = masks.contiguous()
     return _SphericalHarmonics.apply(
         degrees_to_use, dirs.contiguous(), coeffs.contiguous(), masks

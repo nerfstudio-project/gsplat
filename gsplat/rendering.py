@@ -64,6 +64,7 @@ from .utils import depth_to_normal, get_projection_matrix
 RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"]
 RasterizeMode = Literal["classic", "antialiased"]
 
+
 # TODO: RenderMode should be an enum so that we can add these query methods to it.
 # The problem is that it'd break backward compatibllity due to some symbols used, e.g. RGB+D or RGB-d.
 def render_mode_has_color(mode: RenderMode) -> bool:
@@ -674,23 +675,12 @@ def rasterization(
                     features.dim() == num_batch_dims + 2
                 ), f"Distributed mode only supports per-Gaussian {name}."
         else:
-            # treat features as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
-            # Allowing for activating partial SH bands
+            # treat features as SH coefficients in the deduplicated [N, K, 3] layout,
+            # shared across batch and camera dims. Allowing for activating partial SH bands.
             assert (
-                features.dim() == num_batch_dims + 3
-                and features.shape[:-2] == batch_dims + (N,)
-                and channels == 3
-            ) or (
-                features.dim() == num_batch_dims + 4
-                and features.shape[:-2] == batch_dims + (C, N)
-                and channels == 3
-            ), f"{name}'s shape {features.shape=} must be either {(*batch_dims, N, 3)} or {(*batch_dims, C, N, 3)}"
-
+                features.dim() == 3 and features.shape[0] == N and channels == 3
+            ), f"{name}'s shape {features.shape=} must be (N, K, 3) with N={N}"
             assert (sh_degree + 1) ** 2 <= features.shape[-2], features.shape
-            if distributed:
-                assert (
-                    features.dim() == num_batch_dims + 3
-                ), f"Distributed mode only supports per-Gaussian {name}."
 
     # Skip colors validation for depth-only modes (colors are ignored/overwritten)
     if has_color:
@@ -902,9 +892,11 @@ def rasterization(
         if extra_signals is not None:
             feature_list.append(extra_signals)
         if feature_list:
-            with trace_range("concat-features") if len(
-                feature_list
-            ) > 1 else nullcontext():
+            with (
+                trace_range("concat-features")
+                if len(feature_list) > 1
+                else nullcontext()
+            ):
                 proj_features = (
                     torch.cat(feature_list, dim=-1)
                     if len(feature_list) > 1
@@ -936,44 +928,51 @@ def rasterization(
 
         feature_list = []
         if has_color:
-            colors_tail = (
-                colors.shape[-2:] if colors_sh_degree is not None else colors.shape[-1:]
-            )
             trace_push("colors")
-            colors = normalize_features_layout(
-                colors, batch_dims, C, colors_tail, batch_ids, camera_ids, gaussian_ids
-            )
             if colors_sh_degree is not None:
+                if gaussian_ids is not None:
+                    colors = colors[gaussian_ids]
                 colors = spherical_harmonics(
                     colors_sh_degree, dirs, colors, masks=valid_gaussians
                 )
                 # Make sure colors >= 0 so that it's apples-to-apples with Inria CUDA backend
                 with trace_range("adj-colors"):
                     colors = torch.clamp_min(colors + 0.5, 0.0)
+            else:
+                colors = normalize_features_layout(
+                    colors,
+                    batch_dims,
+                    C,
+                    colors.shape[-1:],
+                    batch_ids,
+                    camera_ids,
+                    gaussian_ids,
+                )
             trace_pop()  # colors
             feature_list.append(colors)
 
         if extra_signals is not None:
-            es_tail = (
-                extra_signals.shape[-2:]
-                if extra_signals_sh_degree is not None
-                else extra_signals.shape[-1:]
-            )
             trace_push("extra")
-            extra_signals = normalize_features_layout(
-                extra_signals,
-                batch_dims,
-                C,
-                es_tail,
-                batch_ids,
-                camera_ids,
-                gaussian_ids,
-            )
             if extra_signals_sh_degree is not None:
+                if gaussian_ids is not None:
+                    extra_signals = extra_signals[gaussian_ids]
                 extra_signals = spherical_harmonics(
-                    extra_signals_sh_degree, dirs, extra_signals, masks=valid_gaussians
+                    extra_signals_sh_degree,
+                    dirs,
+                    extra_signals,
+                    masks=valid_gaussians,
                 )
                 extra_signals = extra_signals + 0.5
+            else:
+                extra_signals = normalize_features_layout(
+                    extra_signals,
+                    batch_dims,
+                    C,
+                    extra_signals.shape[-1:],
+                    batch_ids,
+                    camera_ids,
+                    gaussian_ids,
+                )
             trace_pop()  # extra
             feature_list.append(extra_signals)
 
@@ -1386,20 +1385,11 @@ def _maybe_evaluate_sh(
             # features is already [..., C, N, D]
             pass
     else:
-        # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
         camtoworlds = torch.inverse(viewmats)  # [..., C, 4, 4]
         dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]  # [..., C, N, 3]
         masks = (radii > 0).all(dim=-1)  # [..., C, N]
-        if features.dim() == num_batch_dims + 3:
-            # Turn [..., N, K, 3] into [..., C, N, K, 3]
-            shs = torch.broadcast_to(
-                features[..., None, :, :, :], batch_dims + (C, N, -1, 3)
-            )  # [..., C, N, K, 3]
-        else:
-            # features is already [..., C, N, K, 3]
-            shs = features
         features = spherical_harmonics(
-            sh_degree, dirs, shs, masks=masks
+            sh_degree, dirs, features, masks=masks
         )  # [..., C, N, 3]
         if clamp:
             # make it apple-to-apple with Inria's CUDA Backend.
@@ -1507,16 +1497,10 @@ def _rasterization(
                 and colors.shape[:-1] == batch_dims + (C, N)
             ), colors.shape
         else:
-            # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
-            # Allowing for activating partial SH bands
+            # treat colors as SH coefficients, must be in shape [N, K, 3].
+            # Allowing for activating partial SH bands.
             assert (
-                colors.dim() == num_batch_dims + 3
-                and colors.shape[:-2] == batch_dims + (N,)
-                and colors.shape[-1] == 3
-            ) or (
-                colors.dim() == num_batch_dims + 4
-                and colors.shape[:-2] == batch_dims + (C, N)
-                and colors.shape[-1] == 3
+                colors.dim() == 3 and colors.shape[0] == N and colors.shape[-1] == 3
             ), colors.shape
             assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
@@ -1955,16 +1939,10 @@ def rasterization_inria_wrapper(
             and colors.shape[:-1] == batch_dims + (C, N)
         ), colors.shape
     else:
-        # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
-        # Allowing for activating partial SH bands
+        # treat colors as SH coefficients, must be in shape [N, K, 3].
+        # Allowing for activating partial SH bands.
         assert (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-2] == batch_dims + (N,)
-            and colors.shape[-1] == 3
-        ) or (
-            colors.dim() == num_batch_dims + 4
-            and colors.shape[:-2] == batch_dims + (C, N)
-            and colors.shape[-1] == 3
+            colors.dim() == 3 and colors.shape[0] == N and colors.shape[-1] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
@@ -1975,7 +1953,10 @@ def rasterization_inria_wrapper(
     opacities = opacities.reshape(B, N)
     viewmats = viewmats.reshape(B, C, 4, 4)
     Ks = Ks.reshape(B, C, 3, 3)
-    if colors.dim() == num_batch_dims + 2:
+    if sh_degree is not None:
+        # SH coefficients are deduplicated as (N, K, 3), shared across batch dims.
+        colors = colors.unsqueeze(0).expand(B, -1, -1, -1)
+    elif colors.dim() == num_batch_dims + 2:
         colors = colors.reshape(B, N, -1)
     elif colors.dim() == num_batch_dims + 3:
         colors = colors.reshape(B, C, N, -1)
@@ -2212,16 +2193,10 @@ def rasterization_2dgs(
             and colors.shape[:-1] == batch_dims + (C, N)
         ), colors.shape
     else:
-        # treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]
-        # Allowing for activating partial SH bands
+        # treat colors as SH coefficients, must be in shape [N, K, 3].
+        # Allowing for activating partial SH bands.
         assert (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-2] == batch_dims + (N,)
-            and colors.shape[-1] == 3
-        ) or (
-            colors.dim() == num_batch_dims + 4
-            and colors.shape[:-2] == batch_dims + (C, N)
-            and colors.shape[-1] == 3
+            colors.dim() == 3 and colors.shape[0] == N and colors.shape[-1] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
@@ -2284,37 +2259,18 @@ def rasterization_2dgs(
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
-    # TODO: SH also suport N-D.
-    # Compute the per-view colors
-    # if not (
-    #     colors.dim() == num_batch_dims + 3 and sh_degree is None
-    # ):  # silently support [..., C, N, D] color.
-    #     colors = (
-    #         colors.view(B, N, -1)[batch_ids, gaussian_ids]
-    #         if packed
-    #         else colors[..., None, :, :].expand((-1,) * num_batch_dims + (C, -1, -1))
-    #     )  # [nnz, D] or [..., C, N, 3]
-    # else:
-    #     if packed:
-    #         colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids, :]
     if sh_degree is not None:  # SH coefficients
         camtoworlds = torch.inverse(viewmats)
         if packed:
             dirs = means[..., gaussian_ids, :] - camtoworlds[..., camera_ids, :3, 3]
+            # Gather per-Gaussian coeffs to match the [nnz, K, 3] dirs.
+            shs = colors[gaussian_ids]
         else:
             dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]
-
-        if colors.dim() == num_batch_dims + 3:
-            # Turn [..., N, K, 3] into [..., C, N, K, 3]
-            shs = torch.broadcast_to(
-                colors[..., None, :, :, :], batch_dims + (C, N, -1, 3)
-            )  # [..., C, N, K, 3]
-        else:
-            # colors is already [..., C, N, K, 3]
             shs = colors
         colors = spherical_harmonics(
             sh_degree, dirs, shs, masks=(radii > 0).all(dim=-1)
-        )  # [nnz, D] or [..., C, N, 3]
+        )  # [nnz, 3] or [..., C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
 

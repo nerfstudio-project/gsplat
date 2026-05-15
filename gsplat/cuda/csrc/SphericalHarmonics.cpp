@@ -32,9 +32,9 @@ namespace gsplat {
 
 at::Tensor spherical_harmonics_fwd(
     int64_t degrees_to_use,
-    const at::Tensor &dirs,               // [..., 3]
-    const at::Tensor &coeffs,             // [..., K, 3]
-    const at::optional<at::Tensor> &masks // [...]
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &coeffs,             // [N, K, 3]
+    const at::optional<at::Tensor> &masks // [..., N]
 ) {
     DEVICE_GUARD(dirs);
     CHECK_INPUT(dirs);
@@ -44,21 +44,35 @@ at::Tensor spherical_harmonics_fwd(
     }
     TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
     TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
+    TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
+    TORCH_CHECK(
+        coeffs.dim() == 3,
+        "coeffs must have shape [N, K, 3], got ",
+        coeffs.sizes()
+    );
+    TORCH_CHECK(
+        dirs.size(-2) == coeffs.size(-3),
+        "dirs N (",
+        dirs.size(-2),
+        ") must match coeffs N (",
+        coeffs.size(-3),
+        ")"
+    );
 
-    at::Tensor colors = at::empty_like(dirs); // [..., 3]
+    at::Tensor colors = at::empty_like(dirs); // [..., N, 3]
 
     launch_spherical_harmonics_fwd_kernel(
         degrees_to_use, dirs, coeffs, masks, colors
     );
-    return colors; // [..., 3]
+    return colors; // [..., N, 3]
 }
 
 std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
     int64_t degrees_to_use,
-    const at::Tensor &dirs,                // [..., 3]
-    const at::Tensor &coeffs,              // [..., K, 3]
-    const at::optional<at::Tensor> &masks, // [...]
-    const at::Tensor &v_colors,            // [..., 3]
+    const at::Tensor &dirs,                // [..., N, 3]
+    const at::Tensor &coeffs,              // [N, K, 3]
+    const at::optional<at::Tensor> &masks, // [..., N]
+    const at::Tensor &v_colors,            // [..., N, 3]
     bool compute_v_dirs
 ) {
     DEVICE_GUARD(dirs);
@@ -71,6 +85,20 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
     TORCH_CHECK(v_colors.size(-1) == 3, "v_colors must have last dimension 3");
     TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
     TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
+    TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
+    TORCH_CHECK(
+        coeffs.dim() == 3,
+        "coeffs must have shape [N, K, 3], got ",
+        coeffs.sizes()
+    );
+    TORCH_CHECK(
+        dirs.size(-2) == coeffs.size(-3),
+        "dirs N (",
+        dirs.size(-2),
+        ") must match coeffs N (",
+        coeffs.size(-3),
+        ")"
+    );
 
     at::Tensor v_coeffs = at::zeros_like(coeffs);
     at::Tensor v_dirs;
@@ -87,7 +115,7 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
         v_coeffs,
         v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
     );
-    return std::make_tuple(v_coeffs, v_dirs); // [..., K, 3], [..., 3]
+    return std::make_tuple(v_coeffs, v_dirs); // [N, K, 3], [..., N, 3]
 }
 
 } // namespace gsplat
