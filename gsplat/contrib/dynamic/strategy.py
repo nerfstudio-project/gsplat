@@ -43,11 +43,16 @@ class DynamicStrategy(DefaultStrategy):
 
     Extra invariants on top of :class:`DefaultStrategy`:
 
-    - ``params`` must additionally include ``hexplane_params`` and
-      ``deform_mlp_params`` keys (each backed by an optimiser with the
-      matching key, per the base ``Strategy.check_sanity`` contract).
     - ``state`` carries a :class:`DeformationTable` instance under
       ``state["deformation_table"]`` after :meth:`initialize_state`.
+
+    Note that the HexPlane and DeformNet trainables are **not** part of
+    *params*. gsplat's densification ops blindly iterate every entry in
+    *params* and split/duplicate/prune them per-Gaussian; non-per-Gaussian
+    tensors (HexPlane plane grids, DeformNet MLP weights) would be indexed
+    with out-of-bounds per-Gaussian indices. Keep those trainables in
+    their own optimizers, wired separately by the trainer (see
+    ``examples/dynamic_surgical_trainer.py:build_deform_modules``).
 
     The current resize policy on densify / prune mirrors G-SHARP:
 
@@ -68,17 +73,14 @@ class DynamicStrategy(DefaultStrategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
     ) -> None:
-        """Sanity-check on top of :meth:`DefaultStrategy.check_sanity`.
+        """Sanity-check identical to :meth:`DefaultStrategy.check_sanity`.
 
-        Additionally requires ``hexplane_params`` and ``deform_mlp_params``
-        keys in *params* (each tied to an optimizer of the same name).
+        The HexPlane / DeformNet trainables live outside *params* (see the
+        class docstring), so this method has no extra requirements beyond
+        the parent's "params and optimizers share keys, and per-Gaussian
+        keys means/scales/quats/opacities are present" check.
         """
         super().check_sanity(params, optimizers)
-        for key in ("hexplane_params", "deform_mlp_params"):
-            assert key in params, (
-                f"DynamicStrategy.check_sanity: '{key}' is required in params "
-                f"but missing. Got keys: {sorted(params.keys())}."
-            )
 
     def initialize_state(
         self,
