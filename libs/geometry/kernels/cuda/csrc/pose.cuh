@@ -208,7 +208,7 @@ namespace trajectory_cuda {
 // Float32 trajectory: uses quaternion.cuh templates (cross3, quat_rotate_vector_*, quat_multiply_impl, quat_slerp_clamp_dot).
 
 // SLERP q1→q2 at parameter ti∈[0,1]; xyzw; hemisphere flip; if dot>0.9995 use normalized lerp. Outputs *ox..*ow.
-__device__ void quat_slerp_pair_fwd_f(
+__forceinline__ __device__ void quat_slerp_pair_fwd_f(
     float x1,
     float y1,
     float z1,
@@ -255,7 +255,7 @@ __device__ void quat_slerp_pair_fwd_f(
 }
 
 // VJP for quat_slerp_pair_fwd_f: forward outputs (rx,ry,rz,rw) and upstream (gx..gw) → *gq1*, *gq2*, *grad_t.
-__device__ void quat_slerp_pair_bwd_f(
+__forceinline__ __device__ void quat_slerp_pair_bwd_f(
     float x1,
     float y1,
     float z1,
@@ -352,7 +352,7 @@ __device__ void quat_slerp_pair_bwd_f(
 
 // Time-interpolation chain rule: grad_alpha = ∂L/∂α with α=(qt-t_min)/(t_max-t_min), d=t_max-t_min.
 // Outputs *g_t0,*g_t1,*g_qt for ∂L/∂time0, ∂L/∂time1, ∂L/∂query_time (handles t0>t1 swap).
-__device__ void trajectory_alpha_time_grads_f(
+__forceinline__ __device__ void trajectory_alpha_time_grads_f(
     float t0s,
     float t1s,
     float qt,
@@ -384,7 +384,7 @@ __device__ void trajectory_alpha_time_grads_f(
 
 // Row i: interpolate pose between keyframes 0/1 at query_time. trans* (N,3), rot* xyzw (N,4), time* indexed by strides st0/st1; query_time stride sqt.
 // result_point (N,3) = R(qi)(point) + ti; result_oob[i]∈{0,1} if qt outside [min(t0,t1), max(t0,t1)].
-__device__ void trajectory_transform_point_2poses_fwd_device(int64_t i, int64_t n,
+__forceinline__ __device__ void trajectory_transform_point_2poses_fwd_device(int64_t i, int64_t n,
     int64_t st0,
     int64_t st1,
     int64_t sqt,
@@ -439,7 +439,7 @@ __device__ void trajectory_transform_point_2poses_fwd_device(int64_t i, int64_t 
 }
 
 // VJP for 2-pose point transform: grad_result_point (N,3) → grads for trans0/1, rot0/1 (xyzw), time strides, point, query_time.
-__device__ void trajectory_transform_point_2poses_bwd_device(int64_t i, int64_t n,
+__forceinline__ __device__ void trajectory_transform_point_2poses_bwd_device(int64_t i, int64_t n,
     int64_t st0,
     int64_t st1,
     int64_t sqt,
@@ -616,7 +616,7 @@ __device__ void trajectory_transform_point_2poses_bwd_device(int64_t i, int64_t 
 }
 
 // Row i: SLERP rot0/rot1 at query_time (same α and OOB semantics as 2-pose point); result_quat (N,4) xyzw.
-__device__ void trajectory_get_rotation_2poses_fwd_device(int64_t i, int64_t n,
+__forceinline__ __device__ void trajectory_get_rotation_2poses_fwd_device(int64_t i, int64_t n,
     int64_t st0,
     int64_t st1,
     int64_t sqt,
@@ -652,7 +652,7 @@ __device__ void trajectory_get_rotation_2poses_fwd_device(int64_t i, int64_t n,
 }
 
 // VJP: grad_result_quat (N,4) → grad_rot0, grad_rot1; time grads via trajectory_alpha_time_grads_f on SLERP ∂L/∂α.
-__device__ void trajectory_get_rotation_2poses_bwd_device(int64_t i, int64_t n,
+__forceinline__ __device__ void trajectory_get_rotation_2poses_bwd_device(int64_t i, int64_t n,
     int64_t st0,
     int64_t st1,
     int64_t sqt,
@@ -778,7 +778,7 @@ __device__ void trajectory_get_rotation_2poses_bwd_device(int64_t i, int64_t n,
 // -----------------------------------------------------------------------------
 
 // Row i: result = R(rot_i) point_i + trans_i; result_oob[i]=1 if query_time[i*sqt] != time[i*st] (exact float compare).
-__device__ void trajectory_transform_point_1pose_fwd_device(int64_t i, int64_t n,
+__forceinline__ __device__ void trajectory_transform_point_1pose_fwd_device(int64_t i, int64_t n,
     int64_t st,
     int64_t sqt,
     const float* __restrict__ trans,
@@ -806,7 +806,7 @@ __device__ void trajectory_transform_point_1pose_fwd_device(int64_t i, int64_t n
 }
 
 // VJP: grad_result_point → grad_trans, grad_rot (xyzw), grad_point; grad_time/grad_query_time not populated by device body (kernel may ignore).
-__device__ void trajectory_transform_point_1pose_bwd_device(int64_t i, int64_t n,
+__forceinline__ __device__ void trajectory_transform_point_1pose_bwd_device(int64_t i, int64_t n,
     const float* __restrict__ trans,
     const float* __restrict__ rot,
     const float* __restrict__ time,
@@ -861,7 +861,7 @@ __device__ void trajectory_transform_point_1pose_bwd_device(int64_t i, int64_t n
 }
 
 // Row i: 7-D pose (tx,ty,tz, qx,qy,qz,qw) → new_q = fr⊗iq, new_t = scale * (R(fr)*it + fxyz); frame quat fr is xyzw.
-__device__ void frame_transform_poses_tquat_fwd_device(int64_t i, int64_t n,
+__forceinline__ __device__ void frame_transform_poses_tquat_fwd_device(int64_t i, int64_t n,
     float frx,
     float fry,
     float frz,
