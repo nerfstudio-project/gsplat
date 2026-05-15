@@ -24,7 +24,7 @@ import imageio.v2 as imageio
 import numpy as np
 import torch
 from PIL import Image
-from pycolmap import SceneManager
+import pycolmap
 from tqdm import tqdm
 from typing_extensions import assert_never
 
@@ -95,13 +95,10 @@ class Parser:
             colmap_dir
         ), f"COLMAP directory {colmap_dir} does not exist."
 
-        manager = SceneManager(colmap_dir)
-        manager.load_cameras()
-        manager.load_images()
-        manager.load_points3D()
+        reconstruction = pycolmap.Reconstruction(colmap_dir)
 
         # Extract extrinsic matrices in world-to-camera format.
-        imdata = manager.images
+        imdata = reconstruction.images
         w2c_mats = []
         camera_ids = []
         Ks_dict = dict()
@@ -109,10 +106,9 @@ class Parser:
         imsize_dict = dict()  # width, height
         mask_dict = dict()
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
-        for k in imdata:
-            im = imdata[k]
-            rot = im.R()
-            trans = im.tvec.reshape(3, 1)
+        for k, im in imdata.items():
+            rot = im.cam_from_world().rotation.matrix()
+            trans = im.cam_from_world().translation.reshape(3, 1)
             w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
             w2c_mats.append(w2c)
 
@@ -121,31 +117,35 @@ class Parser:
             camera_ids.append(camera_id)
 
             # camera intrinsics
-            cam = manager.cameras[camera_id]
-            fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
+            cam = reconstruction.cameras[camera_id]
+            cam_params = cam.params
+            type_ = int(cam.model)
+            # SIMPLE_PINHOLE=0, SIMPLE_RADIAL=2, RADIAL=3 have a single focal length
+            if type_ in (0, 2, 3):
+                fx = fy = cam_params[0]
+                cx, cy = cam_params[1], cam_params[2]
+            else:  # PINHOLE=1, OPENCV=4, OPENCV_FISHEYE=5
+                fx, fy = cam_params[0], cam_params[1]
+                cx, cy = cam_params[2], cam_params[3]
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             K[:2, :] /= factor
             Ks_dict[camera_id] = K
 
             # Get distortion parameters.
-            type_ = cam.camera_type
-            if type_ == 0 or type_ == "SIMPLE_PINHOLE":
+            if type_ == 0 or type_ == 1:  # SIMPLE_PINHOLE or PINHOLE
                 params = np.empty(0, dtype=np.float32)
                 camtype = "perspective"
-            elif type_ == 1 or type_ == "PINHOLE":
-                params = np.empty(0, dtype=np.float32)
+            if type_ == 2:  # SIMPLE_RADIAL: [f, cx, cy, k1]
+                params = np.array([cam_params[3], 0.0, 0.0, 0.0], dtype=np.float32)
                 camtype = "perspective"
-            if type_ == 2 or type_ == "SIMPLE_RADIAL":
-                params = np.array([cam.k1, 0.0, 0.0, 0.0], dtype=np.float32)
+            elif type_ == 3:  # RADIAL: [f, cx, cy, k1, k2]
+                params = np.array([cam_params[3], cam_params[4], 0.0, 0.0], dtype=np.float32)
                 camtype = "perspective"
-            elif type_ == 3 or type_ == "RADIAL":
-                params = np.array([cam.k1, cam.k2, 0.0, 0.0], dtype=np.float32)
+            elif type_ == 4:  # OPENCV: [fx, fy, cx, cy, k1, k2, p1, p2]
+                params = np.array([cam_params[4], cam_params[5], cam_params[6], cam_params[7]], dtype=np.float32)
                 camtype = "perspective"
-            elif type_ == 4 or type_ == "OPENCV":
-                params = np.array([cam.k1, cam.k2, cam.p1, cam.p2], dtype=np.float32)
-                camtype = "perspective"
-            elif type_ == 5 or type_ == "OPENCV_FISHEYE":
-                params = np.array([cam.k1, cam.k2, cam.k3, cam.k4], dtype=np.float32)
+            elif type_ == 5:  # OPENCV_FISHEYE: [fx, fy, cx, cy, k1, k2, k3, k4]
+                params = np.array([cam_params[4], cam_params[5], cam_params[6], cam_params[7]], dtype=np.float32)
                 camtype = "fisheye"
             assert (
                 camtype == "perspective" or camtype == "fisheye"
@@ -219,17 +219,18 @@ class Parser:
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
 
         # 3D points and {image_name -> [point_idx]}
-        points = manager.points3D.astype(np.float32)
-        points_err = manager.point3D_errors.astype(np.float32)
-        points_rgb = manager.point3D_colors.astype(np.uint8)
+        points3D_dict = reconstruction.points3D
+        point_ids = sorted(points3D_dict.keys())
+        points = np.array([points3D_dict[pid].xyz for pid in point_ids], dtype=np.float32)
+        points_err = np.array([points3D_dict[pid].error for pid in point_ids], dtype=np.float32)
+        points_rgb = np.array([points3D_dict[pid].color for pid in point_ids], dtype=np.uint8)
         point_indices = dict()
 
-        image_id_to_name = {v: k for k, v in manager.name_to_image_id.items()}
-        for point_id, data in manager.point3D_id_to_images.items():
-            for image_id, _ in data:
-                image_name = image_id_to_name[image_id]
-                point_idx = manager.point3D_id_to_point3D_idx[point_id]
-                point_indices.setdefault(image_name, []).append(point_idx)
+        point_id_to_idx = {pid: idx for idx, pid in enumerate(point_ids)}
+        for point_id in point_ids:
+            for track_elem in points3D_dict[point_id].track.elements:
+                image_name = reconstruction.images[track_elem.image_id].name
+                point_indices.setdefault(image_name, []).append(point_id_to_idx[point_id])
         point_indices = {
             k: np.array(v).astype(np.int32) for k, v in point_indices.items()
         }
