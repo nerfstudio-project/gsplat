@@ -1946,7 +1946,10 @@ def rasterization_inria_wrapper(
     opacities = opacities.reshape(B, N)
     viewmats = viewmats.reshape(B, C, 4, 4)
     Ks = Ks.reshape(B, C, 3, 3)
-    if colors.dim() == num_batch_dims + 2:
+    if sh_degree is not None:
+        # SH coefficients are deduplicated as (N, K, 3), shared across batch dims.
+        colors = colors.unsqueeze(0).expand(B, -1, -1, -1)
+    elif colors.dim() == num_batch_dims + 2:
         colors = colors.reshape(B, N, -1)
     elif colors.dim() == num_batch_dims + 3:
         colors = colors.reshape(B, C, N, -1)
