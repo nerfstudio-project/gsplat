@@ -61,6 +61,13 @@
 #   define GSPLAT_BUILD_LOSSES GSPLAT_DEFAULT_ENABLE_BUILD
 #endif
 
+// Camera wrappers are a Python-exposed testing facility, not a core module:
+// build.py omits CameraWrappers.cu from the source list when this flag is off,
+// so it defaults to 0 rather than GSPLAT_DEFAULT_ENABLE_BUILD.
+#ifndef GSPLAT_BUILD_CAMERA_WRAPPERS
+#   define GSPLAT_BUILD_CAMERA_WRAPPERS 0
+#endif
+
 #ifndef GSPLAT_NUM_CHANNELS
 #   define GSPLAT_NUM_CHANNELS 1,2,3,4,5,6,8,9,16,17,21,23,24,32,33,64,65,128,129,256,257,512,513
 #endif
