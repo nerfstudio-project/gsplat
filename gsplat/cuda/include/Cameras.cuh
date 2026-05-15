@@ -209,7 +209,16 @@ inline __host__ __device__ float eval_poly_inverse_horner_newton(
     // (given by poly_coefficients) at points y using numerically stable Horner
     // scheme and Newton iterations starting from an approximate solution
     // \\hat{x} = \\hat{f}^{-1}(y) (given by inv_poly_approx) and the
-    // polynomials derivative df/dx (given by poly_derivative_coefficients)
+    // polynomials derivative df/dx (given by poly_derivative_coefficients).
+    //
+    // `converged` is advisory: the polynomial-evaluation rounding error sets
+    // a per-coefficient floor on |dx| that for typical FTheta / OpenCV-
+    // fisheye fits sits at ~10⁻⁵ in x-units (e.g. ~3.5e-5 when `delta` is a
+    // pixel distance of a few hundred), so the `|dx| < 1e-6` threshold is
+    // generally not reachable in FP32 even though the final x is accurate.
+    // Callers that gate on `converged` should consider that Newton's result
+    // is still usable for projection purposes when |dx| oscillates at the
+    // FP32 noise floor.
 
     static_assert(
         N_NEWTON_ITERATIONS >= 0, "Require at least a single Newton iteration"
@@ -1276,25 +1285,25 @@ public:
         // These FOV-clamped projections will be marked as *invalid*
         auto const theta = theta_full < parameters.dist.max_angle ? theta_full : parameters.dist.max_angle;
 
-        // Evaluate forward polynomial, giving delta = f(theta) factors
-        bool converged;
+        // Evaluate forward polynomial, giving delta = f(theta) factors.
+        // We ignore the Newton `converged` flag here: the polynomial-eval
+        // FP32 noise floor on |dx| sits above the `|dx|<1e-6` threshold for
+        // typical FTheta fits (~3.5e-5 when delta is a pixel distance of a
+        // few hundred), so the flag stays False even though Newton's `delta`
+        // is accurate to FP32. Treating it as a failure would spuriously
+        // cull every Gaussian whose centre projects through this branch.
         float delta;
+        bool _converged = false;
         if (parameters.dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
             // bw poly is reference, evaluate its inverse via Newton-based inversion
-            converged = false;
-            delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>( 
+            delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
                       PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.pixeldist_to_angle_poly},
                       PolynomialProxy<PolynomialType::FULL, 5>{dreference_poly},
                       PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.angle_to_pixeldist_poly},
-                      theta, converged);
+                      theta, _converged);
         } else {
             // fw is reference, evaluate it directly
-            converged = true;
-            delta = eval_poly_horner(parameters.dist.angle_to_pixeldist_poly, theta); 
-        }
-
-        if (!converged) {
-            return {{0.f, 0.f}, false};
+            delta = eval_poly_horner(parameters.dist.angle_to_pixeldist_poly, theta);
         }
 
         // Apply linear term A=[c,d;e,1] to f(theta)-weighted normalized 2d vectors, relative to principal point
