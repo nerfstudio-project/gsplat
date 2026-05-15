@@ -1315,7 +1315,7 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
             approx_poly_even,
             torch.zeros_like(k1[..., None]),  # [B,1] target value (zero)
             n_iterations=newton_iterations,
-        )  # [B,1]
+        )  # [B,1], [B,1]
         max_angle_k4_nonzero = max_angle_k4_nonzero.squeeze(-1)  # [B]
         converged = converged.squeeze(-1)  # [B]
 
@@ -1526,8 +1526,10 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         # Check image bounds
         valid_bounds = self.check_image_bounds(image_point, margin_factor)  # [B,M]
 
-        # Mark FOV-clamped points as invalid
-        valid = valid & (theta <= self.max_angle[..., None]) & valid_bounds  # [B,M]
+        # Mark FOV-clamped points as invalid. Compare against the pre-clamp
+        # `theta_full`; comparing `theta` here would be a tautology because
+        # `theta = min(theta_full, max_angle)` above.
+        valid = valid & (theta_full < self.max_angle[..., None]) & valid_bounds  # [B,M]
 
         # Postconditions
         assert_shape("image_point", image_point, B + M + (2,))
@@ -1840,18 +1842,24 @@ class _FThetaCameraModel(_BaseCameraModel):
         # Evaluate forward polynomial to get delta = f(θ)
         # Choice depends on which polynomial is the reference
         if self.reference_poly_type == FThetaPolynomialType.PIXELDIST_TO_ANGLE:
-            # Backward poly is reference: forward via Newton inverse
-            delta, converged = _eval_poly_inverse_horner_newton(
+            # Backward poly is reference: forward via Newton inverse. Newton's
+            # `converged` flag is too strict here (FP32 polynomial-eval noise
+            # floor on |dx| sits above the inner 1e-6 threshold for typical
+            # FTheta fits; ~3.5e-5 when δ is a pixel distance of a few
+            # hundred). Newton's `x` is FP32-accurate regardless, so we trust
+            # `delta` and do not gate validity on `_converged`.
+            delta, _converged = _eval_poly_inverse_horner_newton(
                 self.pixeldist_to_angle_poly,
                 self.dreference_poly,
                 self.angle_to_pixeldist_poly,
                 theta,  # [M]
                 n_iterations=self.newton_iterations,
-            )  # [M]
+            )  # [M], [M]
         else:
-            # Forward poly is reference: direct evaluation
+            # Forward poly is reference: direct evaluation. No Newton runs,
+            # so the projection is trivially converged.
             delta = self.angle_to_pixeldist_poly.eval_horner(theta)  # [M]
-            converged = torch.ones_like(delta, dtype=torch.bool)  # Always converged
+            _converged = torch.ones_like(delta, dtype=torch.bool)
 
         # Apply delta to normalized xy to get f(θ)-weighted 2D vectors
         # Then apply linear transform A = [[c, d], [e, 1]]
@@ -1877,17 +1885,15 @@ class _FThetaCameraModel(_BaseCameraModel):
         # Check image bounds (matches CUDA image_point_in_image_bounds_margin)
         valid_bounds = self.check_image_bounds(image_point, margin_factor)  # [M]
 
-        # Mark FOV-clamped points as invalid
-        # TODO: This isn't happening, we need to compare against theta_full (not clamped)!
+        # Mark FOV-clamped points as invalid. Compare against the pre-clamp
+        # `theta_full`; comparing `theta` here would be a tautology because
+        # `theta = min(theta_full, max_angle)` above.
         valid = (
-            not_behind_camera
-            & converged
-            & (theta <= self.max_angle[..., None])
-            & valid_bounds
+            not_behind_camera & (theta_full < self.max_angle[..., None]) & valid_bounds
         )
 
-        # Set to zero the image_points behind camera or that didn't converge.
-        image_point = image_point * (converged & not_behind_camera)[..., None]
+        # Zero out image_points for rays behind the camera.
+        image_point = image_point * not_behind_camera[..., None]
 
         # Postconditions
         assert_shape("image_point", image_point, M + (2,))

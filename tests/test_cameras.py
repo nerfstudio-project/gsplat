@@ -962,6 +962,101 @@ class TestCameraModels:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("camera_model", ["fisheye"])
+@pytest.mark.parametrize("batch_dims", [(2, 3)])
+@pytest.mark.parametrize("image_dims", [(127, 256)])
+@pytest.mark.parametrize("rs_type", expand_named_params(DEFAULT_ROLLING_SHUTTER_TYPE))
+def test_projection_rejects_rays_beyond_max_angle(test_camera, ref_camera):
+    """Regression for the silent-clamp bug on FTheta / OpenCV-fisheye
+    `camera_ray_to_image_point`: rays with `theta_full > max_angle` must
+    be marked invalid.
+
+    Pre-fix, the FOV gate compared the *post-clamp*
+    `theta = min(theta_full, max_angle)` against `max_angle` — a tautology —
+    so out-of-FOV rays were silently accepted as valid.
+
+    Projects a single ray per batch element at `theta = 1.05 * max_angle`,
+    `phi = 0`, with a large margin so image-bounds doesn't influence
+    validity (isolates the FOV-cone check).
+    """
+    factor = 1.05
+    theta_full = ref_camera.max_angle * factor  # (*batch_dims,)
+    rays = torch.stack(
+        [torch.sin(theta_full), torch.zeros_like(theta_full), torch.cos(theta_full)],
+        dim=-1,
+    ).unsqueeze(
+        -2
+    )  # (*batch_dims, 1, 3)
+
+    test_imgpt, test_valid = test_camera.camera_ray_to_image_point(rays, 1000.0)
+    ref_imgpt, ref_valid = ref_camera.camera_ray_to_image_point(rays, 1000.0)
+
+    # When both impls correctly reject every out-of-FOV ray, `common` is
+    # empty and the image-point assertion is a no-op; the validity equality
+    # is what trips when one parity side is buggy.
+    common = test_valid & ref_valid
+    assert_close(test_imgpt[common], ref_imgpt[common], atol=5.2e-05, rtol=1.52e-03)
+    assert torch.equal(test_valid, ref_valid), (
+        f"validity divergence: cuda={test_valid.flatten().tolist()} "
+        f"ref={ref_valid.flatten().tolist()}"
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("camera_model", ["ftheta[p2a]"])
+@pytest.mark.parametrize("batch_dims", [(2, 3)])
+@pytest.mark.parametrize("image_dims", [(127, 256)])
+@pytest.mark.parametrize("rs_type", expand_named_params(DEFAULT_ROLLING_SHUTTER_TYPE))
+def test_projection_converges_in_fp_sensitive_newton_zone(test_camera, ref_camera):
+    """Regression for the Newton converged-flag bug on FTheta forward
+    projection (PIXELDIST_TO_ANGLE branch — Newton inverts the reference
+    polynomial).
+
+    Pre-fix, validity gated on Newton's `converged` flag (`|dx| < 1e-6`).
+    The FP32 polynomial-evaluation noise floor on `|dx|` sits above that
+    threshold for typical FTheta fits (~3.5e-5 when `delta` is a pixel
+    distance of a few hundred), so `converged` stayed False and Newton's
+    FP32-accurate `delta` was discarded — silently culling every projection
+    through this branch.
+
+    Projects 32 rays per batch element with `theta ∈ [1.0, π/2 − 0.01]`
+    rad — deep in the FP-sensitive Newton zone but still in front of the
+    camera — and parity-compares CUDA against the Python reference.
+    """
+    n_rays = 32
+    device = ref_camera.max_angle.device
+    theta = torch.linspace(1.0, math.pi / 2 - 0.01, n_rays, device=device)
+    phi = torch.linspace(0.0, 2 * math.pi, n_rays, device=device)
+    batch_shape = ref_camera.max_angle.shape  # e.g. (2, 3)
+    theta_b = theta.expand(*batch_shape, n_rays).contiguous()
+    phi_b = phi.expand(*batch_shape, n_rays).contiguous()
+    rays = torch.stack(
+        [
+            torch.sin(theta_b) * torch.cos(phi_b),
+            torch.sin(theta_b) * torch.sin(phi_b),
+            torch.cos(theta_b),
+        ],
+        dim=-1,
+    )  # (*batch_dims, n_rays, 3)
+
+    test_imgpt, test_valid = test_camera.camera_ray_to_image_point(rays, 0.0)
+    ref_imgpt, ref_valid = ref_camera.camera_ray_to_image_point(rays, 0.0)
+
+    # When the fix is in place both impls accept these in-front-of-camera
+    # rays and their image points match within tolerance; when only one
+    # parity side is fixed, the buggy side culls everything and
+    # `torch.equal` trips on the validity flags.
+    common = test_valid & ref_valid
+    # Tolerances calibrated to 1.05 × observed max on this ftheta[p2a]
+    # config: observed atol = 1.526e-5, rtol = 1.158e-7.
+    assert_close(test_imgpt[common], ref_imgpt[common], atol=1.6e-5, rtol=1.22e-7)
+    assert torch.equal(test_valid, ref_valid), (
+        f"validity divergence: cuda_valid_count={int(test_valid.sum().item())} "
+        f"ref_valid_count={int(ref_valid.sum().item())} of {test_valid.numel()}"
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 # Pinhole-only: shutter-pose composition is camera-type-agnostic (defined on
 # _BaseCameraModel); per-type projection is covered in TestCameraModels.
 @pytest.mark.parametrize("camera_model", ["pinhole"])
