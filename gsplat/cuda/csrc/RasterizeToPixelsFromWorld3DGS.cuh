@@ -456,6 +456,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
     const vec3 (&ray_d)[PIXELS_PER_THREAD_T],
     const uint32_t ALL_DONE,
+    const float (&transmittance_threshold)[PIXELS_PER_THREAD_T],
     float (&T)[PIXELS_PER_THREAD_T],
     float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     vec3 (&normal_out)[PIXELS_PER_THREAD_T],
@@ -504,7 +505,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
 
             const float next_T = T[p] * (1.0f - alpha);
             if constexpr (CHECK_THRESHOLD) {
-                if (next_T <= TRANSMITTANCE_THRESHOLD) {
+                if (next_T <= transmittance_threshold[p]) {
                     if constexpr (store_post_saturation_t) {
                         T[p] = next_T;
                     }
@@ -593,6 +594,7 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
     const vec3 (&ray_d)[PIXELS_PER_THREAD_T],
     const uint32_t ALL_DONE,
+    const float (&transmittance_threshold)[PIXELS_PER_THREAD_T],
     float (&T)[PIXELS_PER_THREAD_T],
     float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     vec3 (&normal_out)[PIXELS_PER_THREAD_T],
@@ -644,6 +646,7 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
             batch_start, batch_size,
             colors, ray_o, ray_d,
             ALL_DONE,
+            transmittance_threshold,
             T, pix_out, normal_out,
             cur_idx, n_accumulated, done_mask);
 

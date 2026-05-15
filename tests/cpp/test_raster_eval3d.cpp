@@ -15,12 +15,33 @@
 
 #include "Config.h"
 #include "Ops.h"
+#include "PrimingChainEncoding.h"
+#include "PrimingChainEncoding.cuh"
 #include "RasterizeCSR.cuh"
 #include "Rasterization.h"
 
 namespace {
 
 using torch::indexing::Slice;
+
+// Test-only fp16 transmittance magnitudes used to construct packed states in a
+// deterministic order without depending on raw half-precision hex literals.
+constexpr uint16_t FP16_EXPONENT_SHIFT = 10u;
+constexpr int32_t FP16_EXPONENT_BIAS = 15;
+
+constexpr uint16_t fp16_power_of_two_bits(int32_t exponent)
+{
+    return static_cast<uint16_t>(
+        static_cast<uint16_t>(exponent + FP16_EXPONENT_BIAS)
+        << FP16_EXPONENT_SHIFT);
+}
+
+constexpr uint16_t T_FP16_ONE_EIGHTH_BITS =
+    fp16_power_of_two_bits(-3);
+constexpr uint16_t T_FP16_ONE_QUARTER_BITS =
+    fp16_power_of_two_bits(-2);
+constexpr uint16_t T_FP16_ONE_HALF_BITS =
+    fp16_power_of_two_bits(-1);
 
 // Native regression coverage for fwd_batch_state early-exit padding.
 //
@@ -69,6 +90,79 @@ float max_abs_diff(const at::Tensor &actual, const at::Tensor &expected)
 }
 
 } // namespace
+
+class PrimingChainEncodingTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        if (!torch::cuda::is_available()) {
+            GTEST_SKIP() << "CUDA runtime is not available";
+        }
+
+#if !GSPLAT_BUILD_3DGUT
+        GTEST_SKIP() << "3DGUT support is not built in";
+#endif
+    }
+
+    torch::TensorOptions i32_cuda() const
+    {
+        return torch::TensorOptions()
+            .device(torch::kCUDA)
+            .dtype(torch::kInt32);
+    }
+};
+
+TEST_F(PrimingChainEncodingTest, DecodeForBatchHandlesForcedOrderCases)
+{
+#if !GSPLAT_BUILD_3DGUT
+    GTEST_SKIP() << "3DGUT support is not built in";
+#else
+    at::Tensor packed = torch::tensor(
+        {
+            static_cast<int32_t>(gsplat::priming::INIT_PACKED),
+            static_cast<int32_t>(
+                gsplat::priming::encode_from_fp16_bits(
+                    T_FP16_ONE_HALF_BITS, 1, false)),
+            static_cast<int32_t>(
+                gsplat::priming::encode_from_fp16_bits(
+                    T_FP16_ONE_QUARTER_BITS, 2, true)),
+            static_cast<int32_t>(
+                gsplat::priming::encode_from_fp16_bits(
+                    T_FP16_ONE_EIGHTH_BITS, 4, false)),
+            static_cast<int32_t>(
+                gsplat::priming::encode_from_fp16_bits(
+                    T_FP16_ONE_EIGHTH_BITS, 3, false)),
+        },
+        i32_cuda());
+    at::Tensor batch_ids =
+        torch::tensor({0, 2, 3, 3, 4}, i32_cuda());
+
+    auto decoded = gsplat::launch_priming_decode_for_batch(packed, batch_ids);
+
+    at::Tensor T_init = std::get<0>(decoded).cpu();
+    at::Tensor stored_K = std::get<1>(decoded).cpu();
+    at::Tensor stored_sat = std::get<2>(decoded).cpu();
+    at::Tensor chain_saturated = std::get<3>(decoded).cpu();
+    at::Tensor use_stored = std::get<4>(decoded).cpu();
+
+    EXPECT_TRUE(torch::allclose(
+        T_init,
+        torch::tensor({1.0f, 0.5f, 0.25f, 1.0f, 0.125f})));
+    EXPECT_TRUE(torch::equal(
+        stored_K,
+        torch::tensor({0, 1, 2, 4, 3}, torch::kInt32)));
+    EXPECT_TRUE(torch::equal(
+        stored_sat,
+        torch::tensor({false, false, true, false, false}, torch::kBool)));
+    EXPECT_TRUE(torch::equal(
+        chain_saturated,
+        torch::tensor({false, false, true, false, false}, torch::kBool)));
+    EXPECT_TRUE(torch::equal(
+        use_stored,
+        torch::tensor({true, true, true, false, true}, torch::kBool)));
+#endif
+}
 
 class FwdBatchStateTest
     : public ::testing::TestWithParam<int>
@@ -315,6 +409,7 @@ TEST_P(FwdBatchStateTest, MixedBatchNoPersistenceKeepsPublicOutputs)
     EXPECT_FALSE(forward_only.batch_offsets.defined());
     EXPECT_FALSE(forward_only.fwd_batch_state.defined());
     EXPECT_FALSE(forward_only.compose_c_stop.defined());
+    EXPECT_FALSE(forward_only.priming_state.defined());
 
     EXPECT_LE(
         max_abs_diff(forward_only.renders, persistent.renders),
@@ -387,6 +482,8 @@ TEST_P(FwdBatchStateTest, LastSlotMatchesTerminalAfterEarlyExit)
     // test to transpose pix_out back to image order before comparison.
     const at::Tensor terminal_slot =
         raster.fwd_batch_state.select(0, num_batches - 1);
+    const int64_t pix_offset =
+        static_cast<int64_t>(gsplat::FWD_BATCH_STATE_PIX_OFFSET);
     const at::Tensor expected_T =
         1.0f - raster.alphas.reshape({scene.height, scene.width});
     const at::Tensor actual_T =
@@ -395,7 +492,9 @@ TEST_P(FwdBatchStateTest, LastSlotMatchesTerminalAfterEarlyExit)
     const at::Tensor expected_pix =
         raster.renders.reshape({scene.height, scene.width, scene.channels});
     const at::Tensor actual_pix =
-        terminal_slot.index({Slice(1, 1 + scene.channels), Slice()})
+        terminal_slot.index({
+            Slice(pix_offset, pix_offset + scene.channels),
+            Slice()})
             .transpose(0, 1)
             .reshape({scene.tile_size, scene.tile_size, scene.channels});
 
