@@ -16,6 +16,7 @@
 
 import os
 import re
+import shlex
 import shutil
 import time
 import glob
@@ -261,15 +262,18 @@ def get_gsplat_build_directory(build_params=None):
     return jit._get_build_directory(build_params.name, verbose=False)
 
 
-def _objects_in_build(build_dir):
-    # Object files in `build_dir` that the current build.ninja still
-    # references. PyTorch's JIT doesn't clean stale `.o` files when a
-    # source is renamed or removed, so a raw glob would pick up dead
-    # intermediates. A `.o` whose basename no longer appears as a
+def _objects_in_build(build_dir, object_dir=None, recursive=False):
+    # Object files under `object_dir` (defaults to `build_dir`) that the
+    # current build.ninja in `build_dir` still references. PyTorch's JIT
+    # and setup.py builds both use ninja and neither cleans stale `.o`
+    # files when a source is renamed or removed, so a raw glob would pick
+    # up dead intermediates. A `.o` whose basename no longer appears as a
     # word-delimited token in `build.ninja` is no longer part of the
     # current build graph. The word-boundary anchor prevents a future
     # rename from silently matching a basename that is a substring of
     # another (e.g. `Foo.o` matching inside `BarFoo.o`).
+    if object_dir is None:
+        object_dir = build_dir
     ninja_path = os.path.join(build_dir, "build.ninja")
     if not os.path.exists(ninja_path):
         raise RuntimeError(f"Expected JIT build file does not exist: {ninja_path}")
@@ -277,15 +281,32 @@ def _objects_in_build(build_dir):
     with open(ninja_path, "r", encoding="utf-8") as f:
         ninja_text = f.read()
 
-    objects = sorted(
-        glob.glob(os.path.join(build_dir, "*.o"))
-        + glob.glob(os.path.join(build_dir, "*.obj"))
-    )
+    if recursive:
+        patterns = [
+            os.path.join(object_dir, "**", "*.o"),
+            os.path.join(object_dir, "**", "*.obj"),
+        ]
+        objects = sorted(p for pat in patterns for p in glob.glob(pat, recursive=True))
+    else:
+        objects = sorted(
+            glob.glob(os.path.join(object_dir, "*.o"))
+            + glob.glob(os.path.join(object_dir, "*.obj"))
+        )
     return [
         obj
         for obj in objects
         if re.search(r"\b" + re.escape(os.path.basename(obj)) + r"\b", ninja_text)
     ]
+
+
+def _exclude_dispatcher_objects(objects):
+    """Drop ext.cpp's compiled output from a list of gsplat objects.
+
+    ``ext.cpp`` owns the Python module entrypoint and ``TORCH_LIBRARY(gsplat)``
+    registration. Native test binaries link against implementation objects
+    directly, so pulling in ``ext.*`` would re-register the namespace.
+    """
+    return [obj for obj in objects if not os.path.basename(obj).startswith("ext.")]
 
 
 def get_gsplat_core_objects(build_params=None, build_dir=None):
@@ -294,15 +315,7 @@ def get_gsplat_core_objects(build_params=None, build_dir=None):
     if build_dir is None:
         build_dir = get_gsplat_build_directory(build_params)
 
-    objects = _objects_in_build(build_dir)
-    core_objects = []
-    for obj in objects:
-        base = os.path.basename(obj)
-        # ext.cpp owns the Python module entrypoint and dispatcher registration.
-        # Native tests link against implementation objects directly.
-        if base.startswith("ext."):
-            continue
-        core_objects.append(obj)
+    core_objects = _exclude_dispatcher_objects(_objects_in_build(build_dir))
 
     missing = [obj for obj in core_objects if not os.path.exists(obj)]
     if missing:
@@ -440,9 +453,231 @@ def build_and_load_gsplat():
                 os.environ.pop(envvar)
 
 
+def get_loaded_csrc_path():
+    """Return the path of the loaded ``gsplat.csrc`` extension, if any."""
+    module = sys.modules.get("gsplat.csrc")
+    path = getattr(module, "__file__", None) if module else None
+    return path if path and os.path.exists(path) else None
+
+
+def _setup_py_core_objects_for_loaded_csrc(return_build_dir=False):
+    """Return the setup.py-built ``.o`` files matching the loaded ``csrc.so``.
+
+    For an editable install (``pip install -e .``), ``csrc.so`` lives at
+    ``<repo>/gsplat/csrc.so`` and the matching object files are at
+    ``<repo>/build/temp.<platform>-cpython-<tag>/gsplat/cuda/{csrc/*.o,ext.o}``.
+    ``ext.o`` is excluded for the same reason ``get_gsplat_core_objects`` skips
+    it: ``ext.cpp`` owns ``TORCH_LIBRARY(gsplat)`` registration and the gtest
+    binary calls implementation entry points directly.
+
+    Returns ``None`` if the layout doesn't match — e.g., ``csrc.so`` was
+    installed from a wheel or to site-packages, so there is no local ``build``
+    directory.
+    """
+    csrc_path = get_loaded_csrc_path()
+    if not csrc_path:
+        return None
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(csrc_path)))
+    build_root = os.path.join(repo_root, "build")
+    if not os.path.isdir(build_root):
+        return None
+    temp_dirs = glob.glob(
+        os.path.join(build_root, f"temp.*-{sys.implementation.cache_tag}")
+    )
+    if not temp_dirs:
+        return None
+    # Multiple platform builds shouldn't normally exist side-by-side. Pick the
+    # most recently touched one as a tie-breaker.
+    temp_dir = max(temp_dirs, key=os.path.getmtime)
+    cuda_dir = os.path.join(temp_dir, "gsplat", "cuda")
+    if not os.path.isdir(cuda_dir):
+        return None
+    # Without a build.ninja we can't tell live objects from stale leftovers,
+    # so treat that the same as a layout mismatch rather than erroring out.
+    if not os.path.exists(os.path.join(temp_dir, "build.ninja")):
+        return None
+    core_objects = _exclude_dispatcher_objects(
+        _objects_in_build(temp_dir, object_dir=cuda_dir, recursive=True)
+    )
+    if return_build_dir:
+        return core_objects or None, temp_dir
+    return core_objects or None
+
+
+def _read_setup_py_ninja_flag_tokens(prefix):
+    """Return tokens of a ``<prefix>= ...`` line from setup.py's build.ninja."""
+    result = _setup_py_core_objects_for_loaded_csrc(return_build_dir=True)
+    if result is None:
+        return None
+    _, temp_dir = result
+    ninja_path = os.path.join(temp_dir, "build.ninja")
+    with open(ninja_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith(prefix):
+                return shlex.split(line.split("=", 1)[1])
+    return None
+
+
+def _setup_py_extra_cflags_for_loaded_csrc():
+    tokens = _read_setup_py_ninja_flag_tokens("post_cflags = ")
+    if tokens is None:
+        return None
+    ignored_flags = {"-DTORCH_API_INCLUDE_EXTENSION_H"}
+    return [
+        flag
+        for flag in tokens
+        if flag not in ignored_flags and not flag.startswith("-DTORCH_EXTENSION_NAME=")
+    ]
+
+
+def _setup_py_extra_cuda_cflags_for_loaded_csrc():
+    """Reconstruct ``extra_cuda_cflags`` from setup.py's build.ninja.
+
+    Strips the prefix/suffix that torch's CUDAExtension path injects on
+    Linux/macOS (see ``unix_cuda_flags`` and ``COMMON_NVCC_FLAGS`` in
+    ``torch.utils.cpp_extension``) so the result is comparable with the
+    ``extra_cuda_cflags`` produced by ``get_build_parameters()``.
+    """
+    tokens = _read_setup_py_ninja_flag_tokens("cuda_post_cflags = ")
+    if tokens is None:
+        return None
+    ignored_flags = {
+        "-D__CUDA_NO_HALF_OPERATORS__",
+        "-D__CUDA_NO_HALF_CONVERSIONS__",
+        "-D__CUDA_NO_BFLOAT16_CONVERSIONS__",
+        "-D__CUDA_NO_HALF2_OPERATORS__",
+        "--expt-relaxed-constexpr",
+        "-DTORCH_API_INCLUDE_EXTENSION_H",
+    }
+    ignored_prefixes = ("-DTORCH_EXTENSION_NAME=", "-gencode=")
+    # `--compiler-options '-fPIC'` from unix_cuda_flags and `-ccbin $CC` are
+    # two-token sequences; build.py never emits either token.
+    paired_flags = {"--compiler-options", "-ccbin"}
+
+    out = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token in paired_flags and i + 1 < len(tokens):
+            i += 2
+            continue
+        if token in ignored_flags or any(token.startswith(p) for p in ignored_prefixes):
+            i += 1
+            continue
+        out.append(token)
+        i += 1
+    return out
+
+
+def _setup_py_build_parameters_mismatch_reason(build_params):
+    recorded_cflags = _setup_py_extra_cflags_for_loaded_csrc()
+    recorded_cuda_cflags = _setup_py_extra_cuda_cflags_for_loaded_csrc()
+    if NUM_CHANNELS is not None:
+        recorded_cflags += [f"-DGSPLAT_NUM_CHANNELS={NUM_CHANNELS}"]
+        recorded_cuda_cflags += [
+            '-DGSPLAT_NUM_CHANNELS="' + NUM_CHANNELS.replace(",", "\\,") + '"'
+        ]
+    # `_setup_py_extra_cuda_cflags_for_loaded_csrc()` drops every torch-injected
+    # CUDA flag, including `--expt-relaxed-constexpr`, which build.py also adds.
+    # Strip the build_params copy so the two sides remain comparable.
+    expected_cuda_cflags = [
+        f for f in build_params.extra_cuda_cflags if f != "--expt-relaxed-constexpr"
+    ]
+    if (recorded_cflags is None or recorded_cflags == build_params.extra_cflags) and (
+        recorded_cuda_cflags is None or recorded_cuda_cflags == expected_cuda_cflags
+    ):
+        return None
+
+    return (
+        "gsplat.csrc is loaded from setup.py-built objects compiled with "
+        "different compiler flags than the native C++ test harness would use. "
+        "Rebuild from source with `pip install -e .` or rerun pytest with "
+        "matching GSPLAT build environment variables.\n"
+        f"setup.py extra_cflags: {recorded_cflags}\n"
+        f"pytest extra_cflags: {build_params.extra_cflags}\n"
+        f"setup.py extra_cuda_cflags: {recorded_cuda_cflags}\n"
+        f"pytest extra_cuda_cflags: {expected_cuda_cflags}"
+    )
+
+
+_LINK_INPUTS_MISSING_MSG = (
+    "gsplat.csrc is loaded but no setup.py-built .o files were found under "
+    "<repo>/build/temp.*-cpython-<tag>/gsplat/cuda/. Native C++ tests need "
+    "ABI-matching object files (some test symbols are not exported by "
+    "csrc.so). Rebuild from source with `pip install -e .` to produce the "
+    "local build artifacts."
+)
+
+
+def get_gsplat_link_inputs_skip_reason(build_params=None):
+    """Return a skip reason when native C++ tests cannot run safely against
+    the loaded ``gsplat.csrc``, else None.
+
+    Detects:
+      * ``csrc.so`` is loaded but no setup.py-built ``.o`` files are
+        available (e.g., wheel install, or modern editable mode that
+        cleans up ``build/temp.*/``).
+      * ``csrc.so`` was compiled with C++ flags that differ from the
+        pytest harness's ``build_params.extra_cflags`` — linking the
+        reused objects would produce an ABI-mixed gtest binary.
+
+    Other failure modes of ``get_gsplat_link_inputs()`` (JIT build errors,
+    missing CUDA toolkit) are not detected here — they surface at the call
+    site.
+    """
+    if not get_loaded_csrc_path():
+        return None
+    if _setup_py_core_objects_for_loaded_csrc() is None:
+        return _LINK_INPUTS_MISSING_MSG
+    if build_params is not None:
+        return _setup_py_build_parameters_mismatch_reason(build_params)
+    return None
+
+
+def get_gsplat_link_inputs():
+    """Return ABI-matching link inputs for the loaded gsplat extension.
+
+    Native test binaries that exercise gsplat C++ entry points need to link
+    against the same compiled objects that produced the loaded ``csrc.so``.
+    There are two supported sources:
+
+    * setup.py-built ``gsplat.csrc`` (editable install). Reuse the ``.o``
+      files at ``<repo>/build/temp.*-cpython-<tag>/gsplat/cuda/`` so the
+      gtest binary picks up implementation symbols — including
+      hidden-visibility ones and other non-exported extern symbols that csrc.so
+      does not surface in its dynamic symbol table — with ABI identical to the
+      loaded extension. Symbols with internal linkage (static at file scope,
+      anonymous-namespace members) remain unreachable from another TU even via
+      direct .o linking.
+
+    * Pure JIT environment. Trigger the JIT build and return the
+      implementation ``.o`` files (``ext.o`` excluded).
+
+    Raises ``FileNotFoundError`` if ``gsplat.csrc`` is loaded but its build
+    artifacts are not available locally (e.g., wheel install). Callers that
+    prefer to skip native tests in that case should consult
+    ``get_gsplat_link_inputs_skip_reason()`` first.
+    """
+    if get_loaded_csrc_path():
+        objects = _setup_py_core_objects_for_loaded_csrc()
+        if objects is not None:
+            return objects
+        # Setup.py-built csrc.so is loaded but its .o files aren't on disk:
+        # Fall through to JIT — `ext.o` is still excluded, so no namespace
+        # re-registration.
+    build_and_load_gsplat()
+    build_params = get_build_parameters()
+    return get_gsplat_core_objects(
+        build_params, get_gsplat_build_directory(build_params)
+    )
+
+
 __all__ = [
     "build_and_load_gsplat",
     "get_build_parameters",
     "get_gsplat_build_directory",
     "get_gsplat_core_objects",
+    "get_gsplat_link_inputs",
+    "get_gsplat_link_inputs_skip_reason",
+    "get_loaded_csrc_path",
 ]
