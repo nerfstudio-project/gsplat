@@ -962,6 +962,47 @@ class TestCameraModels:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize("camera_model", ["fisheye"])
+@pytest.mark.parametrize("batch_dims", [(2, 3)])
+@pytest.mark.parametrize("image_dims", [(127, 256)])
+@pytest.mark.parametrize("rs_type", expand_named_params(DEFAULT_ROLLING_SHUTTER_TYPE))
+def test_projection_rejects_rays_beyond_max_angle(test_camera, ref_camera):
+    """Regression for the silent-clamp bug on FTheta / OpenCV-fisheye
+    `camera_ray_to_image_point`: rays with `theta_full > max_angle` must
+    be marked invalid.
+
+    Pre-fix, the FOV gate compared the *post-clamp*
+    `theta = min(theta_full, max_angle)` against `max_angle` — a tautology —
+    so out-of-FOV rays were silently accepted as valid.
+
+    Projects a single ray per batch element at `theta = 1.05 * max_angle`,
+    `phi = 0`, with a large margin so image-bounds doesn't influence
+    validity (isolates the FOV-cone check).
+    """
+    factor = 1.05
+    theta_full = ref_camera.max_angle * factor  # (*batch_dims,)
+    rays = torch.stack(
+        [torch.sin(theta_full), torch.zeros_like(theta_full), torch.cos(theta_full)],
+        dim=-1,
+    ).unsqueeze(
+        -2
+    )  # (*batch_dims, 1, 3)
+
+    test_imgpt, test_valid = test_camera.camera_ray_to_image_point(rays, 1000.0)
+    ref_imgpt, ref_valid = ref_camera.camera_ray_to_image_point(rays, 1000.0)
+
+    # When both impls correctly reject every out-of-FOV ray, `common` is
+    # empty and the image-point assertion is a no-op; the validity equality
+    # is what trips when one parity side is buggy.
+    common = test_valid & ref_valid
+    assert_close(test_imgpt[common], ref_imgpt[common], atol=5.2e-05, rtol=1.52e-03)
+    assert torch.equal(test_valid, ref_valid), (
+        f"validity divergence: cuda={test_valid.flatten().tolist()} "
+        f"ref={ref_valid.flatten().tolist()}"
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 # Pinhole-only: shutter-pose composition is camera-type-agnostic (defined on
 # _BaseCameraModel); per-type projection is covered in TestCameraModels.
 @pytest.mark.parametrize("camera_model", ["pinhole"])
