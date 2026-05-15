@@ -3409,26 +3409,23 @@ def _ghost_lobe_scene():
 def _ghost_lobe_isect(_ghost_lobe_scene):
     """Intersection list with radii inflated to cover every tile."""
     from gsplat.cuda._wrapper import (
-        fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
     )
 
     s = _ghost_lobe_scene
-    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
-        s.means,
-        s.quats,
-        s.scales,
-        s.opacities,
-        s.viewmats,
-        s.Ks,
-        s.width,
-        s.height,
-        camera_model="pinhole",
-    )
-    radii = radii.clone()
+
+    # This test intentionally bypasses projection so it can force the
+    # off-image gaussian into every tile and exercise the 3D ray hit_t clamp.
+    # The actual projection culls this gaussian, and the CUDA projection
+    # kernel only guarantees radii=0 on culled entries.  means2d/depths are
+    # allocated with at::empty and must not be used after culling.
+    means2d = s.means.new_tensor([[[float(s.cx_int), float(s.height) * 0.5]]])
+    depths = s.means.new_ones((1, 1))
+    radii = torch.empty((1, 1, 2), device=s.means.device, dtype=torch.int32)
     radii[..., 0] = s.width
     radii[..., 1] = s.height
+
     tile_size = 16
     tw = math.ceil(s.width / tile_size)
     th = math.ceil(s.height / tile_size)
