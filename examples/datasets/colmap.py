@@ -139,13 +139,21 @@ class Parser:
                 params = np.array([cam_params[3], 0.0, 0.0, 0.0], dtype=np.float32)
                 camtype = "perspective"
             elif type_ == 3:  # RADIAL: [f, cx, cy, k1, k2]
-                params = np.array([cam_params[3], cam_params[4], 0.0, 0.0], dtype=np.float32)
+                params = np.array(
+                    [cam_params[3], cam_params[4], 0.0, 0.0], dtype=np.float32
+                )
                 camtype = "perspective"
             elif type_ == 4:  # OPENCV: [fx, fy, cx, cy, k1, k2, p1, p2]
-                params = np.array([cam_params[4], cam_params[5], cam_params[6], cam_params[7]], dtype=np.float32)
+                params = np.array(
+                    [cam_params[4], cam_params[5], cam_params[6], cam_params[7]],
+                    dtype=np.float32,
+                )
                 camtype = "perspective"
             elif type_ == 5:  # OPENCV_FISHEYE: [fx, fy, cx, cy, k1, k2, k3, k4]
-                params = np.array([cam_params[4], cam_params[5], cam_params[6], cam_params[7]], dtype=np.float32)
+                params = np.array(
+                    [cam_params[4], cam_params[5], cam_params[6], cam_params[7]],
+                    dtype=np.float32,
+                )
                 camtype = "fisheye"
             assert (
                 camtype == "perspective" or camtype == "fisheye"
@@ -221,16 +229,24 @@ class Parser:
         # 3D points and {image_name -> [point_idx]}
         points3D_dict = reconstruction.points3D
         point_ids = sorted(points3D_dict.keys())
-        points = np.array([points3D_dict[pid].xyz for pid in point_ids], dtype=np.float32)
-        points_err = np.array([points3D_dict[pid].error for pid in point_ids], dtype=np.float32)
-        points_rgb = np.array([points3D_dict[pid].color for pid in point_ids], dtype=np.uint8)
+        points = np.array(
+            [points3D_dict[pid].xyz for pid in point_ids], dtype=np.float32
+        )
+        points_err = np.array(
+            [points3D_dict[pid].error for pid in point_ids], dtype=np.float32
+        )
+        points_rgb = np.array(
+            [points3D_dict[pid].color for pid in point_ids], dtype=np.uint8
+        )
         point_indices = dict()
 
         point_id_to_idx = {pid: idx for idx, pid in enumerate(point_ids)}
         for point_id in point_ids:
             for track_elem in points3D_dict[point_id].track.elements:
                 image_name = reconstruction.images[track_elem.image_id].name
-                point_indices.setdefault(image_name, []).append(point_id_to_idx[point_id])
+                point_indices.setdefault(image_name, []).append(
+                    point_id_to_idx[point_id]
+                )
         point_indices = {
             k: np.array(v).astype(np.int32) for k, v in point_indices.items()
         }
