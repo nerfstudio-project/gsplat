@@ -1526,8 +1526,10 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         # Check image bounds
         valid_bounds = self.check_image_bounds(image_point, margin_factor)  # [B,M]
 
-        # Mark FOV-clamped points as invalid
-        valid = valid & (theta <= self.max_angle[..., None]) & valid_bounds  # [B,M]
+        # Mark FOV-clamped points as invalid. Compare against the pre-clamp
+        # `theta_full`; comparing `theta` here would be a tautology because
+        # `theta = min(theta_full, max_angle)` above.
+        valid = valid & (theta_full < self.max_angle[..., None]) & valid_bounds  # [B,M]
 
         # Postconditions
         assert_shape("image_point", image_point, B + M + (2,))
@@ -1877,12 +1879,13 @@ class _FThetaCameraModel(_BaseCameraModel):
         # Check image bounds (matches CUDA image_point_in_image_bounds_margin)
         valid_bounds = self.check_image_bounds(image_point, margin_factor)  # [M]
 
-        # Mark FOV-clamped points as invalid
-        # TODO: This isn't happening, we need to compare against theta_full (not clamped)!
+        # Mark FOV-clamped points as invalid. Compare against the pre-clamp
+        # `theta_full`; comparing `theta` here would be a tautology because
+        # `theta = min(theta_full, max_angle)` above.
         valid = (
             not_behind_camera
             & converged
-            & (theta <= self.max_angle[..., None])
+            & (theta_full < self.max_angle[..., None])
             & valid_bounds
         )
 

@@ -1138,9 +1138,9 @@ struct OpenCVFisheyeCameraModel
         valid &= image_point_in_image_bounds_margin(
             image_point, parameters.resolution, margin_factor
         );
-        valid &=
-            theta <= max_angle; // explicitly check for strictly smaller angles
-                                // to classify FOV-clamped points as invalid
+        valid &= theta_full < max_angle; // compare against the pre-clamp angle —
+                                         // `theta` was clamped to `max_angle` above so the
+                                         // post-clamp comparison would be a tautology.
 
         return {image_point, valid};
     }
@@ -1307,7 +1307,9 @@ public:
         valid &= image_point_in_image_bounds_margin(
             image_point, parameters.resolution, margin_factor
         );
-        valid &= theta <= parameters.dist.max_angle;
+        // Compare against the pre-clamp angle — `theta` was clamped to
+        // `max_angle` above so the post-clamp comparison would be a tautology.
+        valid &= theta_full < parameters.dist.max_angle;
 
         return {image_point, valid};
     }
