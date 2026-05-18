@@ -311,7 +311,7 @@ def rasterization(
     opacities: Tensor,  # [..., N]
     colors: Optional[
         Tensor
-    ],  # [..., (C,) N, D] or [..., (C,) N, K, 3]; None for depth-only render_modes
+    ],  # [..., (C,) N, D] for post-activation colors, or [N, K, 3] for SH coefficients; None for depth-only render_modes
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -355,7 +355,7 @@ def rasterization(
     # extra signal channels (order in output: RGB, depth, extra)
     extra_signals: Optional[
         Tensor
-    ] = None,  # [..., (C,) N, E] or [..., (C,) N, K, 3] when extra_signals_sh_degree set
+    ] = None,  # [..., (C,) N, E], or [N, K, 3] when extra_signals_sh_degree set
     extra_signals_sh_degree: Optional[
         int
     ] = None,  # Currently only None or 3 is accepted.
@@ -387,7 +387,8 @@ def rasterization(
         the `colors` is expected to be with shape [..., N, D] or [..., C, N, D], in which D is the channel of
         the features to be rendered. The computation is slow when D > 32 at the moment.
         If `sh_degree` is set, the `colors` is expected to be the SH coefficients with
-        shape [..., N, K, 3] or [..., C, N, K, 3], where K is the number of SH bases. In this case, it is expected
+        shape [N, K, 3], shared across all batch and camera dims (i.e. no leading `...` or `C` dims),
+        where K is the number of SH bases. In this case, it is expected
         that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
         activated bases in the SH coefficients.
 
@@ -413,7 +414,7 @@ def rasterization(
     .. note::
         **Extra signals**: Optional `extra_signals` are rendered and returned in ``meta["render_extra_signals"]``
         (shape [..., C, height, width, E]). If `extra_signals_sh_degree` is set, extra_signals are
-        SH coefficients [..., N, K, 3] evaluated per view.
+        SH coefficients of shape [N, K, 3] (shared across batch/camera dims), evaluated per view.
 
     .. note::
         **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
@@ -471,7 +472,7 @@ def rasterization(
         quats: The quaternions of the Gaussians (wxyz convension). It's not required to be normalized. [..., N, 4]
         scales: The scales of the Gaussians. [..., N, 3]
         opacities: The opacities of the Gaussians. [..., N]
-        colors: The colors of the Gaussians. [..., (C,) N, D] or [..., (C,) N, K, 3] for SH coefficients.
+        colors: The colors of the Gaussians. [..., (C,) N, D] for post-activation colors, or [N, K, 3] for SH coefficients (shared across batch/camera dims).
         viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]
         Ks: The camera intrinsics. [..., C, 3, 3]
         width: The width of the image.
@@ -487,8 +488,9 @@ def rasterization(
             This will prevents the projected GS to be too small. For example eps2d=0.3
             leads to minimal 3 pixel unit. Default is 0.3.
         sh_degree: The SH degree to use, which can be smaller than the total
-            number of bands. If set, the `colors` should be [..., (C,) N, K, 3] SH coefficients,
-            else the `colors` should be [..., (C,) N, D] post-activation color values. Default is None.
+            number of bands. If set, the `colors` should be [N, K, 3] SH coefficients (shared
+            across batch/camera dims), else the `colors` should be [..., (C,) N, D]
+            post-activation color values. Default is None.
         packed: Whether to use packed mode which is more memory efficient but might or
             might not be as fast. Default is True.
         tile_size: The size of the tiles for rasterization. Default is 16.
@@ -1397,7 +1399,7 @@ def _rasterization(
     quats: Tensor,  # [..., N, 4]
     scales: Tensor,  # [..., N, 3]
     opacities: Tensor,  # [..., N]
-    colors: Tensor,  # [..., (C,) N, D] or [..., (C,) N, K, 3]
+    colors: Tensor,  # [..., (C,) N, D] for post-activation colors, or [N, K, 3] for SH coefficients
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -1421,7 +1423,7 @@ def _rasterization(
     lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     extra_signals: Optional[
         Tensor
-    ] = None,  # [..., (C,) N, 3] or [..., (C,) N, K, 3] when extra_signals_sh_degree set
+    ] = None,  # [..., (C,) N, E], or [N, K, 3] when extra_signals_sh_degree set
     extra_signals_sh_degree: Optional[int] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """A version of rasterization() that utilies on PyTorch's autograd.
@@ -1876,7 +1878,7 @@ def rasterization_inria_wrapper(
     quats: Tensor,  # [..., N, 4]
     scales: Tensor,  # [..., N, 3]
     opacities: Tensor,  # [..., N]
-    colors: Tensor,  # [..., N, D] or [..., N, K, 3]
+    colors: Tensor,  # [..., N, D] for post-activation colors, or [N, K, 3] for SH coefficients
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -2035,7 +2037,7 @@ def rasterization_2dgs(
     quats: Tensor,  # [..., N, 4]
     scales: Tensor,  # [..., N, 3]
     opacities: Tensor,  # [..., N]
-    colors: Tensor,  # [..., (C,) N, D] or [..., (C,) N, K, 3]
+    colors: Tensor,  # [..., (C,) N, D] for post-activation colors, or [N, K, 3] for SH coefficients
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -2066,7 +2068,7 @@ def rasterization_2dgs(
         quats: The quaternions of the Gaussians (wxyz convension). It's not required to be normalized. [..., N, 4]
         scales: The scales of the Gaussians. [..., N, 3]
         opacities: The opacities of the Gaussians. [..., N]
-        colors: The colors of the Gaussians. [..., (C,) N, D] or [..., (C,) N, K, 3] for SH coefficients.
+        colors: The colors of the Gaussians. [..., (C,) N, D] for post-activation colors, or [N, K, 3] for SH coefficients (shared across batch/camera dims).
         viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]
         Ks: The camera intrinsics. [..., C, 3, 3]
         width: The width of the image.
@@ -2080,8 +2082,9 @@ def rasterization_2dgs(
             This will prevents the projected GS to be too small. For example eps2d=0.3
             leads to minimal 3 pixel unit. Default is 0.3.
         sh_degree: The SH degree to use, which can be smaller than the total
-            number of bands. If set, the `colors` should be [(C,) N, K, 3] SH coefficients,
-            else the `colors` should [(C,) N, D] post-activation color values. Default is None.
+            number of bands. If set, the `colors` should be [N, K, 3] SH coefficients (shared
+            across batch/camera dims), else the `colors` should [(C,) N, D]
+            post-activation color values. Default is None.
         packed: Whether to use packed mode which is more memory efficient but might or
             might not be as fast. Default is True.
         tile_size: The size of the tiles for rasterization. Default is 16.
