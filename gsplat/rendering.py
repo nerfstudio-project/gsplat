@@ -2257,12 +2257,19 @@ def rasterization_2dgs(
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
     if sh_degree is not None:  # SH coefficients
-        camtoworlds = torch.inverse(viewmats)
         if packed:
-            dirs = means[..., gaussian_ids, :] - camtoworlds[..., camera_ids, :3, 3]
+            dirs = compute_directions(
+                batch_dims,
+                means,
+                viewmats,
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+            )  # [nnz, 3]
             # Gather per-Gaussian coeffs to match the [nnz, K, 3] dirs.
             shs = colors[gaussian_ids]
         else:
+            camtoworlds = torch.inverse(viewmats)
             dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]
             shs = colors
         colors = spherical_harmonics(
