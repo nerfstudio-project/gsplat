@@ -356,10 +356,13 @@ def spherical_harmonics(
 ) -> Tensor:
     """Computes spherical harmonics.
 
+    In packed mode, callers pre-gather coeffs by ``gaussian_ids`` so ``N`` is
+    ``nnz`` and ``dirs`` has no leading dims.
+
     Args:
         degrees_to_use: SH degree to evaluate.
         dirs: View directions. ``[..., N, 3]``; any leading shape, rank ≥ 2.
-        coeffs: SH coefficients. ``[N, K, 3]``.
+        coeffs: SH coefficients. ``[N, K, 3]``, with ``N`` matching ``dirs.shape[-2]``.
         masks: Optional boolean masks. ``[..., N]`` matching ``dirs.shape[:-1]``.
 
     Returns:
