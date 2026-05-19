@@ -200,6 +200,7 @@ def test_fully_fused_projection_packed_2dgs(
         batch_ids,
         camera_ids,
         gaussian_ids,
+        indptr,
         radii,
         means2d,
         depths,
@@ -482,3 +483,88 @@ def test_rasterize_to_pixels_2dgs(
             flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
             msg=f"{name} backward (2dgs raster)",
         )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("batch_dims", [(2,), (1, 2)])
+def test_rasterization_packed_2dgs(test_data, batch_dims: Tuple[int, ...]):
+    from gsplat.rendering import rasterization_2dgs
+
+    torch.manual_seed(42)
+
+    N = test_data["means"].shape[-2]
+    C = test_data["viewmats"].shape[-3]
+    sh_degree = 3
+    K = (sh_degree + 1) ** 2
+
+    test_data = expand(test_data, batch_dims)
+    render_colors, *_ = rasterization_2dgs(
+        means=test_data["means"].contiguous(),
+        quats=test_data["quats"].contiguous(),
+        scales=test_data["scales"].contiguous(),
+        opacities=torch.rand(batch_dims + (N,), device=device) * 0.5,
+        colors=torch.randn(N, K, 3, device=device),
+        viewmats=test_data["viewmats"],
+        Ks=test_data["Ks"],
+        width=test_data["width"],
+        height=test_data["height"],
+        sh_degree=sh_degree,
+        packed=True,
+    )
+    assert render_colors.shape == batch_dims + (
+        C,
+        test_data["height"],
+        test_data["width"],
+        3,
+    )
+    assert torch.isfinite(render_colors).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterization_packed_2dgs_pose_grad_large_nnz():
+    # compute_directions switches to a per-(batch, camera) Python loop when
+    #   nnz / (B*C) > 10000 and viewmats.requires_grad
+    # (gsplat/rendering.py: _compute_view_dirs_packed). That loop reads
+    # indptr.cpu(); the 2DGS call site must thread indptr through or it
+    # crashes with AttributeError on None.
+    from gsplat.rendering import rasterization_2dgs
+
+    torch.manual_seed(42)
+
+    # N tuned so nnz/(B*C) > 10000: with C=3 default-frustum cameras roughly
+    # half the randn-positioned gaussians project, so N=80000 yields nnz ~ 1.2e5.
+    N = 80000
+    C = 2
+    means = torch.randn(N, 3, device=device)
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.ones(N, 3, device=device)
+    scales[..., :2] *= 0.1
+    opacities = torch.rand(N, device=device) * 0.5
+    sh_degree = 3
+    sh_coeffs = torch.randn(N, (sh_degree + 1) ** 2, 3, device=device)
+
+    viewmats = torch.eye(4, device=device).expand(C, 4, 4).clone()
+    viewmats.requires_grad = True
+    W, H = 640, 480
+    Ks = torch.tensor(
+        [[W, 0.0, W / 2], [0.0, W, H / 2], [0.0, 0.0, 1.0]], device=device
+    ).expand(C, 3, 3)
+
+    render_colors, *_ = rasterization_2dgs(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=sh_coeffs,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=W,
+        height=H,
+        sh_degree=sh_degree,
+        packed=True,
+    )
+    render_colors.sum().backward()
+    assert viewmats.grad is not None
+    assert torch.isfinite(viewmats.grad).all()

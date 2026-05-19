@@ -2225,6 +2225,7 @@ def rasterization_2dgs(
             batch_ids,
             camera_ids,
             gaussian_ids,
+            indptr,
             radii,
             means2d,
             depths,
@@ -2238,7 +2239,7 @@ def rasterization_2dgs(
         opacities = torch.broadcast_to(
             opacities[..., None, :], batch_dims + (C, N)
         )  # [..., C, N]
-        camera_ids, gaussian_ids = None, None
+        indptr, batch_ids, camera_ids, gaussian_ids = None, None, None, None
         image_ids = None
 
     densify = torch.zeros_like(
@@ -2271,6 +2272,7 @@ def rasterization_2dgs(
                 batch_ids,
                 camera_ids,
                 gaussian_ids,
+                indptr,
             )  # [nnz, 3]
             # Gather per-Gaussian coeffs to match the [nnz, K, 3] dirs.
             shs = colors[gaussian_ids]
