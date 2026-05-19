@@ -50,12 +50,11 @@ code-format:
   script:
     - lint/format-code.sh --check --full
 
-test:
+.test-base:
   stage: test
 
   variables:
     VERBOSE: 1
-    DEBUG: 1
     CCACHE_STATSLOG: $CI_BUILDS_DIR/ccache_stats.log
 
   tags:
@@ -95,3 +94,18 @@ test:
     # pytest.ini testpaths covers tests/ and all colocated lib test directories.
     - pytest -sv
     - ccache --show-log-stats -v
+
+# Debug build: -O0, asserts enabled (NDEBUG undefined). Exercises the
+# assertion-rich path used to catch invariant violations during development.
+test-debug:
+  extends: .test-base
+  variables:
+    DEBUG: 1
+
+# Release build: -O3 -DNDEBUG. Mirrors what users actually run; the debug
+# job alone misses regressions that only surface with NDEBUG stripping
+# asserts.
+test-release:
+  extends: .test-base
+  variables:
+    DEBUG: 0
