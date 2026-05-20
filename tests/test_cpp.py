@@ -27,14 +27,20 @@ GTEST_FILTER_ARG_LIMIT = 16000
 # 1. Collection first checks whether tests/cpp/*.cpp exists. An empty native
 #    suite becomes a skipped pytest item, so the tree does not need a placeholder
 #    C++ test just to keep collection healthy.
-# 2. When C++ tests exist, collection calls build_cpp_tests(), which first
-#    triggers the existing gsplat PyTorch JIT build. That produces both the
-#    Python extension and the gsplat object files.
-# 3. build_cpp_tests() then asks PyTorch JIT for a second standalone executable
-#    target that compiles GoogleTest plus tests/cpp/*.cpp and links the already
-#    built gsplat object files. This keeps gsplat's C++/CUDA sources compiled
-#    once while still letting PyTorch own compiler flags, include paths, and the
-#    generated Ninja files.
+# 2. When C++ tests exist, collection calls build_cpp_tests(), which resolves
+#    the gsplat implementation object files via get_gsplat_link_inputs():
+#      - If gsplat.csrc is already loaded (setup.py / editable install), reuse
+#        the .o files under <repo>/build/temp.*-cpython-<tag>/gsplat/cuda/ —
+#        same artifacts that produced the loaded csrc.so, so ABI matches.
+#      - Otherwise (pure JIT environment), trigger the gsplat JIT build and
+#        use the resulting .o files.
+#    ext.o is excluded in both paths so the gtest binary does not re-register
+#    TORCH_LIBRARY(gsplat).
+# 3. build_cpp_tests() then asks PyTorch JIT for a standalone executable target
+#    that compiles GoogleTest plus tests/cpp/*.cpp and links those object
+#    files. This keeps gsplat's C++/CUDA sources compiled once while still
+#    letting PyTorch own compiler flags, include paths, and the generated
+#    Ninja files.
 # 4. Collection runs the gtest binary with --gtest_list_tests and a JSON report,
 #    then parametrizes one pytest item per gtest. This makes pytest --collect-only,
 #    node ids, and -k selection work on individual native tests.
@@ -145,6 +151,17 @@ def _cpp_tests_can_run() -> tuple[bool, str | None]:
         return False, "gsplat CUDA extension is disabled by BUILD_NO_CUDA=1"
     if not cuda_toolkit_available():
         return False, "CUDA toolkit is not available"
+
+    # When gsplat.csrc is loaded but setup.py artifacts are missing or mismatched,
+    # translate that into a clean pytest skip with the same diagnostic message.
+    from gsplat.cuda.build import (
+        get_build_parameters,
+        get_gsplat_link_inputs_skip_reason,
+    )
+
+    reason = get_gsplat_link_inputs_skip_reason(get_build_parameters())
+    if reason:
+        return False, reason
     return True, None
 
 
@@ -333,10 +350,14 @@ def _python_link_flags() -> list[str]:
 
 
 def _ldflags(build_params, core_objects: list[str]) -> list[str]:
-    """Return linker flags for the gtest executable and reused gsplat objects."""
-    # Reuse the implementation objects that the gsplat extension already built.
-    # ext.o is excluded by get_gsplat_core_objects(), so native tests link the
-    # implementation they exercise without depending on the Python binding TU.
+    """Return linker flags for the gtest executable and reused gsplat objects.
+
+    ``core_objects`` is the list of implementation ``.o`` files — either the
+    setup.py-built objects (when ``gsplat.csrc`` is loaded) or the JIT-built
+    objects (pure JIT environment). ``ext.o`` is excluded from both lists, so
+    the gtest binary links the implementation it exercises without dragging in
+    the ``TORCH_LIBRARY(gsplat)`` registration that ``ext.cpp`` owns.
+    """
     ldflags = list(core_objects) + list(build_params.extra_ldflags)
     ldflags.extend(_python_link_flags())
     if sys.platform != "win32" and "-fopenmp" in build_params.extra_cflags:
@@ -383,19 +404,16 @@ def build_cpp_tests() -> str:
     # hooks only; it should not build or import the CUDA extension during pytest
     # startup paths such as `pytest --help`.
     from gsplat.cuda.build import (
-        build_and_load_gsplat,
         get_build_parameters,
-        get_gsplat_build_directory,
-        get_gsplat_core_objects,
+        get_gsplat_link_inputs,
+        get_gsplat_link_inputs_skip_reason,
     )
 
     build_params = get_build_parameters()
-    # Trigger the existing gsplat JIT path first. It owns the real extension
-    # build and gives us the exact object files that the Python module uses.
-    build_and_load_gsplat()
-    core_objects = get_gsplat_core_objects(
-        build_params, get_gsplat_build_directory(build_params)
-    )
+    reason = get_gsplat_link_inputs_skip_reason(build_params)
+    if reason:
+        raise RuntimeError(reason)
+    core_objects = get_gsplat_link_inputs()
 
     # The native test binary gets its own JIT build directory. It links the
     # already-built gsplat objects instead of recompiling gsplat sources.
