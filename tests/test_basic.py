@@ -5381,7 +5381,7 @@ def test_sh_zero_channels():
     K = (4 + 1) ** 2
     dirs = torch.randn(N, 3, device=device)
     coeffs = torch.randn(N, K, 0, device=device)
-    with pytest.raises(AssertionError):
+    with pytest.raises(RuntimeError):
         spherical_harmonics(0, dirs, coeffs)
 
 
