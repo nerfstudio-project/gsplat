@@ -586,3 +586,105 @@ def test_rasterization(
                         f"reference:\n{formatted}"
                     ),
                 )
+
+
+def _make_distributed_validation_scene() -> dict:
+    C = 2
+    N = 8
+    width = 16
+    height = 12
+    means = torch.rand((N, 3), device=device)
+    means[:, 2] = means[:, 2] + 2.0
+    return {
+        "means": means,
+        "quats": torch.randn((N, 4), device=device),
+        "scales": torch.rand((N, 3), device=device) * 0.05 + 0.01,
+        "opacities": torch.rand((N,), device=device),
+        "colors": torch.rand((N, 3), device=device),
+        "viewmats": torch.eye(4, device=device).expand(C, -1, -1).clone(),
+        "Ks": torch.tensor(
+            [[20.0, 0.0, width / 2], [0.0, 20.0, height / 2], [0.0, 0.0, 1.0]],
+            device=device,
+        )
+        .expand(C, -1, -1)
+        .clone(),
+        "width": width,
+        "height": height,
+    }
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize(
+    "case,match",
+    [
+        ("batch_dims", "batch dimensions"),
+        ("with_eval3d", "with_eval3d=True"),
+        ("with_ut", "with_ut=True"),
+        ("camera_model", "camera_model='ortho'"),
+        ("sparse_grad", "sparse_grad=True"),
+        ("absgrad", "absgrad=True"),
+        ("rolling_shutter", "rolling shutter"),
+        ("distortion", "camera distortion"),
+        ("global_z_order", "global_z_order=False"),
+        ("per_view_color", "per-Gaussian colors"),
+        ("rays", "rays"),
+        ("return_normals", "return_normals=True"),
+        ("lidar", "lidar coefficients"),
+    ],
+)
+def test_rasterization_distributed_rejects_unsupported_configs(
+    case: str,
+    match: str,
+):
+    # Every case raises during pure-Python validation before any distributed
+    # call, so no NCCL process group is needed.
+
+    kwargs = _make_distributed_validation_scene()
+    C = kwargs["viewmats"].shape[0]
+    N = kwargs["means"].shape[0]
+
+    if case == "batch_dims":
+        for key in ("means", "quats", "scales", "opacities", "colors"):
+            kwargs[key] = kwargs[key].expand(2, *kwargs[key].shape).clone()
+        kwargs["viewmats"] = kwargs["viewmats"].expand(2, C, 4, 4).clone()
+        kwargs["Ks"] = kwargs["Ks"].expand(2, C, 3, 3).clone()
+    elif case == "with_eval3d":
+        kwargs["with_eval3d"] = True
+    elif case == "with_ut":
+        kwargs["with_ut"] = True
+    elif case == "camera_model":
+        kwargs["camera_model"] = "ortho"
+    elif case == "sparse_grad":
+        kwargs["sparse_grad"] = True
+    elif case == "absgrad":
+        kwargs["absgrad"] = True
+    elif case == "rays":
+        kwargs["rays"] = torch.zeros(
+            (C, kwargs["height"], kwargs["width"], 6), device=device
+        )
+    elif case == "rolling_shutter":
+        kwargs["rolling_shutter"] = gsplat.RollingShutterType.ROLLING_TOP_TO_BOTTOM
+        kwargs["viewmats_rs"] = kwargs["viewmats"].clone()
+    elif case == "distortion":
+        kwargs["radial_coeffs"] = torch.zeros((C, 6), device=device)
+    elif case == "global_z_order":
+        kwargs["global_z_order"] = False
+    elif case == "per_view_color":
+        kwargs["colors"] = torch.rand((C, N, 3), device=device)
+    elif case == "return_normals":
+        kwargs["return_normals"] = True
+    elif case == "lidar":
+        from types import SimpleNamespace
+
+        # SimpleNamespace satisfies the n_columns/n_rows read that happens before
+        # the distributed-rejection block; the ValueError fires before any deeper
+        # lidar processing that would require a real LiDAR object.
+        kwargs["lidar_coeffs"] = SimpleNamespace(
+            n_columns=kwargs["width"], n_rows=kwargs["height"]
+        )
+    else:
+        raise AssertionError(f"unhandled case {case}")
+
+    with pytest.raises(ValueError, match=match):
+        gsplat.rasterization(**kwargs, distributed=True)
