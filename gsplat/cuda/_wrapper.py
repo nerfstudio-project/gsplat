@@ -400,14 +400,9 @@ def spherical_harmonics(
     Returns:
         Spherical harmonics. ``[..., N, D]``.
     """
-    assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
-    assert coeffs.dim() == 3 and coeffs.shape[-1] >= 1, coeffs.shape
-    assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
-    assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
     if masks is not None:
-        assert masks.shape == dirs.shape[:-1], (masks.shape, dirs.shape[:-1])
         masks = masks.contiguous()
-    return _SphericalHarmonics.apply(
+    return _make_lazy_cuda_func("spherical_harmonics")(
         degrees_to_use, dirs.contiguous(), coeffs.contiguous(), masks
     )
 
@@ -2310,44 +2305,6 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             None,  # sparse_grad
             None,  # camera_model
             None,  # ut_params
-        )
-
-
-class _SphericalHarmonics(torch.autograd.Function):
-    """Spherical Harmonics"""
-
-    @staticmethod
-    def forward(
-        ctx, sh_degree: int, dirs: Tensor, coeffs: Tensor, masks: Tensor
-    ) -> Tensor:
-        colors = _make_lazy_cuda_func("spherical_harmonics_fwd")(
-            sh_degree, dirs, coeffs, masks
-        )
-        ctx.save_for_backward(dirs, coeffs, masks)
-        ctx.sh_degree = sh_degree
-        return colors
-
-    @staticmethod
-    @trace_function("sh-bwd")
-    def backward(ctx, v_colors: Tensor):
-        dirs, coeffs, masks = ctx.saved_tensors
-        sh_degree = ctx.sh_degree
-        compute_v_dirs = ctx.needs_input_grad[1]
-        v_coeffs, v_dirs = _make_lazy_cuda_func("spherical_harmonics_bwd")(
-            sh_degree,
-            dirs,
-            coeffs,
-            masks,
-            v_colors.contiguous(),
-            compute_v_dirs,
-        )
-        if not compute_v_dirs:
-            v_dirs = None
-        return (
-            None,  # sh_degree
-            v_dirs,
-            v_coeffs,
-            None,  # masks
         )
 
 
