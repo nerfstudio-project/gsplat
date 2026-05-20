@@ -576,12 +576,11 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
     # A masked-out tile takes the forward rasterizer's early-return branch,
     # which must initialize ALL of its pixel outputs (the binding allocates
     # them with at::empty, leaving render_alphas / render_normals /
-    # render_distort / render_median / last_ids / median_ids uninitialized
-    # otherwise). The low-level fwd op exposes last_ids / median_ids directly.
-    # Stale allocator contents could coincidentally match these defaults, so
-    # this only reliably catches a missing store when uninitialized memory
-    # differs from the default.
-    from gsplat.cuda._wrapper import _make_lazy_cuda_func
+    # render_distort / render_median uninitialized otherwise). The public op
+    # also returns the absgrad holder, but not the internal last_ids /
+    # median_ids state used by the backward. Stale allocator contents could
+    # coincidentally match these defaults, so this only reliably catches a
+    # missing store when uninitialized memory differs from the default.
 
     tile_size = 16
     width = height = tile_size  # single tile
@@ -593,7 +592,8 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
     colors = torch.ones((1, N, channels), device=device)
     opacities = torch.ones((1, N), device=device)
     normals = torch.zeros((1, N, 3), device=device)
-    backgrounds = torch.zeros((1, channels), device=device)
+    densify = torch.zeros((1, N, 2), device=device)
+    backgrounds = torch.tensor([[0.2, 0.4, 0.6]], device=device)
     masks = torch.zeros((1, 1, 1), dtype=torch.bool, device=device)  # tile masked off
     isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
     flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
@@ -604,14 +604,14 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
         render_normals,
         render_distort,
         render_median,
-        last_ids,
-        median_ids,
-    ) = _make_lazy_cuda_func("rasterize_to_pixels_2dgs_fwd")(
+        means2d_absgrad,
+    ) = torch.ops.gsplat.rasterize_to_pixels_2dgs(
         means2d,
         ray_transforms,
         colors,
         opacities,
         normals,
+        densify,
         backgrounds,
         masks,
         width,
@@ -619,6 +619,9 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
         tile_size,
         isect_offsets,
         flatten_ids,
+        False,  # packed
+        False,  # absgrad
+        False,  # distloss
     )
 
     torch.testing.assert_close(
@@ -628,8 +631,7 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
     torch.testing.assert_close(render_normals, torch.zeros_like(render_normals))
     torch.testing.assert_close(render_distort, torch.zeros_like(render_distort))
     torch.testing.assert_close(render_median, torch.zeros_like(render_median))
-    torch.testing.assert_close(last_ids, torch.zeros_like(last_ids))
-    torch.testing.assert_close(median_ids, torch.zeros_like(median_ids))
+    assert means2d_absgrad.numel() == 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

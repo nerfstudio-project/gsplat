@@ -2429,33 +2429,10 @@ def rasterize_to_pixels_2dgs(
 
 
     """
-    image_dims = means2d.shape[:-2]
-    channels = colors.shape[-1]
-    if packed:
-        nnz = means2d.size(0)
-        assert means2d.shape == (nnz, 2), means2d.shape
-        assert ray_transforms.shape == (nnz, 3, 3), ray_transforms.shape
-        assert colors.shape[0] == nnz, colors.shape
-        assert opacities.shape == (nnz,), opacities.shape
-    else:
-        N = means2d.size(-2)
-        assert means2d.shape == image_dims + (N, 2), means2d.shape
-        assert ray_transforms.shape == image_dims + (N, 3, 3), ray_transforms.shape
-        assert colors.shape[:-2] == image_dims, colors.shape
-        assert opacities.shape == image_dims + (N,), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
         backgrounds = backgrounds.contiguous()
     if masks is not None:
         masks = masks.contiguous()
-
-    tile_height, tile_width = isect_offsets.shape[-2:]
-    assert (
-        tile_height * tile_size >= image_height
-    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-    assert (
-        tile_width * tile_size >= image_width
-    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
     (
         render_colors,
@@ -2463,7 +2440,8 @@ def rasterize_to_pixels_2dgs(
         render_normals,
         render_distort,
         render_median,
-    ) = _RasterizeToPixels2DGS.apply(
+        means2d_absgrad,
+    ) = _make_lazy_cuda_func("rasterize_to_pixels_2dgs")(
         means2d.contiguous(),
         ray_transforms.contiguous(),
         colors.contiguous(),
@@ -2477,9 +2455,12 @@ def rasterize_to_pixels_2dgs(
         tile_size,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
+        packed,
         absgrad,
         distloss,
     )
+    if absgrad:
+        means2d.absgrad = means2d_absgrad
 
     return render_colors, render_alphas, render_normals, render_distort, render_median
 
@@ -2566,174 +2547,3 @@ def rasterize_to_indices_in_range_2dgs(
     out_pixel_ids = out_indices % (image_width * image_height)
     out_image_ids = out_indices // (image_width * image_height)
     return out_gauss_ids, out_pixel_ids, out_image_ids
-
-
-class _RasterizeToPixels2DGS(torch.autograd.Function):
-    """Rasterize gaussians 2DGS"""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means2d: Tensor,
-        ray_transforms: Tensor,
-        colors: Tensor,
-        opacities: Tensor,
-        normals: Tensor,
-        densify: Tensor,
-        backgrounds: Tensor,
-        masks: Tensor,
-        width: int,
-        height: int,
-        tile_size: int,
-        isect_offsets: Tensor,
-        flatten_ids: Tensor,
-        absgrad: bool,
-        distloss: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        (
-            render_colors,
-            render_alphas,
-            render_normals,
-            render_distort,
-            render_median,
-            last_ids,
-            median_ids,
-        ) = _make_lazy_cuda_func("rasterize_to_pixels_2dgs_fwd")(
-            means2d,
-            ray_transforms,
-            colors,
-            opacities,
-            normals,
-            backgrounds,
-            masks,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-        )
-
-        ctx.save_for_backward(
-            means2d,
-            ray_transforms,
-            colors,
-            opacities,
-            normals,
-            densify,
-            backgrounds,
-            masks,
-            isect_offsets,
-            flatten_ids,
-            render_colors,
-            render_alphas,
-            last_ids,
-            median_ids,
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.tile_size = tile_size
-        ctx.absgrad = absgrad
-        ctx.distloss = distloss
-
-        # double to float
-        render_alphas = render_alphas.float()
-        return (
-            render_colors,
-            render_alphas,
-            render_normals,
-            render_distort,
-            render_median,
-        )
-
-    @staticmethod
-    def backward(
-        ctx,
-        v_render_colors: Tensor,
-        v_render_alphas: Tensor,
-        v_render_normals: Tensor,
-        v_render_distort: Tensor,
-        v_render_median: Tensor,
-    ):
-
-        (
-            means2d,
-            ray_transforms,
-            colors,
-            opacities,
-            normals,
-            densify,
-            backgrounds,
-            masks,
-            isect_offsets,
-            flatten_ids,
-            render_colors,
-            render_alphas,
-            last_ids,
-            median_ids,
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        tile_size = ctx.tile_size
-        absgrad = ctx.absgrad
-
-        (
-            v_means2d_abs,
-            v_means2d,
-            v_ray_transforms,
-            v_colors,
-            v_opacities,
-            v_normals,
-            v_densify,
-        ) = _make_lazy_cuda_func("rasterize_to_pixels_2dgs_bwd")(
-            means2d,
-            ray_transforms,
-            colors,
-            opacities,
-            normals,
-            densify,
-            backgrounds,
-            masks,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            render_colors,
-            render_alphas,
-            last_ids,
-            median_ids,
-            v_render_colors.contiguous(),
-            v_render_alphas.contiguous(),
-            v_render_normals.contiguous(),
-            v_render_distort.contiguous(),
-            v_render_median.contiguous(),
-            absgrad,
-        )
-        torch.cuda.synchronize()
-        if absgrad:
-            means2d.absgrad = v_means2d_abs
-
-        if ctx.needs_input_grad[6]:
-            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
-                dim=(-3, -2)
-            )
-        else:
-            v_backgrounds = None
-
-        return (
-            v_means2d,
-            v_ray_transforms,
-            v_colors,
-            v_opacities,
-            v_normals,
-            v_densify,
-            v_backgrounds,
-            None,  # masks
-            None,  # width
-            None,  # height
-            None,  # tile_size
-            None,  # isect_offsets
-            None,  # flatten_ids
-            None,  # absgrad
-            None,  # distloss
-        )

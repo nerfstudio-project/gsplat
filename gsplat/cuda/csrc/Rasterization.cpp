@@ -475,14 +475,184 @@ std::tuple<at::Tensor, at::Tensor> rasterize_top_contributing_gaussian_ids(
 // 2DGS
 ////////////////////////////////////////////////////
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+namespace {
+
+void check_rasterize_to_pixels_2dgs_inputs(
+    const at::Tensor &means2d, const at::Tensor &ray_transforms,
+    const at::Tensor &colors, const at::Tensor &opacities,
+    const at::Tensor &normals, const at::Tensor &densify,
+    const at::optional<at::Tensor> &backgrounds,
+    const at::optional<at::Tensor> &masks,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &tile_offsets,
+    bool packed
+) {
+    TORCH_CHECK(
+        means2d.dim() >= 2,
+        "means2d must have shape [..., N, 2] or [nnz, 2], got ",
+        means2d.sizes()
+    );
+    TORCH_CHECK(
+        colors.dim() >= 2,
+        "colors must have shape [..., N, channels] or [nnz, channels], got ",
+        colors.sizes()
+    );
+    TORCH_CHECK(
+        tile_offsets.dim() >= 2,
+        "tile_offsets must have shape [..., tile_height, tile_width], got ",
+        tile_offsets.sizes()
+    );
+    TORCH_CHECK(
+        means2d.size(-1) == 2,
+        "means2d must have shape [..., N, 2] or [nnz, 2], got ",
+        means2d.sizes()
+    );
+
+    at::DimVector image_dims(means2d.sizes().slice(0, means2d.dim() - 2));
+    const int64_t channels = colors.size(-1);
+    if (packed) {
+        const int64_t nnz = means2d.size(0);
+        TORCH_CHECK(
+            means2d.dim() == 2 && means2d.size(0) == nnz &&
+                means2d.size(1) == 2,
+            "packed means2d must have shape [nnz, 2], got ",
+            means2d.sizes()
+        );
+        TORCH_CHECK(
+            ray_transforms.dim() == 3 && ray_transforms.size(0) == nnz &&
+                ray_transforms.size(1) == 3 && ray_transforms.size(2) == 3,
+            "packed ray_transforms must have shape [nnz, 3, 3], got ",
+            ray_transforms.sizes()
+        );
+        TORCH_CHECK(
+            colors.size(0) == nnz,
+            "packed colors first dimension must match nnz; got colors ",
+            colors.sizes(),
+            " and nnz ",
+            nnz
+        );
+        TORCH_CHECK(
+            opacities.dim() == 1 && opacities.size(0) == nnz,
+            "packed opacities must have shape [nnz], got ",
+            opacities.sizes()
+        );
+        TORCH_CHECK(
+            normals.dim() == 2 && normals.size(0) == nnz &&
+                normals.size(1) == 3,
+            "packed normals must have shape [nnz, 3], got ",
+            normals.sizes()
+        );
+        TORCH_CHECK(
+            densify.dim() == 2 && densify.size(0) == nnz &&
+                densify.size(1) == 2,
+            "packed densify must have shape [nnz, 2], got ",
+            densify.sizes()
+        );
+    } else {
+        const int64_t N = means2d.size(-2);
+        at::DimVector ray_transforms_shape(image_dims);
+        ray_transforms_shape.append({N, 3, 3});
+        at::DimVector colors_shape(image_dims);
+        colors_shape.append({N, channels});
+        at::DimVector opacities_shape(image_dims);
+        opacities_shape.append({N});
+        at::DimVector normals_shape(image_dims);
+        normals_shape.append({N, 3});
+        at::DimVector densify_shape(image_dims);
+        densify_shape.append({N, 2});
+
+        TORCH_CHECK(
+            ray_transforms.sizes() == ray_transforms_shape,
+            "ray_transforms must have shape [..., N, 3, 3], got ",
+            ray_transforms.sizes()
+        );
+        TORCH_CHECK(
+            colors.sizes() == colors_shape,
+            "colors must have shape [..., N, channels], got ",
+            colors.sizes()
+        );
+        TORCH_CHECK(
+            opacities.sizes() == opacities_shape,
+            "opacities must have shape [..., N], got ",
+            opacities.sizes()
+        );
+        TORCH_CHECK(
+            normals.sizes() == normals_shape,
+            "normals must have shape [..., N, 3], got ",
+            normals.sizes()
+        );
+        TORCH_CHECK(
+            densify.sizes() == densify_shape,
+            "densify must have shape [..., N, 2], got ",
+            densify.sizes()
+        );
+    }
+
+    if (backgrounds.has_value()) {
+        at::DimVector backgrounds_shape(image_dims);
+        backgrounds_shape.append({channels});
+        TORCH_CHECK(
+            backgrounds.value().sizes() == backgrounds_shape,
+            "backgrounds must have shape [..., channels], got ",
+            backgrounds.value().sizes()
+        );
+    }
+    if (masks.has_value()) {
+        TORCH_CHECK(
+            masks.value().sizes() == tile_offsets.sizes(),
+            "masks must have the same shape as tile_offsets; got masks ",
+            masks.value().sizes(),
+            " and tile_offsets ",
+            tile_offsets.sizes()
+        );
+    }
+
+    const int64_t tile_height = tile_offsets.size(-2);
+    const int64_t tile_width = tile_offsets.size(-1);
+    TORCH_CHECK(
+        tile_height * tile_size >= image_height,
+        "Assert Failed: ",
+        tile_height,
+        " * ",
+        tile_size,
+        " >= ",
+        image_height
+    );
+    TORCH_CHECK(
+        tile_width * tile_size >= image_width,
+        "Assert Failed: ",
+        tile_width,
+        " * ",
+        tile_size,
+        " >= ",
+        image_width
+    );
+}
+
+} // namespace
+
+struct RasterizeToPixels2DGSFwdResult {
+    at::Tensor renders;
+    at::Tensor alphas;
+    at::Tensor render_normals;
+    at::Tensor render_distort;
+    at::Tensor render_median;
+    at::Tensor last_ids;
+    at::Tensor median_ids;
+    at::Tensor means2d_absgrad;
+};
+
+template <> struct TorchArgDef<RasterizeToPixels2DGSFwdResult> {
+    // last_ids / median_ids are forward-internal state; alphas is exposed
+    // as float.
+    static auto to(const RasterizeToPixels2DGSFwdResult &r) { return to_torch_args(
+        r.renders, r.alphas.to(at::kFloat), r.render_normals,
+        r.render_distort, r.render_median, r.means2d_absgrad
+    ); }
+};
+
+
+RasterizeToPixels2DGSFwdResult
 rasterize_to_pixels_2dgs_fwd(
     // Gaussian parameters
     const at::Tensor &means2d,        // [..., N, 2] or [nnz, 2]
@@ -490,6 +660,7 @@ rasterize_to_pixels_2dgs_fwd(
     const at::Tensor &colors,         // [..., N, channels] or [nnz, channels]
     const at::Tensor &opacities,      // [..., N]  or [nnz]
     const at::Tensor &normals,        // [..., N, 3] or [nnz, 3]
+    const at::Tensor &densify,        // [..., N, 2] or [nnz, 2]
     const at::optional<at::Tensor> &backgrounds, // [..., channels]
     const at::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]
     // image size
@@ -498,8 +669,21 @@ rasterize_to_pixels_2dgs_fwd(
     int64_t tile_size,
     // intersections
     const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor &flatten_ids   // [n_isects]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    bool packed,
+    bool absgrad,
+    bool distloss
 ) {
+    (void)distloss;
+    check_rasterize_to_pixels_2dgs_inputs(
+        means2d, ray_transforms,
+        colors, opacities,
+        normals, densify,
+        backgrounds, masks,
+        image_width, image_height, tile_size,
+        tile_offsets, packed
+    );
+
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(ray_transforms);
@@ -569,25 +753,44 @@ rasterize_to_pixels_2dgs_fwd(
         median_ids
     );
 
-    return std::make_tuple(
-        renders,
-        alphas,
-        render_normals,
-        render_distort,
-        render_median,
-        last_ids,
-        median_ids
-    );
+    return RasterizeToPixels2DGSFwdResult{
+        .renders = renders,
+        .alphas = alphas,
+        .render_normals = render_normals,
+        .render_distort = render_distort,
+        .render_median = render_median,
+        .last_ids = last_ids,
+        .median_ids = median_ids,
+        .means2d_absgrad = absgrad ? at::zeros_like(means2d)
+                                   : at::empty({0}, means2d.options())
+    };
 }
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+// Gradients of the differentiable forward inputs. Slots the backward kernel
+// does not produce stay default (undefined Tensor / nullopt).
+struct RasterizeToPixels2DGSBwdResult {
+    at::optional<at::Tensor> v_means2d_abs;
+    at::Tensor v_means2d;
+    at::Tensor v_ray_transforms;
+    at::Tensor v_colors;
+    at::Tensor v_opacities;
+    at::Tensor v_normals;
+    at::Tensor v_densify;
+    at::Tensor v_backgrounds;
+};
+
+// Gradients of the differentiable forward outputs.
+struct RasterizeToPixels2DGSGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor renders;
+    at::Tensor alphas;
+    at::Tensor render_normals;
+    at::Tensor render_distort;
+    at::Tensor render_median;
+};
+
+// Full backward for rasterize_to_pixels_2dgs.
+RasterizeToPixels2DGSBwdResult
 rasterize_to_pixels_2dgs_bwd(
     // Gaussian parameters
     const at::Tensor &means2d,        // [..., N, 2] or [nnz, 2]
@@ -610,14 +813,10 @@ rasterize_to_pixels_2dgs_bwd(
     const at::Tensor &render_alphas, // [..., image_height, image_width, 1]
     const at::Tensor &last_ids,      // [..., image_height, image_width]
     const at::Tensor &median_ids,    // [..., image_height, image_width]
+    at::Tensor absgrad_holder, // in-place destination for the published abs gradient
+    bool absgrad,
     // gradients of outputs
-    const at::Tensor &v_render_colors,  // [..., image_height, image_width, channels]
-    const at::Tensor &v_render_alphas,  // [..., image_height, image_width, 1]
-    const at::Tensor &v_render_normals, // [..., image_height, image_width, 3]
-    const at::Tensor &v_render_distort, // [..., image_height, image_width, 1]
-    const at::Tensor &v_render_median,  // [..., image_height, image_width, 1]
-    // options
-    bool absgrad
+    const RasterizeToPixels2DGSGrad &grad
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -632,11 +831,11 @@ rasterize_to_pixels_2dgs_bwd(
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
     CHECK_INPUT(median_ids);
-    CHECK_INPUT(v_render_colors);
-    CHECK_INPUT(v_render_alphas);
-    CHECK_INPUT(v_render_normals);
-    CHECK_INPUT(v_render_distort);
-    CHECK_INPUT(v_render_median);
+    CHECK_INPUT(grad.renders);
+    CHECK_INPUT(grad.alphas);
+    CHECK_INPUT(grad.render_normals);
+    CHECK_INPUT(grad.render_distort);
+    CHECK_INPUT(grad.render_median);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
     }
@@ -673,11 +872,11 @@ rasterize_to_pixels_2dgs_bwd(
         render_alphas,
         last_ids,
         median_ids,
-        v_render_colors,
-        v_render_alphas,
-        v_render_normals,
-        v_render_distort,
-        v_render_median,
+        grad.renders,
+        grad.alphas,
+        grad.render_normals,
+        grad.render_distort,
+        grad.render_median,
         absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt,
         v_means2d,
         v_ray_transforms,
@@ -687,14 +886,231 @@ rasterize_to_pixels_2dgs_bwd(
         v_densify
     );
 
-    return std::make_tuple(
-        v_means2d_abs,
-        v_means2d,
-        v_ray_transforms,
-        v_colors,
-        v_opacities,
-        v_normals,
-        v_densify
+    // --- Publish optional AbsGrad output ------------------------------
+    // absgrad_holder was returned (mark_non_differentiable) from forward; the
+    // caller observes the abs gradient through this in-place write.
+    if (absgrad) {
+        absgrad_holder.copy_(v_means2d_abs);
+    }
+
+    // --- Compute background gradient ----------------------------------
+    // Background contribution is not produced by the CUDA backward kernel.
+    // It is the incoming color gradient weighted by the unoccluded alpha.
+    at::Tensor v_backgrounds;
+    if (tensor_requires_grad(backgrounds)) {
+        const at::Tensor one_minus_alpha =
+            at::sub(at::ones_like(render_alphas).to(at::kFloat),
+                    render_alphas.to(at::kFloat));
+        v_backgrounds = at::mul(grad.renders, one_minus_alpha).sum({-3, -2});
+    }
+
+    return RasterizeToPixels2DGSBwdResult{
+        .v_means2d_abs = as_optional_tensor(v_means2d_abs),
+        .v_means2d = v_means2d,
+        .v_ray_transforms = v_ray_transforms,
+        .v_colors = v_colors,
+        .v_opacities = v_opacities,
+        .v_normals = v_normals,
+        .v_densify = v_densify,
+        .v_backgrounds = v_backgrounds,
+    };
+}
+
+// Public outputs of rasterize_to_pixels_2dgs
+struct RasterizeToPixels2DGSResult {
+    at::Tensor renders;
+    at::Tensor alphas;
+    at::Tensor render_normals;
+    at::Tensor render_distort;
+    at::Tensor render_median;
+    at::Tensor means2d_absgrad;
+};
+
+template <> struct TorchArgDef<RasterizeToPixels2DGSResult> {
+    static auto to(const RasterizeToPixels2DGSResult &r) { return to_torch_args(
+        r.renders, r.alphas, r.render_normals, r.render_distort,
+        r.render_median, r.means2d_absgrad
+    ); }
+};
+
+namespace {
+
+class RasterizeToPixels2DGSAutograd
+    : public torch::autograd::Function<RasterizeToPixels2DGSAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS2D, RAY_TRANSFORMS, COLORS, OPACITIES,
+            NORMALS, DENSIFY,
+            BACKGROUNDS, MASKS,
+            IMAGE_WIDTH, IMAGE_HEIGHT, TILE_SIZE,
+            TILE_OFFSETS, FLATTEN_IDS,
+            PACKED, ABSGRAD, DISTLOSS,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum {
+            RENDERS, ALPHAS, RENDER_NORMALS, RENDER_DISTORT, RENDER_MEDIAN,
+            ABSGRAD_HOLDER, COUNT,
+        };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means2d, const at::Tensor &ray_transforms,
+        const at::Tensor &colors, const at::Tensor &opacities,
+        const at::Tensor &normals, const at::Tensor &densify,
+        const at::optional<at::Tensor> &backgrounds,
+        const at::optional<at::Tensor> &masks,
+        int64_t image_width, int64_t image_height, int64_t tile_size,
+        const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
+        bool packed, bool absgrad, bool distloss
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        RasterizeToPixels2DGSFwdResult outputs =
+            rasterize_to_pixels_2dgs_fwd(
+                means2d, ray_transforms,
+                colors, opacities,
+                normals, densify,
+                backgrounds, masks,
+                image_width, image_height, tile_size,
+                tile_offsets, flatten_ids,
+                packed, absgrad, distloss
+            );
+
+        // --- Publish optional public outputs ------------------------------
+        at::Tensor absgrad_holder = outputs.means2d_absgrad;
+        ctx->mark_non_differentiable({absgrad_holder});
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&rasterize_to_pixels_2dgs_bwd>(
+            ctx,
+            means2d, ray_transforms, colors, opacities, normals, densify,
+            backgrounds, masks, image_width, image_height, tile_size,
+            tile_offsets, flatten_ids,
+            outputs.renders, outputs.alphas, outputs.last_ids,
+            outputs.median_ids, absgrad_holder, absgrad
+        );
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::RENDERS]        = outputs.renders;
+        out[FwdOutput::ALPHAS]         = outputs.alphas.to(at::kFloat);
+        out[FwdOutput::RENDER_NORMALS] = outputs.render_normals;
+        out[FwdOutput::RENDER_DISTORT] = outputs.render_distort;
+        out[FwdOutput::RENDER_MEDIAN]  = outputs.render_median;
+        out[FwdOutput::ABSGRAD_HOLDER] = absgrad_holder;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        RasterizeToPixels2DGSGrad grad{
+            .renders        = grad_outputs[FwdOutput::RENDERS].contiguous(),
+            .alphas         = grad_outputs[FwdOutput::ALPHAS].contiguous(),
+            .render_normals = grad_outputs[FwdOutput::RENDER_NORMALS].contiguous(),
+            .render_distort = grad_outputs[FwdOutput::RENDER_DISTORT].contiguous(),
+            .render_median  = grad_outputs[FwdOutput::RENDER_MEDIAN].contiguous(),
+        };
+        RasterizeToPixels2DGSBwdResult g = apply_bwd<&rasterize_to_pixels_2dgs_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS2D]        = g.v_means2d;
+        grads[FwdInput::RAY_TRANSFORMS] = g.v_ray_transforms;
+        grads[FwdInput::COLORS]         = g.v_colors;
+        grads[FwdInput::OPACITIES]      = g.v_opacities;
+        grads[FwdInput::NORMALS]        = g.v_normals;
+        grads[FwdInput::DENSIFY]        = g.v_densify;
+        grads[FwdInput::BACKGROUNDS]    = g.v_backgrounds;
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static RasterizeToPixels2DGSResult call(
+        const at::Tensor &means2d, const at::Tensor &ray_transforms,
+        const at::Tensor &colors, const at::Tensor &opacities,
+        const at::Tensor &normals, const at::Tensor &densify,
+        const at::optional<at::Tensor> &backgrounds,
+        const at::optional<at::Tensor> &masks,
+        int64_t image_width, int64_t image_height, int64_t tile_size,
+        const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
+        bool packed, bool absgrad, bool distloss
+    ) {
+        torch::autograd::variable_list outputs = apply(
+            means2d, ray_transforms,
+            colors, opacities,
+            normals, densify,
+            backgrounds, masks,
+            image_width, image_height, tile_size,
+            tile_offsets, flatten_ids,
+            packed, absgrad, distloss
+        );
+        return {
+            .renders         = outputs[FwdOutput::RENDERS],
+            .alphas          = outputs[FwdOutput::ALPHAS],
+            .render_normals  = outputs[FwdOutput::RENDER_NORMALS],
+            .render_distort  = outputs[FwdOutput::RENDER_DISTORT],
+            .render_median   = outputs[FwdOutput::RENDER_MEDIAN],
+            .means2d_absgrad = outputs[FwdOutput::ABSGRAD_HOLDER],
+        };
+    }
+};
+
+} // namespace
+
+RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
+    const at::Tensor &means2d, const at::Tensor &ray_transforms,
+    const at::Tensor &colors, const at::Tensor &opacities,
+    const at::Tensor &normals, const at::Tensor &densify,
+    const at::optional<at::Tensor> &backgrounds,
+    const at::optional<at::Tensor> &masks,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
+    bool packed, bool absgrad, bool distloss
+) {
+    const bool use_custom_autograd = needs_custom_autograd(
+        means2d, ray_transforms, colors, opacities, normals, densify,
+        backgrounds, masks, tile_offsets, flatten_ids
+    );
+    if (!use_custom_autograd) {
+        RasterizeToPixels2DGSFwdResult fwd = rasterize_to_pixels_2dgs_fwd(
+            means2d, ray_transforms,
+            colors, opacities,
+            normals, densify,
+            backgrounds, masks,
+            image_width, image_height, tile_size,
+            tile_offsets, flatten_ids,
+            packed, absgrad, distloss
+        );
+        // alphas is exposed as float (matches the autograd path).
+        return {
+            .renders         = fwd.renders,
+            .alphas          = fwd.alphas.to(at::kFloat),
+            .render_normals  = fwd.render_normals,
+            .render_distort  = fwd.render_distort,
+            .render_median   = fwd.render_median,
+            .means2d_absgrad = fwd.means2d_absgrad,
+        };
+    }
+
+    return RasterizeToPixels2DGSAutograd::call(
+        means2d, ray_transforms,
+        colors, opacities,
+        normals, densify,
+        backgrounds, masks,
+        image_width, image_height, tile_size,
+        tile_offsets, flatten_ids,
+        packed, absgrad, distloss
     );
 }
 
@@ -1758,8 +2174,7 @@ void register_rasterization_cuda_impl(torch::Library &m) {
 #endif
 
 #if GSPLAT_BUILD_2DGS
-    m.impl("rasterize_to_pixels_2dgs_fwd", &rasterize_to_pixels_2dgs_fwd);
-    m.impl("rasterize_to_pixels_2dgs_bwd", &rasterize_to_pixels_2dgs_bwd);
+    m.impl("rasterize_to_pixels_2dgs", to_torch_op<&rasterize_to_pixels_2dgs_fwd>);
     m.impl("rasterize_to_indices_2dgs", &rasterize_to_indices_2dgs);
 #endif
 
@@ -1770,6 +2185,9 @@ void register_rasterization_cuda_impl(torch::Library &m) {
 }
 
 void register_rasterization_autograd_cuda_impl(torch::Library &m) {
+#if GSPLAT_BUILD_2DGS
+    m.impl("rasterize_to_pixels_2dgs", to_torch_op<&rasterize_to_pixels_2dgs>);
+#endif
     m.impl(
         "rasterize_to_pixels_from_world_3dgs",
         &rasterize_to_pixels_from_world_3dgs_autograd
