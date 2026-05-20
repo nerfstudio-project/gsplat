@@ -955,8 +955,7 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int I, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
 
 #if GSPLAT_BUILD_3DGS
-    m.def("projection_ewa_simple_fwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> (Tensor, Tensor)");
-    m.def("projection_ewa_simple_bwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model, Tensor v_means2d, Tensor v_covars2d) -> (Tensor, Tensor)");
+    m.def("projection_ewa_simple(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> (Tensor, Tensor)");
 
     m.def("projection_ewa_3dgs_fused_fwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
     m.def("projection_ewa_3dgs_fused_bwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, int camera_model, Tensor radii, Tensor conics, Tensor? compensations, Tensor v_means2d, Tensor v_depths, Tensor v_conics, Tensor? v_compensations, bool viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
