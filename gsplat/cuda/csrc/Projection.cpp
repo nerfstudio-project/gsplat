@@ -962,16 +962,28 @@ Projection2DGSFusedFwdResult projection_2dgs_fused(
     );
 }
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+struct Projection2DGSPackedResult {
+    at::Tensor batch_ids;
+    at::Tensor camera_ids;
+    at::Tensor gaussian_ids;
+    at::Tensor indptr;
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor ray_transforms;
+    at::Tensor normals;
+};
+
+template <> struct TorchArgDef<Projection2DGSPackedResult> {
+    static auto to(const Projection2DGSPackedResult &r) { return to_torch_args(
+        r.batch_ids, r.camera_ids, r.gaussian_ids, r.indptr, r.radii,
+        r.means2d, r.depths, r.ray_transforms, r.normals
+    ); }
+};
+
+using Projection2DGSPackedFwdResult = Projection2DGSPackedResult;
+
+Projection2DGSPackedFwdResult
 projection_2dgs_packed_fwd(
     const at::Tensor &means,    // [..., N, 3]
     const at::Tensor &quats,    // [..., N, 4]
@@ -982,14 +994,11 @@ projection_2dgs_packed_fwd(
     int64_t image_height,
     double near_plane,
     double far_plane,
-    double radius_clip
+    double radius_clip,
+    bool sparse_grad
 ) {
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
+    check_projection_2dgs_inputs(means, quats, scales, viewmats, Ks);
 
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)); // number of batches
@@ -1078,20 +1087,37 @@ projection_2dgs_packed_fwd(
         indptr.fill_(0);
     }
 
-    return std::make_tuple(
-        indptr,
-        batch_ids,
-        camera_ids,
-        gaussian_ids,
-        radii,
-        means2d,
-        depths,
-        ray_transforms,
-        normals
-    );
+    return Projection2DGSPackedFwdResult{
+        .batch_ids = batch_ids,
+        .camera_ids = camera_ids,
+        .gaussian_ids = gaussian_ids,
+        .indptr = indptr,
+        .radii = radii,
+        .means2d = means2d,
+        .depths = depths,
+        .ray_transforms = ray_transforms,
+        .normals = normals,
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+struct Projection2DGSPackedBwdResult {
+    at::Tensor v_means;
+    at::Tensor v_quats;
+    at::Tensor v_scales;
+    at::optional<at::Tensor> v_viewmats;
+};
+
+// Gradients of the differentiable forward outputs.
+struct Projection2DGSPackedGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor means2d;        // [nnz, 2]
+    at::Tensor depths;         // [nnz]
+    at::Tensor ray_transforms; // [nnz, 3, 3]
+    at::Tensor normals;        // [nnz, 3]
+};
+
+// Full backward for projection_2dgs_packed.
+Projection2DGSPackedBwdResult
 projection_2dgs_packed_bwd(
     // fwd inputs
     const at::Tensor &means,    // [..., N, 3]
@@ -1101,33 +1127,21 @@ projection_2dgs_packed_bwd(
     const at::Tensor &Ks,       // [..., C, 3, 3]
     int64_t image_width,
     int64_t image_height,
+    bool sparse_grad,
     // fwd outputs
     const at::Tensor &batch_ids,      // [nnz]
     const at::Tensor &camera_ids,     // [nnz]
     const at::Tensor &gaussian_ids,   // [nnz]
     const at::Tensor &ray_transforms, // [nnz, 3, 3]
     // grad outputs
-    const at::Tensor &v_means2d,        // [nnz, 2]
-    const at::Tensor &v_depths,         // [nnz]
-    const at::Tensor &v_ray_transforms, // [nnz, 3, 3]
-    const at::Tensor &v_normals,        // [nnz, 3]
-    bool viewmats_requires_grad,
-    bool sparse_grad
+    const Projection2DGSPackedGrad &grad
 ) {
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
-    CHECK_INPUT(batch_ids);
-    CHECK_INPUT(camera_ids);
-    CHECK_INPUT(gaussian_ids);
-    CHECK_INPUT(ray_transforms);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_normals);
-    CHECK_INPUT(v_ray_transforms);
+    check_projection_2dgs_inputs(means, quats, scales, viewmats, Ks);
+    CHECK_INPUT(grad.means2d);
+    CHECK_INPUT(grad.depths);
+    CHECK_INPUT(grad.normals);
+    CHECK_INPUT(grad.ray_transforms);
 
     auto opt = means.options();
     uint32_t nnz = batch_ids.size(0);
@@ -1142,7 +1156,7 @@ projection_2dgs_packed_bwd(
         v_quats = at::zeros_like(quats, opt);
         v_scales = at::zeros_like(scales, opt);
     }
-    if (viewmats_requires_grad) {
+    if (viewmats.requires_grad()) {
         v_viewmats = at::zeros_like(viewmats, opt);
     }
     
@@ -1161,10 +1175,10 @@ projection_2dgs_packed_bwd(
         gaussian_ids,
         ray_transforms,
         // grad outputs
-        v_means2d,
-        v_depths,
-        v_ray_transforms,
-        v_normals,
+        grad.means2d,
+        grad.depths,
+        grad.ray_transforms,
+        grad.normals,
         sparse_grad,
         // outputs
         v_means,
@@ -1173,7 +1187,180 @@ projection_2dgs_packed_bwd(
         v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
                              : c10::nullopt
     );
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+
+    // When sparse_grad is set, the kernel writes per-nnz dense gradients indexed
+    // by gaussian_ids; wrap them as sparse COO over the full per-input shapes so
+    // the optimizer can scatter-update only the touched gaussians. Coalesced
+    // when there is a single batch (each gaussian_id appears once).
+    if (sparse_grad) {
+        const bool is_coalesced = viewmats.size(0) == 1;
+        const at::Tensor sparse_grad_indices = gaussian_ids.unsqueeze(0);
+        v_means = make_sparse_coo_grad(
+            sparse_grad_indices, v_means, means.sizes(), is_coalesced);
+        v_quats = make_sparse_coo_grad(
+            sparse_grad_indices, v_quats, quats.sizes(), is_coalesced);
+        v_scales = make_sparse_coo_grad(
+            sparse_grad_indices, v_scales, scales.sizes(), is_coalesced);
+    }
+
+    return Projection2DGSPackedBwdResult{
+        .v_means = v_means,
+        .v_quats = v_quats,
+        .v_scales = v_scales,
+        .v_viewmats = as_optional_tensor(v_viewmats),
+    };
+}
+
+namespace {
+
+class Projection2DGSPackedAutograd
+    : public torch::autograd::Function<Projection2DGSPackedAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS, QUATS, SCALES,
+            VIEWMATS, KS,
+            IMAGE_WIDTH, IMAGE_HEIGHT,
+            NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,
+            SPARSE_GRAD,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum {
+            BATCH_IDS, CAMERA_IDS, GAUSSIAN_IDS, INDPTR,
+            RADII, MEANS2D, DEPTHS, RAY_TRANSFORMS, NORMALS,
+            COUNT,
+        };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means, const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double near_plane, double far_plane, double radius_clip,
+        bool sparse_grad
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        Projection2DGSPackedFwdResult outputs = projection_2dgs_packed_fwd(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            near_plane, far_plane, radius_clip,
+            sparse_grad
+        );
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&projection_2dgs_packed_bwd>(
+            ctx, means, quats, scales, viewmats, Ks,
+            image_width, image_height, sparse_grad,
+            outputs.batch_ids, outputs.camera_ids, outputs.gaussian_ids,
+            outputs.ray_transforms
+        );
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::BATCH_IDS]      = outputs.batch_ids;
+        out[FwdOutput::CAMERA_IDS]     = outputs.camera_ids;
+        out[FwdOutput::GAUSSIAN_IDS]   = outputs.gaussian_ids;
+        out[FwdOutput::INDPTR]         = outputs.indptr;
+        out[FwdOutput::RADII]          = outputs.radii;
+        out[FwdOutput::MEANS2D]        = outputs.means2d;
+        out[FwdOutput::DEPTHS]         = outputs.depths;
+        out[FwdOutput::RAY_TRANSFORMS] = outputs.ray_transforms;
+        out[FwdOutput::NORMALS]        = outputs.normals;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        Projection2DGSPackedGrad grad{
+            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
+            .depths = grad_outputs[FwdOutput::DEPTHS].contiguous(),
+            .ray_transforms = grad_outputs[FwdOutput::RAY_TRANSFORMS].contiguous(),
+            .normals = grad_outputs[FwdOutput::NORMALS].contiguous(),
+        };
+        Projection2DGSPackedBwdResult g = apply_bwd<&projection_2dgs_packed_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS]    = g.v_means;
+        grads[FwdInput::QUATS]    = g.v_quats;
+        grads[FwdInput::SCALES]   = g.v_scales;
+        grads[FwdInput::VIEWMATS] = as_tensor(g.v_viewmats);
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static Projection2DGSPackedResult call(
+        const at::Tensor &means, const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double near_plane, double far_plane, double radius_clip,
+        bool sparse_grad
+    ) {
+        torch::autograd::variable_list outputs = apply(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            near_plane, far_plane, radius_clip,
+            sparse_grad
+        );
+        return {
+            .batch_ids      = outputs[FwdOutput::BATCH_IDS],
+            .camera_ids     = outputs[FwdOutput::CAMERA_IDS],
+            .gaussian_ids   = outputs[FwdOutput::GAUSSIAN_IDS],
+            .indptr         = outputs[FwdOutput::INDPTR],
+            .radii          = outputs[FwdOutput::RADII],
+            .means2d        = outputs[FwdOutput::MEANS2D],
+            .depths         = outputs[FwdOutput::DEPTHS],
+            .ray_transforms = outputs[FwdOutput::RAY_TRANSFORMS],
+            .normals        = outputs[FwdOutput::NORMALS],
+        };
+    }
+};
+
+} // namespace
+
+Projection2DGSPackedResult projection_2dgs_packed(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double near_plane, double far_plane, double radius_clip,
+    bool sparse_grad
+) {
+    const bool use_custom_autograd = needs_custom_autograd(
+        means, quats, scales, viewmats, Ks
+    );
+    if (!use_custom_autograd) {
+        return projection_2dgs_packed_fwd(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            near_plane, far_plane, radius_clip,
+            sparse_grad
+        );
+    }
+
+    return Projection2DGSPackedAutograd::call(
+        means, quats, scales,
+        viewmats, Ks,
+        image_width, image_height,
+        near_plane, far_plane, radius_clip,
+        sparse_grad
+    );
 }
 
 #endif
@@ -1388,8 +1575,7 @@ void register_projection_cuda_impl(torch::Library &m) {
 
 #if GSPLAT_BUILD_2DGS
     m.impl("projection_2dgs_fused", to_torch_op<&projection_2dgs_fused_fwd>);
-    m.impl("projection_2dgs_packed_fwd", &projection_2dgs_packed_fwd);
-    m.impl("projection_2dgs_packed_bwd", &projection_2dgs_packed_bwd);
+    m.impl("projection_2dgs_packed", to_torch_op<&projection_2dgs_packed_fwd>);
 #endif
 
     m.impl("projection_ut_3dgs_fused", &projection_ut_3dgs_fused);
@@ -1398,6 +1584,7 @@ void register_projection_cuda_impl(torch::Library &m) {
 void register_projection_autograd_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_2DGS
     m.impl("projection_2dgs_fused", to_torch_op<&projection_2dgs_fused>);
+    m.impl("projection_2dgs_packed", to_torch_op<&projection_2dgs_packed>);
 #endif
 }
 

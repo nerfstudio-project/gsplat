@@ -2343,17 +2343,7 @@ def fully_fused_projection_2dgs(
         - **normals**. The normals in camera spaces. [..., C, N, 3]
 
     """
-    batch_dims = means.shape[:-2]
-    N = means.shape[-2]
-    C = viewmats.shape[-3]
-    assert means.shape == batch_dims + (N, 3), means.shape
-    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     means = means.contiguous()
-    assert quats is not None, "quats is required"
-    assert scales is not None, "scales is required"
-    assert quats.shape == batch_dims + (N, 4), quats.shape
-    assert scales.shape == batch_dims + (N, 3), scales.shape
     quats = quats.contiguous()
     scales = scales.contiguous()
     if sparse_grad:
@@ -2362,7 +2352,7 @@ def fully_fused_projection_2dgs(
     viewmats = viewmats.contiguous()
     Ks = Ks.contiguous()
     if packed:
-        return _FullyFusedProjectionPacked2DGS.apply(
+        return _make_lazy_cuda_func("projection_2dgs_packed")(
             means,
             quats,
             scales,
@@ -2388,182 +2378,6 @@ def fully_fused_projection_2dgs(
             near_plane,
             far_plane,
             radius_clip,
-        )
-
-
-class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
-    """Projects Gaussians to 2D. Return packed tensors."""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means: Tensor,  # [..., N, 3]
-        quats: Tensor,  # [..., N, 4]
-        scales: Tensor,  # [..., N, 3]
-        viewmats: Tensor,  # [..., C, 4, 4]
-        Ks: Tensor,  # [..., C, 3, 3]
-        width: int,
-        height: int,
-        near_plane: float,
-        far_plane: float,
-        radius_clip: float,
-        sparse_grad: bool,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        (
-            indptr,
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            radii,
-            means2d,
-            depths,
-            ray_transforms,
-            normals,
-        ) = _make_lazy_cuda_func("projection_2dgs_packed_fwd")(
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            width,
-            height,
-            near_plane,
-            far_plane,
-            radius_clip,
-        )
-        ctx.save_for_backward(
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            ray_transforms,
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.sparse_grad = sparse_grad
-
-        return (
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            indptr,
-            radii,
-            means2d,
-            depths,
-            ray_transforms,
-            normals,
-        )
-
-    @staticmethod
-    def backward(
-        ctx,
-        v_batch_ids,
-        v_camera_ids,
-        v_gaussian_ids,
-        v_indptr,
-        v_radii,
-        v_means2d,
-        v_depths,
-        v_ray_transforms,
-        v_normals,
-    ):
-        (
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            ray_transforms,
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        sparse_grad = ctx.sparse_grad
-
-        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
-            "projection_2dgs_packed_bwd"
-        )(
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            width,
-            height,
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            ray_transforms,
-            v_means2d.contiguous(),
-            v_depths.contiguous(),
-            v_ray_transforms.contiguous(),
-            v_normals.contiguous(),
-            ctx.needs_input_grad[3],  # viewmats_requires_grad
-            sparse_grad,
-        )
-
-        if sparse_grad:
-            batch_dims = means.shape[:-2]
-            B = math.prod(batch_dims)
-            N = means.shape[-2]
-
-        if not ctx.needs_input_grad[0]:
-            v_means = None
-        else:
-            if sparse_grad:
-                # TODO: gaussian_ids is duplicated so not ideal.
-                # An idea is to directly set the attribute (e.g., .sparse_grad) of
-                # the tensor but this requires the tensor to be leaf node only. And
-                # a customized optimizer would be needed in this case.
-                v_means = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],
-                    values=v_means,  # [nnz, 3]
-                    size=means.shape,
-                    is_coalesced=len(viewmats) == 1,
-                )
-        if not ctx.needs_input_grad[1]:
-            v_quats = None
-        else:
-            if sparse_grad:
-                v_quats = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],
-                    values=v_quats,  # [nnz, 4]
-                    size=quats.shape,
-                    is_coalesced=len(viewmats) == 1,
-                )
-        if not ctx.needs_input_grad[2]:
-            v_scales = None
-        else:
-            if sparse_grad:
-                v_scales = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],
-                    values=v_scales,  # [nnz, 3]
-                    size=scales.shape,
-                    is_coalesced=len(viewmats) == 1,
-                )
-        if not ctx.needs_input_grad[3]:
-            v_viewmats = None
-
-        return (
-            v_means,
-            v_quats,
-            v_scales,
-            v_viewmats,
-            None,  # Ks
-            None,  # width
-            None,  # height
-            None,  # eps2d
-            None,  # near_plane
-            None,  # far_plane
-            None,  # radius_clip
-            None,  # sparse_grad
-            None,  # camera_model
         )
 
 
