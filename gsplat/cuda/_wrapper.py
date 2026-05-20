@@ -492,19 +492,13 @@ def proj(
         - **Projected means**. [..., C, N, 2]
         - **Projected covariances**. [..., C, N, 2, 2]
     """
-    assert (
-        camera_model != "ftheta"
-    ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
-
-    batch_dims = means.shape[:-3]
-    C, N = means.shape[-3:-1]
-    assert means.shape == batch_dims + (C, N, 3), means.shape
-    assert covars.shape == batch_dims + (C, N, 3, 3), covars.shape
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     means = means.contiguous()
     covars = covars.contiguous()
     Ks = Ks.contiguous()
-    return _Proj.apply(means, covars, Ks, width, height, camera_model)
+    camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
+    return _make_lazy_cuda_func("projection_ewa_simple")(
+        means, covars, Ks, width, height, camera_model_type
+    )
 
 
 @trace_function("project-fwd")
@@ -1619,67 +1613,6 @@ def rasterize_to_indices_in_range(
     out_pixel_ids = out_indices % (image_width * image_height)
     out_image_ids = out_indices // (image_width * image_height)
     return out_gauss_ids, out_pixel_ids, out_image_ids
-
-
-class _Proj(torch.autograd.Function):
-    """Perspective fully_fused_projection on Gaussians."""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means: Tensor,  # [..., C, N, 3]
-        covars: Tensor,  # [..., C, N, 3, 3]
-        Ks: Tensor,  # [..., C, 3, 3]
-        width: int,
-        height: int,
-        camera_model: CameraModel = "pinhole",
-    ) -> Tuple[Tensor, Tensor]:
-        assert (
-            camera_model != "ftheta"
-        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
-
-        camera_model_type = _make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
-
-        means2d, covars2d = _make_lazy_cuda_func("projection_ewa_simple_fwd")(
-            means,
-            covars,
-            Ks,
-            width,
-            height,
-            camera_model_type,
-        )
-        ctx.save_for_backward(means, covars, Ks)
-        ctx.width = width
-        ctx.height = height
-        ctx.camera_model_type = camera_model_type
-        return means2d, covars2d
-
-    @staticmethod
-    def backward(ctx, v_means2d: Tensor, v_covars2d: Tensor):
-        means, covars, Ks = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        camera_model_type = ctx.camera_model_type
-        v_means, v_covars = _make_lazy_cuda_func("projection_ewa_simple_bwd")(
-            means,
-            covars,
-            Ks,
-            width,
-            height,
-            camera_model_type,
-            v_means2d.contiguous(),
-            v_covars2d.contiguous(),
-        )
-        return (
-            v_means,
-            v_covars,
-            None,  # Ks
-            None,  # width
-            None,  # height
-            None,  # camera_model
-        )
 
 
 class _FullyFusedProjection(torch.autograd.Function):
