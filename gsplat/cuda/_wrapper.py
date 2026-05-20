@@ -946,41 +946,14 @@ def rasterize_to_pixels(
         - **Rendered colors**. [..., image_height, image_width, channels]
         - **Rendered alphas**. [..., image_height, image_width, 1]
     """
-    assert tile_size in (
-        4,
-        16,
-    ), f"Only tile_size in {{4, 16}} is supported for 3DGS rasterization, got {tile_size}"
-
-    image_dims = means2d.shape[:-2]
-    channels = colors.shape[-1]
-    if packed:
-        nnz = means2d.size(0)
-        assert means2d.shape == (nnz, 2), means2d.shape
-        assert conics.shape == (nnz, 3), conics.shape
-        assert colors.shape[0] == nnz, colors.shape
-        assert opacities.shape == (nnz,), opacities.shape
-    else:
-        N = means2d.size(-2)
-        assert means2d.shape == image_dims + (N, 2), means2d.shape
-        assert conics.shape == image_dims + (N, 3), conics.shape
-        assert colors.shape == image_dims + (N, channels), colors.shape
-        assert opacities.shape == image_dims + (N,), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
         backgrounds = backgrounds.contiguous()
     if masks is not None:
-        assert masks.shape == isect_offsets.shape, masks.shape
         masks = masks.contiguous()
 
-    tile_height, tile_width = isect_offsets.shape[-2:]
-    assert (
-        tile_height * tile_size >= image_height
-    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-    assert (
-        tile_width * tile_size >= image_width
-    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
-
-    render_colors, render_alphas = _RasterizeToPixels.apply(
+    render_colors, render_alphas, means2d_absgrad = _make_lazy_cuda_func(
+        "rasterize_to_pixels_3dgs"
+    )(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
@@ -992,8 +965,11 @@ def rasterize_to_pixels(
         tile_size,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
+        packed,
         absgrad,
     )
+    if absgrad:
+        means2d.absgrad = means2d_absgrad
 
     return render_colors, render_alphas
 
@@ -1718,137 +1694,6 @@ def fully_fused_projection_with_ut(
     if not calc_compensations:
         compensations = None
     return radii, means2d, depths, conics, compensations
-
-
-class _RasterizeToPixels(torch.autograd.Function):
-    """Rasterize gaussians"""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means2d: Tensor,  # [..., N, 2] or [nnz, 2]
-        conics: Tensor,  # [..., N, 3] or [nnz, 3]
-        colors: Tensor,  # [..., N, channels] or [nnz, channels]
-        opacities: Tensor,  # [..., N] or [nnz]
-        backgrounds: Tensor,  # [..., channels], Optional
-        masks: Tensor,  # [..., tile_height, tile_width], Optional
-        width: int,
-        height: int,
-        tile_size: int,
-        isect_offsets: Tensor,  # [..., tile_height, tile_width]
-        flatten_ids: Tensor,  # [n_isects]
-        absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
-            "rasterize_to_pixels_3dgs_fwd"
-        )(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            backgrounds,
-            masks,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-        )
-
-        ctx.save_for_backward(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            backgrounds,
-            masks,
-            isect_offsets,
-            flatten_ids,
-            render_alphas,
-            last_ids,
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.tile_size = tile_size
-        ctx.absgrad = absgrad
-
-        # double to float
-        render_alphas = render_alphas.float()
-        return render_colors, render_alphas
-
-    @staticmethod
-    @trace_function("render2D-bwd")
-    def backward(
-        ctx,
-        v_render_colors: Tensor,  # [..., H, W, 3]
-        v_render_alphas: Tensor,  # [..., H, W, 1]
-    ):
-        (
-            means2d,
-            conics,
-            colors,
-            opacities,
-            backgrounds,
-            masks,
-            isect_offsets,
-            flatten_ids,
-            render_alphas,
-            last_ids,
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        tile_size = ctx.tile_size
-        absgrad = ctx.absgrad
-
-        (
-            v_means2d_abs,
-            v_means2d,
-            v_conics,
-            v_colors,
-            v_opacities,
-        ) = _make_lazy_cuda_func("rasterize_to_pixels_3dgs_bwd")(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            backgrounds,
-            masks,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            render_alphas,
-            last_ids,
-            v_render_colors.contiguous(),
-            v_render_alphas.contiguous(),
-            absgrad,
-        )
-
-        if absgrad:
-            means2d.absgrad = v_means2d_abs
-
-        if ctx.needs_input_grad[4]:
-            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
-                dim=(-3, -2)
-            )
-        else:
-            v_backgrounds = None
-
-        return (
-            v_means2d,
-            v_conics,
-            v_colors,
-            v_opacities,
-            v_backgrounds,
-            None,  # masks
-            None,  # width
-            None,  # height
-            None,  # tile_size
-            None,  # isect_offsets
-            None,  # flatten_ids
-            None,  # absgrad
-        )
 
 
 ###### 2DGS ######
