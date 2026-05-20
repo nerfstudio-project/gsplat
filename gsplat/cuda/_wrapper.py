@@ -638,11 +638,15 @@ def fully_fused_projection(
             opacities,
         )
     else:
-        return _FullyFusedProjection.apply(
+        camera_model_type = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+        return _make_lazy_cuda_func("projection_ewa_3dgs_fused")(
             means,
             covars,
             quats,
             scales,
+            opacities,
             viewmats,
             Ks,
             width,
@@ -652,8 +656,7 @@ def fully_fused_projection(
             far_plane,
             radius_clip,
             calc_compensations,
-            camera_model,
-            opacities,
+            camera_model_type,
         )
 
 
@@ -1613,140 +1616,6 @@ def rasterize_to_indices_in_range(
     out_pixel_ids = out_indices % (image_width * image_height)
     out_image_ids = out_indices // (image_width * image_height)
     return out_gauss_ids, out_pixel_ids, out_image_ids
-
-
-class _FullyFusedProjection(torch.autograd.Function):
-    """Projects Gaussians to 2D."""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means: Tensor,  # [..., N, 3]
-        covars: Tensor,  # [..., N, 6] or None
-        quats: Tensor,  # [..., N, 4] or None
-        scales: Tensor,  # [..., N, 3] or None
-        viewmats: Tensor,  # [..., C, 4, 4]
-        Ks: Tensor,  # [..., C, 3, 3]
-        width: int,
-        height: int,
-        eps2d: float,
-        near_plane: float,
-        far_plane: float,
-        radius_clip: float,
-        calc_compensations: bool,
-        camera_model: CameraModel = "pinhole",
-        opacities: Optional[Tensor] = None,  # [..., N] or None
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-        assert (
-            camera_model != "ftheta"
-        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
-
-        camera_model_type = _make_lazy_cuda_obj(
-            f"CameraModelType.{camera_model.upper()}"
-        )
-
-        # "covars" and {"quats", "scales"} are mutually exclusive
-        radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
-            "projection_ewa_3dgs_fused_fwd"
-        )(
-            means,
-            covars,
-            quats,
-            scales,
-            opacities,
-            viewmats,
-            Ks,
-            width,
-            height,
-            eps2d,
-            near_plane,
-            far_plane,
-            radius_clip,
-            calc_compensations,
-            camera_model_type,
-        )
-        if not calc_compensations:
-            compensations = None
-        ctx.save_for_backward(
-            means, covars, quats, scales, viewmats, Ks, radii, conics, compensations
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.eps2d = eps2d
-        ctx.camera_model_type = camera_model_type
-
-        return radii, means2d, depths, conics, compensations
-
-    @staticmethod
-    @trace_function("project-bwd")
-    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
-        (
-            means,
-            covars,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            radii,
-            conics,
-            compensations,
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        eps2d = ctx.eps2d
-        camera_model_type = ctx.camera_model_type
-        if v_compensations is not None:
-            v_compensations = v_compensations.contiguous()
-        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
-            "projection_ewa_3dgs_fused_bwd"
-        )(
-            means,
-            covars,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            width,
-            height,
-            eps2d,
-            camera_model_type,
-            radii,
-            conics,
-            compensations,
-            v_means2d.contiguous(),
-            v_depths.contiguous(),
-            v_conics.contiguous(),
-            v_compensations,
-            ctx.needs_input_grad[4],  # viewmats_requires_grad
-        )
-        if not ctx.needs_input_grad[0]:
-            v_means = None
-        if not ctx.needs_input_grad[1]:
-            v_covars = None
-        if not ctx.needs_input_grad[2]:
-            v_quats = None
-        if not ctx.needs_input_grad[3]:
-            v_scales = None
-        if not ctx.needs_input_grad[4]:
-            v_viewmats = None
-        return (
-            v_means,
-            v_covars,
-            v_quats,
-            v_scales,
-            v_viewmats,
-            None,  # Ks
-            None,  # width
-            None,  # height
-            None,  # eps2d
-            None,  # near_plane
-            None,  # far_plane
-            None,  # radius_clip
-            None,  # calc_compensations
-            None,  # camera_model
-            None,  # ut_params
-            None,  # radial_coeffs
-        )
 
 
 @trace_function("projectUT-fwd")
