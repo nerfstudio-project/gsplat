@@ -23,6 +23,7 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/csrc/autograd/custom_function.h>
 #include <torch/library.h>
 #include <torch/torch.h>
 
@@ -39,18 +40,77 @@ namespace gsplat {
 
 #if GSPLAT_BUILD_3DGS
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
+namespace {
+
+void check_projection_ewa_simple_inputs(
+    const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
+    CameraModelType camera_model
+) {
+    TORCH_CHECK(
+        camera_model != CameraModelType::FTHETA,
+        "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+    );
+
+    TORCH_CHECK(
+        means.dim() >= 3,
+        "means must have shape [..., C, N, 3], got ",
+        means.sizes()
+    );
+    const int64_t batch_ndim = means.dim() - 3;
+    const int64_t C = means.size(batch_ndim);
+    const int64_t N = means.size(batch_ndim + 1);
+    at::DimVector batch_shape(means.sizes().slice(0, batch_ndim));
+
+    TORCH_CHECK(
+        means.size(batch_ndim + 2) == 3,
+        "means must have shape [..., C, N, 3], got ",
+        means.sizes()
+    );
+
+    at::DimVector covars_shape(batch_shape);
+    covars_shape.append({C, N, 3, 3});
+    TORCH_CHECK(
+        covars.sizes() == covars_shape,
+        "covars must have shape [..., C, N, 3, 3], got ",
+        covars.sizes()
+    );
+
+    at::DimVector Ks_shape(batch_shape);
+    Ks_shape.append({C, 3, 3});
+    TORCH_CHECK(
+        Ks.sizes() == Ks_shape,
+        "Ks must have shape [..., C, 3, 3], got ",
+        Ks.sizes()
+    );
+
+    CHECK_INPUT(means);
+    CHECK_INPUT(covars);
+    CHECK_INPUT(Ks);
+}
+} // namespace
+
+struct ProjectionEWASimpleFwdResult {
+    at::Tensor means2d;
+    at::Tensor covars2d;
+};
+
+template <> struct TorchArgDef<ProjectionEWASimpleFwdResult> {
+    static auto to(const ProjectionEWASimpleFwdResult &r) { return to_torch_args(r.means2d, r.covars2d); }
+};
+
+using ProjectionEWASimpleResult = ProjectionEWASimpleFwdResult;
+
+ProjectionEWASimpleFwdResult projection_ewa_simple_fwd(
     const at::Tensor &means,  // [..., C, N, 3]
     const at::Tensor &covars, // [..., C, N, 3, 3]
     const at::Tensor &Ks,     // [..., C, 3, 3]
     int64_t width,
     int64_t height,
-    int64_t camera_model
+    CameraModelType camera_model
 ) {
+    check_projection_ewa_simple_inputs(means, covars, Ks, camera_model);
+
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(covars);
-    CHECK_INPUT(Ks);
 
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
@@ -72,30 +132,45 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
         Ks,
         width,
         height,
-        static_cast<CameraModelType>(camera_model),
+        camera_model,
         // outputs
         means2d,
         covars2d
     );
-    return std::make_tuple(means2d, covars2d);
+    return ProjectionEWASimpleFwdResult{
+        .means2d = means2d,
+        .covars2d = covars2d,
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
+struct ProjectionEWASimpleBwdResult {
+    at::Tensor v_means;
+    at::Tensor v_covars;
+};
+
+// Gradients of the differentiable forward outputs.
+struct ProjectionEWASimpleGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor means2d;  // [..., C, N, 2]
+    at::Tensor covars2d; // [..., C, N, 2, 2]
+};
+
+// Full backward for projection_ewa_simple.
+ProjectionEWASimpleBwdResult projection_ewa_simple_bwd(
     const at::Tensor &means,  // [..., C, N, 3]
     const at::Tensor &covars, // [..., C, N, 3, 3]
     const at::Tensor &Ks,     // [..., C, 3, 3]
     int64_t width,
     int64_t height,
-    int64_t camera_model,
-    at::Tensor &v_means2d, // [..., C, N, 2]
-    at::Tensor &v_covars2d // [..., C, N, 2, 2]
+    CameraModelType camera_model,
+    const ProjectionEWASimpleGrad &grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     CHECK_INPUT(covars);
     CHECK_INPUT(Ks);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_covars2d);
+    CHECK_INPUT(grad.means2d);
+    CHECK_INPUT(grad.covars2d);
 
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
@@ -117,14 +192,105 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
         Ks,
         width,
         height,
-        static_cast<CameraModelType>(camera_model),
-        v_means2d,
-        v_covars2d,
+        camera_model,
+        grad.means2d,
+        grad.covars2d,
         // outputs
         v_means,
         v_covars
     );
-    return std::make_tuple(v_means, v_covars);
+    return {
+        .v_means = v_means,
+        .v_covars = v_covars,
+    };
+}
+
+namespace {
+
+class ProjectionEWASimpleAutograd
+    : public torch::autograd::Function<ProjectionEWASimpleAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS, COVARS, KS,
+            WIDTH, HEIGHT, CAMERA_MODEL,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum { MEANS2D, COVARS2D, COUNT };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
+        int64_t width, int64_t height, CameraModelType camera_model
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        ProjectionEWASimpleFwdResult outputs = projection_ewa_simple_fwd(
+            means, covars, Ks, width, height, camera_model
+        );
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&projection_ewa_simple_bwd>(
+            ctx, means, covars, Ks, width, height, camera_model
+        );
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::MEANS2D]  = outputs.means2d;
+        out[FwdOutput::COVARS2D] = outputs.covars2d;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        ProjectionEWASimpleGrad grad{
+            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
+            .covars2d = grad_outputs[FwdOutput::COVARS2D].contiguous(),
+        };
+        ProjectionEWASimpleBwdResult g = apply_bwd<&projection_ewa_simple_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS]  = g.v_means;
+        grads[FwdInput::COVARS] = g.v_covars;
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static ProjectionEWASimpleResult call(
+        const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
+        int64_t width, int64_t height, CameraModelType camera_model
+    ) {
+        torch::autograd::variable_list outputs =
+            apply(means, covars, Ks, width, height, camera_model);
+        return {
+            .means2d = outputs[FwdOutput::MEANS2D],
+            .covars2d = outputs[FwdOutput::COVARS2D],
+        };
+    }
+};
+
+} // namespace
+
+ProjectionEWASimpleResult projection_ewa_simple(
+    const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
+    int64_t width, int64_t height, CameraModelType camera_model
+) {
+    // No fwd-only guard here: the custom forward is light, and apply() already
+    // avoids recording a backward node when autograd is inactive.
+    return ProjectionEWASimpleAutograd::call(
+        means, covars, Ks, width, height, camera_model
+    );
 }
 
 std::tuple<
@@ -1545,8 +1711,7 @@ projection_ut_3dgs_fused(
 
 void register_projection_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_3DGS
-    m.impl("projection_ewa_simple_fwd", &projection_ewa_simple_fwd);
-    m.impl("projection_ewa_simple_bwd", &projection_ewa_simple_bwd);
+    m.impl("projection_ewa_simple", to_torch_op<&projection_ewa_simple_fwd>);
     m.impl("projection_ewa_3dgs_fused_fwd", &projection_ewa_3dgs_fused_fwd);
     m.impl("projection_ewa_3dgs_fused_bwd", &projection_ewa_3dgs_fused_bwd);
     m.impl("projection_ewa_3dgs_packed_fwd", &projection_ewa_3dgs_packed_fwd);
@@ -1562,6 +1727,9 @@ void register_projection_cuda_impl(torch::Library &m) {
 }
 
 void register_projection_autograd_cuda_impl(torch::Library &m) {
+#if GSPLAT_BUILD_3DGS
+    m.impl("projection_ewa_simple", to_torch_op<&projection_ewa_simple>);
+#endif
 #if GSPLAT_BUILD_2DGS
     m.impl("projection_2dgs_fused", to_torch_op<&projection_2dgs_fused>);
     m.impl("projection_2dgs_packed", to_torch_op<&projection_2dgs_packed>);
