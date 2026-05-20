@@ -2376,7 +2376,7 @@ def fully_fused_projection_2dgs(
             sparse_grad,
         )
     else:
-        return _FullyFusedProjection2DGS.apply(
+        return _make_lazy_cuda_func("projection_2dgs_fused")(
             means,
             quats,
             scales,
@@ -2388,113 +2388,6 @@ def fully_fused_projection_2dgs(
             near_plane,
             far_plane,
             radius_clip,
-        )
-
-
-class _FullyFusedProjection2DGS(torch.autograd.Function):
-    """Projects Gaussians to 2D."""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means: Tensor,  # [..., N, 3]
-        quats: Tensor,  # [..., N, 4]
-        scales: Tensor,  # [..., N, 3]
-        viewmats: Tensor,  # [..., C, 4, 4]
-        Ks: Tensor,  # [..., C, 3, 3]
-        width: int,
-        height: int,
-        eps2d: float,
-        near_plane: float,
-        far_plane: float,
-        radius_clip: float,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        radii, means2d, depths, ray_transforms, normals = _make_lazy_cuda_func(
-            "projection_2dgs_fused_fwd"
-        )(
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            width,
-            height,
-            eps2d,
-            near_plane,
-            far_plane,
-            radius_clip,
-        )
-        ctx.save_for_backward(
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            radii,
-            ray_transforms,
-            normals,
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.eps2d = eps2d
-
-        return radii, means2d, depths, ray_transforms, normals
-
-    @staticmethod
-    def backward(ctx, v_radii, v_means2d, v_depths, v_ray_transforms, v_normals):
-        (
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            radii,
-            ray_transforms,
-            normals,
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        eps2d = ctx.eps2d
-        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
-            "projection_2dgs_fused_bwd"
-        )(
-            means,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            width,
-            height,
-            radii,
-            ray_transforms,
-            v_means2d.contiguous(),
-            v_depths.contiguous(),
-            v_normals.contiguous(),
-            v_ray_transforms.contiguous(),
-            ctx.needs_input_grad[3],  # viewmats_requires_grad
-        )
-        if not ctx.needs_input_grad[0]:
-            v_means = None
-        if not ctx.needs_input_grad[1]:
-            v_quats = None
-        if not ctx.needs_input_grad[2]:
-            v_scales = None
-        if not ctx.needs_input_grad[3]:
-            v_viewmats = None
-
-        return (
-            v_means,
-            v_quats,
-            v_scales,
-            v_viewmats,
-            None,  # Ks
-            None,  # width
-            None,  # height
-            None,  # eps2d
-            None,  # near_plane
-            None,  # far_plane
-            None,  # radius_clip
-            None,  # camera_model
         )
 
 
