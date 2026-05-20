@@ -436,15 +436,11 @@ def quat_scale_to_covar_preci(
         - **Covariance matrices**. If `triu` is True the returned shape is [..., 6], otherwise [..., 3, 3].
         - **Precision matrices**. If `triu` is True the returned shape is [..., 6], otherwise [..., 3, 3].
     """
-    batch_dims = quats.shape[:-1]
-    assert quats.shape == batch_dims + (4,), quats.shape
-    assert scales.shape == batch_dims + (3,), scales.shape
     quats = quats.contiguous()
     scales = scales.contiguous()
-    covars, precis = _QuatScaleToCovarPreci.apply(
+    return _make_lazy_cuda_func("quat_scale_to_covar_preci")(
         quats, scales, compute_covar, compute_preci, triu
     )
-    return covars if compute_covar else None, precis if compute_preci else None
 
 
 def persp_proj(
@@ -1653,53 +1649,6 @@ def rasterize_to_indices_in_range(
     out_pixel_ids = out_indices % (image_width * image_height)
     out_image_ids = out_indices // (image_width * image_height)
     return out_gauss_ids, out_pixel_ids, out_image_ids
-
-
-class _QuatScaleToCovarPreci(torch.autograd.Function):
-    """Converts quaternions and scales to covariance and precision matrices."""
-
-    @staticmethod
-    def forward(
-        ctx,
-        quats: Tensor,  # [..., 4],
-        scales: Tensor,  # [..., 3],
-        compute_covar: bool = True,
-        compute_preci: bool = True,
-        triu: bool = False,
-    ) -> Tuple[Tensor, Tensor]:
-        covars, precis = _make_lazy_cuda_func("quat_scale_to_covar_preci_fwd")(
-            quats, scales, compute_covar, compute_preci, triu
-        )
-        ctx.save_for_backward(quats, scales)
-        ctx.compute_covar = compute_covar
-        ctx.compute_preci = compute_preci
-        ctx.triu = triu
-        return covars, precis
-
-    @staticmethod
-    def backward(ctx, v_covars: Tensor, v_precis: Tensor):
-        quats, scales = ctx.saved_tensors
-        compute_covar = ctx.compute_covar
-        compute_preci = ctx.compute_preci
-        triu = ctx.triu
-        if compute_covar and v_covars.is_sparse:
-            v_covars = v_covars.to_dense()
-        if compute_preci and v_precis.is_sparse:
-            v_precis = v_precis.to_dense()
-        v_quats, v_scales = _make_lazy_cuda_func("quat_scale_to_covar_preci_bwd")(
-            quats,
-            scales,
-            triu,
-            v_covars.contiguous() if compute_covar else None,
-            v_precis.contiguous() if compute_preci else None,
-        )
-        return (
-            v_quats,
-            v_scales,
-            None,  # compute_covar
-            None,  # compute_preci
-            None,  # triu
-        )
 
 
 class _Proj(torch.autograd.Function):
