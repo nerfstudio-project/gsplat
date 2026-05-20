@@ -351,10 +351,13 @@ def adam(
 def spherical_harmonics(
     degrees_to_use: int,
     dirs: Tensor,  # [..., N, 3]
-    coeffs: Tensor,  # [N, K, 3]
+    coeffs: Tensor,  # [N, K, D]
     masks: Optional[Tensor] = None,  # [..., N]
 ) -> Tensor:
     """Computes spherical harmonics.
+
+    The output channel count ``D`` is taken from the last dim of ``coeffs`` and
+    can be any positive integer (e.g. 3 for RGB, 1 for scalar features).
 
     In packed mode, callers pre-gather coeffs by ``gaussian_ids`` so ``N`` is
     ``nnz`` and ``dirs`` has no leading dims.
@@ -362,14 +365,14 @@ def spherical_harmonics(
     Args:
         degrees_to_use: SH degree to evaluate.
         dirs: View directions. ``[..., N, 3]``; any leading shape, rank ≥ 2.
-        coeffs: SH coefficients. ``[N, K, 3]``, with ``N`` matching ``dirs.shape[-2]``.
+        coeffs: SH coefficients. ``[N, K, D]``, with ``N`` matching ``dirs.shape[-2]``.
         masks: Optional boolean masks. ``[..., N]`` matching ``dirs.shape[:-1]``.
 
     Returns:
-        Spherical harmonics. ``[..., N, 3]``.
+        Spherical harmonics. ``[..., N, D]``.
     """
     assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
-    assert coeffs.dim() == 3 and coeffs.shape[-1] == 3, coeffs.shape
+    assert coeffs.dim() == 3 and coeffs.shape[-1] >= 1, coeffs.shape
     assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
     assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
     if masks is not None:
