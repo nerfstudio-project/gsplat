@@ -38,6 +38,7 @@ void register_intersect_cuda_impl(torch::Library &m);
 void register_mcmc_perturb_cuda_impl(torch::Library &m);
 void register_projection_cuda_impl(torch::Library &m);
 void register_quat_scale_to_covar_cuda_impl(torch::Library &m);
+void register_quat_scale_to_covar_autograd_cuda_impl(torch::Library &m);
 void register_rasterization_cuda_impl(torch::Library &m);
 void register_rasterization_autograd_cuda_impl(torch::Library &m);
 void register_relocation_cuda_impl(torch::Library &m);
@@ -939,8 +940,7 @@ TORCH_LIBRARY(gsplat, m) {
 
 
 #if GSPLAT_BUILD_3DGS
-    m.def("quat_scale_to_covar_preci_fwd(Tensor quats, Tensor scales, bool compute_covar, bool compute_preci, bool triu) -> (Tensor, Tensor)");
-    m.def("quat_scale_to_covar_preci_bwd(Tensor quats, Tensor scales, bool triu, Tensor? v_covars, Tensor? v_precis) -> (Tensor, Tensor)");
+    m.def("quat_scale_to_covar_preci(Tensor quats, Tensor scales, bool compute_covar, bool compute_preci, bool triu) -> (Tensor?, Tensor?)");
 #endif
 
     m.def("spherical_harmonics_fwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks) -> Tensor");
@@ -1039,5 +1039,8 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
 }
 
 TORCH_LIBRARY_IMPL(gsplat, AutogradCUDA, m) {
+#if GSPLAT_BUILD_3DGS
+    gsplat::register_quat_scale_to_covar_autograd_cuda_impl(m);
+#endif
     gsplat::register_rasterization_autograd_cuda_impl(m);
 }

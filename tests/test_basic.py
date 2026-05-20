@@ -134,6 +134,24 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int,
     #     torch.testing.assert_close(torch.bmm(covars, precis), I)
     #     torch.testing.assert_close(torch.bmm(precis, covars), I)
 
+    covars_only, no_precis = quat_scale_to_covar_preci(
+        quats, scales, compute_preci=False, triu=triu
+    )
+    assert no_precis is None
+    torch.testing.assert_close(covars_only, covars)
+
+    no_covars, precis_only = quat_scale_to_covar_preci(
+        quats, scales, compute_covar=False, triu=triu
+    )
+    assert no_covars is None
+    torch.testing.assert_close(precis_only, precis)
+
+    no_covars, no_precis = quat_scale_to_covar_preci(
+        quats, scales, compute_covar=False, compute_preci=False, triu=triu
+    )
+    assert no_covars is None
+    assert no_precis is None
+
     # backward
     v_covars = torch.randn_like(covars)
     v_precis = torch.randn_like(precis) * 0.01
