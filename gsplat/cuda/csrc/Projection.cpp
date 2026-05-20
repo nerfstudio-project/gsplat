@@ -28,6 +28,7 @@
 
 #include "Common.h"     // where all the macros are defined
 #include "Projection.h" // where the launch function is declared
+#include "TorchUtils.h"
 #include "Cameras.h"
 #include "Lidars.h"
 #include "Lidars.cuh"
@@ -575,12 +576,107 @@ projection_ewa_3dgs_packed_bwd(
 
 #if GSPLAT_BUILD_2DGS
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+namespace {
+
+void check_projection_2dgs_inputs(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks
+) {
+    TORCH_CHECK(
+        means.dim() >= 2,
+        "means must have shape [..., N, 3], got ",
+        means.sizes()
+    );
+    const int64_t batch_ndim = means.dim() - 2;
+    const int64_t N = means.size(batch_ndim);
+    at::DimVector batch_shape(means.sizes().slice(0, batch_ndim));
+
+    TORCH_CHECK(
+        means.size(batch_ndim + 1) == 3,
+        "means must have shape [..., N, 3], got ",
+        means.sizes()
+    );
+    TORCH_CHECK(
+        quats.dim() == batch_ndim + 2,
+        "quats must have shape [..., N, 4], got ",
+        quats.sizes()
+    );
+    TORCH_CHECK(
+        scales.dim() == batch_ndim + 2,
+        "scales must have shape [..., N, 3], got ",
+        scales.sizes()
+    );
+    TORCH_CHECK(
+        viewmats.dim() == batch_ndim + 3,
+        "viewmats must have shape [..., C, 4, 4], got ",
+        viewmats.sizes()
+    );
+    TORCH_CHECK(
+        Ks.dim() == batch_ndim + 3,
+        "Ks must have shape [..., C, 3, 3], got ",
+        Ks.sizes()
+    );
+
+    const int64_t C = viewmats.size(batch_ndim);
+    at::DimVector quats_shape(batch_shape);
+    quats_shape.append({N, 4});
+    TORCH_CHECK(
+        quats.sizes() == quats_shape,
+        "quats must have shape [..., N, 4], got ",
+        quats.sizes()
+    );
+
+    at::DimVector scales_shape(batch_shape);
+    scales_shape.append({N, 3});
+    TORCH_CHECK(
+        scales.sizes() == scales_shape,
+        "scales must have shape [..., N, 3], got ",
+        scales.sizes()
+    );
+
+    at::DimVector viewmats_shape(batch_shape);
+    viewmats_shape.append({C, 4, 4});
+    TORCH_CHECK(
+        viewmats.sizes() == viewmats_shape,
+        "viewmats must have shape [..., C, 4, 4], got ",
+        viewmats.sizes()
+    );
+
+    at::DimVector Ks_shape(batch_shape);
+    Ks_shape.append({C, 3, 3});
+    TORCH_CHECK(
+        Ks.sizes() == Ks_shape,
+        "Ks must have shape [..., C, 3, 3], got ",
+        Ks.sizes()
+    );
+
+    CHECK_INPUT(means);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+}
+
+} // namespace
+
+struct Projection2DGSFusedResult {
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor ray_transforms;
+    at::Tensor normals;
+};
+
+template <> struct TorchArgDef<Projection2DGSFusedResult> {
+    static auto to(const Projection2DGSFusedResult &r) { return to_torch_args(
+        r.radii, r.means2d, r.depths, r.ray_transforms, r.normals
+    ); }
+};
+
+using Projection2DGSFusedFwdResult = Projection2DGSFusedResult;
+
+Projection2DGSFusedFwdResult
 projection_2dgs_fused_fwd(
     const at::Tensor &means,    // [..., N, 3]
     const at::Tensor &quats,    // [..., N, 4]
@@ -594,12 +690,9 @@ projection_2dgs_fused_fwd(
     double far_plane,
     double radius_clip
 ) {
+    check_projection_2dgs_inputs(means, quats, scales, viewmats, Ks);
+
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
 
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
@@ -645,10 +738,33 @@ projection_2dgs_fused_fwd(
         ray_transforms,
         normals
     );
-    return std::make_tuple(radii, means2d, depths, ray_transforms, normals);
+    return Projection2DGSFusedFwdResult{
+        .radii = radii,
+        .means2d = means2d,
+        .depths = depths,
+        .ray_transforms = ray_transforms,
+        .normals = normals,
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+struct Projection2DGSFusedBwdResult {
+    at::Tensor v_means;
+    at::Tensor v_quats;
+    at::Tensor v_scales;
+    at::optional<at::Tensor> v_viewmats;
+};
+
+// Gradients of the differentiable forward outputs.
+struct Projection2DGSFusedGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor means2d;        // [..., C, N, 2]
+    at::Tensor depths;         // [..., C, N]
+    at::Tensor ray_transforms; // [..., C, N, 3, 3]
+    at::Tensor normals;        // [..., C, N, 3]
+};
+
+// Full backward for projection_2dgs_fused.
+Projection2DGSFusedBwdResult
 projection_2dgs_fused_bwd(
     // fwd inputs
     const at::Tensor &means,    // [..., N, 3]
@@ -661,12 +777,7 @@ projection_2dgs_fused_bwd(
     // fwd outputs
     const at::Tensor &radii,          // [..., C, N, 2]
     const at::Tensor &ray_transforms, // [..., C, N, 3, 3]
-    // grad outputs
-    const at::Tensor &v_means2d,        // [..., C, N, 2]
-    const at::Tensor &v_depths,         // [..., C, N]
-    const at::Tensor &v_normals,        // [..., C, N, 3]
-    const at::Tensor &v_ray_transforms, // [..., C, N, 3, 3]
-    bool viewmats_requires_grad
+    const Projection2DGSFusedGrad &grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -676,16 +787,16 @@ projection_2dgs_fused_bwd(
     CHECK_INPUT(Ks);
     CHECK_INPUT(radii);
     CHECK_INPUT(ray_transforms);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_normals);
-    CHECK_INPUT(v_ray_transforms);
+    CHECK_INPUT(grad.means2d);
+    CHECK_INPUT(grad.depths);
+    CHECK_INPUT(grad.normals);
+    CHECK_INPUT(grad.ray_transforms);
 
     at::Tensor v_means = at::zeros_like(means);
     at::Tensor v_quats = at::zeros_like(quats);
     at::Tensor v_scales = at::zeros_like(scales);
     at::Tensor v_viewmats;
-    if (viewmats_requires_grad) {
+    if (viewmats.requires_grad()) {
         v_viewmats = at::zeros_like(viewmats);
     }
 
@@ -700,11 +811,11 @@ projection_2dgs_fused_bwd(
         image_height,
         radii,
         ray_transforms,
-        v_means2d,
-        v_depths,
-        v_normals,
-        v_ray_transforms,
-        viewmats_requires_grad,
+        grad.means2d,
+        grad.depths,
+        grad.normals,
+        grad.ray_transforms,
+        viewmats.requires_grad(),
         // outputs
         v_means,
         v_quats,
@@ -712,7 +823,143 @@ projection_2dgs_fused_bwd(
         v_viewmats
     );
 
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+    return Projection2DGSFusedBwdResult{
+        .v_means = v_means,
+        .v_quats = v_quats,
+        .v_scales = v_scales,
+        .v_viewmats = as_optional_tensor(v_viewmats),
+    };
+}
+
+namespace {
+
+class Projection2DGSFusedAutograd
+    : public torch::autograd::Function<Projection2DGSFusedAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS, QUATS, SCALES,
+            VIEWMATS, KS,
+            IMAGE_WIDTH, IMAGE_HEIGHT,
+            EPS2D, NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum { RADII, MEANS2D, DEPTHS, RAY_TRANSFORMS, NORMALS, COUNT };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means, const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double eps2d, double near_plane, double far_plane, double radius_clip
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        Projection2DGSFusedFwdResult outputs = projection_2dgs_fused_fwd(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip
+        );
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&projection_2dgs_fused_bwd>(
+            ctx, means, quats, scales, viewmats, Ks,
+            image_width, image_height,
+            outputs.radii, outputs.ray_transforms
+        );
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::RADII]          = outputs.radii;
+        out[FwdOutput::MEANS2D]        = outputs.means2d;
+        out[FwdOutput::DEPTHS]         = outputs.depths;
+        out[FwdOutput::RAY_TRANSFORMS] = outputs.ray_transforms;
+        out[FwdOutput::NORMALS]        = outputs.normals;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        Projection2DGSFusedGrad grad{
+            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
+            .depths = grad_outputs[FwdOutput::DEPTHS].contiguous(),
+            .ray_transforms = grad_outputs[FwdOutput::RAY_TRANSFORMS].contiguous(),
+            .normals = grad_outputs[FwdOutput::NORMALS].contiguous(),
+        };
+        Projection2DGSFusedBwdResult g = apply_bwd<&projection_2dgs_fused_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS]    = g.v_means;
+        grads[FwdInput::QUATS]    = g.v_quats;
+        grads[FwdInput::SCALES]   = g.v_scales;
+        grads[FwdInput::VIEWMATS] = as_tensor(g.v_viewmats);
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static Projection2DGSFusedResult call(
+        const at::Tensor &means, const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double eps2d, double near_plane, double far_plane, double radius_clip
+    ) {
+        torch::autograd::variable_list outputs = apply(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip
+        );
+        return {
+            .radii          = outputs[FwdOutput::RADII],
+            .means2d        = outputs[FwdOutput::MEANS2D],
+            .depths         = outputs[FwdOutput::DEPTHS],
+            .ray_transforms = outputs[FwdOutput::RAY_TRANSFORMS],
+            .normals        = outputs[FwdOutput::NORMALS],
+        };
+    }
+};
+
+} // namespace
+
+Projection2DGSFusedFwdResult projection_2dgs_fused(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip
+) {
+    const bool use_custom_autograd = needs_custom_autograd(
+        means, quats, scales, viewmats, Ks
+    );
+    if (!use_custom_autograd) {
+        return projection_2dgs_fused_fwd(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip
+        );
+    }
+
+    return Projection2DGSFusedAutograd::call(
+        means, quats, scales,
+        viewmats, Ks,
+        image_width, image_height,
+        eps2d, near_plane, far_plane, radius_clip
+    );
 }
 
 std::tuple<
@@ -1140,13 +1387,18 @@ void register_projection_cuda_impl(torch::Library &m) {
 #endif
 
 #if GSPLAT_BUILD_2DGS
-    m.impl("projection_2dgs_fused_fwd", &projection_2dgs_fused_fwd);
-    m.impl("projection_2dgs_fused_bwd", &projection_2dgs_fused_bwd);
+    m.impl("projection_2dgs_fused", to_torch_op<&projection_2dgs_fused_fwd>);
     m.impl("projection_2dgs_packed_fwd", &projection_2dgs_packed_fwd);
     m.impl("projection_2dgs_packed_bwd", &projection_2dgs_packed_bwd);
 #endif
 
     m.impl("projection_ut_3dgs_fused", &projection_ut_3dgs_fused);
+}
+
+void register_projection_autograd_cuda_impl(torch::Library &m) {
+#if GSPLAT_BUILD_2DGS
+    m.impl("projection_2dgs_fused", to_torch_op<&projection_2dgs_fused>);
+#endif
 }
 
 } // namespace gsplat
