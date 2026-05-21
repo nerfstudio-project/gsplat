@@ -21,7 +21,7 @@ input list and sum the result.
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 import torch
 from torch import Tensor
@@ -35,7 +35,7 @@ def _second_difference_squared(planes: Sequence[Tensor]) -> Tensor:
     Ports ``compute_plane_smoothness`` from
     ``training/scene/regulation.py:45`` in the G-SHARP source.
     """
-    total: Tensor = torch.zeros((), dtype=torch.float32)
+    total: Optional[Tensor] = None
     for p in planes:
         if p.ndim != 4:
             raise ValueError(
@@ -43,11 +43,16 @@ def _second_difference_squared(planes: Sequence[Tensor]) -> Tensor:
                 f"shape {tuple(p.shape)}."
             )
         if p.shape[-2] < 3:
-            # Need at least 3 rows along H to take a second difference.
             continue
         first = p[..., 1:, :] - p[..., :-1, :]
         second = first[..., 1:, :] - first[..., :-1, :]
-        total = total.to(second.dtype) + second.pow(2).mean()
+        contribution = second.pow(2).mean()
+        total = contribution if total is None else total + contribution
+    if total is None:
+        first_p = next(iter(planes), None)
+        device = first_p.device if first_p is not None else None
+        dtype = first_p.dtype if first_p is not None else torch.float32
+        return torch.zeros((), dtype=dtype, device=device)
     return total
 
 
@@ -99,7 +104,13 @@ def time_l1(planes: Sequence[Tensor]) -> Tensor:
     Returns:
         Scalar L1 deviation summed across planes (mean within each plane).
     """
-    total: Tensor = torch.zeros((), dtype=torch.float32)
+    total: Optional[Tensor] = None
     for p in planes:
-        total = total.to(p.dtype) + (1.0 - p).abs().mean()
+        contribution = (1.0 - p).abs().mean()
+        total = contribution if total is None else total + contribution
+    if total is None:
+        first_p = next(iter(planes), None)
+        device = first_p.device if first_p is not None else None
+        dtype = first_p.dtype if first_p is not None else torch.float32
+        return torch.zeros((), dtype=dtype, device=device)
     return total

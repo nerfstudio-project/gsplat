@@ -160,8 +160,17 @@ class EndoNeRFParser:
             dtype=np.float32,
         )
 
-        # Drop the [H, W, focal] column → (N, 3, 4) → pad to (N, 4, 4) homogeneous.
+        # Drop the [H, W, focal] column → (N, 3, 4).
         c2w_3x4 = poses[..., :4]
+
+        # LLFF stores the rotation columns as [down, right, backwards];
+        # convert to the standard [right, up, back] convention used by gsplat /
+        # G-SHARP / Nerfstudio. Mirror endo_loader.py in the G-SHARP source.
+        c2w_3x4 = c2w_3x4[:, :, [1, 0, 2, 3]] * np.array(
+            [1.0, -1.0, 1.0, 1.0], dtype=np.float32
+        )
+
+        # Pad to (N, 4, 4) homogeneous.
         bottom_row = np.broadcast_to(
             np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32), (n, 1, 4)
         )

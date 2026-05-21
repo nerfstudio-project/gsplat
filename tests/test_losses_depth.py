@@ -82,6 +82,21 @@ def test_binocular_disparity_l1_zero_depth_handled_via_eps():
     assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
 
 
+def test_binocular_disparity_l1_one_side_invalid_excludes_pair():
+    """If only one side of a pair is invalid (depth ~ 0), that pair must not
+    leak ``|0 - 1/other|`` into the loss — the docstring promises pair-level
+    validity, not per-side."""
+    # Pair 0: both valid, identical → contributes 0.
+    # Pair 1: pred invalid (0.0), gt = 2.0 → excluded.
+    # Pair 2: pred = 4.0, gt invalid (0.0) → excluded.
+    # Pair 3: both valid, identical → contributes 0.
+    pred = torch.tensor([[1.0, 0.0, 4.0, 0.5]])
+    gt = torch.tensor([[1.0, 2.0, 0.0, 0.5]])
+    loss = binocular_disparity_l1(pred, gt)
+    assert torch.isfinite(loss).all()
+    assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # pearson_depth_loss
 # ---------------------------------------------------------------------------

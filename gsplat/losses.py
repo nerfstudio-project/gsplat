@@ -237,19 +237,24 @@ def binocular_disparity_l1(
             f"binocular_disparity_l1: pred_depth shape {pred_depth.shape} != "
             f"gt_depth shape {gt_depth.shape}. Shapes must match."
         )
-    ones_pred = torch.ones_like(pred_depth)
+    # A pair (pred_i, gt_i) contributes only when *both* sides are valid.
+    # Otherwise the per-side `1/x ↔ 0` substitution leaks `|0 - 1/other|`
+    # into the loss when only one side is invalid, which is not what the
+    # docstring promises.
     valid_pred = pred_depth.abs() > eps
-    safe_pred = torch.where(valid_pred, pred_depth, ones_pred)
-    pred_inv = torch.where(valid_pred, 1.0 / safe_pred, torch.zeros_like(pred_depth))
-
-    ones_gt = torch.ones_like(gt_depth)
     valid_gt = gt_depth.abs() > eps
-    safe_gt = torch.where(valid_gt, gt_depth, ones_gt)
-    gt_inv = torch.where(valid_gt, 1.0 / safe_gt, torch.zeros_like(gt_depth))
+    pair_valid = valid_pred & valid_gt
 
-    if mask is None:
-        return (pred_inv - gt_inv).abs().mean()
-    return masked_l1(pred_inv, gt_inv, mask)
+    ones = torch.ones_like(pred_depth)
+    safe_pred = torch.where(valid_pred, pred_depth, ones)
+    safe_gt = torch.where(valid_gt, gt_depth, ones)
+    pred_inv = 1.0 / safe_pred
+    gt_inv = 1.0 / safe_gt
+
+    pair_mask = pair_valid.to(pred_depth.dtype)
+    if mask is not None:
+        pair_mask = pair_mask * mask.to(pred_depth.dtype)
+    return masked_l1(pred_inv, gt_inv, pair_mask)
 
 
 def pearson_depth_loss(

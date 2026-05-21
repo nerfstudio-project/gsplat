@@ -62,7 +62,7 @@ def _grid_sample_wrapper(
         mode="bilinear",
         padding_mode="border",
     )
-    return interp.view(b, feature_dim, n).transpose(-1, -2).squeeze()
+    return interp.view(b, feature_dim, n).transpose(-1, -2).squeeze(0)
 
 
 def _init_grid_param(
