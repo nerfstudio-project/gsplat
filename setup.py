@@ -95,6 +95,16 @@ setup(
         "lidar": [
             "scipy",
         ],
+        # examples / tutorial dependencies. The dynamic-surgical trainer and
+        # the EndoNeRF parser/dataset import these at module top, but they
+        # are not needed to use the core gsplat library — install with
+        # `pip install gsplat[examples]`.
+        "examples": [
+            "Pillow",
+            "tqdm",
+            "tyro",
+            "imageio>=2.37.2",
+        ],
         # dev dependencies. Install them by `pip install gsplat[dev]`
         "dev": [
             "black[jupyter]==22.3.0",

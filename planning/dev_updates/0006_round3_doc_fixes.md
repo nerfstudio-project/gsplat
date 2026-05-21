@@ -10,7 +10,7 @@ Three new should-fix / nit comments arrived after the round-2 push (`a380d40` + 
 
 ### MR-010 — CodeRabbit on `0004_post_review_round2.md` line 59
 
-Paste-error fix: the dev update listed the upcoming function as `create_invisible_mask_from_paths` (the holohub source's name) doing an "intersection of inverse masks". The actual function in our scaffold + impl is `create_invisible_mask` (no suffix), and the operation is a union. One-line fix to both copies of `0004`.
+Paste-error fix: the dev update listed the upcoming function as `create_invisible_mask_from_paths` (the holohub source's name) doing an "intersection of inverse masks". The actual function in our scaffold + impl is `create_invisible_mask` (no suffix), and the operation is a union. One-line fix to both copies of `0004` (the workspace-mirror copy at `/home/vnath/Code/.../planning/dev_updates/` and the in-repo tracked copy at `gsplat/planning/dev_updates/`).
 
 ### MR-011 — Vincent on `docs/source/proposals/gsharp_v0_2_port.rst` lines 132–133
 
@@ -36,14 +36,14 @@ Status updates from the new GitLab state:
 - MR-001 / MR-002 / MR-003 / MR-004 / MR-005: `addressed` → `resolved` (Andre [self-resolve]; fix landed in `3c0dd4e`; vnath confirmation replies on file).
 - MR-006: stays `addressed` (vnath replied; thread still gating @shsolanki's ack).
 - MR-007 / MR-008 / MR-009: `addressed` → `resolved` (Vincent resolved all three on 2026-05-07 after seeing `dcb84ef`).
-- MR-010 / MR-011 / MR-012: NEW, `addressed` (fixes in this commit; awaiting reviewer ack).
+- MR-010 / MR-011 / MR-012: NEW, `addressed` (fixes in `58bf8d9d`; awaiting reviewer ack).
 - MR-013: NEW, `deferred` (directed at @shsolanki; no vnath action).
 
 ## Verification
 
 - `python -m pytest tests/test_losses_depth.py -x` → **19 passed** in 3.39s (was 18 + 1 new partial-mask test).
 - `grep -n "gsharp_gsplat_plan.html" docs/source/` → no matches (RST clean).
-- `grep -n "create_invisible_mask_from_paths" planning/dev_updates/` → no matches in active text (only in MR-010 detail file as a verbatim quote, intentional).
+- `grep -n "create_invisible_mask_from_paths" planning/dev_updates/` → found only in quoted context inside `MR-010_*.md` (intentional verbatim reviewer quote); no matches in live code or dev-update prose.
 
 ## What unblocks next
 

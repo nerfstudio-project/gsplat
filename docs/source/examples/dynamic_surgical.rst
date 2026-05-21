@@ -27,13 +27,26 @@ the training-time components of G-SHARP v0.2 (see the holohub application
 Data
 ----
 
-The tutorial targets the EndoNeRF sample ("pulling") and the SCARED dataset.
+The tutorial targets the EndoNeRF sample ("pulling"). SCARED support is
+**not yet implemented** in this MR; ``examples/datasets/`` only ships an
+EndoNeRF parser and a stub for SCARED.
+
 gsplat itself does **not** ship code for estimating depth, tool masks, or
 camera poses. If you don't already have these, you can generate them with
 any standard tool; the G-SHARP v0.2 holohub application uses
 Depth Anything V2, MedSAM3, and VGGT-1B as an optional upstream preprocessing
 stack — see ``holohub/applications/surgical_scene_recon`` for a reference
 implementation.
+
+Getting the data
+~~~~~~~~~~~~~~~~
+
+The EndoNeRF "pulling" sequence is hosted on the upstream
+`med-air/EndoNeRF <https://github.com/med-air/EndoNeRF>`_ project's
+Google Drive folder
+(`direct link <https://drive.google.com/drive/folders/1zTcX80c1yrbntY9c6-EK2W2UVESVEug8?usp=sharing>`_).
+Download the ``pulling_soft_tissues`` directory and rename to
+``data/EndoNeRF/pulling`` (or wherever you point ``--data_dir`` at).
 
 Expected on-disk layout::
 
@@ -48,12 +61,19 @@ Quickstart
 
 .. code-block:: bash
 
-   # (once the vnath_gsharp branch lands implementation)
    python examples/dynamic_surgical_trainer.py \
        --data_dir path/to/endonerf_pulling \
-       --dataset_type endonerf \
+       --output_dir output/dynamic_surgical \
+       --coarse_steps 200 --fine_steps 2500 \
+       --init_max_points 50000 \
        --depth_mode binocular \
-       --strategy dynamic
+       --render_gif_after_train
+
+The trainer auto-derives the HexPlane AABB from the init point cloud
+(see :func:`examples.dynamic_surgical_trainer.train`); ``--hex_bounds``
+remains a lower bound. Run ``python examples/dynamic_surgical_trainer.py
+--help`` for the complete flag list (it's a tyro dataclass surface on
+:class:`Config`).
 
 What lands next
 ---------------

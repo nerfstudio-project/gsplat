@@ -1,3 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Regularizers ported from G-SHARP v0.2.
 
 Public API:
@@ -6,7 +20,7 @@ Public API:
   optionally restricted to a binary mask region. Ported from
   ``compute_tv_loss_targeted`` in
   ``holohub/applications/surgical_scene_recon/training/gsplat_train.py``
-  (lines 1992–2028 in the source).
+  (lines 1992-2028 in the source).
 - :func:`dilate_mask` — pure-torch 2D mask dilation via max-pool. Replaces
   the ``cv2.dilate`` call used by G-SHARP so the core library has no OpenCV
   dependency.
@@ -43,7 +57,7 @@ def compute_tv_loss_targeted(image: Tensor, mask: Optional[Tensor] = None) -> Te
     With a mask, sums each anisotropic difference weighted by the mask
     cropped to the difference shape, then divides by the number of valid
     elements (``mask.sum() * C``) plus a tiny epsilon — matching the G-SHARP
-    behaviour at ``training/gsplat_train.py`` lines 1992–2028.
+    behaviour at ``training/gsplat_train.py`` lines 1992-2028.
 
     Args:
         image: 4D tensor ``(B, C, H, W)``.
@@ -95,7 +109,7 @@ def dilate_mask(mask: Tensor, kernel_size: int = 3) -> Tensor:
 
     Pure-torch replacement for ``cv2.dilate``. With *kernel_size* = 1, this
     is the identity. With *kernel_size* = 3, each ``1`` pixel grows to a
-    ``3 × 3`` neighbourhood (one-pixel safety margin). Larger odd kernel
+    ``3x3`` neighbourhood (one-pixel safety margin). Larger odd kernel
     sizes scale accordingly.
 
     Args:
@@ -144,7 +158,7 @@ def create_invisible_mask(masks: Iterable[Union[Tensor, str]]) -> Tensor:
     Pixels that appear as ``1`` (tool / occluder) in *any* frame are marked
     ``1`` in the returned mask — i.e. regions that are *ever* occluded by an
     instrument across the dataset. Matches the G-SHARP semantics of
-    ``create_invisible_mask_from_paths`` (lines 1925–1957 in the source).
+    ``create_invisible_mask_from_paths`` (lines 1925-1957 in the source).
 
     Two input modes are supported per element of *masks*:
 

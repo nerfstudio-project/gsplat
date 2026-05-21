@@ -1,3 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Dynamic surgical scene trainer (G-SHARP v0.2 port, experimental).
 
 End-to-end recipe wiring together every module landed in TDD steps 1–8:
@@ -444,16 +458,10 @@ def train_step(
 
     tv = compute_tv_loss_targeted(rgb_p)  # unmasked TV (mask wiring is dataset-specific)
 
-    spatial_planes: list[Tensor] = []
-    temporal_planes: list[Tensor] = []
-    for scale_grids in hexplane.grids:
-        for i in (0, 1, 3):  # xy, xz, yz
-            spatial_planes.append(scale_grids[i])
-        for i in (2, 4, 5):  # xt, yt, zt
-            temporal_planes.append(scale_grids[i])
-    plane_smooth = plane_smoothness(spatial_planes)
-    time_smooth_v = time_smoothness(temporal_planes)
-    time_l1_v = time_l1(temporal_planes)
+    # Spatial / temporal plane partition lives on HexPlaneField now (MR-030).
+    plane_smooth = plane_smoothness(hexplane.spatial_planes())
+    time_smooth_v = time_smoothness(hexplane.temporal_planes())
+    time_l1_v = time_l1(hexplane.temporal_planes())
 
     loss = (
         cfg.lambda_l1 * l1

@@ -2,7 +2,7 @@
 id: MR-012
 author: Vincent Caux-Brisebois (@vcauxbrisebo) — posted via review-mrs agent
 date: 2026-05-07
-mr: <TBD>
+mr: !169
 thread: gsplat/losses.py (masked_ssim function)
 status: addressed
 labels: [losses, docs, tests, nit]
@@ -34,7 +34,7 @@ labels: [losses, docs, tests, nit]
 - [x] Add docstring sentence to `masked_ssim` calling out that the mask-coverage bias is intentional.
 - [x] Add a partial-mask positive test: identical inputs in the masked-in half, mismatched in the masked-out half → loss ≈ 0.
 - [x] Verify the new test passes alongside the existing 18.
-- [ ] Confirm thread closure once committed.
+- [x] Confirm thread closure once committed. *(Fixes landed in `58bf8d9d`; thread tracked as `addressed` pending reviewer ack — see `mr_tracker.md`.)*
 
 ## Resolution
 Docstring + test landed (see `0006_round3_doc_fixes.md`). All 19 `tests/test_losses_depth.py` tests pass; new partial-mask test asserts `loss < 1e-3` matching the existing identical-inputs threshold.
