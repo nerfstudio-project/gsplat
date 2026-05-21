@@ -52,11 +52,25 @@ def test_tv_targeted_empty_mask_returns_zero_no_div_by_zero():
     assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
 
 
-def test_tv_targeted_non_binary_mask_rejected():
+def test_tv_targeted_non_binary_mask_rejected(monkeypatch):
+    """Binary-mask check is gated behind ENFORCE_CONTRACTS to avoid a CPU sync
+    in the hot training loop; this test opts in so it can verify the check
+    still fires when asked."""
+    monkeypatch.setattr("gsplat.regularizers.ENFORCE_CONTRACTS", True)
     img = torch.rand(2, 3, 8, 8)
     mask = torch.full((2, 1, 8, 8), 0.5)
     with pytest.raises(ValueError, match="binary"):
         compute_tv_loss_targeted(img, mask)
+
+
+def test_tv_targeted_non_binary_mask_silent_when_contracts_disabled(monkeypatch):
+    """When ENFORCE_CONTRACTS is off (default), a non-binary mask should NOT
+    raise — production hot-path behaviour."""
+    monkeypatch.setattr("gsplat.regularizers.ENFORCE_CONTRACTS", False)
+    img = torch.rand(2, 3, 8, 8)
+    mask = torch.full((2, 1, 8, 8), 0.5)
+    loss = compute_tv_loss_targeted(img, mask)
+    assert torch.isfinite(loss).all()
 
 
 def test_tv_targeted_non_4d_image_raises():

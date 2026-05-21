@@ -128,7 +128,9 @@ def multi_frame_depth_unprojection(
     return xyz, rgb
 
 
-def knn_scale_init(xyz: Tensor, k: int = 3, eps: float = 1e-7) -> Tensor:
+def knn_scale_init(
+    xyz: Tensor, k: int = 3, eps: float = 1e-7, chunk_size: int = 1024
+) -> Tensor:
     """Per-point initial log-scale based on the mean distance to the *k* nearest neighbours.
 
     Pure-torch implementation (``cdist`` + ``topk``) — no sklearn dependency.
@@ -147,6 +149,9 @@ def knn_scale_init(xyz: Tensor, k: int = 3, eps: float = 1e-7) -> Tensor:
         k: Number of nearest neighbours per point, excluding self
             (default ``3``).
         eps: Minimum distance clamp before the log; default ``1e-7``.
+        chunk_size: Row-block size for the pairwise distance scan. Memory
+            is ``O(chunk_size * N)`` per block; default 1024 fits comfortably
+            on a 12 GB consumer GPU at ``N = 50_000``.
 
     Returns:
         ``(N,)`` per-point log-distance.
@@ -159,10 +164,17 @@ def knn_scale_init(xyz: Tensor, k: int = 3, eps: float = 1e-7) -> Tensor:
     if n <= k:
         raise ValueError(f"knn_scale_init: need at least k+1={k + 1} points, got {n}.")
 
-    # Pairwise distances. cdist is O(N^2) but fine for typical splat-init
-    # counts (1k–100k); the trainer's downstream ops dominate runtime.
-    dists = torch.cdist(xyz, xyz)  # (N, N), self-distance == 0
-    knn_dists, _ = dists.topk(k + 1, largest=False)  # (N, k+1)
-    neighbor_dists = knn_dists[:, 1:]  # drop self → (N, k)
-    rms = neighbor_dists.pow(2).mean(dim=-1).sqrt()
-    return rms.clamp_min(eps).log()
+    # Chunked pairwise KNN: a single (N, N) cdist is ~N^2 * 4 bytes, which is
+    # ~10 GB at N=50_000 (fits on an A100, OOMs on a 12-16 GB consumer card).
+    # Loop over query rows in blocks; per block we only allocate (chunk, N)
+    # distances, then top-k.  Memory drops from O(N^2) to O(chunk * N).
+    chunk = max(1, min(chunk_size, n))
+    out = torch.empty(n, device=xyz.device, dtype=xyz.dtype)
+    for start in range(0, n, chunk):
+        end = min(start + chunk, n)
+        block_dists = torch.cdist(xyz[start:end], xyz)  # (chunk, N)
+        knn_dists, _ = block_dists.topk(k + 1, largest=False)  # (chunk, k+1)
+        neighbor_dists = knn_dists[:, 1:]  # drop self → (chunk, k)
+        rms = neighbor_dists.pow(2).mean(dim=-1).sqrt()
+        out[start:end] = rms
+    return out.clamp_min(eps).log()
