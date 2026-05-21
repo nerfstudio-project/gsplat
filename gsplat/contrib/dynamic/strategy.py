@@ -33,7 +33,7 @@ import torch
 
 from gsplat.strategy import DefaultStrategy
 
-from .deformation import DeformationTable
+from .deformation import DeformationTable  # noqa: F401  (re-export for back-compat)
 
 __all__ = ["DynamicStrategy"]
 
@@ -43,8 +43,14 @@ class DynamicStrategy(DefaultStrategy):
 
     Extra invariants on top of :class:`DefaultStrategy`:
 
-    - ``state`` carries a :class:`DeformationTable` instance under
-      ``state["deformation_table"]`` after :meth:`initialize_state`.
+    - ``state["dynamic_mask"]`` is a per-Gaussian ``torch.bool`` tensor of
+      shape ``(num_gaussians,)`` that flags which Gaussians the trainer
+      should route through the DeformNet. Resized in lock-step with
+      ``params["means"]`` by gsplat's strategy ops (which iterate every
+      tensor in *state* and apply the per-Gaussian split / duplicate /
+      prune permutation — see ``gsplat/strategy/ops.py:135, 191-195,
+      223-225``). Identity is preserved across split (children inherit
+      the parent's flag).
 
     Note that the HexPlane and DeformNet trainables are **not** part of
     *params*. gsplat's densification ops blindly iterate every entry in
@@ -54,18 +60,13 @@ class DynamicStrategy(DefaultStrategy):
     their own optimizers, wired separately by the trainer (see
     ``examples/dynamic_surgical_trainer.py:build_deform_modules``).
 
-    The current resize policy on densify / prune mirrors G-SHARP:
-
-    - **Grow:** new Gaussians appended at the tail of ``params["means"]``
-      are flagged as **dynamic** (``True``) in the table — matches the
-      G-SHARP ``new_mask = ones(num_new, dtype=bool)`` convention at
-      ``gsplat_train.py:1365``.
-    - **Shrink:** the table is truncated to the new length. This does
-      **not** preserve exact survivor flag identities (the gsplat ``remove``
-      op compacts via boolean indexing; we don't have access to the prune
-      mask from outside ``_prune_gs``). G-SHARP makes the same trade-off
-      and notes "this shouldn't happen in current strategy" — adequate for
-      uniformly-dynamic tables; revisit if exact tracking is needed.
+    Historical note (MR-013 → MR-022): an earlier version of this strategy
+    stored a :class:`DeformationTable` wrapper at ``state["deformation_table"]``
+    and resized it via a custom ``_resize_table`` hook. That hook did not
+    preserve survivor identity across split, and the trainer never consulted
+    the mask anyway. Wiring it through *state* as a plain tensor (so gsplat's
+    ops do the right thing) closes both gaps. The wrapper class is still
+    importable for back-compat; the canonical mask is the tensor in *state*.
     """
 
     def check_sanity(
@@ -87,24 +88,40 @@ class DynamicStrategy(DefaultStrategy):
         scene_scale: float = 1.0,
         num_gaussians: int = 0,
         device: Optional[torch.device] = None,
+        init_dynamic: bool = True,
     ) -> Dict[str, Any]:
-        """Extend :meth:`DefaultStrategy.initialize_state` with a deformation table.
+        """Extend :meth:`DefaultStrategy.initialize_state` with a per-Gaussian
+        dynamic mask.
+
+        The mask is stored under ``state["dynamic_mask"]`` as a plain bool
+        tensor (shape ``(num_gaussians,)``). It is **not** wrapped in a
+        :class:`DeformationTable` so that gsplat's densification ops in
+        :mod:`gsplat.strategy.ops` (which iterate every tensor in *state*
+        and apply the per-Gaussian split / duplicate / prune permutation
+        automatically — see ops.py:135, 191-195, 223-225) can resize it in
+        lock-step with ``params["means"]`` with identity preservation
+        across split. The wrapper class is still exposed for callers that
+        want the helper API (see :class:`DeformationTable`), but the
+        canonical mask now lives in *state*.
 
         Args:
             scene_scale: Forwarded to the parent.
-            num_gaussians: Initial Gaussian count for the
-                :class:`DeformationTable`. All flags start ``False``;
-                callers can flip dynamic ones via
-                :meth:`DeformationTable.set_indices`.
-            device: Device for the deformation-table mask (defaults to CPU).
+            num_gaussians: Initial Gaussian count.
+            device: Device for the mask tensor (defaults to CPU).
+            init_dynamic: Initial value for every flag. ``True`` matches the
+                current trainer behaviour (every Gaussian goes through
+                :class:`DeformNetwork`); set ``False`` if you have a
+                static-by-default workflow and intend to flip dynamic
+                indices manually.
 
         Returns:
-            The strategy state dict with the additional
-            ``deformation_table`` entry.
+            The strategy state dict with the additional ``dynamic_mask``
+            entry (a ``torch.bool`` tensor of shape ``(num_gaussians,)``).
         """
         state = super().initialize_state(scene_scale=scene_scale)
-        state["deformation_table"] = DeformationTable(
-            num_gaussians=num_gaussians, device=device
+        fill = bool(init_dynamic)
+        state["dynamic_mask"] = torch.full(
+            (num_gaussians,), fill, dtype=torch.bool, device=device
         )
         return state
 
@@ -128,13 +145,19 @@ class DynamicStrategy(DefaultStrategy):
         info: Dict[str, Any],
         packed: bool = False,
     ) -> None:
-        """Post-backward hook — runs the parent then resizes the table.
+        """Post-backward hook — defers to the parent.
+
+        ``state["dynamic_mask"]`` is resized in lock-step with the per-Gaussian
+        parameters automatically by gsplat's densification ops (which iterate
+        every tensor in *state* and apply the same per-Gaussian permutation
+        as the params — see ``gsplat/strategy/ops.py:135``). No extra hook
+        needed here.
 
         Raises:
-            RuntimeError: if ``state["deformation_table"]`` is missing
-                (i.e. :meth:`initialize_state` wasn't called first).
+            RuntimeError: if ``state["dynamic_mask"]`` is missing (i.e.
+                :meth:`initialize_state` wasn't called first).
         """
-        if "deformation_table" not in state:
+        if "dynamic_mask" not in state:
             raise RuntimeError(
                 "DynamicStrategy.step_post_backward called before "
                 "initialize_state(...). Call "
@@ -142,7 +165,6 @@ class DynamicStrategy(DefaultStrategy):
                 "num_gaussians=N)` first."
             )
 
-        n_before = len(params["means"])
         super().step_post_backward(
             params=params,
             optimizers=optimizers,
@@ -151,26 +173,3 @@ class DynamicStrategy(DefaultStrategy):
             info=info,
             packed=packed,
         )
-        n_after = len(params["means"])
-        if n_after != n_before:
-            self._resize_table(state["deformation_table"], n_before, n_after)
-
-    @staticmethod
-    def _resize_table(
-        table: DeformationTable, n_before: int, n_after: int
-    ) -> None:
-        """Resize *table* to match a Gaussian count delta after a densify op.
-
-        - On grow, appends ``n_after - n_before`` ``True`` flags (new
-          Gaussians are dynamic by default).
-        - On shrink, truncates to ``n_after`` (see class-level docstring for
-          the limitation).
-        """
-        if n_after > n_before:
-            n_new = n_after - n_before
-            new_flags = torch.ones(
-                n_new, dtype=torch.bool, device=table.mask.device
-            )
-            table.mask = torch.cat([table.mask, new_flags], dim=0)
-        elif n_after < n_before:
-            table.mask = table.mask[:n_after]

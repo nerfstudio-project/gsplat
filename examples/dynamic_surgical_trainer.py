@@ -299,6 +299,60 @@ def build_deform_modules(
 
 
 # ---------------------------------------------------------------------------
+# Deformation routing (MR-022 Option A: gather → DeformNet → scatter)
+# ---------------------------------------------------------------------------
+
+
+def _deform_with_mask(
+    means: Tensor,
+    quats: Tensor,
+    opacities_logit: Tensor,
+    t_per_g: Tensor,
+    dynamic_mask: Tensor,
+    hexplane: HexPlaneField,
+    deform_net: DeformNetwork,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """Route only the Gaussians flagged dynamic through HexPlane + DeformNet.
+
+    Static Gaussians (``dynamic_mask`` False) pass through unchanged so the
+    rasterizer sees their base values. Mixed-fraction uses an
+    out-of-place index-copy on a ``.clone()`` so autograd flows correctly
+    through both the dynamic and static branches.
+    """
+    if dynamic_mask.numel() == 0:
+        return means, quats, opacities_logit
+
+    if dynamic_mask.all():
+        # Fast path: every Gaussian dynamic (the default at init).
+        xyzt = torch.cat([means, t_per_g], dim=-1)
+        plane_features = hexplane(xyzt)
+        return deform_net(means, quats, opacities_logit, t_per_g, plane_features)
+
+    if not dynamic_mask.any():
+        # Nothing dynamic — skip HexPlane / DeformNet entirely.
+        return means, quats, opacities_logit
+
+    dyn_idx = torch.where(dynamic_mask)[0]
+    means_dyn = means[dyn_idx]
+    quats_dyn = quats[dyn_idx]
+    op_dyn = opacities_logit[dyn_idx]
+    t_dyn = t_per_g[dyn_idx]
+    xyzt_dyn = torch.cat([means_dyn, t_dyn], dim=-1)
+    plane_features_dyn = hexplane(xyzt_dyn)
+    means_d_dyn, quats_d_dyn, op_d_dyn = deform_net(
+        means_dyn, quats_dyn, op_dyn, t_dyn, plane_features_dyn
+    )
+
+    means_out = means.clone()
+    means_out[dyn_idx] = means_d_dyn
+    quats_out = quats.clone()
+    quats_out[dyn_idx] = quats_d_dyn
+    op_out = opacities_logit.clone()
+    op_out[dyn_idx] = op_d_dyn
+    return means_out, quats_out, op_out
+
+
+# ---------------------------------------------------------------------------
 # Train step (CUDA-only — gsplat.rasterization is CUDA-only)
 # ---------------------------------------------------------------------------
 
@@ -337,11 +391,15 @@ def train_step(
     # Build per-Gaussian (xyzt) input for HexPlane.
     n = means.shape[0]
     t_per_g = t.expand(n).unsqueeze(-1)
-    xyzt = torch.cat([means, t_per_g], dim=-1)
 
-    plane_features = hexplane(xyzt)
-    means_d, quats_d, opacities_d_logit = deform_net(
-        means, quats, opacities_logit, t_per_g, plane_features
+    means_d, quats_d, opacities_d_logit = _deform_with_mask(
+        means=means,
+        quats=quats,
+        opacities_logit=opacities_logit,
+        t_per_g=t_per_g,
+        dynamic_mask=state["dynamic_mask"],
+        hexplane=hexplane,
+        deform_net=deform_net,
     )
 
     viewmats = torch.linalg.inv(camtoworld)
@@ -453,8 +511,15 @@ def render_frame(
     hexplane: HexPlaneField,
     deform_net: DeformNetwork,
     device: torch.device,
+    dynamic_mask: Optional[Tensor] = None,
 ) -> np.ndarray:
-    """Render a single frame at its native time. Returns ``(H, W, 3)`` uint8."""
+    """Render a single frame at its native time. Returns ``(H, W, 3)`` uint8.
+
+    If *dynamic_mask* is provided, only flagged Gaussians route through
+    HexPlane / DeformNet (matches the train-step routing). Otherwise every
+    Gaussian is treated as dynamic — keeps the legacy single-arg call site
+    working.
+    """
     camtoworld = torch.from_numpy(parser.camtoworlds[frame_idx]).to(device).unsqueeze(0)
     K = torch.from_numpy(parser.K).to(device).unsqueeze(0)
     t = torch.tensor(float(parser.times[frame_idx]), device=device).view(1)
@@ -467,10 +532,16 @@ def render_frame(
 
     n = means.shape[0]
     t_per_g = t.expand(n).unsqueeze(-1)
-    xyzt = torch.cat([means, t_per_g], dim=-1)
-    plane_features = hexplane(xyzt)
-    means_d, quats_d, opacities_d_logit = deform_net(
-        means, quats, opacities_logit, t_per_g, plane_features
+    if dynamic_mask is None:
+        dynamic_mask = torch.ones(n, dtype=torch.bool, device=device)
+    means_d, quats_d, opacities_d_logit = _deform_with_mask(
+        means=means,
+        quats=quats,
+        opacities_logit=opacities_logit,
+        t_per_g=t_per_g,
+        dynamic_mask=dynamic_mask,
+        hexplane=hexplane,
+        deform_net=deform_net,
     )
 
     viewmats = torch.linalg.inv(camtoworld)
@@ -501,6 +572,7 @@ def render_gif(
     device: torch.device,
     frame_indices: Optional[list[int]] = None,
     fps: int = 10,
+    dynamic_mask: Optional[Tensor] = None,
 ) -> Path:
     """Render frames across the dataset and write an animated GIF.
 
@@ -525,7 +597,12 @@ def render_gif(
 
     frames: list[np.ndarray] = []
     for idx in tqdm.tqdm(frame_indices, desc=f"rendering -> {output_path.name}"):
-        frames.append(render_frame(parser, idx, params, hexplane, deform_net, device))
+        frames.append(
+            render_frame(
+                parser, idx, params, hexplane, deform_net, device,
+                dynamic_mask=dynamic_mask,
+            )
+        )
 
     imageio.mimsave(str(output_path), frames, duration=max(1, int(1000 / fps)), loop=0)
     print(f"Saved GIF: {output_path} ({len(frames)} frames @ {fps} fps)")
@@ -624,6 +701,7 @@ def train(cfg: Config) -> None:
             if cfg.gif_frame_indices is not None
             else None,
             fps=cfg.gif_fps,
+            dynamic_mask=state["dynamic_mask"],
         )
 
 
