@@ -104,3 +104,32 @@ def test_time_l1_gradient_flows():
     assert plane.grad is not None
     # |1 - 0.5| = 0.5, derivative w.r.t. plane is -1 / numel = -1/16.
     assert torch.allclose(plane.grad, torch.full_like(plane, -1.0 / 16.0), atol=1e-6)
+
+
+# CUDA-gated regression: earlier impl initialised the accumulator on CPU and
+# crashed on the first GPU training step. Pin the contract.
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_plane_smoothness_on_cuda_planes_runs():
+    plane = torch.randn(1, 4, 5, 5, device="cuda", requires_grad=True)
+    out = plane_smoothness([plane])
+    assert out.device.type == "cuda"
+    out.backward()
+    assert plane.grad is not None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_time_smoothness_on_cuda_planes_runs():
+    plane = torch.randn(1, 4, 5, 5, device="cuda", requires_grad=True)
+    out = time_smoothness([plane])
+    assert out.device.type == "cuda"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_time_l1_on_cuda_planes_runs():
+    plane = torch.full((1, 1, 4, 4), 0.5, device="cuda", requires_grad=True)
+    out = time_l1([plane])
+    assert out.device.type == "cuda"
+    out.backward()
+    assert plane.grad is not None

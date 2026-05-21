@@ -199,12 +199,12 @@ def build_splats_from_parser(
 
     Returns:
         ``(params, optimizers)`` where *params* is a ``ParameterDict`` with
-        keys ``means``, ``quats``, ``scales``, ``opacities``, ``colors``,
-        ``hexplane_params``, ``deform_mlp_params``. The last two are
-        bookkeeping placeholders (zero-d Parameters) that satisfy
-        :meth:`DynamicStrategy.check_sanity`; the real HexPlane and
-        DeformNet trainables are wired separately via
-        :func:`build_deform_modules`.
+        the five per-Gaussian trainables ``means``, ``quats``, ``scales``,
+        ``opacities``, ``colors``. HexPlane and DeformNet trainables are
+        wired separately via :func:`build_deform_modules` so gsplat's
+        densification ops (which iterate every entry in *params* and
+        per-Gaussian-index them) don't accidentally touch non-per-Gaussian
+        tensors — see :class:`DynamicStrategy` for the contract.
     """
     images, depths, masks, poses, intrinsics = _load_train_tensors(parser, device)
 

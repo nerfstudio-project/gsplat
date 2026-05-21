@@ -127,9 +127,12 @@ def test_build_splats_from_parser_produces_expected_shapes(trainer_dir: Path):
     assert params["quats"].shape == (n, 4)
     assert params["opacities"].shape == (n, 1)
     assert params["colors"].shape == (n, 3)
-    # Bookkeeping placeholders required by DynamicStrategy.check_sanity.
-    assert "hexplane_params" in params
-    assert "deform_mlp_params" in params
+    # build_splats_from_parser returns only the five per-Gaussian trainables;
+    # HexPlane / DeformNet trainables live in their own optimizers (see
+    # build_deform_modules). See DynamicStrategy class docstring for why.
+    assert "hexplane_params" not in params
+    assert "deform_mlp_params" not in params
+    assert set(params.keys()) == {"means", "scales", "quats", "opacities", "colors"}
     # Optimizer keys must match parameter keys (Strategy.check_sanity contract).
     assert set(optimizers.keys()) == set(params.keys())
 
