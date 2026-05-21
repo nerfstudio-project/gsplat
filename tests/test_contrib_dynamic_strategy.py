@@ -9,7 +9,6 @@ Seed is set to 42 by the autouse fixture in ``conftest.py``.
 import pytest
 import torch
 
-from gsplat.contrib.dynamic.deformation import DeformationTable
 from gsplat.contrib.dynamic.strategy import DynamicStrategy
 
 
@@ -56,15 +55,25 @@ def test_dynamic_strategy_check_sanity_fails_on_missing_per_gaussian_keys():
 # ---------------------------------------------------------------------------
 
 
-def test_dynamic_strategy_initialize_state_creates_table():
+def test_dynamic_strategy_initialize_state_creates_dynamic_mask_tensor():
+    """MR-022: ``state["dynamic_mask"]`` is a plain bool tensor (not a wrapper).
+    Default is all-True so every Gaussian routes through DeformNet."""
     strategy = DynamicStrategy()
     state = strategy.initialize_state(scene_scale=1.0, num_gaussians=10)
-    assert "deformation_table" in state
-    table = state["deformation_table"]
-    assert isinstance(table, DeformationTable)
-    assert len(table) == 10
-    # All flags start static (False).
-    assert not table.mask.any()
+    assert "dynamic_mask" in state
+    mask = state["dynamic_mask"]
+    assert isinstance(mask, torch.Tensor)
+    assert mask.dtype == torch.bool
+    assert mask.shape == (10,)
+    assert mask.all()  # default: every Gaussian dynamic
+
+
+def test_dynamic_strategy_initialize_state_honours_init_dynamic_false():
+    strategy = DynamicStrategy()
+    state = strategy.initialize_state(
+        scene_scale=1.0, num_gaussians=4, init_dynamic=False
+    )
+    assert not state["dynamic_mask"].any()
 
 
 def test_dynamic_strategy_initialize_state_preserves_default_keys():
@@ -77,45 +86,6 @@ def test_dynamic_strategy_initialize_state_preserves_default_keys():
 
 
 # ---------------------------------------------------------------------------
-# Resize hook (densify lock-step)
-# ---------------------------------------------------------------------------
-
-
-def test_dynamic_strategy_densify_resizes_deformation_table_grow():
-    table = DeformationTable(num_gaussians=5)
-    table.set_indices(torch.tensor([0, 2]))  # [T, F, T, F, F]
-
-    DynamicStrategy._resize_table(table, n_before=5, n_after=8)
-
-    assert len(table) == 8
-    # Original five preserved.
-    assert table.mask[:5].tolist() == [True, False, True, False, False]
-    # Three new Gaussians flagged dynamic.
-    assert table.mask[5:].all()
-
-
-def test_dynamic_strategy_densify_resizes_deformation_table_shrink():
-    table = DeformationTable(num_gaussians=8)
-    table.set_indices(torch.tensor([0, 2, 6]))
-
-    DynamicStrategy._resize_table(table, n_before=8, n_after=4)
-
-    assert len(table) == 4
-    # Truncation: prefix preserved.
-    assert table.mask[:4].tolist() == [True, False, True, False]
-
-
-def test_dynamic_strategy_resize_table_no_change_is_noop():
-    table = DeformationTable(num_gaussians=3)
-    table.set_indices(torch.tensor([1]))
-    snapshot = table.mask.clone()
-
-    DynamicStrategy._resize_table(table, n_before=3, n_after=3)
-
-    assert (table.mask == snapshot).all()
-
-
-# ---------------------------------------------------------------------------
 # step_post_backward guard rails
 # ---------------------------------------------------------------------------
 
@@ -123,7 +93,7 @@ def test_dynamic_strategy_resize_table_no_change_is_noop():
 def test_dynamic_strategy_post_backward_without_init_raises():
     strategy = DynamicStrategy()
     params, optimizers = _make_params_optimizers()
-    state = {"grad2d": None, "count": None, "scene_scale": 1.0}  # no deformation_table
+    state = {"grad2d": None, "count": None, "scene_scale": 1.0}  # no dynamic_mask
     info: dict = {}
     with pytest.raises(RuntimeError, match="initialize_state"):
         strategy.step_post_backward(
