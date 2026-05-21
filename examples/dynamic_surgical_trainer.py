@@ -90,6 +90,11 @@ class Config:
     init_opacity: float = 0.1
 
     # HexPlane field
+    # Lower bound on the HexPlane AABB. The trainer auto-derives the actual
+    # bounds from the init means' bounding box (with a 2× margin for gradient
+    # drift) and takes ``max(cfg.hex_bounds, derived)``. Leave at 1.6 for
+    # legacy / fixture compatibility; the auto-derived value wins on real
+    # data.
     hex_bounds: float = 1.6
     hex_output_dim: int = 32
     hex_resolution: Tuple[int, int, int, int] = (64, 64, 64, 25)
@@ -254,17 +259,31 @@ def build_splats_from_parser(
 
 
 def build_deform_modules(
-    cfg: Config, device: torch.device
+    cfg: Config,
+    device: torch.device,
+    bounds_override: Optional[float] = None,
 ) -> Tuple[HexPlaneField, DeformNetwork, torch.optim.Optimizer, torch.optim.Optimizer]:
-    """Construct the HexPlane field, the DeformNet, and their optimizers."""
+    """Construct the HexPlane field, the DeformNet, and their optimizers.
+
+    Args:
+        cfg: Trainer config.
+        device: Target device.
+        bounds_override: If provided, overrides ``cfg.hex_bounds`` for the
+            HexPlane AABB. The trainer normally derives this from the init
+            point cloud (see ``train()``); passing the override here keeps the
+            HexPlane query inside ``[-1, 1]^3`` after ``_normalize_aabb`` so
+            ``grid_sample(padding_mode="border")`` doesn't clamp every Gaussian
+            to the same edge feature (the dead-HexPlane bug fixed in MR-026).
+    """
     plane_cfg = {
         "grid_dimensions": 2,
         "input_coordinate_dim": 4,
         "output_coordinate_dim": cfg.hex_output_dim,
         "resolution": list(cfg.hex_resolution),
     }
+    bounds = float(bounds_override) if bounds_override is not None else cfg.hex_bounds
     hexplane = HexPlaneField(
-        bounds=cfg.hex_bounds,
+        bounds=bounds,
         planes_config=plane_cfg,
         multires=cfg.hex_multires,
     ).to(device)
@@ -532,7 +551,29 @@ def train(cfg: Config) -> None:
     dataset = EndoNeRFDataset(parser, split="train")
 
     params, optimizers = build_splats_from_parser(parser, cfg, device)
-    hexplane, deform_net, hex_opt, deform_opt = build_deform_modules(cfg, device)
+
+    # MR-026: cfg.hex_bounds is a sentinel ceiling, not a fixed value. The
+    # actual init point cloud (EndoNeRF "pulling" has means ~[-8, +8]) blows
+    # past the legacy 1.6 default, and HexPlane's grid_sample(padding_mode=
+    # "border") would clamp every query to the same edge feature → spatially
+    # constant deformation field. Derive the AABB from the init means with a
+    # 2× safety margin so subsequent gradient drift stays inside.
+    with torch.no_grad():
+        init_means_abs_max = float(params["means"].detach().abs().max())
+    if init_means_abs_max <= 0.0:
+        raise RuntimeError(
+            "build_splats_from_parser produced means with zero magnitude; "
+            "check the depth-unprojection / pose pipeline."
+        )
+    derived_bounds = max(cfg.hex_bounds, init_means_abs_max * 2.0)
+    print(
+        f"[hex_bounds] cfg.hex_bounds={cfg.hex_bounds:.3f}, "
+        f"init_means.abs().max()={init_means_abs_max:.3f}, "
+        f"derived={derived_bounds:.3f}"
+    )
+    hexplane, deform_net, hex_opt, deform_opt = build_deform_modules(
+        cfg, device, bounds_override=derived_bounds
+    )
 
     strategy = DynamicStrategy()
     strategy.check_sanity(params, optimizers)
