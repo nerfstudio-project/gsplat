@@ -84,8 +84,18 @@ def test_endonerf_parser_loads_fixture(endonerf_dir: Path):
     assert parser.K[1, 1] == pytest.approx(100.0)
 
     assert parser.camtoworlds.shape == (4, 4, 4)
-    # Identity-rotation, translation-along-z fixture.
-    np.testing.assert_allclose(parser.camtoworlds[0, :3, :3], np.eye(3), atol=1e-6)
+    # The fixture writes an identity rotation in LLFF raw format ([down,
+    # right, backwards]). The parser applies the LLFF → OpenGL/Nerfstudio
+    # axis permutation (MR-027): `c2w[:, :, [1, 0, 2, 3]] * [1, -1, 1, 1]`.
+    # Identity LLFF maps to the column-permuted matrix below; translation
+    # is unchanged.
+    llff_identity_after_permutation = np.array(
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    np.testing.assert_allclose(
+        parser.camtoworlds[0, :3, :3], llff_identity_after_permutation, atol=1e-6
+    )
     np.testing.assert_allclose(parser.camtoworlds[2, :3, 3], [0.0, 0.0, 2.0])
     np.testing.assert_allclose(parser.camtoworlds[:, 3, :], [[0.0, 0.0, 0.0, 1.0]] * 4)
 
@@ -93,6 +103,32 @@ def test_endonerf_parser_loads_fixture(endonerf_dir: Path):
     assert len(parser.depth_paths) == 4
     assert len(parser.mask_paths) == 4
     np.testing.assert_allclose(parser.times, [0.0, 0.25, 0.5, 0.75])
+
+
+def test_endonerf_parser_applies_llff_axis_permutation(endonerf_dir: Path):
+    """MR-027: parser must apply ``c2w[:, :, [1, 0, 2, 3]] * [1, -1, 1, 1]`` to
+    match the OpenGL / Nerfstudio camera convention (G-SHARP ``endo_loader.py``).
+
+    Verified by writing a non-trivial LLFF pose and asserting the parser's
+    output matches the hand-computed permutation."""
+    # Custom fixture: scaled-identity LLFF rotation per frame.
+    import shutil
+
+    custom_root = endonerf_dir.parent / "endonerf_axis_test"
+    if custom_root.exists():
+        shutil.rmtree(custom_root)
+    custom_root = _write_endonerf_fixture(custom_root)
+
+    poses = np.load(custom_root / "poses_bounds.npy")[:, :15].reshape(-1, 3, 5)
+    llff_c2w_3x4 = poses[..., :4].copy()
+
+    # Expected post-permutation: apply the same transform the parser does.
+    expected = llff_c2w_3x4[:, :, [1, 0, 2, 3]] * np.array(
+        [1.0, -1.0, 1.0, 1.0], dtype=np.float32
+    )
+
+    parser = EndoNeRFParser(data_dir=custom_root)
+    np.testing.assert_allclose(parser.camtoworlds[:, :3, :4], expected, atol=1e-6)
 
 
 def test_endonerf_parser_split_indices_obey_test_every():

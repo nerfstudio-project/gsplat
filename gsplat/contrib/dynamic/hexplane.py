@@ -1,3 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# Portions of this file (HexPlane construction) are adapted from the
+# Nerfstudio K-Planes / HexPlane reference implementation; see
+# https://github.com/sarafridov/K-Planes for the upstream.
 """HexPlane spatio-temporal feature field (experimental).
 
 Multi-resolution 6-plane decomposition of a 4D ``(x, y, z, t)`` feature
@@ -13,7 +30,7 @@ concatenated across multi-resolution scales to produce the final feature.
 from __future__ import annotations
 
 import itertools
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -247,3 +264,28 @@ class HexPlaneField(nn.Module):
             grid_dimensions=self.grid_config["grid_dimensions"],
             concat_features=self.concat_features,
         )
+
+    # ------------------------------------------------------------------
+    # Plane-partition accessors (MR-030): keep the spatial / temporal
+    # grouping next to the grid construction code so regularizers don't
+    # have to hardcode the (0,1,3) / (2,4,5) indices.
+    # ------------------------------------------------------------------
+
+    _SPATIAL_PLANE_IDXS: Tuple[int, ...] = (0, 1, 3)  # xy, xz, yz
+    _TEMPORAL_PLANE_IDXS: Tuple[int, ...] = (2, 4, 5)  # xt, yt, zt
+
+    def spatial_planes(self) -> list[Tensor]:
+        """Return the flat list of spatial planes across all multi-res scales."""
+        out: list[Tensor] = []
+        for scale_grids in self.grids:
+            for i in self._SPATIAL_PLANE_IDXS:
+                out.append(scale_grids[i])
+        return out
+
+    def temporal_planes(self) -> list[Tensor]:
+        """Return the flat list of spatio-temporal planes across all scales."""
+        out: list[Tensor] = []
+        for scale_grids in self.grids:
+            for i in self._TEMPORAL_PLANE_IDXS:
+                out.append(scale_grids[i])
+        return out
