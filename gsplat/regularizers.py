@@ -19,11 +19,21 @@ Public API:
 
 from __future__ import annotations
 
+import os
 from typing import Iterable, Optional, Union
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+
+# Mirror the `gsplat.losses.ENFORCE_CONTRACTS` knob: contract checks (binary
+# mask / shape constraints / ...) cost a CPU-GPU sync each call, so they are
+# disabled in the hot training loop unless explicitly opted into. Enable via
+# `GSPLAT_ENFORCE_CONTRACTS=1` or `PYTHONOPTIMIZE=0`.
+ENFORCE_CONTRACTS: bool = (
+    os.environ.get("GSPLAT_ENFORCE_CONTRACTS") == "1"
+    or os.environ.get("PYTHONOPTIMIZE") == "0"
+)
 
 
 def compute_tv_loss_targeted(image: Tensor, mask: Optional[Tensor] = None) -> Tensor:
@@ -59,7 +69,9 @@ def compute_tv_loss_targeted(image: Tensor, mask: Optional[Tensor] = None) -> Te
     if mask is None:
         return (tv_h.sum() + tv_w.sum()) / image.numel()
 
-    if not (((mask == 0) | (mask == 1)).all()):
+    if ENFORCE_CONTRACTS and not (((mask == 0) | (mask == 1)).all()):
+        # Gated behind ENFORCE_CONTRACTS because the .all() → __bool__ forces a
+        # host sync; this loss is called every training step.
         raise ValueError(
             "compute_tv_loss_targeted: mask must be binary (values in {0, 1}). "
             "Convert via `(mask > threshold).float()` first if needed."
