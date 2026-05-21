@@ -29,21 +29,21 @@ void launch_spherical_harmonics_fwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
     const at::Tensor dirs,                // [..., N, 3]
-    const at::Tensor coeffs,              // [N, K, 3]
+    const at::Tensor coeffs,              // [N, K, D]
     const at::optional<at::Tensor> masks, // [..., N]
     // outputs
-    at::Tensor colors // [..., N, 3]
+    at::Tensor colors // [..., N, D]
 );
 
 void launch_spherical_harmonics_bwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
     const at::Tensor dirs,                // [..., N, 3]
-    const at::Tensor coeffs,              // [N, K, 3]
+    const at::Tensor coeffs,              // [N, K, D]
     const at::optional<at::Tensor> masks, // [..., N]
-    const at::Tensor v_colors,            // [..., N, 3]
+    const at::Tensor v_colors,            // [..., N, D]
     // outputs
-    at::Tensor v_coeffs,            // [N, K, 3]
+    at::Tensor v_coeffs,            // [N, K, D]
     at::optional<at::Tensor> v_dirs // [..., N, 3]
 );
 
