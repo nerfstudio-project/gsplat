@@ -60,4 +60,22 @@ labels: [<area tags, e.g. losses, contrib, docs>]
 | MR-010 | CodeRabbit | 2026-05-07 | `0004` line 59 function name + operation paste-error | addressed | [MR-010](mr_comments/MR-010_coderabbit_invisible-mask-name.md) |
 | MR-011 | Vincent Caux-Brisebois | 2026-05-07 | Proposal RST still references the deleted HTML | addressed | [MR-011](mr_comments/MR-011_vcauxbrisebo_proposal-rst-html-ref.md) |
 | MR-012 | Vincent Caux-Brisebois | 2026-05-07 | `masked_ssim` mask-bias docstring + partial-mask test | addressed | [MR-012](mr_comments/MR-012_vcauxbrisebo_masked-ssim-bias-doc.md) |
-| MR-013 | Vincent Caux-Brisebois | 2026-05-07 | Question to @shsolanki on deformation integration | deferred | [MR-013](mr_comments/MR-013_vcauxbrisebo_deformation-integration-question.md) |
+| MR-013 | Vincent Caux-Brisebois | 2026-05-07 | Question to @shsolanki on deformation integration (answered by MR-022) | deferred | [MR-013](mr_comments/MR-013_vcauxbrisebo_deformation-integration-question.md) |
+| MR-014 | CodeRabbit | 2026-05-14 | Round-4 nits: regularizers Unicode, test format, 0006/MR-012 doc polish (7 sub-threads bundled) | open | [MR-014](mr_comments/MR-014_coderabbit_round4-doc-and-format-nits.md) |
+| MR-015 | Vincent Caux-Brisebois | 2026-05-14 | `regulation.py` accumulator inits on CPU — crashes on CUDA planes (blocking) | open | [MR-015](mr_comments/MR-015_vcauxbrisebo_regulation-cpu-cuda-device.md) |
+| MR-016 | Vincent Caux-Brisebois | 2026-05-14 | `compute_tv_loss_targeted` binary-mask check forces per-step host sync | open | [MR-016](mr_comments/MR-016_vcauxbrisebo_tv-mask-cpu-sync.md) |
+| MR-017 | Vincent Caux-Brisebois | 2026-05-14 | `_grid_sample_wrapper` bare `.squeeze()` is shape-fragile (nit) | open | [MR-017](mr_comments/MR-017_vcauxbrisebo_hexplane-bare-squeeze.md) |
+| MR-018 | Vincent Caux-Brisebois | 2026-05-14 | Remove `mr_comments/` directory before merge? (owner question) | open | [MR-018](mr_comments/MR-018_vcauxbrisebo_remove-mr-comments-dir.md) |
+| MR-019 | Shikhar Solanki | 2026-05-20 | Drop AI co-author trailers from 13/14 branch commits (rebase + force-push) | open | [MR-019](mr_comments/MR-019_shsolanki_ai-coauthor-trailers.md) |
+| MR-020 | Shikhar Solanki | 2026-05-20 | CI `code-format` job fails on 14 files; trailing whitespace in `docs/source/index.rst:118` | open | [MR-020](mr_comments/MR-020_shsolanki_ci-code-format.md) |
+| MR-021 | Shikhar Solanki | 2026-05-20 | Test still asserts removed `hexplane_params` / `deform_mlp_params` placeholders | open | [MR-021](mr_comments/MR-021_shsolanki_test-asserts-removed-params.md) |
+| MR-022 | Shikhar Solanki | 2026-05-20 | DeformationTable contract not honoured end-to-end (answers MR-013; design decision needed) | open | [MR-022](mr_comments/MR-022_shsolanki_deformation-table-contract.md) |
+| MR-023 | Shikhar Solanki | 2026-05-20 | `binocular_disparity_l1` validity handling contradicts docstring | open | [MR-023](mr_comments/MR-023_shsolanki_binocular-disparity-pair-valid.md) |
+| MR-024 | Shikhar Solanki | 2026-05-20 | `knn_scale_init` builds O(N²) `cdist` matrix; OOM on consumer GPUs at 50k pts | open | [MR-024](mr_comments/MR-024_shsolanki_knn-scale-init-memory.md) |
+| MR-025 | Shikhar Solanki | 2026-05-20 | Tutorial quickstart shows CLI flags `--dataset_type` / `--strategy` that don't exist | open | [MR-025](mr_comments/MR-025_shsolanki_tutorial-bogus-cli-flags.md) |
+| MR-026 | Shikhar Solanki | 2026-05-20 | `Config.hex_bounds=1.6` mismatch → HexPlane spatially constant (deformation effectively dead) **major** | open | [MR-026](mr_comments/MR-026_shsolanki_hex-bounds-mismatch-dead-hexplane.md) |
+| MR-027 | Shikhar Solanki | 2026-05-20 | LLFF axis permutation in EndoNeRF parser (reviewer marked resolved; verify in tree) | addressed | [MR-027](mr_comments/MR-027_shsolanki_llff-axis-permutation.md) |
+| MR-028 | Shikhar Solanki | 2026-05-20 | `setup.py install_requires` missing `Pillow` and `tqdm` | open | [MR-028](mr_comments/MR-028_shsolanki_missing-pillow-tqdm-deps.md) |
+| MR-029 | Shikhar Solanki | 2026-05-20 | 13 new source files missing the standard SPDX copyright header block | open | [MR-029](mr_comments/MR-029_shsolanki_spdx-headers-missing.md) |
+| MR-030 | Shikhar Solanki | 2026-05-20 | `gsplat/contrib/dynamic/__init__.py.__all__` exports internals (`DeformationTable` + plane-partitioned regs) | open | [MR-030](mr_comments/MR-030_shsolanki_contrib-dynamic-all-exposes-internals.md) |
+| MR-031 | Shikhar Solanki | 2026-05-20 | EndoNeRF dataset has no documented acquisition path (no URL / no download script entry) | open | [MR-031](mr_comments/MR-031_shsolanki_endonerf-acquisition-path.md) |
