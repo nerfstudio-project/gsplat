@@ -207,6 +207,15 @@ def build_splats_from_parser(
     """
     images, depths, masks, poses, intrinsics = _load_train_tensors(parser, device)
 
+    # Clip depths to the dataset's near/far bounds from poses_bounds.npy.
+    # EndoNeRF pulling has a few outlier pixels with depth > 100x the scene
+    # extent (sensor noise / invalid samples); without clipping they pull
+    # the init point cloud's AABB to absurd scales and the HexPlane AABB
+    # (auto-derived in train()) blows up too.
+    if hasattr(parser, "bounds") and parser.bounds is not None and len(parser.bounds) > 0:
+        depth_max = float(parser.bounds.max()) * 1.5  # 50% margin for unsupervised drift
+        depths = depths.clamp(max=depth_max)
+
     # ``masks`` is already in tissue=1 / tool=0 convention (see
     # :func:`_load_train_tensors`), which is exactly the include-mask that
     # :func:`multi_frame_depth_unprojection` expects (keep where ``!= 0``).
