@@ -148,6 +148,7 @@ import inspect
 import json
 import os
 import time
+from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Optional, TypeVar
 
@@ -179,6 +180,20 @@ profiler = {}
 
 # Parameter names that should have requires_grad=True for backward pass
 _GRAD_PARAMS = {"means", "quats", "scales", "opacities", "colors", "extra_signals"}
+
+
+@dataclass
+class ProfileWorkload:
+    """Single callable selected for one `gsplat.profile` invocation."""
+
+    name: str
+    operator_name: str
+    operator: Callable[..., Any]
+    replay_inputs: dict[str, Any]
+    losses: list[str]
+    loss_contribution: Callable[[tuple[Any, ...]], torch.Tensor]
+    expected_kernel_families: list[str]
+    notes: list[str]
 
 
 def _parse_override_value(raw: str) -> Any:
@@ -319,6 +334,18 @@ _2DGS_RENDER_MODE_MAP = {
     "RGB-Ed": "RGB+ED",
 }
 
+_2DGS_DISTORTION_RENDER_MODE = "RGB+ED"
+_2DGS_DISTORTION_RENDER_MODES = {"D", "ED", "RGB+D", "RGB+ED"}
+_2DGS_COLOR_DEPTH_RENDER_MODES = {"RGB+D", "RGB+ED"}
+
+_PROFILE_LOSS_ALIASES = {
+    "gaussian": "gaussian_fused",
+    "fused_gaussian": "gaussian_fused",
+    "gaussian_fused": "gaussian_fused",
+    "2dgs_distortion": "2dgs_distortion",
+    "distortion": "2dgs_distortion",
+}
+
 
 def _adapt_2dgs_scene_inputs(
     inputs: dict[str, Any],
@@ -389,6 +416,370 @@ def _adapt_2dgs_scene_inputs(
         notes.append("dropped 3DGS/3DGUT-only inputs: " + ", ".join(dropped))
 
     return adapted, notes
+
+
+def _default_profile_losses(replay_name: str) -> list[str]:
+    """Return CUDA-backed gsplat losses that make sense for one workload."""
+    losses = ["gaussian_fused"]
+    if replay_name == "rasterization_2dgs":
+        losses.append("2dgs_distortion")
+    return losses
+
+
+def _parse_profile_losses(raw_losses: str, replay_name: str) -> list[str]:
+    """Parse the `--losses` option into canonical loss names.
+
+    Bare `--losses` is represented by argparse as ``"all"``. That expands to
+    the CUDA-backed loss paths that are meaningful for the selected workload.
+    """
+    normalized = raw_losses.strip().lower()
+    if normalized in {"", "none", "false", "0"}:
+        return []
+    if normalized == "all":
+        return _default_profile_losses(replay_name)
+
+    losses: list[str] = []
+    for raw_name in normalized.split(","):
+        name = raw_name.strip()
+        if not name:
+            raise ValueError(f"empty loss name in --losses={raw_losses!r}")
+        if name not in _PROFILE_LOSS_ALIASES:
+            valid = ", ".join(sorted([*set(_PROFILE_LOSS_ALIASES), "all", "none"]))
+            raise ValueError(f"unknown profile loss {name!r}; expected one of {valid}")
+        canonical = _PROFILE_LOSS_ALIASES[name]
+        if canonical == "2dgs_distortion" and replay_name != "rasterization_2dgs":
+            raise ValueError("2dgs_distortion loss is only valid with --2dgs")
+        if canonical not in losses:
+            losses.append(canonical)
+    return losses
+
+
+def _prepare_gaussian_fused_loss_inputs(
+    replay_inputs: dict[str, Any],
+    scene_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Prepare stable tensor inputs for the fused Gaussian loss kernels.
+
+    The fused CUDA op expects flattened ``[N, *]`` tensors and a non-gradient
+    cuboid size. Profiling does not require the scene file to carry cuboids, so
+    a deterministic synthetic cuboid is created when none is provided.
+    """
+    required = ("means", "scales", "opacities")
+    missing = [name for name in required if name not in replay_inputs]
+    if missing:
+        raise ValueError(
+            "gaussian_fused loss requires replay inputs: " + ", ".join(missing)
+        )
+
+    positions = replay_inputs["means"].reshape(-1, 3)
+    scales = replay_inputs["scales"].reshape(-1, 3)
+    # rasterization() receives post-activation opacities, which are exactly the
+    # density values expected by gaussian_density_reg/FusedGaussianLosses.
+    densities = replay_inputs["opacities"].reshape(-1)
+    if not (positions.is_cuda and scales.is_cuda and densities.is_cuda):
+        raise ValueError("gaussian_fused loss requires CUDA replay tensors")
+    if scales.dtype not in (torch.float32, torch.float64):
+        raise ValueError(
+            "gaussian_fused loss only supports float32/float64 scales, "
+            f"got {scales.dtype}"
+        )
+
+    raw_cuboid_dims = scene_inputs.get("cuboid_dims")
+    if raw_cuboid_dims is None:
+        cuboid_dims = torch.full_like(positions, 2.0, requires_grad=False)
+    elif isinstance(raw_cuboid_dims, torch.Tensor):
+        cuboid_dims = raw_cuboid_dims.reshape(-1, 3).to(
+            device=positions.device, dtype=positions.dtype
+        )
+    else:
+        raise ValueError("gaussian_fused loss cuboid_dims input must be a Tensor")
+    cuboid_dims = cuboid_dims.detach()
+    if cuboid_dims.shape != positions.shape:
+        raise ValueError(
+            "gaussian_fused loss cuboid_dims must match flattened means shape, "
+            f"got {tuple(cuboid_dims.shape)} vs {tuple(positions.shape)}"
+        )
+
+    raw_visibility = scene_inputs.get("visibility", scene_inputs.get("visibilities"))
+    visibility = None
+    if raw_visibility is not None:
+        if not isinstance(raw_visibility, torch.Tensor):
+            raise ValueError("gaussian_fused loss visibility input must be a Tensor")
+        visibility = raw_visibility.reshape(-1).to(
+            device=positions.device, dtype=positions.dtype
+        )
+        if visibility.numel() != positions.shape[0]:
+            raise ValueError(
+                "gaussian_fused loss visibility must have one value per Gaussian, "
+                f"got {visibility.numel()} vs {positions.shape[0]}"
+            )
+        visibility = visibility.detach()
+
+    z_scale_threshold = float(scene_inputs.get("z_scale_threshold", 0.0))
+    return {
+        "scales": scales,
+        "densities": densities,
+        "positions": positions,
+        "cuboid_dims": cuboid_dims,
+        "visibility": visibility,
+        "z_scale_threshold": z_scale_threshold,
+    }
+
+
+def _apply_profile_loss_presets(
+    losses: list[str],
+    replay_name: str,
+    replay_inputs: dict[str, Any],
+) -> list[str]:
+    """Apply loss-driven input mutations before user overrides.
+
+    This is intentionally limited to semantic mode switches, such as enabling
+    the 2DGS distortion path. Tensor captures for loss kernels are prepared
+    after `--set` overrides so the profiled callable uses final inputs.
+    """
+    notes: list[str] = []
+
+    if "2dgs_distortion" in losses:
+        if replay_name != "rasterization_2dgs":
+            raise ValueError("2dgs_distortion loss is only valid with --2dgs")
+        if replay_inputs.get("render_mode", "RGB") not in _2DGS_DISTORTION_RENDER_MODES:
+            replay_inputs["render_mode"] = _2DGS_DISTORTION_RENDER_MODE
+            notes.append(
+                f"set render_mode={_2DGS_DISTORTION_RENDER_MODE!r} for 2DGS distortion loss"
+            )
+        replay_inputs["distloss"] = True
+        notes.append("enabled 2dgs_distortion loss path")
+
+    return notes
+
+
+def _build_profile_loss_contribution(
+    losses: list[str],
+    replay_name: str,
+    replay_inputs: dict[str, Any],
+    scene_inputs: dict[str, Any],
+) -> tuple[Callable[[tuple[Any, ...]], torch.Tensor], list[str]]:
+    """Build the profiled CUDA loss contribution callable.
+
+    The returned callable is invoked inside the workload closure, so loss CUDA
+    kernels appear in the profiled forward/backward ranges. All validation and
+    stable tensor selection happens here, once, after user overrides.
+    """
+    notes: list[str] = []
+    gaussian_state: dict[str, Any] | None = None
+    fused_gaussian_losses: torch.nn.Module | None = None
+
+    if "gaussian_fused" in losses:
+        from gsplat.cuda._wrapper import has_losses
+        from gsplat.losses_fused import FusedGaussianLosses
+
+        if not has_losses():
+            raise ValueError(
+                "gaussian_fused loss requested, but gsplat was built without "
+                "CUDA loss support"
+            )
+        gaussian_state = _prepare_gaussian_fused_loss_inputs(
+            replay_inputs, scene_inputs
+        )
+        fused_gaussian_losses = FusedGaussianLosses(
+            z_scale_threshold=gaussian_state["z_scale_threshold"]
+        )
+        notes.append("enabled gaussian_fused loss kernels")
+
+    def _loss_contribution(outputs: tuple[Any, ...]) -> torch.Tensor:
+        total: torch.Tensor | None = None
+
+        if gaussian_state is not None and fused_gaussian_losses is not None:
+            z_scales = gaussian_state["scales"][:, 2]
+            loss_scale, loss_density, loss_z_scale, loss_oob = fused_gaussian_losses(
+                gaussian_state["scales"],
+                gaussian_state["densities"],
+                z_scales,
+                gaussian_state["positions"],
+                gaussian_state["cuboid_dims"],
+                gaussian_state["visibility"],
+            )
+            total = (
+                loss_scale.mean()
+                + loss_density.mean()
+                + loss_z_scale.mean()
+                + loss_oob.mean()
+            )
+
+        if "2dgs_distortion" in losses:
+            render_distort = outputs[4]
+            contribution = render_distort.mean()
+            total = contribution if total is None else total + contribution
+
+        if total is None:
+            render_colors = outputs[0]
+            return render_colors.new_zeros(())
+        return total
+
+    return _loss_contribution, notes
+
+
+def _validate_profile_loss_overrides(
+    losses: list[str],
+    replay_name: str,
+    replay_inputs: dict[str, Any],
+) -> None:
+    """Validate user overrides that may affect requested loss paths."""
+    if "2dgs_distortion" not in losses:
+        return
+    if replay_name != "rasterization_2dgs":
+        raise ValueError("2dgs_distortion loss is only valid with --2dgs")
+    if not replay_inputs.get("distloss", False):
+        raise ValueError("2dgs_distortion loss requires distloss=True")
+    render_mode = replay_inputs.get("render_mode", "RGB")
+    if render_mode not in _2DGS_DISTORTION_RENDER_MODES:
+        valid = ", ".join(sorted(_2DGS_DISTORTION_RENDER_MODES))
+        raise ValueError(
+            f"2dgs_distortion loss requires a depth render_mode ({valid}), "
+            f"got {render_mode!r}"
+        )
+
+
+def _normalize_2dgs_replay_inputs(replay_inputs: dict[str, Any]) -> list[str]:
+    """Apply final 2DGS tensor-shape conversions after mode/override setup."""
+    notes: list[str] = []
+    render_mode = replay_inputs.get("render_mode", "RGB")
+    sh_degree = replay_inputs.get("sh_degree")
+
+    # The 2DGS RGB+depth path concatenates `colors` with projected depths.
+    # With unpacked projection, depths are shaped [..., C, N, 1], so a plain
+    # [..., N, D] color tensor must be expanded to [..., C, N, D] once before
+    # the measured loop. Keep the converted tensor as a leaf so repeated
+    # backward iterations can clear `.grad` through `_clear_replay_grads()`.
+    if (
+        render_mode in _2DGS_COLOR_DEPTH_RENDER_MODES
+        and sh_degree is None
+        and not replay_inputs.get("packed", False)
+    ):
+        means = replay_inputs["means"]
+        viewmats = replay_inputs["viewmats"]
+        colors = replay_inputs["colors"]
+        batch_dims = means.shape[:-2]
+        n_gaussians = means.shape[-2]
+        n_cameras = viewmats.shape[-3]
+        expected_scene_shape = batch_dims + (n_gaussians,)
+        if colors.shape[:-1] == expected_scene_shape:
+            expanded = colors[..., None, :, :].expand(
+                batch_dims + (n_cameras, n_gaussians, colors.shape[-1])
+            )
+            replay_inputs["colors"] = (
+                expanded.detach().clone().requires_grad_(colors.requires_grad)
+            )
+            notes.append(
+                "expanded colors from scene-shaped [..., N, D] to "
+                "camera-shaped [..., C, N, D] for 2DGS RGB+depth replay"
+            )
+
+    return notes
+
+
+def _expected_kernel_families(
+    replay_name: str,
+    replay_inputs: dict[str, Any],
+    losses: list[str],
+) -> list[str]:
+    """Describe kernel families expected from the selected single workload.
+
+    This is intentionally a family-level list rather than a promise about exact
+    template names. Exact names depend on channel count, dtype, packed mode,
+    camera model, and JIT/AOT dispatch.
+    """
+    kernels: list[str] = []
+    if replay_name == "rasterization_2dgs":
+        kernels.extend(
+            [
+                "Projection2DGSFwd/Bwd",
+                "IntersectTile",
+                "IntersectOffset",
+                "IntersectSort",
+                "RasterizeToPixels2DGSFwd/Bwd",
+            ]
+        )
+        if replay_inputs.get("sh_degree") is not None:
+            kernels.append("SphericalHarmonicsFwd/Bwd")
+    else:
+        with_eval3d = bool(replay_inputs.get("with_eval3d", False))
+        with_ut = bool(replay_inputs.get("with_ut", False))
+        is_lidar = (
+            replay_inputs.get("camera_model") == "lidar"
+            or replay_inputs.get("lidar_coeffs") is not None
+        )
+        if with_eval3d:
+            if with_ut:
+                kernels.append("ProjectionUT3DGSFused")
+            else:
+                kernels.append("ProjectionEWA3DGSFwd/Bwd")
+            kernels.append("IntersectTileLidar" if is_lidar else "IntersectTile")
+            kernels.extend(
+                [
+                    "IntersectOffset",
+                    "IntersectSort",
+                    "RasterizeToPixelsFromWorld3DGSFwd/Bwd",
+                    "ComputeChunksPerTile",
+                ]
+            )
+        else:
+            packed = bool(replay_inputs.get("packed", True))
+            if packed:
+                kernels.append("ProjectionEWA3DGSPackedFwd/Bwd")
+            else:
+                kernels.append("ProjectionEWA3DGSFusedFwd/Bwd")
+            kernels.extend(
+                [
+                    "IntersectTile",
+                    "IntersectOffset",
+                    "IntersectSort",
+                    "RasterizeToPixels3DGSFwd/Bwd",
+                ]
+            )
+        if replay_inputs.get("sh_degree") is not None:
+            kernels.append("SphericalHarmonicsFwd/Bwd")
+        if replay_inputs.get("extra_signals_sh_degree") is not None:
+            kernels.append("SphericalHarmonicsFwd/Bwd(extra_signals)")
+
+    if "gaussian_fused" in losses:
+        kernels.extend(["GaussianLossesFwd", "GaussianLossesBwd"])
+    if "2dgs_distortion" in losses:
+        kernels.append("RasterizeToPixels2DGSFwd/Bwd(distortion)")
+
+    unique: list[str] = []
+    for kernel in kernels:
+        if kernel not in unique:
+            unique.append(kernel)
+    return unique
+
+
+def _format_replay_value(value: Any) -> str:
+    """Return a compact, human-readable value summary for `--describe`."""
+    if isinstance(value, torch.Tensor):
+        return (
+            f"Tensor(shape={tuple(value.shape)}, dtype={value.dtype}, "
+            f"device={value.device}, requires_grad={value.requires_grad})"
+        )
+    return f"{type(value).__name__}({value!r})"
+
+
+def _describe_workload(workload: ProfileWorkload) -> None:
+    """Print the selected single workload and exit without profiling."""
+    print("[gsplat.profile] Workload")
+    print(f"  name: {workload.name}")
+    print(f"  operator: {workload.operator_name}")
+    print("  losses: " + (", ".join(workload.losses) if workload.losses else "none"))
+    if workload.notes:
+        print("  notes:")
+        for note in workload.notes:
+            print(f"    - {note}")
+    print("  expected kernel families:")
+    for kernel in workload.expected_kernel_families:
+        print(f"    - {kernel}")
+    print("  replay inputs:")
+    for name in sorted(workload.replay_inputs):
+        print(f"    - {name}: {_format_replay_value(workload.replay_inputs[name])}")
 
 
 def _clear_replay_grads(inputs: dict[str, Any]) -> None:
@@ -705,6 +1096,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--describe",
+        action="store_true",
+        help=(
+            "Set up the selected single workload, print the selected operator, "
+            "losses, expected kernel families, and replay inputs, then exit "
+            "before warmup/profiling."
+        ),
+    )
+    parser.add_argument(
         "--ensure-rays",
         action="store_true",
         help=(
@@ -765,6 +1165,19 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--losses",
+        nargs="?",
+        const="all",
+        default="none",
+        metavar="LIST",
+        help=(
+            "Include gsplat CUDA-backed loss paths in the profiled workload. "
+            "Bare --losses expands to all losses that make sense for the "
+            "selected mode. Supported names: all, none, gaussian_fused, "
+            "2dgs_distortion."
+        ),
+    )
+    parser.add_argument(
         "--set",
         "--override",
         dest="overrides",
@@ -814,39 +1227,58 @@ def main() -> None:
     replay_operator: Callable[..., Any] = rasterization
     replay_name = "rasterization"
     replay_params = inspect.signature(replay_operator).parameters
+    workload_name = "rasterization"
+    workload_notes: list[str] = []
 
     if args.force_2dgs:
         from gsplat.rendering import rasterization_2dgs
 
         replay_operator = rasterization_2dgs
         replay_name = "rasterization_2dgs"
+        workload_name = "2dgs"
         replay_params = inspect.signature(replay_operator).parameters
         try:
             replay_inputs, notes = _adapt_2dgs_scene_inputs(inputs, replay_params)
         except ValueError as exc:
             parser.error(str(exc))
         print("[gsplat.profile] --2dgs: adapting input to rasterization_2dgs replay")
+        workload_notes.extend(notes)
         for note in notes:
             print(f"[gsplat.profile] --2dgs: {note}")
     elif args.force_3dgs:
+        workload_name = "3dgs"
         try:
             replay_inputs = _select_replay_inputs(inputs, replay_params, "--3dgs")
             _apply_3dgs_replay_preset(replay_inputs)
         except ValueError as exc:
             parser.error(str(exc))
         print("[gsplat.profile] --3dgs: forcing plain RGB classic 3DGS replay")
+        workload_notes.append("forced plain RGB classic 3DGS replay")
     elif args.force_3dgut:
+        workload_name = "3dgut"
         try:
             replay_inputs = _select_replay_inputs(inputs, replay_params, "--3dgut")
         except ValueError as exc:
             parser.error(str(exc))
         _apply_3dgut_replay_preset(replay_inputs)
         print("[gsplat.profile] --3dgut: forcing 3DGUT/eval3d replay")
+        workload_notes.append("forced 3DGUT/eval3d replay")
     else:
         try:
             replay_inputs = _select_replay_inputs(inputs, replay_params, replay_name)
         except ValueError as exc:
             parser.error(str(exc))
+
+    try:
+        profile_losses = _parse_profile_losses(args.losses, replay_name)
+        loss_preset_notes = _apply_profile_loss_presets(
+            profile_losses, replay_name, replay_inputs
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    workload_notes.extend(loss_preset_notes)
+    for note in loss_preset_notes:
+        print(f"[gsplat.profile] --losses: {note}")
 
     for raw_override in args.overrides:
         try:
@@ -862,6 +1294,20 @@ def main() -> None:
         print(
             f"[gsplat.profile] override {name}={value!r} " f"({type(value).__name__})"
         )
+
+    try:
+        _validate_profile_loss_overrides(profile_losses, replay_name, replay_inputs)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if replay_name == "rasterization_2dgs":
+        try:
+            replay_normalize_notes = _normalize_2dgs_replay_inputs(replay_inputs)
+        except ValueError as exc:
+            parser.error(str(exc))
+        workload_notes.extend(replay_normalize_notes)
+        for note in replay_normalize_notes:
+            print(f"[gsplat.profile] --2dgs: {note}")
 
     if args.no_rays:
         if replay_inputs.get("rays") is None:
@@ -943,6 +1389,33 @@ def main() -> None:
                 f"{tuple(rays.shape)} "
                 f"(camera_model={cam_model})"
             )
+            workload_notes.append(
+                f"{ensure_rays_label} generated rays {tuple(rays.shape)} "
+                f"(camera_model={cam_model})"
+            )
+
+    try:
+        profile_loss_contribution, loss_build_notes = _build_profile_loss_contribution(
+            profile_losses, replay_name, replay_inputs, inputs
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    workload_notes.extend(loss_build_notes)
+    for note in loss_build_notes:
+        print(f"[gsplat.profile] --losses: {note}")
+
+    workload_descriptor = ProfileWorkload(
+        name=workload_name,
+        operator_name=replay_name,
+        operator=replay_operator,
+        replay_inputs=replay_inputs,
+        losses=profile_losses,
+        loss_contribution=profile_loss_contribution,
+        expected_kernel_families=_expected_kernel_families(
+            replay_name, replay_inputs, profile_losses
+        ),
+        notes=workload_notes,
+    )
 
     n_gaussians = replay_inputs["means"].shape[-2] if "means" in replay_inputs else "?"
     width = replay_inputs.get("width", "?")
@@ -956,16 +1429,22 @@ def main() -> None:
     print(
         f"[gsplat.profile] Warmup: {args.warmup}, Profiled iterations: {args.iterations}"
     )
+    if args.describe:
+        _describe_workload(workload_descriptor)
+        return
+
     if args.sync:
         print("[gsplat.profile] Synchronizing after each profiled iteration")
 
-    def replay_forward() -> torch.Tensor:
-        """Run the selected operator and return its render colors tensor."""
+    def replay_forward() -> tuple[tuple[Any, ...], torch.Tensor]:
+        """Run the selected operator and return outputs plus render colors."""
 
-        outputs = replay_operator(**replay_inputs)
+        outputs = workload_descriptor.operator(**workload_descriptor.replay_inputs)
         if len(outputs) == 2 and isinstance(outputs[0], tuple):
-            return outputs[0][0]
-        return outputs[0]
+            render_colors = outputs[0][0]
+        else:
+            render_colors = outputs[0]
+        return outputs, render_colors
 
     def run_iteration(iteration: int) -> None:
         # Keep the replay structure explicit so NVTX ranges map cleanly to the
@@ -973,17 +1452,21 @@ def main() -> None:
         with trace_range("iteration", payload=iteration):
             with trace_range("forward"):
                 if args.grad:
-                    render_colors = replay_forward()
-                    loss = render_colors.sum()
+                    outputs, render_colors = replay_forward()
+                    loss = render_colors.sum() + workload_descriptor.loss_contribution(
+                        outputs
+                    )
                 else:
                     with torch.inference_mode():
-                        replay_forward()
+                        outputs, _render_colors = replay_forward()
+                        if workload_descriptor.losses:
+                            workload_descriptor.loss_contribution(outputs)
 
             if args.grad:
                 with trace_range("backward"):
                     loss.backward()
                 # Clear grads in place so every iteration starts from the same state.
-                _clear_replay_grads(replay_inputs)
+                _clear_replay_grads(workload_descriptor.replay_inputs)
 
             if args.sync:
                 # Kept inside the range so the wait counts toward this iteration.
