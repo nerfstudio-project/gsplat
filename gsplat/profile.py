@@ -113,6 +113,10 @@ nsys profile \
 
 The replay harness emits NVTX ranges for `iteration`, `forward`, and
 `backward`, which makes it easier to inspect the trace in Nsight Systems.
+Add `--sync` to the `gsplat.profile` command to synchronize the device at the
+end of each iteration: each iteration then excludes the previous iteration's
+in-flight kernels, and the `iteration` NVTX range spans CUDA device completion
+instead of only CPU launch time.
 
 Replay under Nsight Compute
 ---------------------------
@@ -513,6 +517,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--sync",
+        action="store_true",
+        help=(
+            "Synchronize the CUDA device at the end of each profiled "
+            "iteration so it excludes the previous iteration's in-flight "
+            "kernels (models an end-of-step pipeline sync). This also makes "
+            "the iteration NVTX range span GPU completion time instead of "
+            "only launch-side CPU time."
+        ),
+    )
+    parser.add_argument(
         "--ensure-rays",
         action="store_true",
         help=(
@@ -671,6 +686,8 @@ def main() -> None:
     print(
         f"[gsplat.profile] Warmup: {args.warmup}, Profiled iterations: {args.iterations}"
     )
+    if args.sync:
+        print("[gsplat.profile] Synchronizing after each profiled iteration")
 
     def run_iteration(iteration: int) -> None:
         # Keep the replay structure explicit so NVTX ranges map cleanly to the
@@ -696,6 +713,10 @@ def main() -> None:
                     ):
                         inputs[k].grad = None
 
+            if args.sync:
+                # Kept inside the range so the wait counts toward this iteration.
+                torch.cuda.synchronize()
+
     print(f"[gsplat.profile] Running {args.warmup} warmup iterations...")
     for i in range(args.warmup):
         run_iteration(i)
@@ -709,6 +730,8 @@ def main() -> None:
     torch.cuda.cudart().cudaProfilerStart()
     for i in range(args.iterations):
         run_iteration(i)
+    # Drain in-flight kernels before stopping the profiler, even when --sync is off.
+    torch.cuda.synchronize()
     torch.cuda.cudart().cudaProfilerStop()
     print("[gsplat.profile] Profiling done.")
 
