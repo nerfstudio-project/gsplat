@@ -22,6 +22,7 @@
 #include <tuple>
 
 #include <ATen/Functions.h>
+#include <ATen/core/grad_mode.h>
 #include <ATen/NativeFunctions.h>
 #include <torch/csrc/autograd/custom_function.h>
 
@@ -29,7 +30,7 @@
 #include "Common.h"
 #include "Ops.h"
 #include "Rasterization.h"
-#include "RasterizeChunkCSR.h"
+#include "RasterizeCSR.cuh"
 #include "RasterizeToPixelsFromWorld3DGS.h"
 #include "TorchUtils.h"
 #include "Cameras.h"
@@ -44,6 +45,8 @@ RendererConfig parse_renderer_config(const int64_t renderer_config)
     switch (renderer_config) {
     case static_cast<int64_t>(RendererConfig::MIXED_BATCH):
         return RendererConfig::MIXED_BATCH;
+    case static_cast<int64_t>(RendererConfig::PARALLEL_BATCH):
+        return RendererConfig::PARALLEL_BATCH;
     default:
         TORCH_CHECK(false, "unsupported 3DGUT renderer_config: ", renderer_config);
         return RendererConfig::MIXED_BATCH;
@@ -618,9 +621,8 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 // kernels below. Native C++ tests include Rasterization.h for the internal
 // functions they intentionally exercise.
 
-// The forward result includes public render outputs plus the CSR-packed chunk
-// state that backward consumes to skip per-Gaussian preamble work it would
-// otherwise have to recompute.
+// The forward result includes public render outputs plus optional CSR-packed
+// batch state that backward consumes to skip work it would otherwise recompute.
 RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
@@ -653,6 +655,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
     const RendererConfig renderer_config,
+    const bool persist_batch_state,
     const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3] optional output tensor
     const bool unsafe_masked_tile_outputs
@@ -665,11 +668,6 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     );
     return {};
 #else
-    TORCH_CHECK(
-        renderer_config == RendererConfig::MIXED_BATCH,
-        "only RendererConfig.MIXED_BATCH is supported in this commit"
-    );
-
     // --- Validate inputs ---------------------------------------------------
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -718,68 +716,115 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     last_ids_shape.append({C, image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_shape, opt.dtype(at::kInt));
 
-    // --- Build CSR chunk structure + forward persistence buffer -----------
-    // Compute (chunks_per_tile, chunk_offsets, total_chunks) here so bwd can
-    // reuse the same CSR layout via save_for_backward. The blocking
-    // chunk_offsets[-1].item() D2H sync happens once across fwd+bwd instead
-    // of twice. The shared helper lives in `RasterizeChunkCSR.h` (impl in
-    // bwd `.cu`).
+    at::Tensor compose_c_stop;
+    const int32_t pixels_per_tile = tile_size * tile_size;
+    const bool return_normals = normals.has_value();
+    const bool needs_batch_state =
+        persist_batch_state ||
+        renderer_config == RendererConfig::PARALLEL_BATCH;
+
+    // --- Build CSR batch structure + forward persistence buffer -----------
+    // Autograd callers persist batch state because both MixedBatch and
+    // ParallelBatch use batch-parallel backward. ParallelBatch forward also
+    // needs the same CSR/state tensors for its compose pass. No-grad
+    // MixedBatch is the only path that can skip this blocking readback and
+    // allocation.
     const uint32_t tile_height = static_cast<uint32_t>(tile_offsets.size(-2));
     const uint32_t tile_width = static_cast<uint32_t>(tile_offsets.size(-1));
     int64_t batch_prod = 1;
     for (size_t d = 0; d < batch_dims.size(); ++d) {
         batch_prod *= batch_dims[d];
     }
-    const uint32_t I = static_cast<uint32_t>(batch_prod) * C;  // number of images
+    const uint32_t I =
+        static_cast<uint32_t>(batch_prod) * C;  // number of images
     const uint32_t num_tiles = I * tile_height * tile_width;
-    const uint32_t pixels_per_tile =
-        static_cast<uint32_t>(tile_size) * static_cast<uint32_t>(tile_size);
     const int64_t n_isects = flatten_ids.size(0);
 
-    at::Tensor chunks_per_tile;
-    at::Tensor chunk_offsets;
-    int64_t total_chunks;
-    std::tie(chunks_per_tile, chunk_offsets, total_chunks) =
-        compute_chunk_csr(tile_offsets, n_isects, num_tiles, pixels_per_tile,
-                          opt);
+    at::Tensor batches_per_tile;
+    at::Tensor batch_offsets;
+    at::Tensor fwd_batch_state;
+    int64_t total_batches = 0;
+    if (needs_batch_state) {
+        std::tie(batches_per_tile, batch_offsets, total_batches) =
+            compute_batch_csr(
+                tile_offsets, n_isects, num_tiles, pixels_per_tile, opt);
 
-    // Persistence buffer storing, per (tile, chunk boundary, pixel), the
-    // cumulative fwd state (T, pix_out[CDIM], normal_out[3]) fp32. The bwd
-    // variants consume this in lieu of re-running the fwd walk for the
-    // first-chunk preamble. Use `at::empty`: slots for masked tiles and
-    // padded pixels are intentionally left unwritten (bwd matches fwd's
-    // mask-early-return and never reads those slots).
-    const int64_t state_dim =
-        /*T*/ 1 + static_cast<int64_t>(channels) + /*normal*/ 3;
-    at::Tensor fwd_chunk_state = at::empty(
-        {total_chunks, static_cast<int64_t>(pixels_per_tile), state_dim},
-        opt.dtype(at::kFloat));
+        // Per (tile, batch boundary, pixel), stores cumulative fwd state:
+        // T, pix_out[CDIM], and optional normal_out[3]. Use `at::empty`: masked
+        // tiles and padded pixels are never read by the matching backward walk.
+        //
+        // SOA layout: `[total_batches, state_dim, pixels_per_tile]`. The pixel
+        // axis is fastest-varying, so warp-aligned reads/writes of one state
+        // element across pixels coalesce instead of striding by state_dim.
+        const int64_t state_dim =
+            FWD_BATCH_STATE_PIX_OFFSET + channels +
+            (return_normals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0);
+        fwd_batch_state = at::empty(
+            {total_batches, state_dim, pixels_per_tile},
+            opt.dtype(at::kFloat));
+    }
 
-    // --- Launch shared forward kernel -------------------------------------
-    // CUDA dispatch returns only the public outputs; AutogradCUDA also saves
-    // the chunk state for backward.
-    launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
-        means, quats, scales, colors, opacities,
-        backgrounds, masks,
-        image_width, image_height, tile_size,
-        viewmats0, viewmats1, Ks,
-        camera_model, ut_params, rs_type,
-        rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-        ftheta_coeffs, lidar_coeffs, external_distortion_params,
-        tile_offsets, flatten_ids, use_hit_distance,
-        unsafe_masked_tile_outputs,
-        chunks_per_tile, chunk_offsets, total_chunks,
-        renders, alphas, last_ids,
-        sample_counts, normals, fwd_chunk_state
-    );
+    // --- Launch selected forward kernel -----------------------------------
+    if (renderer_config == RendererConfig::MIXED_BATCH) {
+        launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
+            means, quats, scales, colors, opacities,
+            backgrounds, masks,
+            image_width, image_height, tile_size,
+            viewmats0, viewmats1, Ks,
+            camera_model, ut_params, rs_type,
+            rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            ftheta_coeffs, lidar_coeffs, external_distortion_params,
+            tile_offsets, flatten_ids, use_hit_distance,
+            unsafe_masked_tile_outputs,
+            batches_per_tile, batch_offsets, total_batches,
+            renders, alphas, last_ids,
+            sample_counts, normals, fwd_batch_state
+        );
+    } else {
+        // The batch-parallel forward needs a transient per-batch summary
+        // (last index and sample count per pixel) for its compose pass. It is
+        // not part of autograd state; backward consumes only fwd_batch_state.
+        // Each ushort2 stores `(last_local_plus_one, count_low15)` for one
+        // (batch, pixel). Pixel 0's count lane also reserves its high bit as
+        // the per-CTA batch-replay flag; see FwdPartialsMetaView.
+        at::Tensor partials_meta = at::empty(
+            {total_batches, pixels_per_tile, 2},
+            opt.dtype(at::kUInt16));
+
+        // Transient per-pixel and per-batch handoff from batch-scan to
+        // batch-replay. These are intentionally local to ParallelBatch fwd:
+        // MixedBatch runs the serial forward path and never needs them.
+        const int64_t num_tiles_for_compose = batches_per_tile.size(0);
+        at::Tensor batch_replay_preamble = at::empty(
+            {num_tiles_for_compose, pixels_per_tile, 2},
+            opt.dtype(at::kInt));
+        compose_c_stop = at::empty(
+            {num_tiles_for_compose, pixels_per_tile},
+            opt.dtype(at::kUInt16));
+        launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
+            means, quats, scales, colors, opacities,
+            backgrounds, masks,
+            image_width, image_height, tile_size,
+            viewmats0, viewmats1, Ks,
+            camera_model, ut_params, rs_type,
+            rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            ftheta_coeffs, lidar_coeffs, external_distortion_params,
+            tile_offsets, flatten_ids, use_hit_distance,
+            batches_per_tile, batch_offsets, total_batches,
+            renders, alphas, last_ids,
+            sample_counts, normals, fwd_batch_state, partials_meta,
+            batch_replay_preamble, compose_c_stop
+        );
+    }
 
     return {
         .renders = renders,
         .alphas = alphas,
         .last_ids = last_ids,
-        .chunks_per_tile = chunks_per_tile,
-        .chunk_offsets = chunk_offsets,
-        .fwd_chunk_state = fwd_chunk_state,
+        .batches_per_tile = batches_per_tile,
+        .batch_offsets = batch_offsets,
+        .fwd_batch_state = fwd_batch_state,
+        .compose_c_stop = compose_c_stop,
     };
 #endif // !GSPLAT_BUILD_3DGUT
 }
@@ -830,10 +875,10 @@ class RasterizeToPixelsFromWorld3DGSAutograd
     : public torch::autograd::Function<RasterizeToPixelsFromWorld3DGSAutograd> {
 public:
     // Positional slot map for ctx->save_for_backward() / get_saved_variables().
-    // Every write in forward() and every read in backward() uses these names;
-    // the enum is the single source of truth for the saved-tensor layout.
-    // SAVED_COUNT auto-tracks the enumerator count and drives both the
-    // variable_list size and the saved.size() check.
+    // The common prefix is saved for every renderer config. Both current
+    // configs save batch-state slots because both use the batch-parallel
+    // backward. ParallelBatch-only slots are appended after that, so MixedBatch
+    // does not carry placeholders for transient forward state it never reads.
     enum SavedSlot {
         SAVED_MEANS = 0,
         SAVED_QUATS,
@@ -853,10 +898,13 @@ public:
         SAVED_FLATTEN_IDS,
         SAVED_ALPHAS,
         SAVED_LAST_IDS,
-        SAVED_CHUNKS_PER_TILE,
-        SAVED_CHUNK_OFFSETS,
-        SAVED_FWD_CHUNK_STATE,
-        SAVED_COUNT,
+        SAVED_COMMON_COUNT,
+        SAVED_BATCHES_PER_TILE = SAVED_COMMON_COUNT,
+        SAVED_BATCH_OFFSETS,
+        SAVED_FWD_BATCH_STATE,
+        SAVED_BATCH_STATE_COUNT,
+        SAVED_COMPOSE_C_STOP = SAVED_BATCH_STATE_COUNT,
+        SAVED_PARALLEL_STATE_COUNT,
     };
 
     // Forward-input slot map: positions in the full forward argument list,
@@ -974,7 +1022,7 @@ public:
             rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids,
-            use_hit_distance, parsed_renderer_config,
+            use_hit_distance, parsed_renderer_config, true,
             optional_outputs.sample_counts, optional_outputs.normals,
             unsafe_masked_tile_outputs
         );
@@ -983,7 +1031,12 @@ public:
         // Optional Tensor arguments cannot be stored in save_for_backward as
         // optionals, so use undefined tensors as sentinels and reconstruct
         // c10::optional values in backward.
-        torch::autograd::variable_list saved(SAVED_COUNT);
+        const bool saves_parallel_state =
+            parsed_renderer_config == RendererConfig::PARALLEL_BATCH;
+        torch::autograd::variable_list saved(
+            saves_parallel_state
+                ? SAVED_PARALLEL_STATE_COUNT
+                : SAVED_BATCH_STATE_COUNT);
         saved[SAVED_MEANS]              = means;
         saved[SAVED_QUATS]              = quats;
         saved[SAVED_SCALES]             = scales;
@@ -1002,9 +1055,12 @@ public:
         saved[SAVED_FLATTEN_IDS]        = flatten_ids;
         saved[SAVED_ALPHAS]             = fwd.alphas;
         saved[SAVED_LAST_IDS]           = fwd.last_ids;
-        saved[SAVED_CHUNKS_PER_TILE]    = fwd.chunks_per_tile;
-        saved[SAVED_CHUNK_OFFSETS]      = fwd.chunk_offsets;
-        saved[SAVED_FWD_CHUNK_STATE]    = fwd.fwd_chunk_state;
+        saved[SAVED_BATCHES_PER_TILE]   = fwd.batches_per_tile;
+        saved[SAVED_BATCH_OFFSETS]      = fwd.batch_offsets;
+        saved[SAVED_FWD_BATCH_STATE]    = fwd.fwd_batch_state;
+        if (saves_parallel_state) {
+            saved[SAVED_COMPOSE_C_STOP] = fwd.compose_c_stop;
+        }
         ctx->save_for_backward(std::move(saved));
 
         // --- Save non-tensor state for backward ---------------------------
@@ -1016,6 +1072,7 @@ public:
         ctx->saved_data["ut_params"] = ut_params;
         ctx->saved_data["ftheta_coeffs"] = ftheta_coeffs;
         ctx->saved_data["use_hit_distance"] = use_hit_distance;
+        ctx->saved_data["return_normals"] = return_normals;
         ctx->saved_data["renderer_config"] = renderer_config;
         if (lidar_coeffs.has_value()) {
             ctx->saved_data["lidar_coeffs"] = lidar_coeffs.value();
@@ -1059,9 +1116,16 @@ public:
             grad_outputs.size()
         );
 
+        const RendererConfig renderer_config = parse_renderer_config(
+            ctx->saved_data["renderer_config"].toInt());
+        const size_t expected_saved_count =
+            renderer_config == RendererConfig::PARALLEL_BATCH
+                ? SAVED_PARALLEL_STATE_COUNT
+                : SAVED_BATCH_STATE_COUNT;
+
         auto saved = ctx->get_saved_variables();
         TORCH_CHECK(
-            saved.size() == SAVED_COUNT,
+            saved.size() == expected_saved_count,
             "rasterize_to_pixels_from_world_3dgs saved tensor count mismatch"
         );
 
@@ -1084,9 +1148,6 @@ public:
         const at::Tensor &flatten_ids = saved[SAVED_FLATTEN_IDS];
         const at::Tensor &render_alphas = saved[SAVED_ALPHAS];
         const at::Tensor &last_ids = saved[SAVED_LAST_IDS];
-        const at::Tensor &chunks_per_tile = saved[SAVED_CHUNKS_PER_TILE];
-        const at::Tensor &chunk_offsets = saved[SAVED_CHUNK_OFFSETS];
-        const at::Tensor &fwd_chunk_state = saved[SAVED_FWD_CHUNK_STATE];
 
         // --- Restore scalar and custom-class state ------------------------
         const int64_t image_width = ctx->saved_data["image_width"].toInt();
@@ -1102,10 +1163,8 @@ public:
             ctx->saved_data["ftheta_coeffs"].toCustomClass<FThetaCameraDistortionParameters>();
         const bool use_hit_distance =
             ctx->saved_data["use_hit_distance"].toBool();
-        const RendererConfig renderer_config = parse_renderer_config(
-            ctx->saved_data["renderer_config"].toInt());
-        (void)renderer_config;
-
+        const bool return_normals =
+            ctx->saved_data["return_normals"].toBool();
         at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>>
             lidar_coeffs = c10::nullopt;
         auto lidar_it = ctx->saved_data.find("lidar_coeffs");
@@ -1144,6 +1203,11 @@ public:
         at::optional<at::Tensor> v_render_normals = c10::nullopt;
         if (grad_outputs[4].defined()) {
             v_render_normals = grad_outputs[4].contiguous();
+        } else if (return_normals) {
+            at::DimVector normal_grad_shape(render_alphas.sizes());
+            normal_grad_shape[normal_grad_shape.size() - 1] = 3;
+            v_render_normals =
+                at::zeros(normal_grad_shape, means.options().dtype(at::kFloat));
         }
 
         // --- Validate restored CUDA inputs --------------------------------
@@ -1159,9 +1223,6 @@ public:
         CHECK_INPUT(last_ids);
         CHECK_INPUT(v_render_colors);
         CHECK_INPUT(v_render_alphas);
-        CHECK_INPUT(chunks_per_tile);
-        CHECK_INPUT(chunk_offsets);
-        CHECK_INPUT(fwd_chunk_state);
         if (backgrounds.has_value()) {
             CHECK_INPUT(backgrounds.value());
         }
@@ -1193,8 +1254,20 @@ public:
             rays.has_value() ? at::optional<at::Tensor>(at::zeros_like(rays.value()))
                              : at::optional<at::Tensor>();
 
-        // --- Launch private backward kernel -------------------------------
-        launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+        // --- Launch batch-parallel backward kernel ------------------------
+        const at::Tensor &batches_per_tile = saved[SAVED_BATCHES_PER_TILE];
+        const at::Tensor &batch_offsets = saved[SAVED_BATCH_OFFSETS];
+        const at::Tensor &fwd_batch_state = saved[SAVED_FWD_BATCH_STATE];
+        CHECK_INPUT(batches_per_tile);
+        CHECK_INPUT(batch_offsets);
+        CHECK_INPUT(fwd_batch_state);
+        at::Tensor compose_c_stop;
+        if (renderer_config == RendererConfig::PARALLEL_BATCH) {
+            compose_c_stop = saved[SAVED_COMPOSE_C_STOP];
+            CHECK_INPUT(compose_c_stop);
+        }
+
+        launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
             means, quats, scales, colors, opacities,
             backgrounds, masks,
             static_cast<uint32_t>(image_width), static_cast<uint32_t>(image_height),
@@ -1207,8 +1280,9 @@ public:
             use_hit_distance,
             render_alphas, last_ids,
             v_render_colors, v_render_alphas, v_render_normals,
-            chunks_per_tile, chunk_offsets,
-            fwd_chunk_state.size(0), fwd_chunk_state,
+            batches_per_tile, batch_offsets,
+            fwd_batch_state.size(0), fwd_batch_state,
+            compose_c_stop,
             v_means, v_quats, v_scales, v_colors, v_opacities, v_rays
         );
 
@@ -1292,10 +1366,9 @@ rasterize_to_pixels_from_world_3dgs(
     const RendererConfig parsed_renderer_config =
         parse_renderer_config(renderer_config);
 
-    // CUDA dispatch is the forward-only implementation. When autograd is
-    // active, the dispatcher selects the AutogradCUDA registration below,
-    // whose forward calls the same rasterize_to_pixels_from_world_3dgs_fwd
-    // helper.
+    // CUDA-key dispatch is the state-light forward implementation. Calls whose
+    // tensor inputs do not require gradients can reach this backend directly;
+    // the AutogradCUDA adapter below also bounces here when grad mode is off.
     //
     // --- Allocate optional public outputs ---------------------------------
     // Allocate optional public outputs first so both dispatch paths use the
@@ -1306,8 +1379,8 @@ rasterize_to_pixels_from_world_3dgs(
     );
 
     // --- Run shared forward ------------------------------------------------
-    // The chunk tensors are only useful to autograd, so the forward-only
-    // dispatcher path drops them.
+    // Forward-only MixedBatch does not need batch-state tensors. ParallelBatch
+    // still requests them because its forward compose pass uses the same state.
     auto fwd = rasterize_to_pixels_from_world_3dgs_fwd(
         means, quats, scales, colors, opacities,
         backgrounds, masks,
@@ -1319,7 +1392,7 @@ rasterize_to_pixels_from_world_3dgs(
         rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         ftheta_coeffs, lidar_coeffs, external_distortion_params,
         tile_offsets, flatten_ids,
-        use_hit_distance, parsed_renderer_config,
+        use_hit_distance, parsed_renderer_config, false,
         optional_outputs.sample_counts, optional_outputs.normals,
         unsafe_masked_tile_outputs
     );
@@ -1373,6 +1446,21 @@ rasterize_to_pixels_from_world_3dgs_autograd(
     );
     return {};
 #else
+    if (!at::GradMode::is_enabled()) {
+        return rasterize_to_pixels_from_world_3dgs(
+            means, quats, scales, colors, opacities,
+            backgrounds, masks,
+            image_width, image_height, tile_size,
+            viewmats0, viewmats1, Ks,
+            camera_model, ut_params, rs_type,
+            rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            ftheta_coeffs, lidar_coeffs, external_distortion_params,
+            tile_offsets, flatten_ids,
+            return_sample_counts, use_hit_distance, return_normals,
+            renderer_config, unsafe_masked_tile_outputs
+        );
+    }
+
     // Adapter between dispatcher schema and C++ custom Function: apply()
     // returns a variable_list, while the public operator schema has optional
     // trailing outputs.

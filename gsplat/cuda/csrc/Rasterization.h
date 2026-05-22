@@ -218,14 +218,18 @@ struct RasterizeToPixelsFromWorld3DGSFwdResult {
     at::Tensor renders;
     at::Tensor alphas;
     at::Tensor last_ids;
-    at::Tensor chunks_per_tile;
-    at::Tensor chunk_offsets;
-    at::Tensor fwd_chunk_state;
+    // Persisted forward batch state consumed by batch-parallel backward.
+    at::Tensor batches_per_tile;
+    at::Tensor batch_offsets;
+    at::Tensor fwd_batch_state;
+    // Defined only for ParallelBatch. MixedBatch uses the serial forward path,
+    // while ParallelBatch stores the per-pixel saturation handoff batch here.
+    at::Tensor compose_c_stop;
 };
 
-// Internal C++ forward entry point. Returns fwd_chunk_state so callers
-// that drive backward can reuse the CSR layout forward already paid the
-// D2H sync for; forward-only callers discard it.
+// Internal C++ forward entry point. When `persist_batch_state` is true (or the
+// selected forward renderer needs the state internally), returns fwd_batch_state
+// so backward can reuse the CSR layout forward already paid the D2H sync for.
 RasterizeToPixelsFromWorld3DGSFwdResult
 rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor means,     // [..., N, 3]
@@ -253,6 +257,10 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor flatten_ids,  // [n_isects]
     bool use_hit_distance,
     RendererConfig renderer_config,
+    // Request CSR/fwd batch-state outputs for backward. ParallelBatch still
+    // allocates the same state internally because its forward compose pass
+    // depends on it.
+    bool persist_batch_state,
     const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3] optional output tensor
     bool unsafe_masked_tile_outputs

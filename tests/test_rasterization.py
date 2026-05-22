@@ -36,6 +36,7 @@ from gsplat.rendering import (
     RenderMode,
     RendererConfig,
     RendererConfig_MixedBatch,
+    RendererConfig_ParallelBatch,
     render_mode_has_color,
     render_mode_has_depth_channel,
     render_mode_has_hit_distance,
@@ -47,13 +48,13 @@ device = torch.device("cuda:0")
 
 def _minimal_rasterization_args():
     return dict(
-        means=None,
-        quats=None,
-        scales=None,
-        opacities=None,
-        colors=None,
-        viewmats=None,
-        Ks=None,
+        means=torch.zeros((1, 3), dtype=torch.float32),
+        quats=torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32),
+        scales=torch.ones((1, 3), dtype=torch.float32) * 0.01,
+        opacities=torch.ones((1,), dtype=torch.float32),
+        colors=torch.zeros((1, 3), dtype=torch.float32),
+        viewmats=torch.eye(4, dtype=torch.float32).unsqueeze(0),
+        Ks=torch.eye(3, dtype=torch.float32).unsqueeze(0),
         width=1,
         height=1,
     )
@@ -67,8 +68,14 @@ def test_renderer_config_base_public_api():
 
 @pytest.mark.parametrize(
     "config_type",
-    [RendererConfig_MixedBatch],
-    ids=["mixed_batch"],
+    [
+        RendererConfig_MixedBatch,
+        RendererConfig_ParallelBatch,
+    ],
+    ids=[
+        "mixed_batch",
+        "parallel_batch",
+    ],
 )
 def test_renderer_config_public_api(config_type):
     assert getattr(gsplat, config_type.__name__) is config_type
@@ -108,9 +115,19 @@ def test_rasterization_rejects_invalid_renderer_config(
         )
 
 
+def test_rasterization_rejects_parallel_renderer_config_without_eval3d():
+    with pytest.raises(ValueError, match="with_eval3d=True"):
+        gsplat.rasterization(
+            **_minimal_rasterization_args(),
+            renderer_config=RendererConfig_ParallelBatch(),
+        )
+
+
 def _rasterization_param_id(value):
     if type(value) is RendererConfig_MixedBatch:
         return "mixed_batch"
+    if type(value) is RendererConfig_ParallelBatch:
+        return "parallel_batch"
     return None
 
 
@@ -277,7 +294,10 @@ def gaussians(
                 [False],  # distributed
                 [3],  # C (number of cameras)
                 [10_000],  # N (number of gaussians)
-                [RendererConfig_MixedBatch()],
+                [
+                    RendererConfig_MixedBatch(),
+                    RendererConfig_ParallelBatch(),
+                ],
             ),
             # 3DGUT hit-distance modes: exercises `use_hit_distance` with the
             # extra-signals plumbing. Channel counts produced (e.g. 24 = 3 RGB
@@ -296,7 +316,10 @@ def gaussians(
                 [False],  # distributed
                 [3],  # C (number of cameras)
                 [10_000],  # N (number of gaussians)
-                [RendererConfig_MixedBatch()],
+                [
+                    RendererConfig_MixedBatch(),
+                    RendererConfig_ParallelBatch(),
+                ],
             ),
             # Distributed rendering (single-rank): exercises the all-gather /
             # scatter code path.  Constraints: batch_dims=(), no per_view_color.

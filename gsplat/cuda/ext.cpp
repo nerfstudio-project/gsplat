@@ -46,6 +46,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     py::enum_<gsplat::RendererConfig>(m, "RendererConfig", py::module_local())
         .value("MIXED_BATCH", gsplat::RendererConfig::MIXED_BATCH)
+        .value("PARALLEL_BATCH", gsplat::RendererConfig::PARALLEL_BATCH)
         .export_values();
 
     py::enum_<gsplat::extdist::ModelType>(m, "ExternalDistortionModelType", py::module_local())

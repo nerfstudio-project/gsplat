@@ -111,6 +111,11 @@ def renderer_config_mixed_batch() -> Any:
     return _make_lazy_cuda_obj("RendererConfig.MIXED_BATCH")
 
 
+def renderer_config_parallel_batch() -> Any:
+    """Return the CUDA enum value for the ParallelBatch renderer config."""
+    return _make_lazy_cuda_obj("RendererConfig.PARALLEL_BATCH")
+
+
 def _renderer_config_to_cuda(renderer_config: Any) -> Any:
     if renderer_config is None:
         return renderer_config_mixed_batch()
@@ -120,15 +125,13 @@ def _renderer_config_to_cuda(renderer_config: Any) -> Any:
     # config objects as gsplat.rasterization without creating an import cycle.
     from gsplat.rendering import (  # pylint: disable=import-outside-toplevel
         RendererConfig,
-        RendererConfig_MixedBatch,
+        _renderer_config_type,
     )
 
-    if isinstance(renderer_config, RendererConfig_MixedBatch):
-        return renderer_config_mixed_batch()
     if isinstance(renderer_config, RendererConfig):
-        raise NotImplementedError(
-            f"Unsupported renderer_config type: {type(renderer_config).__name__}."
-        )
+        # Delegate the config -> CUDA enum mapping to the single source of
+        # truth in gsplat.rendering (which raises for unknown subtypes).
+        return _renderer_config_type(renderer_config)
     return renderer_config
 
 
@@ -1002,6 +1005,12 @@ def rasterize_to_pixels_eval3d(
     ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA
     kernel raises ``ValueError``.
 
+    Args:
+        renderer_config: Eval3d renderer selector. ``None`` uses the default
+            ``RendererConfig_MixedBatch`` policy. Pass public
+            ``RendererConfig_MixedBatch`` / ``RendererConfig_ParallelBatch``
+            instances, or the already-translated low-level CUDA config value.
+
     Returns:
         A tuple:
 
@@ -1095,6 +1104,10 @@ def rasterize_to_pixels_eval3d_extra(
         return_normals: If True, compute and return accumulated normals per pixel.
             Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
             transformed by rotation, flipped if facing away from ray). Default: False.
+        renderer_config: Eval3d renderer selector. ``None`` uses the default
+            ``RendererConfig_MixedBatch`` policy. Pass public
+            ``RendererConfig_MixedBatch`` / ``RendererConfig_ParallelBatch``
+            instances, or the already-translated low-level CUDA config value.
         unsafe_masked_tile_outputs: If True, outputs for masked tiles are left undefined
             and must not be read by the caller. Default False writes per-pixel safe
             values for masked tiles: render_colors = backgrounds (or 0.0 when no
