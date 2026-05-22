@@ -85,8 +85,10 @@ python -m gsplat.profile --input /tmp/gsplat_inputs_0.pt
 ```
 
 The harness loads the saved arguments, moves tensors to CUDA, restores
-`requires_grad=True` on differentiable Gaussian inputs, then runs warmup and
-profiled forward/backward iterations of `rasterization()`.
+`requires_grad=True` on differentiable Gaussian inputs by default, then runs
+warmup and profiled forward/backward iterations of `rasterization()`. Pass
+`--nograd` to replay forward-only iterations under `torch.inference_mode()`;
+`--grad` is the default and keeps the training-style forward/backward replay.
 
 Replay under Nsight Systems
 ---------------------------
@@ -491,6 +493,25 @@ def main() -> None:
     parser.add_argument(
         "--iterations", type=int, default=20, help="Number of profiled iterations"
     )
+    grad_group = parser.add_mutually_exclusive_group()
+    grad_group.add_argument(
+        "--grad",
+        dest="grad",
+        action="store_true",
+        default=True,
+        help=(
+            "Replay training-style forward+backward iterations. This is the " "default."
+        ),
+    )
+    grad_group.add_argument(
+        "--nograd",
+        dest="grad",
+        action="store_false",
+        help=(
+            "Replay forward-only iterations under torch.inference_mode() and "
+            "skip backward."
+        ),
+    )
     parser.add_argument(
         "--ensure-rays",
         action="store_true",
@@ -538,14 +559,15 @@ def main() -> None:
         args.input, map_location="cuda", weights_only=False
     )
 
-    # Recreate the training-style inputs expected by rasterization replay.
-    for k in _GRAD_PARAMS:
-        if (
-            k in inputs
-            and isinstance(inputs[k], torch.Tensor)
-            and inputs[k].is_floating_point()
-        ):
-            inputs[k] = inputs[k].requires_grad_(True)
+    if args.grad:
+        # Recreate the training-style inputs expected by rasterization replay.
+        for k in _GRAD_PARAMS:
+            if (
+                k in inputs
+                and isinstance(inputs[k], torch.Tensor)
+                and inputs[k].is_floating_point()
+            ):
+                inputs[k] = inputs[k].requires_grad_(True)
 
     rasterization_params = inspect.signature(rasterization).parameters
     for raw_override in args.overrides:
@@ -644,6 +666,8 @@ def main() -> None:
     width = inputs.get("width", "?")
     height = inputs.get("height", "?")
     print(f"[gsplat.profile] {n_gaussians} gaussians, {width}x{height} image")
+    replay_mode = "grad (forward+backward)" if args.grad else "nograd (forward-only)"
+    print(f"[gsplat.profile] Replay mode: {replay_mode}")
     print(
         f"[gsplat.profile] Warmup: {args.warmup}, Profiled iterations: {args.iterations}"
     )
@@ -653,19 +677,24 @@ def main() -> None:
         # forward and backward phases in Nsight tools.
         with trace_range("iteration", payload=iteration):
             with trace_range("forward"):
-                render_colors, _render_alphas, _meta = rasterization(**inputs)
-                loss = render_colors.sum()
+                if args.grad:
+                    render_colors, _render_alphas, _meta = rasterization(**inputs)
+                    loss = render_colors.sum()
+                else:
+                    with torch.inference_mode():
+                        rasterization(**inputs)
 
-            with trace_range("backward"):
-                loss.backward()
-            # Clear grads in place so every iteration starts from the same state.
-            for k in _GRAD_PARAMS:
-                if (
-                    k in inputs
-                    and isinstance(inputs[k], torch.Tensor)
-                    and inputs[k].grad is not None
-                ):
-                    inputs[k].grad = None
+            if args.grad:
+                with trace_range("backward"):
+                    loss.backward()
+                # Clear grads in place so every iteration starts from the same state.
+                for k in _GRAD_PARAMS:
+                    if (
+                        k in inputs
+                        and isinstance(inputs[k], torch.Tensor)
+                        and inputs[k].grad is not None
+                    ):
+                        inputs[k].grad = None
 
     print(f"[gsplat.profile] Running {args.warmup} warmup iterations...")
     for i in range(args.warmup):
