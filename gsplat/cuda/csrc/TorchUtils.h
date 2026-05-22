@@ -6,6 +6,7 @@
 #pragma once
 
 #include <ATen/core/Tensor.h>
+#include <type_traits>
 
 namespace gsplat {
 
@@ -22,6 +23,91 @@ inline at::optional<at::Tensor> as_optional_tensor(const at::Tensor &tensor) {
 
 inline at::Tensor as_tensor(const at::optional<at::Tensor> &tensor) {
     return tensor.value_or(at::Tensor{});
+}
+
+namespace detail {
+
+template <class T>
+inline T *tensor_data_ptr(const at::Tensor &tensor)
+{
+    using ValueT = std::remove_const_t<T>;
+    if constexpr (std::is_const_v<T>) {
+        return tensor.const_data_ptr<ValueT>();
+    } else {
+        return tensor.mutable_data_ptr<ValueT>();
+    }
+}
+
+} // namespace detail
+
+/** Return a data pointer with constness inferred from `T`.
+ *
+ * `T = float` returns a mutable `float *`; `T = const float` returns a
+ * read-only `const float *`.
+ */
+template <class T>
+inline T *data_ptr(const at::Tensor &tensor)
+{
+    return detail::tensor_data_ptr<T>(tensor);
+}
+
+/** Return a data pointer when the tensor is enabled, or nullptr.
+ *
+ * Pointer constness is inferred from `T`.
+ * The tensor is not inspected when `enabled == false`, which lets callers pass
+ * placeholder tensors for code paths that do not allocate a given buffer.
+ */
+template <class T>
+inline T *data_ptr_or_null(bool enabled, const at::Tensor &tensor)
+{
+    return enabled ? data_ptr<T>(tensor) : nullptr;
+}
+
+/** Return a data pointer for an optional tensor, or nullptr.
+ *
+ * Pointer constness is inferred from `T`. Empty optionals map to nullptr.
+ */
+template <class T>
+inline T *data_ptr_or_null(const at::optional<at::Tensor> &tensor)
+{
+    return tensor.has_value() ? data_ptr<T>(tensor.value()) : nullptr;
+}
+
+/** Return an optional tensor pointer only when both gates are true. */
+template <class T>
+inline T *data_ptr_or_null(
+    bool enabled,
+    const at::optional<at::Tensor> &tensor)
+{
+    return enabled ? data_ptr_or_null<T>(tensor) : nullptr;
+}
+
+/** Return a tensor data pointer reinterpreted as `PointerT *`.
+ *
+ * Pointer constness is inferred from `PointerT`. `ScalarT` names the tensor
+ * element type before reinterpretation.
+ */
+template <class PointerT, class ScalarT>
+inline PointerT *data_ptr_as(const at::Tensor &tensor)
+{
+    static_assert(
+        !std::is_const_v<ScalarT>,
+        "Put const on PointerT, not ScalarT");
+    using TensorPointerT = std::conditional_t<
+        std::is_const_v<PointerT>,
+        const ScalarT,
+        ScalarT>;
+    return reinterpret_cast<PointerT *>(data_ptr<TensorPointerT>(tensor));
+}
+
+/** Return a reinterpreted data pointer when enabled, or nullptr.
+ *
+ * Pointer constness is inferred from `PointerT`.
+ */
+template <class PointerT, class ScalarT>
+inline PointerT *data_ptr_as_or_null(bool enabled, const at::Tensor &tensor)
+{
+    return enabled ? data_ptr_as<PointerT, ScalarT>(tensor) : nullptr;
 }
 
 } // namespace gsplat
