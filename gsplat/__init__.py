@@ -95,6 +95,14 @@ from .cuda._lidar import (
     compute_tiling as compute_lidar_tiling,
 )
 
+from .nht import (
+    DeferredShaderModule,
+    DeferredShaderModuleAOV,
+    HarmonicFeatures,
+    export_splats_nht,
+)
+from .nht._rendering import NHTParams
+
 __all__ = [
     "color_correct_affine",
     "color_correct_quadratic",
@@ -155,4 +163,9 @@ __all__ = [
     "compute_lidar_tiling",
     "LidarTiling",
     "SpinningDirection",
+    "DeferredShaderModule",
+    "DeferredShaderModuleAOV",
+    "HarmonicFeatures",
+    "NHTParams",
+    "export_splats_nht",
 ]

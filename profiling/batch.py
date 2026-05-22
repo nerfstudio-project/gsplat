@@ -53,16 +53,27 @@ def timeit(repeats: int, f: Callable, *args, **kwargs) -> float:
 
 
 def main(
-    model: Literal["3DGS", "3DGUT"] = "3DGS",
+    model: Literal["3DGS", "3DGUT", "NHT"] = "3DGS",
     n_gaussians: int = 1000,
     n_cameras: int = 1,
     n_batches: int = 1,
+    nht_feature_dim: int = 48,
     reso: Literal["360p", "720p", "1080p", "4k"] = "4k",
     repeats: int = 100,
     memory_history: bool = False,
     world_rank: int = 0,
     world_size: int = 1,
 ):
+    # NHT (Neural Harmonic Textures) builds on the 3DGUT pipeline and stores
+    # per-primitive feature vectors (divided across 4 tetrahedral vertices)
+    # instead of RGB colors. It also requires non-packed rasterization.
+    if model == "NHT":
+        if nht_feature_dim % 4 != 0:
+            raise ValueError(
+                f"NHT feature_dim must be divisible by 4 "
+                f"(4 tetrahedron vertices); got {nht_feature_dim}."
+            )
+
     (
         means,
         quats,
@@ -74,6 +85,9 @@ def main(
         width,
         height,
     ) = load_test_data(device=device, scene_grid=1)
+
+    if model == "NHT":
+        colors = colors[:, :1].repeat(1, nht_feature_dim)
 
     tensors = [means, quats, scales, opacities, colors]
     for i, tensor in enumerate(tensors):
@@ -100,16 +114,34 @@ def main(
     if memory_history:
         torch.cuda.memory._record_memory_history()
 
+    extra_kwargs = {}
+    if model == "NHT":
+        from gsplat.nht import NHTParams
+
+        # NHT routes through the 3DGUT kernels (with_ut + with_eval3d) and
+        # enables a separate NHT-specific raster path via nht_params.
+        extra_kwargs.update(
+            with_ut=True,
+            with_eval3d=True,
+            nht_params=NHTParams(),
+            sh_degree=None,
+        )
+    else:
+        extra_kwargs.update(
+            with_ut=model == "3DGUT",
+            with_eval3d=model == "3DGUT",
+        )
+
     ellipse_time_fwd, outputs = timeit(
         repeats,
         rasterization,
-        means,  # [N, 3]
-        quats,  # [N, 4]
-        scales,  # [N, 3]
-        opacities,  # [N]
-        colors,  # [N, K, 3]
-        viewmats,  # [C, 4, 4]
-        Ks,  # [C, 3, 3]
+        means,  # [B, N, 3]
+        quats,  # [B, N, 4]
+        scales,  # [B, N, 3]
+        opacities,  # [B, N]
+        colors,  # [B, N, 3] for 3DGS/3DGUT, [B, N, feature_dim] for NHT
+        viewmats,  # [B, C, 4, 4]
+        Ks,  # [B, C, 3, 3]
         render_width,
         render_height,
         packed=False,
@@ -117,8 +149,7 @@ def main(
         far_plane=100.0,
         radius_clip=3.0,
         distributed=False,
-        with_ut=model == "3DGUT",
-        with_eval3d=model == "3DGUT",
+        **extra_kwargs,
     )
     mem_toc_fwd = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
 
@@ -152,46 +183,70 @@ def main(
 
 
 def worker(local_rank: int, world_rank: int, world_size: int, args):
-    from tabulate import tabulate
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        # Fallback. tabulate is not part of the standard dependencies
+        def tabulate(rows, headers, tablefmt="rst"): 
+            widths = [
+                max(len(str(h)), *(len(str(r[i])) for r in rows))
+                for i, h in enumerate(headers)
+            ]
+            sep = "  ".join("-" * w for w in widths)
+            line = lambda row: "  ".join(  # noqa: E731
+                str(c).ljust(w) for c, w in zip(row, widths)
+            )
+            return "\n".join([line(headers), sep, *(line(r) for r in rows)])
 
     # Tested on a NVIDIA TITAN RTX with (24 GB).
 
     collection = []
     for model in args.model:
-        for n_gaussians in args.n_gaussians:
-            for n_cameras in args.n_cameras:
-                for n_batches in args.n_batches:
-                    print("========================================")
-                    print(
-                        f"N Gaussians: {n_gaussians}, N Cameras: {n_cameras}, N Batches: {n_batches}"
-                    )
-                    print("========================================")
-                    stats = main(
-                        model=model,
-                        n_gaussians=n_gaussians,
-                        n_cameras=n_cameras,
-                        n_batches=n_batches,
-                        reso="360p",
-                        repeats=args.repeats,
-                        world_rank=world_rank,
-                        world_size=world_size,
-                    )
-                    collection.append(
-                        [
-                            model,
-                            # configs
-                            n_gaussians,
-                            n_cameras,
-                            n_batches,
-                            # stats
-                            f"{stats['mem_all']:0.3f}",
-                            f"{1.0 / stats['time_fwd']:0.1f} x {(n_batches)} x {(n_cameras)}",
-                            f"{1.0 / stats['time_bwd']:0.1f} x {(n_batches)} x {(n_cameras)}",
-                            f"{stats['time_fwd']:0.5f}",
-                            f"{stats['time_bwd']:0.5f}",
-                        ]
-                    )
-                    torch.cuda.empty_cache()
+        if model == "NHT":
+            feature_dims = args.nht_feature_dim
+        else:
+            feature_dims = [3]
+        for feature_dim in feature_dims:
+            for n_gaussians in args.n_gaussians:
+                for n_cameras in args.n_cameras:
+                    for n_batches in args.n_batches:
+                        print("========================================")
+                        suffix = (
+                            f", Feature Dim: {feature_dim}" if model == "NHT" else ""
+                        )
+                        print(
+                            f"Model: {model}, N Gaussians: {n_gaussians}, "
+                            f"N Cameras: {n_cameras}, N Batches: {n_batches}{suffix}"
+                        )
+                        print("========================================")
+                        stats = main(
+                            model=model,
+                            n_gaussians=n_gaussians,
+                            n_cameras=n_cameras,
+                            n_batches=n_batches,
+                            nht_feature_dim=feature_dim,
+                            reso="360p",
+                            repeats=args.repeats,
+                            world_rank=world_rank,
+                            world_size=world_size,
+                        )
+                        label = (
+                            f"NHT (feat={feature_dim})" if model == "NHT" else model
+                        )
+                        collection.append(
+                            [
+                                label,
+                                n_gaussians,
+                                n_cameras,
+                                n_batches,
+                                f"{stats['mem_all']:0.3f}",
+                                f"{1.0 / stats['time_fwd']:0.1f} x {(n_batches)} x {(n_cameras)}",
+                                f"{1.0 / stats['time_bwd']:0.1f} x {(n_batches)} x {(n_cameras)}",
+                                f"{stats['time_fwd']:0.5f}",
+                                f"{stats['time_bwd']:0.5f}",
+                            ]
+                        )
+                        torch.cuda.empty_cache()
 
     if world_rank == 0:
         headers = [
@@ -239,7 +294,22 @@ if __name__ == "__main__":
         type=str,
         nargs="+",
         default=["3DGS", "3DGUT"],
-        help="Model used for rasterization",
+        help=(
+            "Model used for rasterization. One or more of: "
+            "3DGS, 3DGUT, NHT."
+        ),
+    )
+    parser.add_argument(
+        "--nht_feature_dim",
+        type=int,
+        nargs="+",
+        default=[48],
+        help=(
+            "Per-primitive feature dimension(s) for the NHT model. Must be "
+            "divisible by 4 (4 tetrahedral vertices). Supported values: "
+            "4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 80, 96, 128, 256. "
+            "Ignored for 3DGS / 3DGUT."
+        ),
     )
     parser.add_argument(
         "--repeats",

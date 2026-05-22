@@ -169,6 +169,12 @@ def get_extras_require() -> dict:
             "imageio>=2.37.2",
             "torchpq>=0.3.0.6",
         ],
+        # NHT (Neural Harmonic Textures) deferred-shader dependencies.
+        # Install them with `pip install "gsplat[nht]"`. tiny-cuda-nn requires
+        # a working CUDA toolchain at install time; see docs/nht.md.
+        "nht": [
+            "tinycudann @ git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch",
+        ],
     }
 
 

@@ -76,6 +76,7 @@ BUILD_2DGS = os.getenv("BUILD_2DGS")
 BUILD_ADAM = os.getenv("BUILD_ADAM")
 BUILD_RELOC = os.getenv("BUILD_RELOC")
 BUILD_LOSSES = os.getenv("BUILD_LOSSES")
+BUILD_NHT = os.getenv("BUILD_NHT")
 BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
 
 NUM_CHANNELS = os.getenv("NUM_CHANNELS")
@@ -211,6 +212,10 @@ def get_build_parameters():
         extra_cflags += [f"-DGSPLAT_BUILD_LOSSES={BUILD_LOSSES}"]
         if sys.platform == "win32":
             extra_cuda_cflags += [f"-DGSPLAT_BUILD_LOSSES={BUILD_LOSSES}"]
+    if BUILD_NHT is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_NHT={BUILD_NHT}"]
+        if sys.platform == "win32":
+            extra_cuda_cflags += [f"-DGSPLAT_BUILD_NHT={BUILD_NHT}"]
     if BUILD_CAMERA_WRAPPERS:
         extra_cflags += ["-DGSPLAT_BUILD_CAMERA_WRAPPERS=1"]
         if sys.platform == "win32":

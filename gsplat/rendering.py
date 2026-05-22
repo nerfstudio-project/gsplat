@@ -17,7 +17,7 @@
 from contextlib import nullcontext
 from dataclasses import dataclass
 import math
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
 import torch
 import torch.distributed
@@ -27,6 +27,9 @@ from typing_extensions import Literal
 from ._helper import assert_shape
 from .trace import trace_function, trace_pop, trace_push, trace_range
 from .profile import capture_inputs
+
+if TYPE_CHECKING:
+    from .nht._rendering import NHTParams
 
 from .cuda._wrapper import (
     RollingShutterType,
@@ -455,6 +458,7 @@ def rasterization(
         int
     ] = None,  # Currently only None or 3 is accepted.
     renderer_config: Optional[RendererConfig] = None,
+    nht_params: Optional["NHTParams"] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -724,6 +728,15 @@ def rasterization(
 
     tile_size = _resolve_tile_size(tile_size, with_eval3d, width, height)
 
+    # NHT compatibility checks
+    _nht_enabled = nht_params is not None and nht_params.enabled
+    if _nht_enabled:
+        assert with_eval3d and with_ut, (
+            "NHT requires with_eval3d=True and with_ut=True"
+        )
+        if extra_signals is not None:
+            meta["nht_extra_signal_dim"] = extra_signals.shape[-1]
+
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
     B = math.prod(batch_dims)
@@ -837,7 +850,7 @@ def rasterization(
     if has_color:
         check_features(colors, sh_degree, "colors")
 
-    if extra_signals is not None:
+    if extra_signals is not None and not _nht_enabled:
         check_features(extra_signals, extra_signals_sh_degree, "extra signals")
 
     if (
@@ -916,6 +929,9 @@ def rasterization(
         # Use provided UT parameters or create default
         if ut_params is None:
             ut_params = UnscentedTransformParameters()
+        projection_global_z_order = (
+            False if camera_model == "lidar" else global_z_order
+        )
 
         proj_results = fully_fused_projection_with_ut(
             means=means,
@@ -941,7 +957,7 @@ def rasterization(
             external_distortion_coeffs=external_distortion_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
-            global_z_order=global_z_order,
+            global_z_order=projection_global_z_order,
         )
 
     else:
@@ -1038,7 +1054,7 @@ def rasterization(
         feature_list = []
         if has_color:
             feature_list.append(colors)
-        if extra_signals is not None:
+        if extra_signals is not None and not _nht_enabled:
             feature_list.append(extra_signals)
         if feature_list:
             with (
@@ -1100,7 +1116,7 @@ def rasterization(
             trace_pop()  # colors
             feature_list.append(colors)
 
-        if extra_signals is not None:
+        if extra_signals is not None and not _nht_enabled:
             trace_push("extra")
             if extra_signals_sh_degree is not None:
                 if gaussian_ids is not None:
@@ -1259,7 +1275,11 @@ def rasterization(
     # Append depth channel to proj_features if needed.
     # Layout is [proj_features(D+E) | depth(1)], with depth always last.
     # In depth-only modes proj_features may not be set yet (no colors, no extra_signals).
-    if render_mode_has_depth_channel(render_mode):
+    # The NHT wrapper strips that channel internally before harmonic feature
+    # encoding, then returns it as the last rendered channel; NHT also needs
+    # depth here (even outside depth-render modes) when normals are requested.
+    nht_depth_for_normals = _nht_enabled and return_normals and not render_mode_has_depth_channel(render_mode)
+    if render_mode_has_depth_channel(render_mode) or nht_depth_for_normals:
         trace_push("append-depth")
         if render_mode_has_hit_distance(render_mode):
             depth_channel = torch.zeros_like(
@@ -1346,8 +1366,13 @@ def rasterization(
         }
     )
 
+    # NHT routing: no chunking, but otherwise uses the same eval3d call.
+    nht_kwargs: Dict[str, Any] = {}
+    if _nht_enabled:
+        nht_kwargs["nht_params"] = nht_params
+
     # print("rank", world_rank, "Before rasterize_to_pixels")
-    if proj_features.shape[-1] > channel_chunk:
+    if not _nht_enabled and proj_features.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (proj_features.shape[-1] + channel_chunk - 1) // channel_chunk
         render_colors, render_alphas = [], []
@@ -1463,10 +1488,16 @@ def rasterization(
                 viewmats_rs=viewmats_rs,
                 return_last_ids=False,
                 use_hit_distance=render_mode_has_hit_distance(render_mode),
-                return_normals=return_normals,
+                return_normals=return_normals and not _nht_enabled,
                 renderer_config=renderer_config_impl,
+                **nht_kwargs,
             )
         else:
+            if _nht_enabled:
+                raise ValueError(
+                    "NHT requires with_eval3d=True; the standard 2D rasterizer "
+                    "is not supported with `nht_params`."
+                )
             if rays is not None:
                 raise ValueError("Rays input is only supported with with_eval3d=True")
             render_colors, render_alphas = rasterize_to_pixels(
@@ -1483,7 +1514,21 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
             )
-    if extra_signals is not None:
+
+    if _nht_enabled and return_normals:
+        depth_for_normals = render_colors[..., -1:]
+        if nht_depth_for_normals or render_mode_has_expected_depth(render_mode):
+            depth_for_normals = depth_for_normals / render_alphas.clamp(min=1e-10)
+        meta["normals"] = depth_to_normal(
+            depth_for_normals,
+            torch.linalg.inv(viewmats),
+            Ks,
+            z_depth=not render_mode_has_hit_distance(render_mode),
+        )
+        if nht_depth_for_normals:
+            render_colors = render_colors[..., :-1]
+
+    if extra_signals is not None and not _nht_enabled:
         trace_push("post-processing")
         # Extract the extra signals (per ray) from render_colors
         E = extra_signals.shape[-1]
@@ -1515,7 +1560,7 @@ def rasterization(
             trace_pop()  # post-processing
 
     # Add normals to meta if computed
-    if return_normals:
+    if return_normals and not _nht_enabled:
         meta["normals"] = render_normals
 
     return render_colors, render_alphas, meta
@@ -1656,6 +1701,7 @@ def _rasterization(
             assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
     if with_ut:
+        projection_global_z_order = False if camera_model == "lidar" else True
         radii, means2d, depths, conics, compensations = _fully_fused_projection_with_ut(
             means=means,
             quats=quats,
@@ -1671,6 +1717,7 @@ def _rasterization(
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
             lidar_coeffs=lidar_coeffs,
+            global_z_order=projection_global_z_order,
         )
     else:
         if rays is not None:

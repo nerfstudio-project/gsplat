@@ -30,7 +30,8 @@
     defined(GSPLAT_BUILD_3DGUT) && GSPLAT_BUILD_3DGUT || \
     defined(GSPLAT_BUILD_ADAM) && GSPLAT_BUILD_ADAM || \
     defined(GSPLAT_BUILD_RELOC) && GSPLAT_BUILD_RELOC || \
-    defined(GSPLAT_BUILD_LOSSES) && GSPLAT_BUILD_LOSSES
+    defined(GSPLAT_BUILD_LOSSES) && GSPLAT_BUILD_LOSSES || \
+    defined(GSPLAT_BUILD_NHT) && GSPLAT_BUILD_NHT
 
 #   define GSPLAT_DEFAULT_ENABLE_BUILD 0
 #else
@@ -68,6 +69,13 @@
 #   define GSPLAT_BUILD_CAMERA_WRAPPERS 0
 #endif
 
+#ifndef GSPLAT_BUILD_NHT
+#   define GSPLAT_BUILD_NHT GSPLAT_DEFAULT_ENABLE_BUILD
+#endif
+
 #ifndef GSPLAT_NUM_CHANNELS
-#   define GSPLAT_NUM_CHANNELS 1,2,3,4,5,6,8,9,16,17,21,23,24,32,33,64,65,128,129,256,257,512,513
+// NHT requires additional channel counts (12, 48, 80, 96) for its harmonic feature dimensions.
+// These are only instantiated when GSPLAT_BUILD_NHT=1; the full list is always defined here
+// because the preprocessor must see a consistent set of channel instantiations at build time.
+#   define GSPLAT_NUM_CHANNELS 1,2,3,4,5,6,8,9,12,16,17,21,23,24,32,33,48,64,65,80,96,128,129,256,257,512,513
 #endif
