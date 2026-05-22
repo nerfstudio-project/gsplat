@@ -663,7 +663,8 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
     const RendererConfig renderer_config,
-    const bool persist_batch_state,
+    const bool fwd_only,
+    const bool return_last_ids,
     const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3] optional output tensor
     const bool unsafe_masked_tile_outputs
@@ -704,6 +705,16 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     if (sample_counts.has_value()) {
         CHECK_INPUT(sample_counts.value());
     }
+    TORCH_CHECK(
+        !fwd_only || !return_last_ids,
+        "fwd-only eval3d rasterization cannot return last_ids; "
+        "request exact metadata instead"
+    );
+    TORCH_CHECK(
+        !fwd_only || !sample_counts.has_value(),
+        "fwd-only eval3d rasterization cannot return sample_counts; "
+        "request exact metadata instead"
+    );
 
     // --- Allocate public forward outputs ----------------------------------
     auto opt = means.options();
@@ -720,24 +731,27 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     alphas_shape.append({C, image_height, image_width, 1});
     at::Tensor alphas = at::empty(alphas_shape, opt);
 
-    at::DimVector last_ids_shape(batch_dims);
-    last_ids_shape.append({C, image_height, image_width});
-    at::Tensor last_ids = at::empty(last_ids_shape, opt.dtype(at::kInt));
-
     at::Tensor compose_c_stop;
     at::Tensor priming_state;
     const int32_t pixels_per_tile = tile_size * tile_size;
     const bool return_normals = normals.has_value();
+    const bool needs_exact_metadata = !fwd_only;
+    const bool needs_last_ids = needs_exact_metadata || return_last_ids;
+    at::Tensor last_ids;
+    if (needs_last_ids) {
+        at::DimVector last_ids_shape(batch_dims);
+        last_ids_shape.append({C, image_height, image_width});
+        last_ids = at::empty(last_ids_shape, opt.dtype(at::kInt));
+    }
     const bool needs_batch_state =
-        persist_batch_state ||
-        renderer_config == RendererConfig::PARALLEL_BATCH;
+        !fwd_only || renderer_config == RendererConfig::PARALLEL_BATCH;
 
     // --- Build CSR batch structure + forward persistence buffer -----------
-    // Autograd callers persist batch state because both MixedBatch and
-    // ParallelBatch use batch-parallel backward. ParallelBatch forward also
-    // needs the same CSR/state tensors for its compose pass. No-grad
-    // MixedBatch is the only path that can skip this blocking readback and
-    // allocation.
+    // Non-fwd-only callers persist exact batch state because both MixedBatch and
+    // ParallelBatch use batch-parallel backward, and metadata inspection needs
+    // exact traversal results. ParallelBatch forward also needs the CSR/state
+    // tensors for its batch-scan/batch-replay passes. Fwd-only MixedBatch is
+    // the only path that can skip this blocking readback and allocation.
     const uint32_t tile_height = static_cast<uint32_t>(tile_offsets.size(-2));
     const uint32_t tile_width = static_cast<uint32_t>(tile_offsets.size(-1));
     int64_t batch_prod = 1;
@@ -791,7 +805,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
         );
     } else {
         // The batch-parallel forward needs a transient per-batch summary
-        // (last index and sample count per pixel) for its compose pass. It is
+        // (last index and sample count per pixel) for its batch-scan pass. It is
         // not part of autograd state; backward consumes only fwd_batch_state.
         // Each ushort2 stores `(last_local_plus_one, count_low15)` for one
         // (batch, pixel). Pixel 0's count lane also reserves its high bit as
@@ -803,13 +817,16 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
         // Transient per-pixel and per-batch handoff from batch-scan to
         // batch-replay. These are intentionally local to ParallelBatch fwd:
         // MixedBatch runs the serial forward path and never needs them.
-        const int64_t num_tiles_for_compose = batches_per_tile.size(0);
-        at::Tensor batch_replay_preamble = at::empty(
-            {num_tiles_for_compose, pixels_per_tile, 2},
-            opt.dtype(at::kInt));
-        compose_c_stop = at::empty(
-            {num_tiles_for_compose, pixels_per_tile},
-            opt.dtype(at::kUInt16));
+        const int64_t num_tiles_for_batch_replay = batches_per_tile.size(0);
+        at::Tensor batch_replay_preamble;
+        if (needs_exact_metadata) {
+            batch_replay_preamble = at::empty(
+                {num_tiles_for_batch_replay, pixels_per_tile, 2},
+                opt.dtype(at::kInt));
+            compose_c_stop = at::empty(
+                {num_tiles_for_batch_replay, pixels_per_tile},
+                opt.dtype(at::kUInt16));
+        }
         // Per-pixel priming-chain state for ParallelBatch partials. Each int32
         // packs `(!sat, float16 T_cum, uint16 -next_batch)`. Partials publish
         // with atomicMin, so saturated entries win first, then the smallest
@@ -823,7 +840,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
             max_batches_per_tile <= kMaxParallelBatchesPerTile,
             "max batches per tile must be <= ",
             kMaxParallelBatchesPerTile,
-            " for u16-packed ParallelBatch priming/compose state (got ",
+            " for u16-packed ParallelBatch priming/replay state (got ",
             max_batches_per_tile,
             ")");
         const int32_t priming_state_init =
@@ -847,6 +864,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
             ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids, use_hit_distance,
             batches_per_tile, batch_offsets, bid_to_slot, total_batches,
+            fwd_only,
             renders, alphas, last_ids,
             sample_counts, normals, fwd_batch_state, partials_meta,
             batch_replay_preamble, compose_c_stop, priming_state
@@ -958,9 +976,11 @@ public:
         FWD_OPACITIES   = 4,
         FWD_BACKGROUNDS = 5,
         FWD_RAYS        = 16,
-        FWD_RENDERER_CONFIG = 28,
-        // unsafe_masked_tile_outputs is op input 29 (no grad slot needed).
-        FWD_COUNT       = 30,
+        // op-input order (forward args): return_last_ids=25, return_sample_counts=26,
+        // use_hit_distance=27, return_normals=28, renderer_config=29,
+        // unsafe_masked_tile_outputs=30 (the last two carry no grad slot).
+        FWD_RENDERER_CONFIG = 29,
+        FWD_COUNT       = 31,
     };
 
     // Tensor-input slot map: positions in the Tensor-only subsequence of
@@ -1024,6 +1044,7 @@ public:
         // intersections
         const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
         const at::Tensor &flatten_ids,  // [n_isects]
+        bool return_last_ids,
         bool return_sample_counts,
         bool use_hit_distance,
         bool return_normals,
@@ -1059,7 +1080,8 @@ public:
             rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids,
-            use_hit_distance, parsed_renderer_config, true,
+            use_hit_distance, parsed_renderer_config,
+            /*fwd_only=*/false, /*return_last_ids=*/true,
             optional_outputs.sample_counts, optional_outputs.normals,
             unsafe_masked_tile_outputs
         );
@@ -1124,6 +1146,12 @@ public:
         // not optional<Tensor>. Zero-length tensors preserve the output count
         // for autograd; the dispatcher adapter converts them back to nullopt
         // for the public schema when the caller did not request them.
+        //
+        // Backward always saves the exact last_ids above, even when the public
+        // caller does not request that metadata as an output.
+        at::Tensor last_ids_output = return_last_ids
+            ? fwd.last_ids
+            : at::empty({0}, means.options().dtype(at::kInt));
         at::Tensor sample_counts_output = optional_outputs.sample_counts.value_or(
             at::empty({0}, means.options().dtype(at::kInt)));
         at::Tensor normals_output = optional_outputs.normals.value_or(
@@ -1136,7 +1164,7 @@ public:
         return {
             fwd.renders,
             fwd.alphas,
-            fwd.last_ids,
+            last_ids_output,
             sample_counts_output,
             normals_output,
         };
@@ -1391,6 +1419,7 @@ rasterize_to_pixels_from_world_3dgs(
     bool use_hit_distance,
     bool return_normals,
     int64_t renderer_config,
+    bool return_last_ids,
     bool unsafe_masked_tile_outputs
 ) {
 #if !GSPLAT_BUILD_3DGUT
@@ -1416,8 +1445,13 @@ rasterize_to_pixels_from_world_3dgs(
     );
 
     // --- Run shared forward ------------------------------------------------
-    // Forward-only MixedBatch does not need batch-state tensors. ParallelBatch
-    // still requests them because its forward compose pass uses the same state.
+    // Only the pure-render path can take the state-light fwd-only shortcut:
+    // - last_ids / sample_counts are exact-traversal outputs the fwd-only path
+    //   cannot produce, so requesting either forces the full forward (the
+    //   shared forward TORCH_CHECKs that combination).
+    // - Fwd-only MixedBatch then skips the batch-state tensors; ParallelBatch
+    //   still requests them for its forward batch-scan/batch-replay.
+    const bool fwd_only = !(return_last_ids || return_sample_counts);
     auto fwd = rasterize_to_pixels_from_world_3dgs_fwd(
         means, quats, scales, colors, opacities,
         backgrounds, masks,
@@ -1429,13 +1463,18 @@ rasterize_to_pixels_from_world_3dgs(
         rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         ftheta_coeffs, lidar_coeffs, external_distortion_params,
         tile_offsets, flatten_ids,
-        use_hit_distance, parsed_renderer_config, false,
+        use_hit_distance, parsed_renderer_config,
+        /*fwd_only=*/fwd_only, return_last_ids,
         optional_outputs.sample_counts, optional_outputs.normals,
         unsafe_masked_tile_outputs
     );
 
-    return std::make_tuple(fwd.renders, fwd.alphas, fwd.last_ids,
-                           optional_outputs.sample_counts, optional_outputs.normals);
+    return std::make_tuple(
+        fwd.renders,
+        fwd.alphas,
+        return_last_ids ? at::optional<at::Tensor>(fwd.last_ids) : c10::nullopt,
+        optional_outputs.sample_counts,
+        optional_outputs.normals);
 #endif // !GSPLAT_BUILD_3DGUT
 }
 
@@ -1473,6 +1512,7 @@ rasterize_to_pixels_from_world_3dgs_autograd(
     bool use_hit_distance,
     bool return_normals,
     int64_t renderer_config,
+    bool return_last_ids,
     bool unsafe_masked_tile_outputs
 ) {
 #if !GSPLAT_BUILD_3DGUT
@@ -1483,7 +1523,40 @@ rasterize_to_pixels_from_world_3dgs_autograd(
     );
     return {};
 #else
-    if (!at::GradMode::is_enabled()) {
+    // Dispatch note for rasterize_to_pixels_from_world_3dgs:
+    // References:
+    //   PyTorch Custom Operators Manual:
+    //     https://docs.pytorch.org/tutorials/advanced/custom_ops_landing_page.html#the-custom-operators-manual
+    //   Dispatcher autograd registration:
+    //     https://docs.pytorch.org/tutorials/advanced/dispatcher.html#adding-autograd-support
+    //   Autograd grad modes:
+    //     https://docs.pytorch.org/docs/stable/notes/autograd.html#locally-disabling-gradient-computation
+    //
+    // - Normal CUDA tensors carry both CUDA and AutogradCUDA dispatch keys even
+    //   when requires_grad=false. If an AutogradCUDA implementation is
+    //   registered, the dispatcher enters it before the CUDA implementation.
+    // - torch.no_grad() disables grad recording, but does not remove the
+    //   AutogradCUDA dispatch key. Calls still enter this adapter, which is why
+    //   the adapter has its own GradMode fast path back to the CUDA kernel.
+    // - torch.inference_mode() does remove the autograd-related dispatch keys.
+    //   In that mode, the dispatcher selects the CUDA implementation directly.
+    // - torch::autograd::Function::apply() only attaches an executable grad
+    //   node when GradMode is enabled and at least one tensor input requires
+    //   gradients, but that decision happens after forward() has already run.
+    //   The helper below mirrors that criterion before calling apply().
+    //   Its Tensor list is intentionally broader than "inputs whose gradients
+    //   we compute" so unsupported-but-requiring-grad Tensor inputs retain the
+    //   same observable behavior as the generic custom Function path.
+    const bool needs_autograd =
+        needs_custom_autograd(
+            means, quats, scales, colors, opacities,
+            backgrounds, masks,
+            viewmats0, viewmats1, Ks,
+            rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            tile_offsets, flatten_ids
+        );
+
+    if (!needs_autograd) {
         return rasterize_to_pixels_from_world_3dgs(
             means, quats, scales, colors, opacities,
             backgrounds, masks,
@@ -1493,8 +1566,9 @@ rasterize_to_pixels_from_world_3dgs_autograd(
             rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids,
-            return_sample_counts, use_hit_distance, return_normals,
-            renderer_config, unsafe_masked_tile_outputs
+            return_sample_counts,
+            use_hit_distance, return_normals,
+            renderer_config, return_last_ids, unsafe_masked_tile_outputs
         );
     }
 
@@ -1510,7 +1584,8 @@ rasterize_to_pixels_from_world_3dgs_autograd(
         rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
         ftheta_coeffs, lidar_coeffs, external_distortion_params,
         tile_offsets, flatten_ids,
-        return_sample_counts, use_hit_distance, return_normals,
+        return_last_ids, return_sample_counts,
+        use_hit_distance, return_normals,
         renderer_config,
         unsafe_masked_tile_outputs
     );
@@ -1518,7 +1593,7 @@ rasterize_to_pixels_from_world_3dgs_autograd(
     return std::make_tuple(
         outputs[0],
         outputs[1],
-        outputs[2],
+        return_last_ids ? at::optional<at::Tensor>(outputs[2]) : c10::nullopt,
         return_sample_counts ? at::optional<at::Tensor>(outputs[3]) : c10::nullopt,
         return_normals ? at::optional<at::Tensor>(outputs[4]) : c10::nullopt
     );

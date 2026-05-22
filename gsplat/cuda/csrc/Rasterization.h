@@ -217,6 +217,8 @@ void launch_rasterize_to_indices_2dgs_kernel(
 struct RasterizeToPixelsFromWorld3DGSFwdResult {
     at::Tensor renders;
     at::Tensor alphas;
+    // Defined when exact metadata is requested or when a forward implementation
+    // needs it internally.
     at::Tensor last_ids;
     // Persisted forward batch state consumed by batch-parallel backward.
     at::Tensor batches_per_tile;
@@ -228,9 +230,10 @@ struct RasterizeToPixelsFromWorld3DGSFwdResult {
     at::Tensor priming_state;
 };
 
-// Internal C++ forward entry point. When `persist_batch_state` is true (or the
-// selected forward renderer needs the state internally), returns fwd_batch_state
-// so backward can reuse the CSR layout forward already paid the D2H sync for.
+// Internal C++ forward entry point. When `fwd_only` is false, the caller is
+// asking for exact traversal metadata for backward/debugging. ParallelBatch
+// still allocates transient batch state in fwd-only mode because its compose
+// pass depends on it, but that mode must not expose exact metadata.
 RasterizeToPixelsFromWorld3DGSFwdResult
 rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor means,     // [..., N, 3]
@@ -258,10 +261,8 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor flatten_ids,  // [n_isects]
     bool use_hit_distance,
     RendererConfig renderer_config,
-    // Request CSR/fwd batch-state outputs for backward. ParallelBatch still
-    // allocates the same state internally because its forward compose pass
-    // depends on it.
-    bool persist_batch_state,
+    bool fwd_only,
+    bool return_last_ids,
     const at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3] optional output tensor
     bool unsafe_masked_tile_outputs
@@ -272,7 +273,7 @@ rasterize_to_pixels_from_world_3dgs_fwd(
 using RasterizeToPixelsFromWorld3DGSResult = std::tuple<
     at::Tensor,
     at::Tensor,
-    at::Tensor,
+    at::optional<at::Tensor>,
     at::optional<at::Tensor>,
     at::optional<at::Tensor>>;
 
@@ -307,6 +308,7 @@ rasterize_to_pixels_from_world_3dgs(
     bool use_hit_distance,
     bool return_normals,
     int64_t renderer_config,
+    bool return_last_ids,
     bool unsafe_masked_tile_outputs
 );
 
@@ -342,6 +344,7 @@ rasterize_to_pixels_from_world_3dgs_autograd(
     bool use_hit_distance,
     bool return_normals,
     int64_t renderer_config,
+    bool return_last_ids,
     bool unsafe_masked_tile_outputs
 );
 

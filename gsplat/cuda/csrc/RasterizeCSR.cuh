@@ -45,7 +45,7 @@ constexpr uint32_t FWD_BATCH_STATE_PIX_OFFSET = 1;
 // NORMAL offset depends on CDIM; callers compute it inline.
 constexpr uint32_t FWD_BATCH_STATE_NORMAL_EXTRA = 3;
 
-// Per-pixel compose handoff written in tile-major `[num_tiles, ppt]` order.
+// Per-pixel batch-replay handoff written in tile-major `[num_tiles, ppt]` order.
 // Values below COMPOSE_C_STOP_INVALID_RAY name the batch where batch-scan
 // handed the pixel to batch-replay. The top two uint16 values are sentinels:
 // - NONE: valid pixel finished entirely in batch-scan.
@@ -227,11 +227,12 @@ public:
     __device__ void set(
         int32_t last_idx_global,
         int32_t n_accumulated,
-        int32_t logical_batch_start
+        int32_t logical_batch_start,
+        bool terminal_batch = false
     ) {
         *value_ = make_ushort2(
             encodeLast(last_idx_global, logical_batch_start),
-            encodeCount(n_accumulated));
+            encodeCount(n_accumulated, terminal_batch));
     }
 
     __device__ void reset() {
@@ -249,6 +250,11 @@ public:
             return -1;
         }
         return logical_batch_start + static_cast<int32_t>(pair.x) - 1;
+    }
+
+    __device__ bool isTerminalBatch() const {
+        const ushort2 pair = *value_;
+        return (pair.y & BATCH_REPLAY_FLAG) != 0u;
     }
 
     __device__ int32_t count() const {
@@ -276,7 +282,9 @@ private:
     // TILE_SIZE*TILE_SIZE Gaussian batch:
     // - x: last local gaussian index + 1, or 0 when no hit
     // - y: low 15 bits hold the number of blended gaussians in that logical
-    //      batch; the high bit on pixel 0 is a CTA-level batch-replay flag.
+    //      batch. Exact mode uses the high bit on pixel 0 as a CTA-level
+    //      batch-replay flag; fwd-only mode uses the same high bit per
+    //      pixel to mark the terminal pre-threshold batch.
     //
     // The full global last index is reconstructed from the batch's global
     // start. This keeps the transient partials tensor compact without changing
@@ -296,10 +304,14 @@ private:
         return 0u;
     }
 
-    __device__ static uint16_t encodeCount(int32_t n_accumulated) {
+    __device__ static uint16_t encodeCount(
+        int32_t n_accumulated,
+        bool terminal_batch
+    ) {
         assert(n_accumulated >= 0);
         assert(n_accumulated <= COUNT_MASK);
-        return static_cast<uint16_t>(n_accumulated);
+        return static_cast<uint16_t>(
+            n_accumulated | (terminal_batch ? BATCH_REPLAY_FLAG : 0u));
     }
 
     PairT *value_;
