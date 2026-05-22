@@ -286,10 +286,15 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
     const uint32_t block_size = block.size();
     const uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
 
-    // Shared-memory layout: id, xyz+opacity, iscl_rot, scale, normal. Scale
-    // and normal slots are always reserved so the layout is deterministic
-    // across builds; the kernel writes to them only when the corresponding
-    // aux output is requested. 
+    // Shared-memory layout: id, xyz+opacity, iscl_rot, scale, normal.
+    // - scale_batch is always reserved (cheap, also used for hit-distance).
+    // - normal_batch is reserved AND populated only when render_n is true.
+    //   It sits at the very end of the layout so the host launcher can drop
+    //   its block_size * sizeof(vec3) bytes from the dynamic shared-memory
+    //   request when normals are not requested, which can recover a block
+    //   of SM occupancy on tight configurations. The kernel still computes
+    //   the (out-of-allocation) pointer below, but never touches the slot
+    //   unless render_n holds, so the address is just unused arithmetic.
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s;
     vec4 *xyz_opacity_batch = reinterpret_cast<vec4 *>(&id_batch[block_size]);
@@ -338,7 +343,9 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
             // same memory ops; the kernel only USES the values when the
             // corresponding output is requested.
             scale_batch[tr] = scale;
-            normal_batch[tr] = R[2];
+            if (render_n) {
+                normal_batch[tr] = R[2];
+            }
         }
         block.sync();
 
@@ -360,10 +367,10 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
             const float power = -0.5f * grayDist;
             const float density = __expf(power);
             float alpha = min(MAX_ALPHA, opac * density);
-            if (power > 0.f || alpha < 1.f / 255.f || density <= MAX_KERNEL_DENSITY_CUTOFF) continue;
+            if (alpha < ALPHA_THRESHOLD || density <= MAX_KERNEL_DENSITY_CUTOFF) continue;
 
             const float next_T = T * (1.0f - alpha);
-            if (next_T <= 1e-4f) { done = true; break; }
+            if (next_T <= TRANSMITTANCE_THRESHOLD) { done = true; break; }
 
             int32_t isect_id = id_batch[t];
             const float vis = alpha * T;
@@ -579,14 +586,12 @@ void launch_rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
 
     // Shared-memory layout matches the in-kernel pointer layout:
     // id_batch (int32) | xyz_opacity_batch (vec4) | iscl_rot_batch (mat3)
-    //                                       | scale_batch (vec3) | normal_batch (vec3)
-    // scale_batch / normal_batch are always reserved so the launch param
-    // matches the kernel regardless of whether the aux outputs are
-    // requested. See the in-kernel comment for details.
+    //                  | scale_batch (vec3) | normal_batch (vec3) [optional]
+    const bool launch_render_n = render_normals.has_value();
     int64_t shmem_size =
         tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3)
-         + sizeof(vec3) + sizeof(vec3));
+        (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3)
+         + (launch_render_n ? sizeof(vec3) : 0));
 
     if (cudaFuncSetAttribute(
             rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel<CDIM, scalar_t>,

@@ -16,6 +16,8 @@ class Tensor;
 
 namespace gsplat {
 
+struct RowOffsetStructuredSpinningLidarModelParametersExt;
+
 // NHT "from world" 3DGS: full camera model stack + tetrahedral interpolation.
 // NHT always uses world evaluation (with_eval3d + with_ut).
 // Forward supports FP16 via scalar_t = at::Half (fetches half, accumulation fp32).

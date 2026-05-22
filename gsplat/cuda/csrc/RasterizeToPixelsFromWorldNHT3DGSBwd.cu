@@ -387,7 +387,7 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_bwd_kernel(
                 const float power = -0.5f * grayDist;
                 vis = __expf(power);
                 alpha = min(MAX_ALPHA, opac * vis);
-                if (power > 0.f || alpha < 1.f / 255.f || vis <= MAX_KERNEL_DENSITY_CUTOFF) valid = false;
+                if (alpha < ALPHA_THRESHOLD || vis <= MAX_KERNEL_DENSITY_CUTOFF) valid = false;
             }
 
             if (!warp.any(valid)) continue;
@@ -456,18 +456,43 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_bwd_kernel(
                     (float *)v0, (float *)v1, (float *)v2, (float *)v3,
                     reinterpret_cast<float *>(f_interp));
 
+                // Fused (k, freq) loop: a single __sincosf(bv * freq_val) call
+                // per iteration feeds three accumulators
+                //   (a) v_f_interp_local : ∂L/∂f_interp via harmonic_encoding_bwd
+                //                          (d_sin = c*freq_val, d_cos = -s*freq_val).
+                //   (b) v_alpha (feature part) : over-operator chain term using
+                //                                the pre-Gaussian buffer[] values.
+                //   (c) buffer[] update : adds (s, c) * fac for the next Gaussian.
+                // buffer is read for (b) and written for (c) at the same FREQ_IDX pair
                 float v_f_interp_local[BASE_CDIM] = {};
+                float v_alpha = 0.f;
                 #pragma unroll
                 for (uint32_t k = 0; k < BASE_CDIM; ++k) {
                     const float bv = f_interp[k];
                     #pragma unroll
                     for (uint32_t freq = 0; freq < NUM_ENCODING_FREQUENCIES; ++freq) {
-                        float d_sin, d_cos;
-                        harmonic_encoding_bwd(bv, freq, d_sin, d_cos);
-                        v_f_interp_local[k] = fmaf(fac * d_sin, v_render_c[FREQ_IDX(k, 2 * freq)], v_f_interp_local[k]);
-                        v_f_interp_local[k] = fmaf(fac * d_cos, v_render_c[FREQ_IDX(k, 2 * freq + 1)], v_f_interp_local[k]);
+                        const float freq_val = get_encoding_frequency(freq);
+                        float s, c;
+                        __sincosf(bv * freq_val, &s, &c);
+                        const float d_sin =  c * freq_val;
+                        const float d_cos = -s * freq_val;
+
+                        const uint32_t idx_s = FREQ_IDX(k, 2 * freq);
+                        const uint32_t idx_c = FREQ_IDX(k, 2 * freq + 1);
+                        const float vc_s = v_render_c[idx_s];
+                        const float vc_c = v_render_c[idx_c];
+
+                        v_f_interp_local[k] = fmaf(fac * d_sin, vc_s, v_f_interp_local[k]);
+                        v_f_interp_local[k] = fmaf(fac * d_cos, vc_c, v_f_interp_local[k]);
+
+                        v_alpha = fmaf(fmaf(s, T, -buffer[idx_s] * ra), vc_s, v_alpha);
+                        v_alpha = fmaf(fmaf(c, T, -buffer[idx_c] * ra), vc_c, v_alpha);
+
+                        buffer[idx_s] = fmaf(s, fac, buffer[idx_s]);
+                        buffer[idx_c] = fmaf(c, fac, buffer[idx_c]);
                     }
                 }
+                v_alpha = fmaf(T_final * ra, v_render_a, v_alpha);
 
                 float v_v0_l[BASE_CDIM] = {};
                 float v_v1_l[BASE_CDIM] = {};
@@ -485,19 +510,6 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_bwd_kernel(
                     v_v2_local[k] += v_v2_l[k];
                     v_v3_local[k] += v_v3_l[k];
                 }
-
-                float v_alpha = 0.f;
-                for (uint32_t k = 0; k < BASE_CDIM; ++k) {
-                    const float bv = f_interp[k];
-                    #pragma unroll
-                    for (uint32_t freq = 0; freq < NUM_ENCODING_FREQUENCIES; ++freq) {
-                        float s, c;
-                        harmonic_encoding_fwd(bv, freq, s, c);
-                        v_alpha = fmaf(fmaf(s, T, -buffer[FREQ_IDX(k, 2 * freq)] * ra), v_render_c[FREQ_IDX(k, 2 * freq)], v_alpha);
-                        v_alpha = fmaf(fmaf(c, T, -buffer[FREQ_IDX(k, 2 * freq + 1)] * ra), v_render_c[FREQ_IDX(k, 2 * freq + 1)], v_alpha);
-                    }
-                }
-                v_alpha = fmaf(T_final * ra, v_render_a, v_alpha);
 
                 if (backgrounds != nullptr) {
                     float accum = 0.f;
@@ -581,7 +593,8 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_bwd_kernel(
                 }
 
                 // Update aux buffers (gaussians behind us in the next
-                // back-to-front step).
+                // back-to-front step). The harmonic `buffer[]` was already
+                // updated in the fused (k, freq) loop above.
                 if (bwd_d) {
                     depth_buffer = fmaf(depth_i, fac, depth_buffer);
                 }
@@ -589,18 +602,6 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_bwd_kernel(
                     normal_buffer.x = fmaf(normal.x, fac, normal_buffer.x);
                     normal_buffer.y = fmaf(normal.y, fac, normal_buffer.y);
                     normal_buffer.z = fmaf(normal.z, fac, normal_buffer.z);
-                }
-
-                #pragma unroll
-                for (uint32_t k = 0; k < BASE_CDIM; ++k) {
-                    const float bv = f_interp[k];
-                    #pragma unroll
-                    for (uint32_t freq = 0; freq < NUM_ENCODING_FREQUENCIES; ++freq) {
-                        float s, c;
-                        harmonic_encoding_fwd(bv, freq, s, c);
-                        buffer[FREQ_IDX(k, 2 * freq)] = fmaf(s, fac, buffer[FREQ_IDX(k, 2 * freq)]);
-                        buffer[FREQ_IDX(k, 2 * freq + 1)] = fmaf(c, fac, buffer[FREQ_IDX(k, 2 * freq + 1)]);
-                    }
                 }
             }
 
