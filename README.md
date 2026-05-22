@@ -15,6 +15,10 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 ### Unreleased
 
+[May 2026] [NHT (Neural Harmonic Textures)](https://research.nvidia.com/labs/sil/projects/neural-harmonic-textures/) is integrated in gsplat! Checkout [here](docs/nht.md) for more details.
+
+[Jan 2026] [PPISP](https://research.nvidia.com/labs/sil/projects/ppisp/) is integrated as an alternative way of bilateral grid to compensate the training views.
+
 Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gsplat/releases/tag/v1.5.3) tag (not yet on PyPI).
 
 - [May 2026] **Inference Rendering (HiGS)** -- An experimental inference-only rendering path based on HiGS (Hierarchically Tiled Gaussian Splatting) is now available under the `experimental` package. The inference path uses macro-tile fused rasterization with fp16 scene packing for low-latency rendering of pre-trained Gaussian scenes. For more details, see the [Inference Rendering](#inference-rendering) section and the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/).
