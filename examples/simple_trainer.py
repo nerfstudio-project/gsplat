@@ -71,7 +71,7 @@ except ModuleNotFoundError as e:
     ) from e
 from gsplat.cuda._wrapper import CameraModel
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat_viewer import GsplatViewer, GsplatRenderTabState
+from gsplat_viewer import GsplatViewer, GsplatRenderTabState, apply_ortho_scale_to_K
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
 
@@ -720,6 +720,7 @@ class Runner:
                     .unsqueeze(0)
                 )
 
+        return_normals = bool(kwargs.get("return_normals", False))
         render_colors, render_alphas, info = rasterization(
             means=means,
             quats=quats,
@@ -741,7 +742,7 @@ class Runner:
             distributed=self.world_size > 1,
             camera_model=camera_model,
             with_ut=with_ut,
-            with_eval3d=self.cfg.with_eval3d,
+            with_eval3d=self.cfg.with_eval3d or return_normals,
             ftheta_coeffs=ftheta_coeffs,
             radial_coeffs=radial_coeffs,
             tangential_coeffs=tangential_coeffs,
@@ -1434,13 +1435,19 @@ class Runner:
         K = camera_state.get_K((width, height))
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
+        if render_tab_state.camera_model == "ortho":
+            K = apply_ortho_scale_to_K(
+                K, width, height, render_tab_state.ortho_scale
+            )
 
         RENDER_MODE_MAP = {
             "rgb": "RGB",
             "depth(accumulated)": "D",
             "depth(expected)": "ED",
+            "normal": "RGB",
             "alpha": "RGB",
         }
+        need_normals = render_tab_state.render_mode == "normal"
 
         render_colors, render_alphas, info = self.stage.render(
             self.scene.id,
@@ -1458,6 +1465,7 @@ class Runner:
             render_mode=RENDER_MODE_MAP[render_tab_state.render_mode],
             rasterize_mode=render_tab_state.rasterize_mode,
             camera_model=render_tab_state.camera_model,
+            return_normals=need_normals,
         )  # [1, H, W, 3]
         render_tab_state.total_gs_count = len(self.splats["means"])
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
@@ -1484,6 +1492,9 @@ class Runner:
                 .cpu()
                 .numpy()
             )
+        elif render_tab_state.render_mode == "normal":
+            render_normals = info["normals"][0]
+            renders = (render_normals * 0.5 + 0.5).clamp(0, 1).cpu().numpy()
         elif render_tab_state.render_mode == "alpha":
             alpha = render_alphas[0, ..., 0:1]
             if render_tab_state.inverse:

@@ -37,7 +37,7 @@ from gsplat.scene import GaussianScene
 import gsplat.experimental as experimental
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
-from gsplat_viewer import GsplatViewer, GsplatRenderTabState
+from gsplat_viewer import GsplatViewer, GsplatRenderTabState, apply_ortho_scale_to_K
 
 
 def main(local_rank: int, world_rank, world_size: int, args):
@@ -208,6 +208,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         K = camera_state.get_K((width, height))
         c2w = torch.from_numpy(c2w).float().to(device)
         K = torch.from_numpy(K).float().to(device)
+        if render_tab_state.camera_model == "ortho":
+            K = apply_ortho_scale_to_K(K, width, height, render_tab_state.ortho_scale)
         viewmat = c2w.inverse().contiguous()
 
         if args.use_gaussian_render_inference_scene:
@@ -229,8 +231,10 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 "rgb": "RGB",
                 "depth(accumulated)": "D",
                 "depth(expected)": "ED",
+                "normal": "RGB",
                 "alpha": "RGB",
             }
+            need_normals = render_tab_state.render_mode == "normal"
             splats = gaussian_scene.splats
             render_kwargs = dict(
                 viewmats=viewmat[None],
@@ -253,7 +257,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 camera_model=render_tab_state.camera_model,
                 packed=False,
                 with_ut=args.with_ut,
-                with_eval3d=args.with_eval3d,
+                with_eval3d=args.with_eval3d or need_normals,
+                return_normals=need_normals,
             )
 
         with torch.inference_mode():
@@ -293,8 +298,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 near_plane = render_tab_state.near_plane
                 far_plane = render_tab_state.far_plane
             else:
-                near_plane = depth.min()
-                far_plane = depth.max()
+                valid_depth = depth[render_alphas[0] > 1e-6]
+                near_plane = valid_depth.min() if valid_depth.numel() else depth.min()
+                far_plane = valid_depth.max() if valid_depth.numel() else depth.max()
             depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
             depth_norm = torch.clip(depth_norm, 0, 1)
             if render_tab_state.inverse:
@@ -304,6 +310,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 .cpu()
                 .numpy()
             )
+        elif render_tab_state.render_mode == "normal":
+            render_normals = render_info["normals"][0]
+            renders = (render_normals * 0.5 + 0.5).clamp(0, 1).cpu().numpy()
         elif render_tab_state.render_mode == "alpha":
             alpha = render_alphas_out[0, ..., 0:1]
             renders = (
