@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <ATen/core/grad_mode.h>
 #include <ATen/core/Tensor.h>
 #include <type_traits>
 
@@ -23,6 +24,22 @@ inline at::optional<at::Tensor> as_optional_tensor(const at::Tensor &tensor) {
 
 inline at::Tensor as_tensor(const at::optional<at::Tensor> &tensor) {
     return tensor.value_or(at::Tensor{});
+}
+
+inline bool tensor_requires_grad(const at::Tensor &tensor) {
+    return tensor.defined() && tensor.requires_grad();
+}
+
+inline bool tensor_requires_grad(const at::optional<at::Tensor> &tensor) {
+    return tensor.has_value() && tensor.value().requires_grad();
+}
+
+// Mirrors torch::autograd::Function::apply's node-creation predicate for
+// wrappers whose custom forward does non-trivial saved-state setup.
+template <typename... Tensors>
+inline bool needs_custom_autograd(const Tensors &...tensors) {
+    return at::GradMode::is_enabled() &&
+           (tensor_requires_grad(tensors) || ...);
 }
 
 namespace detail {
