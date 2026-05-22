@@ -596,7 +596,12 @@ class TestQuaternionOperations(unittest.TestCase):
         )
         q2_seed = torch.randn(n, 4, device="cuda", dtype=torch.float32)
         proj = (q2_seed * q1_data).sum(dim=-1, keepdim=True) * q1_data
-        q2_data = torch.nn.functional.normalize(q2_seed - proj, dim=-1)
+        q2_orthogonal = torch.nn.functional.normalize(q2_seed - proj, dim=-1)
+        # Avoid the nondifferentiable hemisphere boundary at dot(q1, q2) == 0.
+        # The CUDA kernel and PyTorch reference both branch on the dot sign;
+        # keeping a small positive margin makes this a stable backward parity
+        # test instead of a comparison of two valid branch-side choices.
+        q2_data = torch.nn.functional.normalize(q2_orthogonal + 0.25 * q1_data, dim=-1)
         q1 = q1_data.requires_grad_()
         q2 = q2_data.requires_grad_()
         t = (
