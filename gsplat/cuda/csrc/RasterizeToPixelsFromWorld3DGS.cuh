@@ -24,7 +24,7 @@
 #include "Cameras.cuh"
 #include "ExternalDistortion.cuh"
 #include "Lidars.cuh"
-#include "RasterizeChunkCSR.h"
+#include "RasterizeCSR.cuh"
 #include "Utils.cuh"
 
 namespace gsplat {
@@ -36,7 +36,7 @@ namespace gsplat {
 // `compute_pixel_coords` and `compute_world_ray` are shared by
 // both the forward and backward kernels. The remaining helpers
 // (cooperative_load_fetch_round / process_fetch_round_blend /
-// process_logical_batch_gaussians / persist_chunk_state, plus
+// process_logical_batch_gaussians / persist_batch_state, plus
 // the cta_sync wrappers they call) are specific to the forward
 // kernel's compact-CTA path.
 //
@@ -48,14 +48,21 @@ namespace gsplat {
 //   - Logical batch: TILE_SIZE * TILE_SIZE gaussians, processed
 //     as FETCHES_PER_BATCH = LOGICAL_BATCH / FETCH_SIZE rounds.
 //     This is the unit the bwd's per-batch view expects, so the
-//     fwd's chunk-state persist boundaries land at the same
+//     fwd's batch-state persist boundaries land at the same
 //     gaussian positions.
-//   - Depth chunk (defined in RasterizeChunkCSR.h as CHUNK_BATCHES
-//     logical batches): the CSR persistence unit, also the unit
-//     the future depth-parallel kernel will have CTAs claim.
-//     Not directly represented here — orchestrated one logical
-//     batch at a time via process_logical_batch_gaussians.
 ////////////////////////////////////////////////////////////////
+
+enum class SaturationTPolicy {
+    // Leave T at its pre-saturation value when the threshold is crossed.
+    // SerialBatch and batch-replay use this when the post-saturation T is not
+    // needed outside the local blend loop.
+    KeepPreSaturationT,
+
+    // Store the post-saturation T in T itself. Exact ParallelBatch uses this
+    // so batch-scan sees a non-negative walk product and hands the boundary to
+    // batch-replay for exact metadata replay.
+    StorePostSaturationT,
+};
 
 // CTA-wide barrier with the same warp-vs-block behaviour the
 // kernel uses inline. CTA_SIZE_T == 32 collapses the whole CTA
@@ -416,11 +423,15 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
 // own bit in done_mask.
 //
 // CHECK_THRESHOLD enables the per-pixel transmittance early-mark:
-// when next_T <= TRANSMITTANCE_THRESHOLD the pixel's bit in
-// done_mask is set and the gaussian's contribution is dropped.
-// Always instantiated `true` in the current sequential kernel;
-// reserved as `false` for the depth-parallel kernel's
-// run-without-threshold-then-replay path.
+// when next_T <= the per-pixel transmittance_threshold[p] supplied by the
+// caller, the pixel's bit in done_mask is set and the gaussian's
+// contribution is dropped. (In the parallel-batch partials kernel that
+// threshold is the priming-tightened bound TRANSMITTANCE_THRESHOLD / T_init.)
+// Always instantiated `true` by both the serial-batch and parallel-batch
+// forward kernels; `false` is not currently instantiated.
+//
+// SaturationPolicy controls whether T keeps the pre-saturation value or stores
+// the post-saturation value after a gaussian crosses the threshold.
 //
 // Caller must run cta_sync between the cooperative load and this
 // call so all threads see the loaded shared batches.
@@ -428,6 +439,7 @@ template <
     uint32_t CDIM,
     uint32_t PIXELS_PER_THREAD_T,
     bool CHECK_THRESHOLD,
+    SaturationTPolicy SaturationPolicy,
     bool UseHitDistance,
     bool ReturnNormals,
     typename scalar_t
@@ -451,6 +463,9 @@ __device__ __forceinline__ void process_fetch_round_blend(
     int32_t (&n_accumulated)[PIXELS_PER_THREAD_T],
     uint32_t &done_mask
 ) {
+    constexpr bool store_post_saturation_t =
+        SaturationPolicy == SaturationTPolicy::StorePostSaturationT;
+
     for (uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t) {
         const vec4 xyz_opac = xyz_opacity_batch[t];
         const float opac = xyz_opac[3];
@@ -490,6 +505,9 @@ __device__ __forceinline__ void process_fetch_round_blend(
             const float next_T = T[p] * (1.0f - alpha);
             if constexpr (CHECK_THRESHOLD) {
                 if (next_T <= TRANSMITTANCE_THRESHOLD) {
+                    if constexpr (store_post_saturation_t) {
+                        T[p] = next_T;
+                    }
                     done_mask |= (1u << p);
                     continue;
                 }
@@ -550,6 +568,7 @@ template <
     uint32_t CTA_SIZE_T,
     uint32_t PIXELS_PER_THREAD_T,
     bool CHECK_THRESHOLD,
+    SaturationTPolicy SaturationPolicy,
     bool UseHitDistance,
     bool ReturnNormals,
     typename scalar_t
@@ -619,7 +638,7 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
         const uint32_t batch_size = min(FETCH_SIZE_T, ((uint32_t)range_end - batch_start));
         process_fetch_round_blend<
             CDIM, PIXELS_PER_THREAD_T, CHECK_THRESHOLD,
-            UseHitDistance, ReturnNormals, scalar_t>(
+            SaturationPolicy, UseHitDistance, ReturnNormals, scalar_t>(
             id_batch, xyz_opacity_batch, iscl_rot_batch,
             scale_batch, normal_batch,
             batch_start, batch_size,
@@ -640,58 +659,66 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     return false;
 }
 
-// Persist the CURRENT per-pixel cumulative state (T, pix_out, normal_out)
-// into one chunk slot of the CSR `fwd_chunk_state` buffer. Caller is
-// responsible for gating on `fwd_chunk_state != nullptr` (no internal
-// early-return) and for selecting the correct chunk index `c`.
+// Persist the CURRENT per-pixel cumulative state
+// (T, pix_out, and optional normal_out) into one batch slot of the CSR
+// `fwd_batch_state` buffer. Caller is
+// responsible for gating on `fwd_batch_state != nullptr` (no internal
+// early-return) and for selecting the correct forward depth-walk batch index
+// `c`.
 //
-// Layout: each (slot, thread_row=tid + p*CTA_SIZE_T) writes
-// `state_dim = FWD_CHUNK_STATE_PIX_OFFSET + CDIM + FWD_CHUNK_STATE_NORMAL_EXTRA`
-// = 1 + CDIM + 3 floats. The normal slot is zero-filled when
-// `return_normals == false` so bwd consumers can read it unconditionally.
+// SOA layout: each (slot, state element, thread_row=tid + p*CTA_SIZE_T) writes
+// `state_dim = FWD_BATCH_STATE_PIX_OFFSET + CDIM +
+// (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0)`. Pixels are
+// fastest-varying so each warp writes a contiguous span for one state element.
 //
-// `c=0` corresponds to the terminal state (what bwd chunk 0 starts from);
-// `c=num_chunks-1` corresponds to the earliest persistable state. The
-// boundary-formula derivation is documented in `RasterizeChunkCSR.h`.
+// `c=0` corresponds to the front-most batch boundary; `c=num_batches-1`
+// corresponds to the terminal state. The CSR slot layout these indices
+// follow is defined in `RasterizeCSR.cuh`.
 template <
     uint32_t CDIM,
     uint32_t PIXELS_PER_THREAD_T,
     uint32_t CTA_SIZE_T,
     bool ReturnNormals
 >
-__device__ __forceinline__ void persist_chunk_state(
+__device__ __forceinline__ void persist_batch_state(
     uint32_t c,
-    int64_t chunk_base_slot,
+    int64_t batch_base_slot,
     uint32_t pixels_per_tile,
     uint32_t tid,
     const float (&T)[PIXELS_PER_THREAD_T],
     const float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     const vec3  (&normal_out)[PIXELS_PER_THREAD_T],
-    float *__restrict__ fwd_chunk_state
+    float *__restrict__ fwd_batch_state
 ) {
     constexpr uint32_t state_dim =
-        FWD_CHUNK_STATE_PIX_OFFSET + CDIM + FWD_CHUNK_STATE_NORMAL_EXTRA;
+        FWD_BATCH_STATE_PIX_OFFSET + CDIM +
+        (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0u);
+    const int64_t ppt64 = static_cast<int64_t>(pixels_per_tile);
 #pragma unroll
     for (uint32_t p = 0; p < PIXELS_PER_THREAD_T; ++p) {
         const uint32_t tr = tid + p * CTA_SIZE_T;
-        const int64_t slot = chunk_base_slot + static_cast<int64_t>(c);
-        const int64_t base = slot * static_cast<int64_t>(pixels_per_tile) *
-                                static_cast<int64_t>(state_dim) +
-                            static_cast<int64_t>(tr) *
-                                static_cast<int64_t>(state_dim);
-        fwd_chunk_state[base + FWD_CHUNK_STATE_T_OFFSET] = T[p];
+        const int64_t slot = batch_base_slot + static_cast<int64_t>(c);
+        const int64_t slot_base =
+            slot * static_cast<int64_t>(state_dim) * ppt64;
+        const int64_t pix64 = static_cast<int64_t>(tr);
+        fwd_batch_state[slot_base + FWD_BATCH_STATE_T_OFFSET * ppt64 + pix64] =
+            T[p];
 #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + k] = pix_out[p][k];
+            fwd_batch_state[
+                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + k) * ppt64 + pix64] =
+                pix_out[p][k];
         }
         if constexpr (ReturnNormals) {
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = normal_out[p].x;
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = normal_out[p].y;
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = normal_out[p].z;
-        } else {
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = 0.0f;
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = 0.0f;
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = 0.0f;
+            fwd_batch_state[
+                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 0) * ppt64 +
+                    pix64] = normal_out[p].x;
+            fwd_batch_state[
+                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 1) * ppt64 +
+                    pix64] = normal_out[p].y;
+            fwd_batch_state[
+                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 2) * ppt64 +
+                    pix64] = normal_out[p].z;
         }
     }
 }

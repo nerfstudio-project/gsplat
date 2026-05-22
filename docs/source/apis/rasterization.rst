@@ -47,6 +47,8 @@ are the focal lengths of the camera.
 
 .. autoclass:: RendererConfig_MixedBatch
 
+.. autoclass:: RendererConfig_ParallelBatch
+
 2DGS
 ------
 

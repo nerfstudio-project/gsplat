@@ -50,6 +50,7 @@ from .cuda._wrapper import (
     rasterize_to_pixels_eval3d,
     rasterize_to_pixels_eval3d_extra,
     renderer_config_mixed_batch,
+    renderer_config_parallel_batch,
     spherical_harmonics,
 )
 from .distributed import (
@@ -94,6 +95,17 @@ class RendererConfig_MixedBatch(RendererConfig):
     """
 
 
+@dataclass
+class RendererConfig_ParallelBatch(RendererConfig):
+    """Eval3d rasterizer: batch-parallel forward and backward.
+
+    Both passes are batch-parallel (one CTA per batch); the forward adds a
+    partials/scan/replay pipeline so independent batches composite concurrently,
+    at the cost of per-batch forward state persisted for the backward. The
+    backward kernel is shared with MixedBatch.
+    """
+
+
 def _validate_renderer_config(renderer_config: RendererConfig) -> None:
     if renderer_config is None:
         raise TypeError("renderer_config must be a RendererConfig instance, got None.")
@@ -102,7 +114,9 @@ def _validate_renderer_config(renderer_config: RendererConfig) -> None:
             "renderer_config must be a RendererConfig instance, "
             f"got {type(renderer_config).__name__}."
         )
-    if type(renderer_config) is RendererConfig_MixedBatch:
+    if isinstance(renderer_config, RendererConfig_MixedBatch):
+        return
+    if isinstance(renderer_config, RendererConfig_ParallelBatch):
         return
     raise NotImplementedError(
         f"Unsupported renderer_config type: {type(renderer_config).__name__}."
@@ -111,10 +125,12 @@ def _validate_renderer_config(renderer_config: RendererConfig) -> None:
 
 def _renderer_config_type(renderer_config: RendererConfig) -> Any:
     _validate_renderer_config(renderer_config)
-    if type(renderer_config) is RendererConfig_MixedBatch:
+    if isinstance(renderer_config, RendererConfig_MixedBatch):
         return renderer_config_mixed_batch()
-    raise NotImplementedError(
-        f"Unsupported renderer_config type: {type(renderer_config).__name__}."
+    if isinstance(renderer_config, RendererConfig_ParallelBatch):
+        return renderer_config_parallel_batch()
+    raise AssertionError(
+        f"unreachable renderer_config: {type(renderer_config).__name__}"
     )
 
 
@@ -606,9 +622,10 @@ def rasterization(
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
-        renderer_config: The rasterizer implementation selector. Default is
+        renderer_config: The eval3d rasterizer implementation selector. Default is
             :class:`RendererConfig_MixedBatch`, which uses the existing mixed-batch
-            rasterizer implementation.
+            rasterizer implementation. Non-default configs require
+            ``with_eval3d=True``.
 
     Returns:
         A tuple:
@@ -658,6 +675,14 @@ def rasterization(
 
     _validate_3dgut_rasterize_mode(
         rasterize_mode, with_ut=with_ut, with_eval3d=with_eval3d
+    )
+    if not with_eval3d and not isinstance(renderer_config, RendererConfig_MixedBatch):
+        raise ValueError(
+            f"{type(renderer_config).__name__} requires with_eval3d=True; "
+            "non-eval3d rasterization only supports RendererConfig_MixedBatch."
+        )
+    renderer_config_impl = (
+        _renderer_config_type(renderer_config) if with_eval3d else None
     )
 
     if colors is None and has_color:
@@ -1311,7 +1336,7 @@ def rasterization(
                     viewmats_rs=viewmats_rs,
                     use_hit_distance=render_mode_has_hit_distance(render_mode),
                     return_normals=return_normals_chunk,
-                    renderer_config=_renderer_config_type(renderer_config),
+                    renderer_config=renderer_config_impl,
                 )
                 if i == 0 and render_normals_ is not None:
                     render_normals = render_normals_
@@ -1376,7 +1401,7 @@ def rasterization(
                 viewmats_rs=viewmats_rs,
                 use_hit_distance=render_mode_has_hit_distance(render_mode),
                 return_normals=return_normals,
-                renderer_config=_renderer_config_type(renderer_config),
+                renderer_config=renderer_config_impl,
             )
         else:
             if rays is not None:
