@@ -109,12 +109,18 @@ class EndoNeRFParser:
     height: int = field(init=False, default=0)
     width: int = field(init=False, default=0)
     focal: float = field(init=False, default=0.0)
-    K: np.ndarray = field(init=False, default_factory=lambda: np.zeros((3, 3), dtype=np.float32))
-    bounds: np.ndarray = field(init=False, default_factory=lambda: np.zeros((0, 2), dtype=np.float32))
+    K: np.ndarray = field(
+        init=False, default_factory=lambda: np.zeros((3, 3), dtype=np.float32)
+    )
+    bounds: np.ndarray = field(
+        init=False, default_factory=lambda: np.zeros((0, 2), dtype=np.float32)
+    )
     camtoworlds: np.ndarray = field(
         init=False, default_factory=lambda: np.zeros((0, 4, 4), dtype=np.float32)
     )
-    times: np.ndarray = field(init=False, default_factory=lambda: np.zeros((0,), dtype=np.float32))
+    times: np.ndarray = field(
+        init=False, default_factory=lambda: np.zeros((0,), dtype=np.float32)
+    )
     image_paths: List[Path] = field(init=False, default_factory=list)
     depth_paths: List[Path] = field(init=False, default_factory=list)
     mask_paths: List[Path] = field(init=False, default_factory=list)
@@ -188,9 +194,11 @@ class EndoNeRFParser:
         bottom_row = np.broadcast_to(
             np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32), (n, 1, 4)
         )
-        self.camtoworlds = np.concatenate([c2w_3x4, bottom_row], axis=1).astype(np.float32)
+        self.camtoworlds = np.concatenate([c2w_3x4, bottom_row], axis=1).astype(
+            np.float32
+        )
 
-        self.times = (np.arange(n, dtype=np.float32) / n)
+        self.times = np.arange(n, dtype=np.float32) / n
 
         self.image_paths = sorted((self.data_dir / "images").glob("*.png"))
         self.depth_paths = sorted((self.data_dir / "depth").glob("*.png"))
@@ -256,7 +264,8 @@ class EndoNeRFDataset(torch.utils.data.Dataset):
         idx = self.indices[index]
 
         image = (
-            np.array(Image.open(self.parser.image_paths[idx])).astype(np.float32) / 255.0
+            np.array(Image.open(self.parser.image_paths[idx])).astype(np.float32)
+            / 255.0
         )
         depth = np.array(Image.open(self.parser.depth_paths[idx])).astype(np.float32)
 

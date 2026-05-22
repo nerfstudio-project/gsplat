@@ -38,14 +38,16 @@ def test_plane_smoothness_curved_input_positive():
     """Quadratic ramp along H → constant non-zero second-difference → positive."""
     h, w = 8, 8
     coords = torch.arange(h, dtype=torch.float32)
-    plane = (coords ** 2).view(1, 1, h, 1).expand(1, 4, h, w).contiguous()
+    plane = (coords**2).view(1, 1, h, 1).expand(1, 4, h, w).contiguous()
     out = plane_smoothness([plane])
     assert out.item() > 0
 
 
 def test_plane_smoothness_sums_across_planes():
     plane_a = torch.full((1, 1, 4, 4), 0.5)  # constant → 0 contribution
-    plane_b = (torch.arange(4 * 4, dtype=torch.float32) ** 2).view(1, 1, 4, 4)  # nonzero
+    plane_b = (torch.arange(4 * 4, dtype=torch.float32) ** 2).view(
+        1, 1, 4, 4
+    )  # nonzero
     out_b_only = plane_smoothness([plane_b])
     out_both = plane_smoothness([plane_a, plane_b])
     assert torch.allclose(out_both, out_b_only, atol=1e-6)
@@ -101,9 +103,7 @@ def test_time_l1_gradient_flows():
     out.backward()
     assert plane.grad is not None
     # |1 - 0.5| = 0.5, derivative w.r.t. plane is -1 / numel = -1/16.
-    assert torch.allclose(
-        plane.grad, torch.full_like(plane, -1.0 / 16.0), atol=1e-6
-    )
+    assert torch.allclose(plane.grad, torch.full_like(plane, -1.0 / 16.0), atol=1e-6)
 
 
 # CUDA-gated regression: earlier impl initialised the accumulator on CPU and

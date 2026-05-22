@@ -39,9 +39,7 @@ def test_multiframe_unprojection_recovers_synthetic_grid():
     depths = torch.full((1, h, w), 1.0)
     masks = torch.ones(1, h, w)
     poses = torch.eye(4).unsqueeze(0)
-    intrinsics = torch.tensor(
-        [[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]]
-    )
+    intrinsics = torch.tensor([[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]])
 
     xyz, rgb = multi_frame_depth_unprojection(images, depths, masks, poses, intrinsics)
 
@@ -58,25 +56,27 @@ def test_multiframe_unprojection_recovers_synthetic_grid():
 
 def test_multiframe_unprojection_rgb_matches_source_pixels():
     """All four source RGBs should appear in the output point set (one per pixel)."""
-    images = torch.tensor([[
-        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-        [[0.0, 0.0, 1.0], [1.0, 1.0, 0.0]],
-    ]])  # (1, 2, 2, 3)
+    images = torch.tensor(
+        [
+            [
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                [[0.0, 0.0, 1.0], [1.0, 1.0, 0.0]],
+            ]
+        ]
+    )  # (1, 2, 2, 3)
     depths = torch.full((1, 2, 2), 1.0)
     masks = torch.ones(1, 2, 2)
     poses = torch.eye(4).unsqueeze(0)
-    intrinsics = torch.tensor(
-        [[[1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]]]
-    )
+    intrinsics = torch.tensor([[[1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]]])
 
     _, rgb = multi_frame_depth_unprojection(images, depths, masks, poses, intrinsics)
 
     assert rgb.shape == (4, 3)
     expected = images.reshape(-1, 3)
     for r in expected:
-        assert any(torch.allclose(out, r, atol=1e-6) for out in rgb), (
-            f"Expected RGB {r.tolist()} not found in output."
-        )
+        assert any(
+            torch.allclose(out, r, atol=1e-6) for out in rgb
+        ), f"Expected RGB {r.tolist()} not found in output."
 
 
 def test_multiframe_unprojection_frame_count_mismatch_raises():
@@ -108,9 +108,7 @@ def test_multiframe_unprojection_zero_depth_pixels_excluded():
     depths[0, :2, :] = 0.0  # top half: no depth
     masks = torch.ones(1, h, w)
     poses = torch.eye(4).unsqueeze(0)
-    intrinsics = torch.tensor(
-        [[[4.0, 0.0, 2.0], [0.0, 4.0, 2.0], [0.0, 0.0, 1.0]]]
-    )
+    intrinsics = torch.tensor([[[4.0, 0.0, 2.0], [0.0, 4.0, 2.0], [0.0, 0.0, 1.0]]])
 
     xyz, rgb = multi_frame_depth_unprojection(images, depths, masks, poses, intrinsics)
     # Only bottom half (8 pixels) should remain.
@@ -124,9 +122,7 @@ def test_multiframe_unprojection_max_points_subsamples():
     depths = torch.full((1, h, w), 1.0)
     masks = torch.ones(1, h, w)
     poses = torch.eye(4).unsqueeze(0)
-    intrinsics = torch.tensor(
-        [[[1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]]]
-    )
+    intrinsics = torch.tensor([[[1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]]])
 
     xyz, rgb = multi_frame_depth_unprojection(
         images, depths, masks, poses, intrinsics, max_points=5

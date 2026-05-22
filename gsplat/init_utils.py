@@ -74,7 +74,12 @@ def multi_frame_depth_unprojection(
         ValueError: if leading dimensions disagree across the inputs.
     """
     n = images.shape[0]
-    for name, t in (("depths", depths), ("masks", masks), ("poses", poses), ("intrinsics", intrinsics)):
+    for name, t in (
+        ("depths", depths),
+        ("masks", masks),
+        ("poses", poses),
+        ("intrinsics", intrinsics),
+    ):
         if t.shape[0] != n:
             raise ValueError(
                 f"multi_frame_depth_unprojection: leading dim mismatch — "
@@ -171,9 +176,7 @@ def knn_scale_init(
     """
     n = xyz.shape[0]
     if n <= k:
-        raise ValueError(
-            f"knn_scale_init: need at least k+1={k + 1} points, got {n}."
-        )
+        raise ValueError(f"knn_scale_init: need at least k+1={k + 1} points, got {n}.")
 
     # Chunked pairwise KNN: a single (N, N) cdist is ~N^2 * 4 bytes, which is
     # ~10 GB at N=50_000 (fits on an A100, OOMs on a 12-16 GB consumer card).

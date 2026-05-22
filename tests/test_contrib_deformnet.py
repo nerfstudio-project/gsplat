@@ -84,9 +84,9 @@ def test_deform_net_gradients_flow_to_mlp_weights():
 
     for head in (net.pos_head, net.quat_head, net.opacity_head):
         assert head.weight.grad is not None
-        assert head.weight.grad.abs().sum() > 0, (
-            f"Head {head} weight received zero gradient."
-        )
+        assert (
+            head.weight.grad.abs().sum() > 0
+        ), f"Head {head} weight received zero gradient."
 
 
 def test_deform_net_zero_init_blocks_trunk_gradient_at_init():

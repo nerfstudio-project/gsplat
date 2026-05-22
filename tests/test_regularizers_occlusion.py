@@ -39,9 +39,7 @@ def test_tv_targeted_step_edge_matches_analytic_value():
     tv_w is 0 (rows are constant horizontally).
     Without a mask: (3 + 0) / image.numel() = 3 / 9 = 1/3.
     """
-    img = torch.tensor(
-        [[[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]]]
-    )
+    img = torch.tensor([[[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]]])
     loss = compute_tv_loss_targeted(img)
     assert torch.allclose(loss, torch.tensor(1.0 / 3.0), atol=1e-6)
 

@@ -31,7 +31,9 @@ from examples.datasets.endonerf import EndoNeRFDataset, EndoNeRFParser  # noqa: 
 # ---------------------------------------------------------------------------
 
 
-def _write_endonerf_fixture(root: Path, n_frames: int = 4, height: int = 8, width: int = 8) -> Path:
+def _write_endonerf_fixture(
+    root: Path, n_frames: int = 4, height: int = 8, width: int = 8
+) -> Path:
     """Write a minimal EndoNeRF-shaped directory under *root* and return *root*."""
     (root / "images").mkdir(parents=True, exist_ok=True)
     (root / "depth").mkdir(parents=True, exist_ok=True)
@@ -40,9 +42,9 @@ def _write_endonerf_fixture(root: Path, n_frames: int = 4, height: int = 8, widt
     # poses_bounds.npy: (N, 17) — 15 = pose [3 x 5] flattened, 2 = near/far bounds.
     poses = np.zeros((n_frames, 3, 5), dtype=np.float32)
     for i in range(n_frames):
-        poses[i, :, :3] = np.eye(3)                # identity rotation
-        poses[i, :, 3] = [0.0, 0.0, float(i)]      # translation along z so frames differ
-        poses[i, :, 4] = [height, width, 100.0]    # [H, W, focal]
+        poses[i, :, :3] = np.eye(3)  # identity rotation
+        poses[i, :, 3] = [0.0, 0.0, float(i)]  # translation along z so frames differ
+        poses[i, :, 4] = [height, width, 100.0]  # [H, W, focal]
     bounds = np.tile([[0.1, 100.0]], (n_frames, 1)).astype(np.float32)
     poses_arr = np.concatenate([poses.reshape(n_frames, 15), bounds], axis=1)
     np.save(root / "poses_bounds.npy", poses_arr)
@@ -88,9 +90,7 @@ def test_endonerf_parser_loads_fixture(endonerf_dir: Path):
     # Identity LLFF maps to the column-permuted matrix below; translation
     # is unchanged.
     llff_identity_after_permutation = np.array(
-        [[0.0, -1.0, 0.0],
-         [1.0,  0.0, 0.0],
-         [0.0,  0.0, 1.0]],
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
         dtype=np.float32,
     )
     np.testing.assert_allclose(
@@ -113,6 +113,7 @@ def test_endonerf_parser_applies_llff_axis_permutation(endonerf_dir: Path):
     output matches the hand-computed permutation."""
     # Custom fixture: scaled-identity LLFF rotation per frame.
     import shutil
+
     custom_root = endonerf_dir.parent / "endonerf_axis_test"
     if custom_root.exists():
         shutil.rmtree(custom_root)

@@ -309,7 +309,9 @@ def pearson_depth_loss(
     pred_centered = pred_flat - pred_flat.mean()
     gt_centered = gt_flat - gt_flat.mean()
     num = (pred_centered * gt_centered).sum()
-    denom = (pred_centered.pow(2).sum() * gt_centered.pow(2).sum()).clamp(min=1e-12).sqrt()
+    denom = (
+        (pred_centered.pow(2).sum() * gt_centered.pow(2).sum()).clamp(min=1e-12).sqrt()
+    )
     return 1.0 - num / denom
 
 

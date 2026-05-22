@@ -91,13 +91,9 @@ def _init_grid_param(
     b: float = 0.5,
 ) -> nn.ParameterList:
     if in_dim != len(reso):
-        raise ValueError(
-            f"_init_grid_param: in_dim={in_dim} != len(reso)={len(reso)}."
-        )
+        raise ValueError(f"_init_grid_param: in_dim={in_dim} != len(reso)={len(reso)}.")
     if grid_nd > in_dim:
-        raise ValueError(
-            f"_init_grid_param: grid_nd={grid_nd} > in_dim={in_dim}."
-        )
+        raise ValueError(f"_init_grid_param: grid_nd={grid_nd} > in_dim={in_dim}.")
     has_time_planes = in_dim == 4
     coo_combs = list(itertools.combinations(range(in_dim), grid_nd))
     grid_coefs = nn.ParameterList()
@@ -197,8 +193,14 @@ class HexPlaneField(nn.Module):
     ) -> None:
         super().__init__()
 
-        config = dict(planes_config) if planes_config is not None else dict(_DEFAULT_PLANE_CONFIG)
-        multires_seq = list(multires) if multires is not None else list(_DEFAULT_MULTIRES)
+        config = (
+            dict(planes_config)
+            if planes_config is not None
+            else dict(_DEFAULT_PLANE_CONFIG)
+        )
+        multires_seq = (
+            list(multires) if multires is not None else list(_DEFAULT_MULTIRES)
+        )
 
         self.bounds = float(bounds)
         aabb = torch.tensor(
@@ -217,7 +219,9 @@ class HexPlaneField(nn.Module):
             scale_config = dict(config)
             base_reso = list(scale_config["resolution"])
             # Multi-res only on spatial axes; time grid stays fixed across scales.
-            scale_config["resolution"] = [r * res for r in base_reso[:3]] + base_reso[3:]
+            scale_config["resolution"] = [r * res for r in base_reso[:3]] + base_reso[
+                3:
+            ]
             gp = _init_grid_param(
                 grid_nd=scale_config["grid_dimensions"],
                 in_dim=scale_config["input_coordinate_dim"],

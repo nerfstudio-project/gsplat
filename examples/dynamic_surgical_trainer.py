@@ -100,7 +100,9 @@ class Config:
 
     # SfM-free initialisation
     init_max_points: int = 50_000
-    init_scale_multiplier: float = 1.0  # G-SHARP convention: scales = log(knn_dist * init_scale)
+    init_scale_multiplier: float = (
+        1.0  # G-SHARP convention: scales = log(knn_dist * init_scale)
+    )
     init_opacity: float = 0.1
 
     # HexPlane field
@@ -180,7 +182,9 @@ def _load_train_tensors(
         images_np.append(
             np.array(Image.open(parser.image_paths[idx])).astype(np.float32) / 255.0
         )
-        depths_np.append(np.array(Image.open(parser.depth_paths[idx])).astype(np.float32))
+        depths_np.append(
+            np.array(Image.open(parser.depth_paths[idx])).astype(np.float32)
+        )
         mask_raw = np.array(Image.open(parser.mask_paths[idx]))
         if mask_raw.ndim == 3:
             mask_raw = mask_raw[..., 0]
@@ -194,7 +198,9 @@ def _load_train_tensors(
     depths = torch.from_numpy(np.stack(depths_np)).to(device)
     masks = torch.from_numpy(np.stack(masks_np)).to(device)
     poses = torch.from_numpy(parser.camtoworlds[idxs]).to(device)
-    intrinsics = torch.from_numpy(parser.K).unsqueeze(0).expand(len(idxs), -1, -1).to(device)
+    intrinsics = (
+        torch.from_numpy(parser.K).unsqueeze(0).expand(len(idxs), -1, -1).to(device)
+    )
     return images, depths, masks, poses, intrinsics
 
 
@@ -226,8 +232,14 @@ def build_splats_from_parser(
     # extent (sensor noise / invalid samples); without clipping they pull
     # the init point cloud's AABB to absurd scales and the HexPlane AABB
     # (auto-derived in train()) blows up too.
-    if hasattr(parser, "bounds") and parser.bounds is not None and len(parser.bounds) > 0:
-        depth_max = float(parser.bounds.max()) * 1.5  # 50% margin for unsupervised drift
+    if (
+        hasattr(parser, "bounds")
+        and parser.bounds is not None
+        and len(parser.bounds) > 0
+    ):
+        depth_max = (
+            float(parser.bounds.max()) * 1.5
+        )  # 50% margin for unsupervised drift
         depths = depths.clamp(max=depth_max)
 
     # ``masks`` is already in tissue=1 / tool=0 convention (see
@@ -456,7 +468,9 @@ def train_step(
     else:
         d_loss = pearson_depth_loss(depth_rendered, depth_gt, mask)
 
-    tv = compute_tv_loss_targeted(rgb_p)  # unmasked TV (mask wiring is dataset-specific)
+    tv = compute_tv_loss_targeted(
+        rgb_p
+    )  # unmasked TV (mask wiring is dataset-specific)
 
     # Spatial / temporal plane partition lives on HexPlaneField now (MR-030).
     plane_smooth = plane_smoothness(hexplane.spatial_planes())
@@ -479,7 +493,11 @@ def train_step(
     info_with_dims["n_cameras"] = 1
 
     strategy.step_pre_backward(
-        params=params, optimizers=optimizers, state=state, step=step, info=info_with_dims
+        params=params,
+        optimizers=optimizers,
+        state=state,
+        step=step,
+        info=info_with_dims,
     )
 
     for opt in optimizers.values():
@@ -616,7 +634,12 @@ def render_gif(
     for idx in tqdm.tqdm(frame_indices, desc=f"rendering -> {output_path.name}"):
         frames.append(
             render_frame(
-                parser, idx, params, hexplane, deform_net, device,
+                parser,
+                idx,
+                params,
+                hexplane,
+                deform_net,
+                device,
                 dynamic_mask=dynamic_mask,
             )
         )

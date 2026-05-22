@@ -90,8 +90,8 @@ def test_hexplane_out_of_bounds_time_handled():
     xyzt = torch.tensor(
         [
             [0.0, 0.0, 0.0, -2.0],  # t below grid
-            [0.0, 0.0, 0.0, 2.0],   # t above grid
-            [0.0, 0.0, 0.0, 0.0],   # in-bounds
+            [0.0, 0.0, 0.0, 2.0],  # t above grid
+            [0.0, 0.0, 0.0, 0.0],  # in-bounds
         ]
     )
     feat = field(xyzt)

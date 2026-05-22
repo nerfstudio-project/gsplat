@@ -136,7 +136,11 @@ class DeformNetwork(nn.Module):
                 or dtype mismatch among the four tensors.
         """
         n = means.shape[0]
-        if quats.shape[0] != n or opacities.shape[0] != n or plane_features.shape[0] != n:
+        if (
+            quats.shape[0] != n
+            or opacities.shape[0] != n
+            or plane_features.shape[0] != n
+        ):
             raise ValueError(
                 f"DeformNetwork: batch dim mismatch — means {means.shape[0]}, "
                 f"quats {quats.shape[0]}, opacities {opacities.shape[0]}, "

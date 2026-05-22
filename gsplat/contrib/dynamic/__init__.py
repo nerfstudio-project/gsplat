@@ -19,7 +19,10 @@ Ported from G-SHARP v0.2's ``training/scene`` package. See the proposal at
 branch ``vnath_gsharp`` for progress.
 """
 
-from .deformation import DeformationTable, DeformNetwork  # noqa: F401  (back-compat re-export)
+from .deformation import (
+    DeformationTable,
+    DeformNetwork,
+)  # noqa: F401  (back-compat re-export)
 from .hexplane import HexPlaneField
 from .regulation import (
     hexplane_regularization,

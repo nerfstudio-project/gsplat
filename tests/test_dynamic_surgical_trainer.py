@@ -49,7 +49,9 @@ _ENDONERF_DATA_DIR = os.environ.get("ENDONERF_DATA_DIR")
 # ---------------------------------------------------------------------------
 
 
-def _write_trainer_fixture(root: Path, n_frames: int = 4, h: int = 32, w: int = 32) -> Path:
+def _write_trainer_fixture(
+    root: Path, n_frames: int = 4, h: int = 32, w: int = 32
+) -> Path:
     (root / "images").mkdir(parents=True, exist_ok=True)
     (root / "depth").mkdir(parents=True, exist_ok=True)
     (root / "masks").mkdir(parents=True, exist_ok=True)
@@ -113,7 +115,9 @@ def test_config_paths_are_coerced_to_path():
 def test_build_splats_from_parser_produces_expected_shapes(trainer_dir: Path):
     cfg = Config(data_dir=trainer_dir, init_max_points=200)
     parser = EndoNeRFParser(data_dir=trainer_dir)
-    params, optimizers = build_splats_from_parser(parser, cfg, device=torch.device("cpu"))
+    params, optimizers = build_splats_from_parser(
+        parser, cfg, device=torch.device("cpu")
+    )
 
     n = params["means"].shape[0]
     assert n > 0
