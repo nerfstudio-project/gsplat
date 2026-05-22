@@ -428,3 +428,53 @@ def test_parse_input_override(load_profile):
 def test_parse_input_override_rejects_bad_names(raw, load_profile):
     with pytest.raises(ValueError):
         load_profile._parse_input_override(raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_type"),
+    [
+        ("mixedbatch", "RendererConfig_MixedBatch"),
+        ("MixedBatch", "RendererConfig_MixedBatch"),
+        ("MIXEDBATCH", "RendererConfig_MixedBatch"),
+        ("parallelbatch", "RendererConfig_ParallelBatch"),
+        ("ParallelBatch", "RendererConfig_ParallelBatch"),
+        ("PARALLELBATCH", "RendererConfig_ParallelBatch"),
+    ],
+)
+def test_parse_renderer_config_override_names(
+    load_profile, monkeypatch, raw, expected_type
+):
+    rendering = types.ModuleType("gsplat.rendering")
+    for type_name in {
+        "RendererConfig_MixedBatch",
+        "RendererConfig_ParallelBatch",
+    }:
+        setattr(rendering, type_name, type(type_name, (), {}))
+    monkeypatch.setitem(sys.modules, "gsplat.rendering", rendering)
+
+    value = load_profile._parse_renderer_config_override(raw)
+
+    assert type(value).__name__ == expected_type
+
+
+def test_parse_renderer_config_override_keeps_non_string(load_profile):
+    value = object()
+
+    assert load_profile._parse_renderer_config_override(value) is value
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "default",
+        "mixed",
+        "mixed_batch",
+        "RendererConfig_MixedBatch",
+        "serialbatch",
+        "parallelbathc",
+        "futurebatch",
+    ],
+)
+def test_parse_renderer_config_override_rejects_unknown(load_profile, raw):
+    with pytest.raises(ValueError, match="renderer_config override"):
+        load_profile._parse_renderer_config_override(raw)
