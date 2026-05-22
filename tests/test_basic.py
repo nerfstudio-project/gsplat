@@ -2559,6 +2559,7 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
         isect_offsets,
         flatten_ids,
         use_hit_distance=True,
+        return_last_ids=False,
         return_sample_counts=False,
         return_normals=False,
     )
@@ -3652,6 +3653,7 @@ class InputGrad(Enum):
 class EnableGrad(Enum):
     ENABLE = "enable"
     DISABLE = "disable"
+    INFERENCE = "inference"
 
 
 class GradResult(Enum):
@@ -3659,21 +3661,57 @@ class GradResult(Enum):
     NO_GRAD = "no_grad"
 
 
+def _call_rasterize_eval3d_extra(
+    inputs, renderer_config, return_last_ids=False, return_sample_counts=False
+):
+    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+
+    return rasterize_to_pixels_eval3d_extra(
+        inputs["means"],
+        inputs["quats"],
+        inputs["scales"],
+        inputs["colors"],
+        inputs["opacities"],
+        inputs["viewmats"],
+        inputs["Ks"],
+        inputs["width"],
+        inputs["height"],
+        inputs["tile_size"],
+        inputs["isect_offsets"],
+        inputs["flatten_ids"],
+        return_last_ids=return_last_ids,
+        return_sample_counts=return_sample_counts,
+        renderer_config=renderer_config,
+    )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "renderer_config",
+    [
+        gsplat.RendererConfig_MixedBatch(),
+        gsplat.RendererConfig_ParallelBatch(),
+    ],
+    ids=["mixed_batch", "parallel_batch"],
+)
+@pytest.mark.parametrize(
+    "request_metadata",
+    [False, True],
+    ids=["render_only", "with_metadata"],
+)
 @pytest.mark.parametrize(
     ("enable_grad", "input_grad", "grad_result"),
     [
         (EnableGrad.DISABLE, InputGrad.REQ_GRAD, GradResult.NO_GRAD),
+        (EnableGrad.INFERENCE, InputGrad.REQ_GRAD, GradResult.NO_GRAD),
         (EnableGrad.ENABLE, InputGrad.NO_GRAD, GradResult.NO_GRAD),
         (EnableGrad.ENABLE, InputGrad.REQ_GRAD, GradResult.HAS_GRAD),
     ],
 )
 def test_rasterize_eval3d_grad_modes_save_backward_state(
-    small_scene, enable_grad, input_grad, grad_result
+    small_scene, renderer_config, enable_grad, input_grad, grad_result, request_metadata
 ):
-    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
-
     saved = []
     differentiable_names = ("means", "quats", "scales", "colors", "opacities")
     requires_grad = input_grad is InputGrad.REQ_GRAD
@@ -3689,20 +3727,11 @@ def test_rasterize_eval3d_grad_modes_save_backward_state(
         return tensor
 
     def call():
-        return rasterize_to_pixels_eval3d_extra(
-            inputs["means"],
-            inputs["quats"],
-            inputs["scales"],
-            inputs["colors"],
-            inputs["opacities"],
-            inputs["viewmats"],
-            inputs["Ks"],
-            inputs["width"],
-            inputs["height"],
-            inputs["tile_size"],
-            inputs["isect_offsets"],
-            inputs["flatten_ids"],
-            renderer_config=gsplat.RendererConfig_MixedBatch(),
+        return _call_rasterize_eval3d_extra(
+            inputs,
+            renderer_config,
+            return_last_ids=request_metadata,
+            return_sample_counts=request_metadata,
         )
 
     with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
@@ -3710,6 +3739,9 @@ def test_rasterize_eval3d_grad_modes_save_backward_state(
             outputs = call()
         elif enable_grad is EnableGrad.DISABLE:
             with torch.no_grad():
+                outputs = call()
+        elif enable_grad is EnableGrad.INFERENCE:
+            with torch.inference_mode():
                 outputs = call()
         else:
             raise AssertionError(f"unknown grad mode: {enable_grad}")
@@ -3730,6 +3762,51 @@ def test_rasterize_eval3d_grad_modes_save_backward_state(
         assert not outputs[0].requires_grad
         for name in differentiable_names:
             assert inputs[name].grad is None
+
+    # Exact-metadata outputs must survive every grad mode. The no-grad / inference
+    # paths route through the state-light CUDA-key forward, which must request the
+    # full forward when last_ids / sample_counts are asked for rather than taking
+    # the fwd-only shortcut (else the shared forward rejects the combination).
+    if request_metadata:
+        assert outputs[2] is not None, "last_ids should be returned"
+        assert outputs[3] is not None, "sample_counts should be returned"
+    else:
+        assert outputs[2] is None
+        assert outputs[3] is None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "renderer_config",
+    [
+        gsplat.RendererConfig_MixedBatch(),
+        gsplat.RendererConfig_ParallelBatch(),
+    ],
+    ids=["mixed_batch", "parallel_batch"],
+)
+def test_rasterize_eval3d_autograd_tracks_any_tensor_input(
+    small_scene, renderer_config
+):
+    differentiable_names = ("means", "quats", "scales", "colors", "opacities")
+    inputs = dict(small_scene)
+    for name in differentiable_names:
+        inputs[name] = small_scene[name].detach().clone().requires_grad_(False)
+
+    # The C++ adapter's fast path mirrors torch::autograd::Function::apply():
+    # any Tensor input requiring gradients keeps the autograd path active, even
+    # for inputs whose gradients this op does not currently implement.
+    inputs["viewmats"] = small_scene["viewmats"].detach().clone().requires_grad_(True)
+
+    outputs = _call_rasterize_eval3d_extra(inputs, renderer_config)
+    assert outputs[0].requires_grad
+
+    (outputs[0].sum() + outputs[1].sum()).backward()
+    torch.cuda.synchronize()
+
+    assert inputs["viewmats"].grad is None
+    for name in differentiable_names:
+        assert inputs[name].grad is None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -3774,6 +3851,9 @@ def test_rasterize_eval3d_parallel_batch_no_t_underflow_across_batches():
     )
     isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
 
+    # This regression targets the for-backward path, where ParallelBatch must
+    # preserve enough state to match the exact serial saturation boundary.
+    means = means.detach().requires_grad_(True)
     opacities_bc = opacities[None, :].contiguous()
 
     rc, ra, _, _, _ = rasterize_to_pixels_eval3d_extra(
@@ -3789,7 +3869,7 @@ def test_rasterize_eval3d_parallel_batch_no_t_underflow_across_batches():
         tile_size,
         isect_offsets,
         flatten_ids,
-        return_sample_counts=True,
+        return_last_ids=False,
         rolling_shutter=RollingShutterType.GLOBAL,
         camera_model="pinhole",
         renderer_config=gsplat.RendererConfig_ParallelBatch(),
@@ -3970,6 +4050,7 @@ def test_fwd_last_ids_match_ref_under_saturation(renderer_config_name):
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
     isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+    means = means.detach().requires_grad_(True)
 
     rc, ra, render_last_ids, render_sample_counts, _ = rasterize_to_pixels_eval3d_extra(
         means,
@@ -4033,6 +4114,116 @@ def test_fwd_last_ids_match_ref_under_saturation(renderer_config_name):
 
     torch.testing.assert_close(ra, _ra, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(rc, _rc, rtol=3e-3, atol=1e-3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_parallel_batch_fwd_only_omits_debug_metadata():
+    """Fwd-only ParallelBatch should match exact output without metadata."""
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+        RollingShutterType,
+    )
+
+    tile_size = 16
+    width = height = tile_size
+    num_gaussians = 8
+    channels = 3
+
+    means = torch.zeros(num_gaussians, 3, device=device)
+    means[:, 2] = 1.0 + torch.arange(num_gaussians, device=device).float() * 1e-3
+    quats = (
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+        .expand(num_gaussians, 4)
+        .contiguous()
+    )
+    scales = torch.full((num_gaussians, 3), 100.0, device=device)
+    opacities = torch.full((num_gaussians,), 0.95, device=device)
+    torch.manual_seed(0)
+    colors = torch.rand(1, num_gaussians, channels, device=device)
+    opacities_bc = opacities[None, :].contiguous()
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [
+            [
+                [float(width), 0.0, width / 2.0],
+                [0.0, float(height), height / 2.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ],
+        device=device,
+    )
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _tpg, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+    renderer_config = gsplat.RendererConfig_ParallelBatch()
+    exact_means = means.detach().clone().requires_grad_(True)
+
+    (
+        exact_colors,
+        exact_alphas,
+        exact_last_ids,
+        exact_sample_counts,
+        _,
+    ) = rasterize_to_pixels_eval3d_extra(
+        exact_means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_sample_counts=True,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        camera_model="pinhole",
+        renderer_config=renderer_config,
+    )
+    (
+        render_colors,
+        render_alphas,
+        last_ids,
+        sample_counts,
+        _,
+    ) = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_last_ids=False,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        camera_model="pinhole",
+        renderer_config=renderer_config,
+    )
+
+    assert exact_last_ids is not None
+    assert exact_sample_counts is not None
+    assert last_ids is None
+    assert sample_counts is None
+    torch.testing.assert_close(render_alphas, exact_alphas, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(render_colors, exact_colors, rtol=3e-3, atol=1e-3)
 
 
 @pytest.fixture
@@ -4157,6 +4348,7 @@ def test_rasterize_eval3d_no_behind_camera_ghost_lobe(
         backgrounds=s.backgrounds,
         rolling_shutter=RollingShutterType.GLOBAL,
         use_hit_distance=False,
+        return_last_ids=False,
         return_normals=False,
         camera_model="pinhole",
         rays=rays,
@@ -4598,6 +4790,7 @@ def _render_alpha(data, quats, scales, means2d, radii, depths, tile_size=8):
         tile_size,
         ioff,
         fids,
+        return_last_ids=False,
     )
     return ra
 
@@ -4964,6 +5157,7 @@ def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data, tile_size):
         tile_size,
         ioff,
         fids,
+        return_last_ids=False,
     )
 
     # Python reference rasterization

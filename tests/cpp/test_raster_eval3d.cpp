@@ -207,7 +207,7 @@ protected:
     }
 
     gsplat::RasterizeToPixelsFromWorld3DGSFwdResult
-    run_mixed_batch_fwd(const bool persist_batch_state)
+    run_mixed_batch_fwd(const bool fwd_only, const bool return_last_ids)
     {
         Eval3DScene &scene = m_scene;
         return gsplat::rasterize_to_pixels_from_world_3dgs_fwd(
@@ -238,7 +238,8 @@ protected:
             scene.flatten_ids,
             false, // use_hit_distance
             gsplat::RendererConfig::MIXED_BATCH,
-            persist_batch_state,
+            fwd_only,
+            return_last_ids,
             c10::nullopt, // sample_counts
             c10::nullopt, // normals
             false); // unsafe_masked_tile_outputs
@@ -391,37 +392,33 @@ INSTANTIATE_TEST_SUITE_P(
         return "Tile" + std::to_string(info.param);
     });
 
-TEST_P(FwdBatchStateTest, MixedBatchNoPersistenceKeepsPublicOutputs)
+TEST_P(FwdBatchStateTest, MixedBatchFwdOnlyKeepsPublicOutputs)
 {
     Eval3DScene &scene = this->scene();
     SCOPED_TRACE("tile_size=" + std::to_string(scene.tile_size));
 
-    gsplat::RasterizeToPixelsFromWorld3DGSFwdResult persistent =
-        run_mixed_batch_fwd(true);
-    gsplat::RasterizeToPixelsFromWorld3DGSFwdResult forward_only =
-        run_mixed_batch_fwd(false);
+    gsplat::RasterizeToPixelsFromWorld3DGSFwdResult exact =
+        run_mixed_batch_fwd(/*fwd_only=*/false, /*return_last_ids=*/true);
+    gsplat::RasterizeToPixelsFromWorld3DGSFwdResult fwd_only =
+        run_mixed_batch_fwd(/*fwd_only=*/true, /*return_last_ids=*/false);
 
-    ASSERT_TRUE(persistent.batches_per_tile.defined());
-    ASSERT_TRUE(persistent.batch_offsets.defined());
-    ASSERT_TRUE(persistent.fwd_batch_state.defined());
+    ASSERT_TRUE(exact.batches_per_tile.defined());
+    ASSERT_TRUE(exact.batch_offsets.defined());
+    ASSERT_TRUE(exact.fwd_batch_state.defined());
 
-    EXPECT_FALSE(forward_only.batches_per_tile.defined());
-    EXPECT_FALSE(forward_only.batch_offsets.defined());
-    EXPECT_FALSE(forward_only.fwd_batch_state.defined());
-    EXPECT_FALSE(forward_only.compose_c_stop.defined());
-    EXPECT_FALSE(forward_only.priming_state.defined());
+    EXPECT_FALSE(fwd_only.batches_per_tile.defined());
+    EXPECT_FALSE(fwd_only.batch_offsets.defined());
+    EXPECT_FALSE(fwd_only.fwd_batch_state.defined());
+    EXPECT_FALSE(fwd_only.compose_c_stop.defined());
+    EXPECT_FALSE(fwd_only.priming_state.defined());
+    EXPECT_FALSE(fwd_only.last_ids.defined());
 
     EXPECT_LE(
-        max_abs_diff(forward_only.renders, persistent.renders),
+        max_abs_diff(fwd_only.renders, exact.renders),
         1.0e-5f);
     EXPECT_LE(
-        max_abs_diff(forward_only.alphas, persistent.alphas),
+        max_abs_diff(fwd_only.alphas, exact.alphas),
         1.0e-5f);
-    EXPECT_EQ(
-        max_abs_diff(
-            forward_only.last_ids.to(at::kFloat),
-            persistent.last_ids.to(at::kFloat)),
-        0.0f);
 }
 
 TEST_P(FwdBatchStateTest, LastSlotMatchesTerminalAfterEarlyExit)
@@ -461,7 +458,8 @@ TEST_P(FwdBatchStateTest, LastSlotMatchesTerminalAfterEarlyExit)
             scene.flatten_ids,
             false, // use_hit_distance
             gsplat::RendererConfig::MIXED_BATCH,
-            true, // persist_batch_state
+            false, // fwd_only
+            true, // return_last_ids
             c10::nullopt, // sample_counts
             c10::nullopt, // normals
             false); // unsafe_masked_tile_outputs
@@ -544,7 +542,8 @@ TEST_P(FwdBatchStateTest, ParallelBatchSaturatedSlotMatchesTerminal)
             scene.flatten_ids,
             false, // use_hit_distance
             gsplat::RendererConfig::PARALLEL_BATCH,
-            true, // persist_batch_state
+            false, // fwd_only
+            true, // return_last_ids
             c10::nullopt, // sample_counts
             c10::nullopt, // normals
             false); // unsafe_masked_tile_outputs
@@ -590,6 +589,78 @@ TEST_P(FwdBatchStateTest, ParallelBatchSaturatedSlotMatchesTerminal)
         << "c_stop slot T differs from 1 - render_alphas";
     EXPECT_LE(max_abs_diff(actual_pix, expected_pix), 1.0e-5f)
         << "c_stop slot pix_out differs from render_colors";
+}
+
+TEST_P(FwdBatchStateTest, ParallelBatchFwdOnlyMatchesExactWithoutMetadata)
+{
+    Eval3DScene &scene = this->scene();
+    SCOPED_TRACE("tile_size=" + std::to_string(scene.tile_size));
+
+    auto run_parallel_batch =
+        [&scene](const bool fwd_only, const bool return_last_ids) {
+            return gsplat::rasterize_to_pixels_from_world_3dgs_fwd(
+                scene.means,
+                scene.quats,
+                scene.scales,
+                scene.colors,
+                scene.opacities_bc,
+                c10::nullopt, // backgrounds
+                c10::nullopt, // masks
+                scene.width,
+                scene.height,
+                scene.tile_size,
+                scene.viewmats,
+                c10::nullopt, // viewmats1
+                scene.Ks,
+                gsplat::PINHOLE,
+                scene.ut_params,
+                ShutterType::GLOBAL,
+                c10::nullopt, // rays
+                c10::nullopt, // radial_coeffs
+                c10::nullopt, // tangential_coeffs
+                c10::nullopt, // thin_prism_coeffs
+                scene.ftheta_coeffs,
+                c10::nullopt, // lidar_coeffs
+                c10::nullopt, // external_distortion_params
+                scene.isect_offsets,
+                scene.flatten_ids,
+                false, // use_hit_distance
+                gsplat::RendererConfig::PARALLEL_BATCH,
+                fwd_only,
+                return_last_ids,
+                c10::nullopt, // sample_counts
+                c10::nullopt, // normals
+                false); // unsafe_masked_tile_outputs
+        };
+
+    // Exact mode requests last_ids, so ParallelBatch must keep the
+    // batch-replay metadata path live. This fixture saturates, making the
+    // exact path exercise the replay boundary that fwd-only removes.
+    gsplat::RasterizeToPixelsFromWorld3DGSFwdResult exact =
+        run_parallel_batch(/*fwd_only=*/false, /*return_last_ids=*/true);
+    gsplat::RasterizeToPixelsFromWorld3DGSFwdResult fwd_only =
+        run_parallel_batch(/*fwd_only=*/true, /*return_last_ids=*/false);
+
+    ASSERT_TRUE(exact.last_ids.defined());
+    ASSERT_TRUE(exact.compose_c_stop.defined());
+    ASSERT_FALSE(fwd_only.last_ids.defined());
+    ASSERT_FALSE(fwd_only.compose_c_stop.defined());
+
+    const at::Tensor compose_c_stop_i32 = exact.compose_c_stop.to(at::kInt);
+    const int64_t replay_pixels =
+        compose_c_stop_i32
+            .ne(static_cast<int32_t>(gsplat::COMPOSE_C_STOP_NONE))
+            .sum()
+            .cpu()
+            .item<int64_t>();
+    ASSERT_GT(replay_pixels, 0)
+        << "the fwd-only regression fixture must exercise the batch-replay "
+           "boundary in exact mode";
+
+    EXPECT_LE(max_abs_diff(fwd_only.renders, exact.renders), 1.0e-5f)
+        << "fwd-only ParallelBatch changed rendered colors";
+    EXPECT_LE(max_abs_diff(fwd_only.alphas, exact.alphas), 1.0e-5f)
+        << "fwd-only ParallelBatch changed rendered alphas";
 }
 
 class InvalidRayStateTest
@@ -739,7 +810,8 @@ TEST_P(InvalidRayStateTest, SkipsBatchStateForInvalidRays)
             scene.flatten_ids,
             false, // use_hit_distance
             gsplat::RendererConfig::PARALLEL_BATCH,
-            true, // persist_batch_state
+            false, // fwd_only
+            true, // return_last_ids
             at::optional<at::Tensor>(scene.sample_counts),
             c10::nullopt, // normals
             false); // unsafe_masked_tile_outputs

@@ -59,9 +59,15 @@ enum class SaturationTPolicy {
     KeepPreSaturationT,
 
     // Store the post-saturation T in T itself. Exact ParallelBatch uses this
-    // so batch-scan sees a non-negative walk product and hands the boundary to
-    // batch-replay for exact metadata replay.
+    // so batch-scan sees a non-negative walk product and hands the boundary
+    // to batch-replay for exact metadata replay.
     StorePostSaturationT,
+
+    // Leave T at its pre-saturation value, but also expose the post-saturation
+    // T through saturating_T. Fwd-only ParallelBatch uses this to publish the
+    // renderable terminal partial while still priming downstream batches with
+    // the saturated chain state.
+    KeepPreAndCapturePostSaturationT,
 };
 
 // CTA-wide barrier with the same warp-vs-block behaviour the
@@ -430,8 +436,9 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
 // Always instantiated `true` by both the serial-batch and parallel-batch
 // forward kernels; `false` is not currently instantiated.
 //
-// SaturationPolicy controls whether T keeps the pre-saturation value or stores
-// the post-saturation value after a gaussian crosses the threshold.
+// SaturationPolicy controls what survives after a gaussian crosses the
+// threshold: keep pre-saturation T, store post-saturation T in T, or keep the
+// pre-saturation T while also capturing the post-saturation T in saturating_T.
 //
 // Caller must run cta_sync between the cooperative load and this
 // call so all threads see the loaded shared batches.
@@ -458,6 +465,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
     const uint32_t ALL_DONE,
     const float (&transmittance_threshold)[PIXELS_PER_THREAD_T],
     float (&T)[PIXELS_PER_THREAD_T],
+    float (&saturating_T)[PIXELS_PER_THREAD_T],
     float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     vec3 (&normal_out)[PIXELS_PER_THREAD_T],
     int32_t (&cur_idx)[PIXELS_PER_THREAD_T],
@@ -466,6 +474,9 @@ __device__ __forceinline__ void process_fetch_round_blend(
 ) {
     constexpr bool store_post_saturation_t =
         SaturationPolicy == SaturationTPolicy::StorePostSaturationT;
+    constexpr bool capture_post_saturation_t =
+        SaturationPolicy ==
+            SaturationTPolicy::KeepPreAndCapturePostSaturationT;
 
     for (uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t) {
         const vec4 xyz_opac = xyz_opacity_batch[t];
@@ -506,6 +517,9 @@ __device__ __forceinline__ void process_fetch_round_blend(
             const float next_T = T[p] * (1.0f - alpha);
             if constexpr (CHECK_THRESHOLD) {
                 if (next_T <= transmittance_threshold[p]) {
+                    if constexpr (capture_post_saturation_t) {
+                        saturating_T[p] = next_T;
+                    }
                     if constexpr (store_post_saturation_t) {
                         T[p] = next_T;
                     }
@@ -596,6 +610,7 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     const uint32_t ALL_DONE,
     const float (&transmittance_threshold)[PIXELS_PER_THREAD_T],
     float (&T)[PIXELS_PER_THREAD_T],
+    float (&saturating_T)[PIXELS_PER_THREAD_T],
     float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     vec3 (&normal_out)[PIXELS_PER_THREAD_T],
     int32_t (&cur_idx)[PIXELS_PER_THREAD_T],
@@ -640,14 +655,15 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
         const uint32_t batch_size = min(FETCH_SIZE_T, ((uint32_t)range_end - batch_start));
         process_fetch_round_blend<
             CDIM, PIXELS_PER_THREAD_T, CHECK_THRESHOLD,
-            SaturationPolicy, UseHitDistance, ReturnNormals, scalar_t>(
+            SaturationPolicy,
+            UseHitDistance, ReturnNormals, scalar_t>(
             id_batch, xyz_opacity_batch, iscl_rot_batch,
             scale_batch, normal_batch,
             batch_start, batch_size,
             colors, ray_o, ray_d,
             ALL_DONE,
             transmittance_threshold,
-            T, pix_out, normal_out,
+            T, saturating_T, pix_out, normal_out,
             cur_idx, n_accumulated, done_mask);
 
         // CTA-wide early stop: if every pixel in the CTA has crossed

@@ -210,7 +210,7 @@ rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
     float *__restrict__ render_colors,        // [B, C, image_height, image_width, CDIM]
     float *__restrict__ render_alphas,        // [B, C, image_height, image_width, 1]
     float *__restrict__ render_normals,       // [B, C, image_height, image_width, 3] optional
-    int32_t *__restrict__ last_ids,           // [B, C, image_height, image_width]
+    int32_t *__restrict__ last_ids,           // [B, C, image_height, image_width] optional
     int32_t *__restrict__ sample_counts,      // [B, C, image_height, image_width] optional
     // Optional CSR batch-state persistence (for MixedBatch bwd reuse). See
     // RasterizeCSR.cuh.
@@ -279,7 +279,9 @@ rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
     if constexpr (ReturnNormals) {
         render_normals += iid * image_height * image_width * 3;
     }
-    last_ids += iid * image_height * image_width;
+    if (last_ids != nullptr) {
+        last_ids += iid * image_height * image_width;
+    }
     if (sample_counts != nullptr) {
         sample_counts += iid * image_height * image_width;
     }
@@ -491,7 +493,7 @@ rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
                 flatten_ids, means, quats, scales, opacities, colors, C, N,
                 // Per-pixel rays and accumulation state.
                 ray_o, ray_d, ALL_DONE, transmittance_threshold,
-                T, pix_out, normal_out,
+                T, T, pix_out, normal_out,
                 cur_idx, n_accumulated, done_mask);
 
         // --- Batch-boundary persist ---------------------------------------
@@ -559,7 +561,9 @@ rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
                     render_normals[pc[p].pix_id * 3 + k] = normal_out[p][k];
                 }
             }
-            last_ids[pc[p].pix_id] = static_cast<int32_t>(cur_idx[p]);
+            if (last_ids != nullptr) {
+                last_ids[pc[p].pix_id] = static_cast<int32_t>(cur_idx[p]);
+            }
             if (sample_counts != nullptr) {
                 sample_counts[pc[p].pix_id] = n_accumulated[p];
             }
@@ -725,7 +729,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
                     renders.data_ptr<float>(),
                     alphas.data_ptr<float>(),
                     data_ptr_or_null<float>(normals),
-                    last_ids.data_ptr<int32_t>(),
+                    data_ptr_or_null<int32_t>(last_ids.defined(), last_ids),
                     data_ptr_or_null<int32_t>(sample_counts),
                     // CSR batch state persistence.
                     data_ptr_or_null<const int32_t>(total_batches > 0, batch_offsets),

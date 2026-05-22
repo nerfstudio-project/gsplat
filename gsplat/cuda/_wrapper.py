@@ -1046,6 +1046,7 @@ def rasterize_to_pixels_eval3d(
         external_distortion_coeffs=external_distortion_coeffs,
         rolling_shutter=rolling_shutter,
         viewmats_rs=viewmats_rs,
+        return_last_ids=False,
         return_sample_counts=False,
         use_hit_distance=use_hit_distance,
         return_normals=return_normals,
@@ -1087,19 +1088,20 @@ def rasterize_to_pixels_eval3d_extra(
     use_hit_distance: bool = False,
     return_normals: bool = False,
     renderer_config: Any = None,
+    return_last_ids: bool = True,
     unsafe_masked_tile_outputs: bool = False,
-) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
+) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
-    Similar to `rasterize_to_pixels_eval3d()`, but returns turns the last gaussian id
-    accumulated in a pixel, and optionally the number of accumulated samples per pixel.
+    Similar to `rasterize_to_pixels_eval3d()`, but can return the last gaussian id
+    accumulated in a pixel and optionally the number of accumulated samples per pixel.
 
     ``colors.shape[-1]`` must be one of the channel counts compiled into
     ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA
     kernel raises ``ValueError``.
 
     Args:
-        return_last_ids: If True, also return last flatten_idx per pixel. Default: False.
+        return_last_ids: If True, also return last flatten_idx per pixel. Default: True.
         return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.
         return_normals: If True, compute and return accumulated normals per pixel.
             Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
@@ -1119,7 +1121,7 @@ def rasterize_to_pixels_eval3d_extra(
 
         - **Rendered colors**. [..., C, image_height, image_width, channels]
         - **Rendered alphas**. [..., C, image_height, image_width, 1]
-        - **Last flatten_idx**. [..., C, image_height, image_width]
+        - **Last flatten_idx** (optional). [..., C, image_height, image_width]. If return_last_ids=True.
         - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.
         - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.
     """
@@ -1247,12 +1249,11 @@ def rasterize_to_pixels_eval3d_extra(
         external_distortion_coeffs,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
-        # Forward is always collecting the last_ids for the backward pass,
-        # no need to tell it to do it.
         return_sample_counts,  # Pass flag to forward
         use_hit_distance,
         return_normals,  # Pass return_normals flag to forward
         renderer_config,
+        return_last_ids,
         unsafe_masked_tile_outputs,
     )
 
