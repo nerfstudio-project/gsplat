@@ -29,14 +29,9 @@ Design notes:
   ``rasterization(...)`` is called, mirroring G-SHARP's ``rasterize_splats``.
   This strategy class only owns the densification policy + deformation-table
   bookkeeping; it does **not** apply the deform-net itself.
-- The ``@dataclass`` decorator is intentionally not applied here (per the
-  ``0001_scaffolding_commit.md`` note): no new fields are added with
-  defaults, so we inherit the parent's auto-generated ``__init__`` cleanly
-  without dataclass-field ordering errors.
-
-@vcauxbrisebo's MR-013 question to @shsolanki on the deformation integration
-approach is still open. Per @vnath's direction (2026-05-07): proceeding
-without waiting; refactor if @shsolanki's response changes the design.
+- The ``@dataclass`` decorator is intentionally not applied here: no new
+  fields are added with defaults, so we inherit the parent's auto-generated
+  ``__init__`` cleanly without dataclass-field ordering errors.
 """
 
 from __future__ import annotations
