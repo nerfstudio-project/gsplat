@@ -1,7 +1,7 @@
 G-SHARP v0.2 Integration Proposal
 ==================================
 
-:Status: Proposed (scaffolding landed on branch ``vnath_gsharp``)
+:Status: Implemented on branch ``vnath_gsharp`` (under ``gsplat.contrib.dynamic``); experimental, APIs may change
 :Source: ``holohub/applications/surgical_scene_recon/`` (G-SHARP v0.2)
 :Destination: ``gsplat/`` (branch ``vnath_gsharp``)
 
