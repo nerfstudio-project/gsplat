@@ -3,11 +3,12 @@ Dynamic Surgical Scene Reconstruction (G-SHARP port, experimental)
 
 .. note::
 
-   This tutorial is **scaffolding only** on branch ``vnath_gsharp``. The
-   underlying modules (the G-SHARP additions in ``gsplat.losses``, ``gsplat.regularizers``,
-   ``gsplat.init_utils``, ``gsplat.training``, ``gsplat.contrib.dynamic``) are
-   stubs pending implementation. See the proposal at
-   :doc:`../proposals/gsharp_v0_2_port` for the full plan.
+   This pipeline is **experimental**. The G-SHARP port lives under
+   ``gsplat.contrib.dynamic`` (HexPlane field, deformation network,
+   :class:`~gsplat.contrib.dynamic.DynamicStrategy`) plus surgical-scene
+   helpers in ``gsplat.losses``, ``gsplat.regularizers``,
+   ``gsplat.init_utils``, ``gsplat.training``. APIs may change. See
+   :doc:`../proposals/gsharp_v0_2_port` for the design background.
 
 Overview
 --------
