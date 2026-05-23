@@ -50,7 +50,11 @@ def _write_endonerf_fixture(
     np.save(root / "poses_bounds.npy", poses_arr)
 
     for i in range(n_frames):
-        rgb = np.full((height, width, 3), i * 60, dtype=np.uint8)
+        # Per-frame greyscale value spread across [0, 255] so the fixture
+        # works for any n_frames (the old `i * 60` overflowed uint8 at i>=5
+        # under numpy >=2.0, which CI runs).
+        gray = int(round(i * 255.0 / max(1, n_frames - 1)))
+        rgb = np.full((height, width, 3), gray, dtype=np.uint8)
         Image.fromarray(rgb).save(root / "images" / f"{i:06d}.png")
 
         depth = np.full((height, width), 10 + i, dtype=np.uint8)
