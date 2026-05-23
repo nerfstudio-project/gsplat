@@ -33,10 +33,6 @@ Port targets:
 - ``holohub/applications/surgical_scene_recon/training/scene/deformation.py``
 - ``_deformation_table`` / ``update_deformation_table_with_tool_masks`` in
   ``holohub/applications/surgical_scene_recon/training/gsplat_train.py``
-
-@vcauxbrisebo's MR-013 question to @shsolanki on the integration approach is
-still open. Per @vnath's direction (2026-05-07): proceeding without waiting;
-refactor if @shsolanki's response changes the design.
 """
 
 from __future__ import annotations

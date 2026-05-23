@@ -53,8 +53,7 @@ jobs:
         # Fail on warnings (e.g. "document isn't included in any toctree" if
         # docs/source/index.rst is ever truncated or a new page is added
         # without wiring it in). `--keep-going` collects every warning before
-        # exiting so a single failure doesn't hide the rest. Tracked by
-        # MR-032 (Vincent, 2026-05-21).
+        # exiting so a single failure doesn't hide the rest.
         run: |
           sphinx-build -W --keep-going docs/source _build
 
