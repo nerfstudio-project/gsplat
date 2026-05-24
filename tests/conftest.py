@@ -66,6 +66,11 @@ def dist_init():
 
     With world_size=1 the all-gather / all-to-all ops become identity operations,
     but the code path inside ``rasterization(distributed=True)`` is still exercised.
+
+    On backends without RCCL collectives (commonly HIP builds where the
+    torch wheel lacks RCCL ops for the target arch), init may fail; we
+    yield without a group and let distributed-only tests self-skip via
+    ``torch.distributed.is_initialized()`` guards.
     """
     if not torch.cuda.is_available():
         yield
@@ -74,10 +79,19 @@ def dist_init():
     if not torch.distributed.is_initialized():
         os.environ.setdefault("MASTER_ADDR", "localhost")
         os.environ.setdefault("MASTER_PORT", "29500")
-        torch.distributed.init_process_group(backend="nccl", world_size=1, rank=0)
-        # Warm up the communicator required by batch_isend_irecv.
-        _ = [None]
-        torch.distributed.all_gather_object(_, 0)
+        try:
+            torch.distributed.init_process_group(backend="nccl", world_size=1, rank=0)
+            # Warm up the communicator required by batch_isend_irecv.
+            _ = [None]
+            torch.distributed.all_gather_object(_, 0)
+        except Exception as e:
+            # Common on HIP without RCCL (hipErrorInvalidKernelFile). Tear
+            # down any half-init group, then yield; distributed-only tests
+            # will self-skip via their own is_initialized() check.
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+            print(f"\nconftest.dist_init: NCCL/RCCL unavailable, "
+                  f"distributed-only tests will skip. ({type(e).__name__}: {e})")
 
     yield
 
