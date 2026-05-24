@@ -24,7 +24,7 @@
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
-#include <cuda/std/optional>
+#include "CudaStdOptional.h"
 
 #include "Common.h"
 #include "ExternalDistortion.cuh"
