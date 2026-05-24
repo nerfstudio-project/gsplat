@@ -513,15 +513,23 @@ def _fully_fused_projection_with_ut(
         valid_gaussian & (cov_diag_check[..., 0] > 0.0) & (cov_diag_check[..., 1] > 0.0)
     )
 
-    # Compute conics (inverse of 2D covariance)
-    # This is more robust than manual formula, especially for non-symmetric matrices
-    # (numerical errors in weighted sum can break exact symmetry)
-    # Add a small epsilon to the diagonal to prevent torch.linalg.inv from
-    # producing NaN on singular matrices (invalid Gaussians are masked out
-    # by valid_gaussian anyway, but autograd still propagates through inv).
-    cov_2d_inv = torch.linalg.inv(
-        cov_2d + 1e-6 * torch.eye(2, dtype=cov_2d.dtype, device=cov_2d.device)
+    # 2x2 inverse via closed form: M^-1 = (1/det) * [[d,-b],[-c,a]].
+    # Epsilon on the diagonal avoids div-by-zero on near-singular invalid
+    # Gaussians (autograd still propagates through the inverse).
+    # Avoid torch.linalg.inv: torch+ROCm's batched 2x2 LU kernel raises
+    # hipErrorInvalidConfiguration on non-finite inputs (gfx1201, torch
+    # 2.11+rocm7.13). Closed form sidesteps it and is faster for 2x2.
+    cov_2d_blur = cov_2d + 1e-6 * torch.eye(
+        2, dtype=cov_2d.dtype, device=cov_2d.device
     )  # [B, C, N, 2, 2]
+    a = cov_2d_blur[..., 0, 0]
+    b = cov_2d_blur[..., 0, 1]
+    c = cov_2d_blur[..., 1, 0]
+    d = cov_2d_blur[..., 1, 1]
+    inv_det = 1.0 / (a * d - b * c)
+    cov_2d_inv = torch.stack(
+        [d * inv_det, -b * inv_det, -c * inv_det, a * inv_det], dim=-1
+    ).reshape(cov_2d.shape)  # [B, C, N, 2, 2]
 
     # Apply opacity-based culling
     # Reference: https://arxiv.org/pdf/2402.00525 Section B.2
