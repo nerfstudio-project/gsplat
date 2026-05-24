@@ -122,7 +122,7 @@ public:
         {
             if (expected[i] != -1)
             {
-#ifdef __CUDA_ARCH__
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
                 assert(sizes[i] == expected[i]);
 #else
                 TORCH_CHECK_INDEX(sizes[i] == expected[i],
