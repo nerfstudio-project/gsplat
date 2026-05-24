@@ -272,11 +272,14 @@ def _mirror_files_for_hip():
             if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
                 shutil.copy2(src, dst)
 
-    # Mirror csrc/*.h headers (declarations — no CUDA-only code in them)
-    for src in glob.glob(os.path.join(cuda_csrc, "*.h")):
-        dst = os.path.join(hip_csrc, os.path.basename(src))
-        if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
-            shutil.copy2(src, dst)
+    # Mirror csrc/*.{h,cuh} headers — hipify ships .cuh under include/
+    # but skips ones colocated with .cu in csrc/, so we mirror them
+    # ourselves for the .hip sources' same-directory lookup.
+    for pattern in ("*.h", "*.cuh"):
+        for src in glob.glob(os.path.join(cuda_csrc, pattern)):
+            dst = os.path.join(hip_csrc, os.path.basename(src))
+            if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
+                shutil.copy2(src, dst)
 
     # GLM's `simd/platform.h` checks `__CUDACC__` before `__HIP__`. hipcc
     # defines both, so the CUDA branch wins and rejects with

@@ -454,6 +454,37 @@ __global__ void projection_2dgs_fused_bwd_kernel(
 
     // #if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction
+#ifdef USE_ROCM
+    // HIP: ROCm cg lacks labeled_partition; emit per-thread atomicAdd.
+    if (v_means != nullptr) {
+        auto* p_means = v_means + bid * N * 3 + gid * 3;
+#pragma unroll
+        for (uint32_t i = 0; i < 3; i++) {
+            gpuAtomicAdd(p_means + i, v_mean[i]);
+        }
+    }
+    {
+        auto* p_quats = v_quats + bid * N * 4 + gid * 4;
+        auto* p_scales = v_scales + bid * N * 3 + gid * 3;
+        gpuAtomicAdd(p_quats, v_quat[0]);
+        gpuAtomicAdd(p_quats + 1, v_quat[1]);
+        gpuAtomicAdd(p_quats + 2, v_quat[2]);
+        gpuAtomicAdd(p_quats + 3, v_quat[3]);
+        gpuAtomicAdd(p_scales, v_scale[0]);
+        gpuAtomicAdd(p_scales + 1, v_scale[1]);
+    }
+    if (v_viewmats != nullptr) {
+        auto* p_vm = v_viewmats + bid * C * 16 + cid * 16;
+#pragma unroll
+        for (uint32_t i = 0; i < 3; i++) {
+#pragma unroll
+            for (uint32_t j = 0; j < 3; j++) {
+                gpuAtomicAdd(p_vm + i * 4 + j, v_R[j][i]);
+            }
+            gpuAtomicAdd(p_vm + i * 4 + 3, v_t[i]);
+        }
+    }
+#else
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto warp_group_g = cg::labeled_partition(warp, gid);
     if (v_means != nullptr) {
@@ -497,6 +528,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
             }
         }
     }
+#endif
 }
 
 void launch_projection_2dgs_fused_bwd_kernel(

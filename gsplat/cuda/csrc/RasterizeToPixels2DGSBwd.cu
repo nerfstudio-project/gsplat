@@ -262,8 +262,12 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     // find the maximum final gaussian ids in the thread warp.
     // this gives the last gaussian id that have intersected with any pixels in
     // the warp
+#ifdef USE_ROCM
+    const int32_t warp_bin_final = _warp_butterfly_max(bin_final);
+#else
     const int32_t warp_bin_final =
         cg::reduce(warp, bin_final, cg::greater<int>());
+#endif
 
     /**
      * =======================================================
