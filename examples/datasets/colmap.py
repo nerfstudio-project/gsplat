@@ -1,22 +1,5 @@
-# SPDX-FileCopyrightText: Copyright 2024-2025 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import json
 import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -24,11 +7,13 @@ import imageio.v2 as imageio
 import numpy as np
 import torch
 from PIL import Image
-from pycolmap import SceneManager
+try:
+    from pycolmap import SceneManager
+except ImportError:
+    from videogaus.compat.pycolmap_scene_manager import SceneManager
 from tqdm import tqdm
 from typing_extensions import assert_never
 
-from exif import compute_exposure_from_exif
 from .normalize import (
     align_principal_axes,
     similarity_from_cameras,
@@ -80,13 +65,11 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
-        load_exposure: bool = False,
     ):
         self.data_dir = data_dir
         self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
-        self.load_exposure = load_exposure
 
         colmap_dir = os.path.join(data_dir, "sparse/0/")
         if not os.path.exists(colmap_dir):
@@ -278,39 +261,23 @@ class Parser:
         self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
         self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
         self.transform = transform  # np.ndarray, (4, 4)
-
-        # Create 0-based contiguous camera indices from COLMAP camera_ids.
-        # This is useful for camera-based embeddings/modules.
-        unique_camera_ids = sorted(set(camera_ids))
-        self.camera_id_to_idx = {cid: idx for idx, cid in enumerate(unique_camera_ids)}
-        self.camera_indices = [self.camera_id_to_idx[cid] for cid in camera_ids]
-        self.num_cameras = len(unique_camera_ids)
-
-        # Load EXIF exposure data if requested.
-        # Always read from original (non-downscaled) images since PNG doesn't support EXIF.
-        if load_exposure:
-            exposure_values: List[Optional[float]] = []
-            for image_name in tqdm(image_names, desc="Loading EXIF exposure"):
-                original_path = Path(colmap_image_dir) / image_name
-                exposure_values.append(compute_exposure_from_exif(original_path))
-
-            # Compute mean across all valid exposures and subtract
-            valid_exposures = [e for e in exposure_values if e is not None]
-            if valid_exposures:
-                exposure_mean = sum(valid_exposures) / len(valid_exposures)
-                self.exposure_values: List[Optional[float]] = [
-                    (e - exposure_mean) if e is not None else None
-                    for e in exposure_values
-                ]
-                print(
-                    f"[Parser] Loaded exposure for {len(valid_exposures)}/{len(exposure_values)} images "
-                    f"(mean={exposure_mean:.3f} EV)"
-                )
+        self.dense_depths = None
+        self.dense_confs = None
+        self.dense_depth_name_to_idx = {}
+        dense_depth_file = os.path.join(data_dir, "dense_depth.npz")
+        if os.path.exists(dense_depth_file):
+            dense_data = np.load(dense_depth_file)
+            self.dense_depths = dense_data["depth"].astype(np.float32)
+            if "conf" in dense_data:
+                self.dense_confs = dense_data["conf"].astype(np.float32)
+            if "image_names" in dense_data:
+                dense_names = [str(name) for name in dense_data["image_names"]]
             else:
-                self.exposure_values = [None] * len(exposure_values)
-                print("[Parser] No valid EXIF exposure data found in any image.")
-        else:
-            self.exposure_values = [None] * len(image_paths)
+                dense_names = colmap_files
+            self.dense_depth_name_to_idx = {
+                name: i for i, name in enumerate(dense_names)
+            }
+            print(f"[Parser] Loaded dense depth priors: {self.dense_depths.shape}.")
 
         # load one image to check the size. In the case of tanksandtemples dataset, the
         # intrinsics stored in COLMAP corresponds to 2x upsampled images.
@@ -410,11 +377,13 @@ class Dataset:
         split: str = "train",
         patch_size: Optional[int] = None,
         load_depths: bool = False,
+        load_dense_depths: bool = False,
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
         self.load_depths = load_depths
+        self.load_dense_depths = load_dense_depths
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
             self.indices = indices[indices % self.parser.test_every != 0]
@@ -457,23 +426,17 @@ class Dataset:
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
-            "camera_idx": self.parser.camera_indices[
-                index
-            ],  # 0-based contiguous camera index
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()
-
-        # Add exposure if available for this image
-        exposure = self.parser.exposure_values[index]
-        if exposure is not None:
-            data["exposure"] = torch.tensor(exposure, dtype=torch.float32)
 
         if self.load_depths:
             # projected points to image plane to get depths
             worldtocams = np.linalg.inv(camtoworlds)
             image_name = self.parser.image_names[index]
-            point_indices = self.parser.point_indices[image_name]
+            point_indices = self.parser.point_indices.get(
+                image_name, np.empty(0, dtype=np.int32)
+            )
             points_world = self.parser.points[point_indices]
             points_cam = (worldtocams[:3, :3] @ points_world.T + worldtocams[:3, 3:4]).T
             points_proj = (K @ points_cam.T).T
@@ -491,6 +454,16 @@ class Dataset:
             depths = depths[selector]
             data["points"] = torch.from_numpy(points).float()
             data["depths"] = torch.from_numpy(depths).float()
+
+        if self.load_dense_depths and self.parser.dense_depths is not None:
+            image_name = self.parser.image_names[index]
+            dense_idx = self.parser.dense_depth_name_to_idx.get(image_name)
+            if dense_idx is not None:
+                dense_depth = self.parser.dense_depths[dense_idx]
+                data["dense_depth"] = torch.from_numpy(dense_depth).float()
+                if self.parser.dense_confs is not None:
+                    dense_conf = self.parser.dense_confs[dense_idx]
+                    data["dense_conf"] = torch.from_numpy(dense_conf).float()
 
         return data
 
