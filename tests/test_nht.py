@@ -65,9 +65,7 @@ def _nht_rasterizer_available() -> bool:
             viewmats=torch.linalg.inv(
                 torch.eye(4, device=d).unsqueeze(0).clone().detach()
             ),
-            Ks=torch.tensor(
-                [[[50.0, 0, 16], [0, 50, 12], [0, 0, 1]]], device=d
-            ),
+            Ks=torch.tensor([[[50.0, 0, 16], [0, 50, 12], [0, 0, 1]]], device=d),
             width=32,
             height=24,
             nht_params=NHTParams(),
@@ -343,8 +341,14 @@ class TestNHTRasterization:
         encoded_dim = (16 // get_feature_divisor()) * get_encoding_expansion_factor()
         assert rc.shape[-1] == encoded_dim + 3
         assert ra.shape[-1] == 1
-        assert info["tile_width"] == _make_lidar_coeffs(device=device).tiling.n_bins_azimuth
-        assert info["tile_height"] == _make_lidar_coeffs(device=device).tiling.n_bins_elevation
+        assert (
+            info["tile_width"]
+            == _make_lidar_coeffs(device=device).tiling.n_bins_azimuth
+        )
+        assert (
+            info["tile_height"]
+            == _make_lidar_coeffs(device=device).tiling.n_bins_elevation
+        )
         assert torch.isfinite(rc).all()
         assert torch.isfinite(ra).all()
 
@@ -499,10 +503,20 @@ class TestNHTRasterizationBackward:
 
         def fwd(feat):
             rc, _, _ = rasterization(
-                means=means, quats=quats, scales=scales, opacities=opacities,
-                colors=feat, viewmats=viewmats, Ks=K, width=W, height=H,
-                nht_params=NHTParams(), with_eval3d=True, with_ut=True,
-                packed=False, sh_degree=None,
+                means=means,
+                quats=quats,
+                scales=scales,
+                opacities=opacities,
+                colors=feat,
+                viewmats=viewmats,
+                Ks=K,
+                width=W,
+                height=H,
+                nht_params=NHTParams(),
+                with_eval3d=True,
+                with_ut=True,
+                packed=False,
+                sh_degree=None,
             )
             return rc.sum()
 
@@ -522,9 +536,9 @@ class TestNHTRasterizationBackward:
             if abs(fd) < 1e-6 and abs(a) < 1e-6:
                 continue
             rel_err = abs(a - fd) / (max(abs(a), abs(fd)) + 1e-8)
-            assert rel_err < 0.05, (
-                f"Gradient mismatch [{gi},{fi}]: analytic={a:.6f} fd={fd:.6f}"
-            )
+            assert (
+                rel_err < 0.05
+            ), f"Gradient mismatch [{gi},{fi}]: analytic={a:.6f} fd={fd:.6f}"
 
     @pytest.mark.parametrize("render_mode", ["RGB+D", "RGB-d"])
     def test_fused_depth_gradients_flow_to_geometry(self, render_mode):
@@ -591,6 +605,7 @@ class TestNHTRasterizationBackward:
         assert quats.grad is None or torch.isfinite(quats.grad).all()
         assert features.grad is None or torch.isfinite(features.grad).all()
 
+
 # ===================================================================
 # Encoding helpers
 # ===================================================================
@@ -598,7 +613,6 @@ class TestNHTRasterizationBackward:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 class TestEncodingHelpers:
-
     def test_encoding_expansion_factor_positive(self):
         encf = get_encoding_expansion_factor()
         assert isinstance(encf, int) and encf >= 1
@@ -631,7 +645,6 @@ class TestEncodingHelpers:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not _tcnn_available, reason="tinycudann not available")
 class TestDeferredShaderModule:
-
     def _make(self, feature_dim=16, enable_view_encoding=True, **kw):
         from gsplat.nht.deferred_shader import DeferredShaderModule
 
@@ -689,7 +702,12 @@ class TestDeferredShaderModule:
         mod = self._make(view_encoding_type=view_encoding_type)
         _, _, W, H = _make_camera(width=32, height=24, device=device)
         inp = torch.randn(
-            1, H, W, _deferred_shader_raster_channels(mod), device=device, requires_grad=True
+            1,
+            H,
+            W,
+            _deferred_shader_raster_channels(mod),
+            device=device,
+            requires_grad=True,
         )
         colors, _ = mod(inp)
         colors.sum().backward()
@@ -704,7 +722,6 @@ class TestDeferredShaderModule:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not _tcnn_available, reason="tinycudann not available")
 class TestDeferredShaderModuleAOV:
-
     def _make(self, feature_dim=16, auxiliary_output_dim=8, **kw):
         from gsplat.nht.deferred_shader import DeferredShaderModuleAOV
 
@@ -794,7 +811,6 @@ class TestDeferredShaderModuleAOV:
 @pytest.mark.skipif(not _nht_ok, reason="NHT rasterizer not functional")
 @pytest.mark.skipif(not _tcnn_available, reason="tinycudann not available")
 class TestNHTPipeline:
-
     @pytest.mark.parametrize("feature_dim", [16, 32])
     def test_pipeline_produces_rgb(self, feature_dim):
         from gsplat.nht.deferred_shader import DeferredShaderModule
@@ -838,7 +854,9 @@ class TestNHTPipeline:
         opacities = torch.nn.Parameter(torch.zeros(N, device=device))
         features = torch.nn.Parameter(torch.randn(N, fdim, device=device))
 
-        dm = DeferredShaderModule(feature_dim=fdim, enable_view_encoding=True).to(device)
+        dm = DeferredShaderModule(feature_dim=fdim, enable_view_encoding=True).to(
+            device
+        )
         K, c2w, W, H = _make_camera(width=32, height=24, device=device)
         viewmats = torch.linalg.inv(c2w)
         target = torch.rand(1, H, W, 3, device=device)
@@ -851,11 +869,20 @@ class TestNHTPipeline:
         for _ in range(10):
             opt.zero_grad()
             rc, _, _ = rasterization(
-                means=means, quats=quats, scales=torch.exp(scales),
-                opacities=torch.sigmoid(opacities), colors=features,
-                viewmats=viewmats, Ks=K, width=W, height=H,
-                nht_params=NHTParams(), with_eval3d=True, with_ut=True,
-                packed=False, sh_degree=None,
+                means=means,
+                quats=quats,
+                scales=torch.exp(scales),
+                opacities=torch.sigmoid(opacities),
+                colors=features,
+                viewmats=viewmats,
+                Ks=K,
+                width=W,
+                height=H,
+                nht_params=NHTParams(),
+                with_eval3d=True,
+                with_ut=True,
+                packed=False,
+                sh_degree=None,
             )
             colors, _ = dm(rc)
             loss = F.l1_loss(colors, target)
@@ -863,9 +890,9 @@ class TestNHTPipeline:
             opt.step()
             losses.append(loss.item())
 
-        assert losses[-1] < losses[0], (
-            f"Loss did not decrease: {losses[0]:.4f} → {losses[-1]:.4f}"
-        )
+        assert (
+            losses[-1] < losses[0]
+        ), f"Loss did not decrease: {losses[0]:.4f} → {losses[-1]:.4f}"
 
 
 # ===================================================================
@@ -875,7 +902,6 @@ class TestNHTPipeline:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 class TestNHTExporter:
-
     def test_export_ply(self):
         from gsplat.nht.exporter import export_splats_nht
 
@@ -895,7 +921,9 @@ class TestNHTExporter:
         from gsplat.nht.exporter import export_splats_nht
 
         N, fdim = 50, 16
-        dm = DeferredShaderModule(feature_dim=fdim, enable_view_encoding=True).to(device)
+        dm = DeferredShaderModule(feature_dim=fdim, enable_view_encoding=True).to(
+            device
+        )
         state = {"state_dict": dm.state_dict(), "config": {"feature_dim": fdim}}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -935,8 +963,11 @@ class TestNHTExporter:
         features = torch.randn(N, fdim) * 3.0  # exercise a real fp16 range
 
         data = export_splats_nht(
-            means=means, scales=scales, quats=quats,
-            opacities=opacities, features=features,
+            means=means,
+            scales=scales,
+            quats=quats,
+            opacities=opacities,
+            features=features,
         )
 
         header_end = data.find(b"end_header\n") + len(b"end_header\n")
@@ -951,7 +982,9 @@ class TestNHTExporter:
         # ``f4`` for the 7 fp32 fields (x,y,z,opacity,scale,rot) + ``u2`` for
         # each fp16 feature.
         dtype_fields = [
-            ("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+            ("x", "<f4"),
+            ("y", "<f4"),
+            ("z", "<f4"),
         ]
         dtype_fields += [(f"f_nht_{j}", "<u2") for j in range(fdim)]
         dtype_fields.append(("opacity", "<f4"))
@@ -963,9 +996,7 @@ class TestNHTExporter:
         body = np.frombuffer(data[header_end:], dtype=dt)
         assert body.shape == (N,)
 
-        feature_bits = np.stack(
-            [body[f"f_nht_{j}"] for j in range(fdim)], axis=-1
-        )
+        feature_bits = np.stack([body[f"f_nht_{j}"] for j in range(fdim)], axis=-1)
         decoded = feature_bits.view(np.float16).astype(np.float32)
         expected = features.to(torch.float16).to(torch.float32).numpy()
         np.testing.assert_array_equal(decoded, expected)
@@ -978,7 +1009,8 @@ class TestNHTExporter:
 
         N, fdim = 8, 16
         dm = DeferredShaderModule(
-            feature_dim=fdim, enable_view_encoding=False,
+            feature_dim=fdim,
+            enable_view_encoding=False,
         ).to(device)
         # auxiliary_output_dim == 0 ⇒ no Linear heads; the backbone is the
         # only learnable submodule and is the one we expect to be downcast.
@@ -1034,11 +1066,7 @@ class TestNHTExporter:
 
         # Unrestricted downcast: all fp32 → fp16, integer kept.
         all_down = cast_state_dict_to_fp16(sd)
-        assert all(
-            v.dtype == torch.float16
-            for k, v in all_down.items()
-            if k != "step"
-        )
+        assert all(v.dtype == torch.float16 for k, v in all_down.items() if k != "step")
         assert all_down["step"].dtype == torch.int64
 
         # Round trip preserves shapes and is the inverse on storage dtype.

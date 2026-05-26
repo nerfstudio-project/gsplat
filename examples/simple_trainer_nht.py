@@ -65,7 +65,9 @@ from gsplat_viewer import (
     GsplatRenderTabState,
 )
 from nerfview import CameraState, RenderTabState, apply_float_colormap
+
 ## NHT ##
+
 
 @dataclass
 class Config:
@@ -156,9 +158,7 @@ class Config:
     far_plane: float = 1e10
 
     # Strategy for GS densification (NHT only supports MCMC)
-    strategy: MCMCStrategy = field(
-        default_factory=MCMCStrategy
-    )
+    strategy: MCMCStrategy = field(default_factory=MCMCStrategy)
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
     # Use sparse gradients for optimization. (experimental)
@@ -274,7 +274,7 @@ class Config:
     # Use a single center ray for view encoding instead of per-pixel rays.
     deferred_opt_center_ray_encoding: bool = False
     # Deferred shading feature embedding dimension
-    deferred_opt_feature_dim: int = 48 # /4 per vertex
+    deferred_opt_feature_dim: int = 48  # /4 per vertex
     # Learning rate for deferred features (per-Gaussian features in splats)
     deferred_features_lr: float = 15e-3
     # Learning rate for deferred MLP
@@ -329,6 +329,7 @@ class Config:
         strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
         strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
         strategy.refine_every = int(strategy.refine_every * factor)
+
 
 def create_splats_with_optimizers(
     parser: Parser,
@@ -415,6 +416,7 @@ def create_splats_with_optimizers(
         for name, _, lr in params
     }
     return splats, optimizers
+
 
 class Runner:
     """Engine for training and testing."""
@@ -703,7 +705,9 @@ class Runner:
         print("[Distillation] Gaussian parameters frozen")
 
     def _deferred_mod(self):
-        return self.deferred_module.module if self.world_size > 1 else self.deferred_module
+        return (
+            self.deferred_module.module if self.world_size > 1 else self.deferred_module
+        )
 
     def _aov_target_from_batch(self, data: Dict[str, Any]) -> Optional[Tensor]:
         if self.aov_output_dim == 0 or self.cfg.aov_target_key is None:
@@ -720,7 +724,9 @@ class Runner:
             )
         return target
 
-    def _aov_loss(self, pred: Tensor, target: Tensor) -> Tuple[Tensor, Dict[str, Tensor]]:
+    def _aov_loss(
+        self, pred: Tensor, target: Tensor
+    ) -> Tuple[Tensor, Dict[str, Tensor]]:
         if pred.shape[1:3] != target.shape[1:3]:
             pred = F.interpolate(
                 pred.permute(0, 3, 1, 2),
@@ -730,7 +736,10 @@ class Runner:
             ).permute(0, 2, 3, 1)
         loss_terms: Dict[str, Tensor] = {}
         loss = pred.new_zeros(())
-        if self.cfg.aov_loss_type in ("l1", "l1+cosine") and self.cfg.aov_loss_lambda > 0:
+        if (
+            self.cfg.aov_loss_type in ("l1", "l1+cosine")
+            and self.cfg.aov_loss_lambda > 0
+        ):
             l1 = F.l1_loss(pred, target)
             loss = loss + self.cfg.aov_loss_lambda * l1
             loss_terms["aov_l1"] = l1
@@ -743,7 +752,10 @@ class Runner:
             loss = loss + self.cfg.aov_loss_lambda * smooth_l1
             loss_terms["aov_smooth_l1"] = smooth_l1
 
-        if self.cfg.aov_loss_type in ("cosine", "l1+cosine") and self.cfg.aov_cosine_lambda > 0:
+        if (
+            self.cfg.aov_loss_type in ("cosine", "l1+cosine")
+            and self.cfg.aov_cosine_lambda > 0
+        ):
             cos = 1.0 - F.cosine_similarity(pred, target, dim=-1).mean()
             loss = loss + self.cfg.aov_cosine_lambda * cos
             loss_terms["aov_cosine"] = cos
@@ -883,40 +895,44 @@ class Runner:
         use_eval3d = self.cfg.with_eval3d
         use_ut = self.cfg.with_ut
         render_colors, render_alphas, info = rasterization(
-                means=means,
-                quats=quats,
-                scales=scales,
-                opacities=opacities,
-                colors=colors,
-                sh_degree=sh_degree,
-                viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
-                Ks=Ks,  # [C, 3, 3]
-                width=width,
-                height=height,
-                tile_size=self.cfg.tile_size,
-                packed=self.cfg.packed,
-                absgrad=False,
-                sparse_grad=self.cfg.sparse_grad,
-                rasterize_mode=rasterize_mode,
-                render_mode=render_mode,
-                distributed=self.world_size > 1,
-                camera_model=camera_model,
-                with_ut=use_ut,
-                with_eval3d=use_eval3d,
-                nht_params=NHTParams(
-                    center_ray_mode=self.cfg.deferred_opt_center_ray_encoding,
-                    ray_dir_scale=self._deferred_mod().ray_dir_scale,
-                ),
-                **sensor_kwargs,
-                **kwargs,
-            )
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,
+            colors=colors,
+            sh_degree=sh_degree,
+            viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+            Ks=Ks,  # [C, 3, 3]
+            width=width,
+            height=height,
+            tile_size=self.cfg.tile_size,
+            packed=self.cfg.packed,
+            absgrad=False,
+            sparse_grad=self.cfg.sparse_grad,
+            rasterize_mode=rasterize_mode,
+            render_mode=render_mode,
+            distributed=self.world_size > 1,
+            camera_model=camera_model,
+            with_ut=use_ut,
+            with_eval3d=use_eval3d,
+            nht_params=NHTParams(
+                center_ray_mode=self.cfg.deferred_opt_center_ray_encoding,
+                ray_dir_scale=self._deferred_mod().ray_dir_scale,
+            ),
+            **sensor_kwargs,
+            **kwargs,
+        )
 
         render_mode_has_depth = render_mode in {"RGB+D", "RGB+ED", "RGB-d", "RGB-Ed"}
         render_colors, extras = self.deferred_module(render_colors)
         if extras is not None:
             raster_extra_dim = 1 if render_mode_has_depth else 0
             raster_extras = extras[..., :raster_extra_dim] if raster_extra_dim else None
-            aux = extras[..., raster_extra_dim:] if extras.shape[-1] > raster_extra_dim else None
+            aux = (
+                extras[..., raster_extra_dim:]
+                if extras.shape[-1] > raster_extra_dim
+                else None
+            )
             if aux is not None and aux.shape[-1] > 0:
                 info["render_extra_signals"] = aux
             if raster_extras is not None:
@@ -1012,7 +1028,7 @@ class Runner:
                         gamma=features_decay_final ** (1.0 / max_steps),
                     )
                 )
-        if  cfg.deferred_mlp_lr_decay:
+        if cfg.deferred_mlp_lr_decay:
             # deferred MLP has a learning rate schedule
             mlp_decay_final = cfg.deferred_mlp_lr_decay_final
             if cfg.deferred_lr_scheduler == "cosine":
@@ -1081,7 +1097,7 @@ class Runner:
                     time.sleep(0.01)
                 self.viewer.lock.acquire()
                 tic = time.time()
-            
+
             # Freeze Gaussians when PPISP controller distillation starts
             if (
                 cfg.post_processing == "ppisp"
@@ -1111,9 +1127,7 @@ class Runner:
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
-            normals_gt = (
-                self._get_normal_targets(data) if cfg.normal_loss else None
-            )
+            normals_gt = self._get_normal_targets(data) if cfg.normal_loss else None
             if cfg.normal_loss and normals_gt is None:
                 raise KeyError(
                     "normal_loss=True but no normal target was found in the batch. "
@@ -1212,15 +1226,16 @@ class Runner:
                     cfg.normal_lambda if step >= cfg.normal_start_iter else 0.0
                 )
                 render_normals = F.normalize(info["normals"], dim=-1, eps=1e-6)
-                normal_valid = torch.linalg.norm(normals_gt, dim=-1, keepdim=True) > 1e-6
+                normal_valid = (
+                    torch.linalg.norm(normals_gt, dim=-1, keepdim=True) > 1e-6
+                )
                 normal_weight = alphas.detach() * normal_valid.float()
                 normal_error = 1.0 - (render_normals * normals_gt).sum(
                     dim=-1, keepdim=True
                 )
                 normalloss = (
-                    (normal_error * normal_weight).sum()
-                    / normal_weight.sum().clamp(min=1e-6)
-                )
+                    normal_error * normal_weight
+                ).sum() / normal_weight.sum().clamp(min=1e-6)
                 loss += normalloss * curr_normal_lambda
 
             aov_terms: Dict[str, Tensor] = {}
@@ -1317,8 +1332,8 @@ class Runner:
                 # runs in fp16
                 splats_state = dict(self.splats.state_dict())
                 if "features" in splats_state:
-                    splats_state["features"] = splats_state["features"].detach().to(
-                        torch.float16
+                    splats_state["features"] = (
+                        splats_state["features"].detach().to(torch.float16)
                     )
                 data = {"step": step, "splats": splats_state}
                 if cfg.pose_opt:
@@ -1356,7 +1371,7 @@ class Runner:
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
-            
+
             if (
                 step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1
             ) and cfg.save_ply:
@@ -1414,7 +1429,9 @@ class Runner:
                 else:
                     visibility_mask = (info["radii"] > 0).all(-1).any(0)
 
-            _frozen_geom = frozenset(("means", "scales", "quats", "opacities", "betas_raw"))
+            _frozen_geom = frozenset(
+                ("means", "scales", "quats", "opacities", "betas_raw")
+            )
             for name, optimizer in self.optimizers.items():
                 if in_color_refine and name in _frozen_geom:
                     optimizer.zero_grad(set_to_none=True)
@@ -1501,13 +1518,13 @@ class Runner:
         # -- Multi-pass render, save, and compute metrics per frame ---------
         # Runs the full validation set `eval_timing_passes` times. Timing is
         # accumulated across all passes; metrics and image saves only happen on
-        # the final pass. 
+        # the final pass.
         ellipse_time = 0
         metrics = defaultdict(list)
 
         num_passes = max(1, cfg.eval_timing_passes)
         for pass_idx in range(num_passes):
-            is_last_pass = (pass_idx == num_passes - 1)
+            is_last_pass = pass_idx == num_passes - 1
             desc = f"Eval pass {pass_idx+1}/{num_passes}" if num_passes > 1 else "Eval"
 
             for i, data in enumerate(tqdm.tqdm(valloader, desc=desc)):
@@ -1572,10 +1589,10 @@ class Runner:
         if world_rank == 0:
             ellipse_time /= len(valloader) * num_passes
 
-            per_image_stats = {
-                k: [x.item() for x in v] for k, v in metrics.items()
-            }
-            with open(f"{self.stats_dir}/{stage}_step{step:04d}_per_image.json", "w") as f:
+            per_image_stats = {k: [x.item() for x in v] for k, v in metrics.items()}
+            with open(
+                f"{self.stats_dir}/{stage}_step{step:04d}_per_image.json", "w"
+            ) as f:
                 json.dump(per_image_stats, f)
 
             stats = {k: torch.stack(v).mean().item() for k, v in metrics.items()}
@@ -1778,9 +1795,7 @@ class Runner:
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
         if render_tab_state.camera_model == "ortho":
-            K = apply_ortho_scale_to_K(
-                K, width, height, render_tab_state.ortho_scale
-            )
+            K = apply_ortho_scale_to_K(K, width, height, render_tab_state.ortho_scale)
 
         RENDER_MODE_MAP = {
             "rgb": "RGB",
@@ -1880,7 +1895,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     if cfg.ckpt is not None:
         # run eval only -- free optimizer states to save GPU memory
         runner.optimizers = {}
-        if hasattr(runner, 'strategy_state'):
+        if hasattr(runner, "strategy_state"):
             runner.strategy_state = {}
         torch.cuda.empty_cache()
 
@@ -1907,9 +1922,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             if world_size > 1:
                 runner.deferred_module = DDP(runner.deferred_module)
         target = (
-            runner.deferred_module.module
-            if world_size > 1
-            else runner.deferred_module
+            runner.deferred_module.module if world_size > 1 else runner.deferred_module
         )
         target.load_state_dict(ckpt_sd)
         target.eval()

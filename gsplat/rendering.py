@@ -731,9 +731,7 @@ def rasterization(
     # NHT compatibility checks
     _nht_enabled = nht_params is not None and nht_params.enabled
     if _nht_enabled:
-        assert with_eval3d and with_ut, (
-            "NHT requires with_eval3d=True and with_ut=True"
-        )
+        assert with_eval3d and with_ut, "NHT requires with_eval3d=True and with_ut=True"
         if extra_signals is not None:
             meta["nht_extra_signal_dim"] = extra_signals.shape[-1]
 
@@ -929,9 +927,7 @@ def rasterization(
         # Use provided UT parameters or create default
         if ut_params is None:
             ut_params = UnscentedTransformParameters()
-        projection_global_z_order = (
-            False if camera_model == "lidar" else global_z_order
-        )
+        projection_global_z_order = False if camera_model == "lidar" else global_z_order
 
         proj_results = fully_fused_projection_with_ut(
             means=means,
@@ -1278,7 +1274,11 @@ def rasterization(
     # The NHT wrapper strips that channel internally before harmonic feature
     # encoding, then returns it as the last rendered channel; NHT also needs
     # depth here (even outside depth-render modes) when normals are requested.
-    nht_depth_for_normals = _nht_enabled and return_normals and not render_mode_has_depth_channel(render_mode)
+    nht_depth_for_normals = (
+        _nht_enabled
+        and return_normals
+        and not render_mode_has_depth_channel(render_mode)
+    )
     if render_mode_has_depth_channel(render_mode) or nht_depth_for_normals:
         trace_push("append-depth")
         if render_mode_has_hit_distance(render_mode):

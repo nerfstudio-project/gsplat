@@ -1436,9 +1436,7 @@ class Runner:
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
         if render_tab_state.camera_model == "ortho":
-            K = apply_ortho_scale_to_K(
-                K, width, height, render_tab_state.ortho_scale
-            )
+            K = apply_ortho_scale_to_K(K, width, height, render_tab_state.ortho_scale)
 
         RENDER_MODE_MAP = {
             "rgb": "RGB",

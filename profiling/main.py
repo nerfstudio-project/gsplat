@@ -344,9 +344,7 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
         if "nht" in args.backends:
             for nht_feature_dim in args.nht_feature_dim:
                 print("========================================")
-                print(
-                    f"Batch Size: {batch_size}, NHT Feature Dim: {nht_feature_dim}"
-                )
+                print(f"Batch Size: {batch_size}, NHT Feature Dim: {nht_feature_dim}")
                 print("========================================")
                 print("nht (3DGUT + Neural Harmonic Textures)")
                 for scene_grid in args.scene_grid:

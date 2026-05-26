@@ -37,6 +37,7 @@ from ..cuda._wrapper import (
 # NHT compile-time constants exposed to Python via the C++ extension.
 # ---------------------------------------------------------------------------
 
+
 def get_encoding_expansion_factor() -> int:
     """Output expansion factor per base feature after harmonic encoding.
 
@@ -63,7 +64,23 @@ def get_feature_divisor() -> int:
 # Channels supported by the NHT CUDA kernels' templated switch.
 # ---------------------------------------------------------------------------
 NHT_SUPPORTED_CHANNELS: Tuple[int, ...] = (
-    4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 80, 96, 128, 256,
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32,
+    36,
+    40,
+    44,
+    48,
+    64,
+    80,
+    96,
+    128,
+    256,
 )
 
 
@@ -111,9 +128,7 @@ def _nht_pad_colors(
             backgrounds = torch.cat(
                 [
                     backgrounds,
-                    torch.zeros(
-                        *backgrounds.shape[:-1], padded_output, device=device
-                    ),
+                    torch.zeros(*backgrounds.shape[:-1], padded_output, device=device),
                 ],
                 dim=-1,
             )
@@ -178,9 +193,7 @@ class _RasterizeToPixelsNHTEval3D(torch.autograd.Function):
             render_depth,
             render_normals,
             last_ids,
-        ) = _make_lazy_cuda_func(
-            "rasterize_to_pixels_from_world_nht_3dgs_fwd"
-        )(
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_nht_3dgs_fwd")(
             means,
             quats,
             scales,
@@ -291,7 +304,9 @@ class _RasterizeToPixelsNHTEval3D(torch.autograd.Function):
         ):
             v_render_normals_in = v_render_normals.contiguous()
 
-        depths_per_gauss_in = saved_depths_per_gauss if ctx.has_depths_per_gauss else None
+        depths_per_gauss_in = (
+            saved_depths_per_gauss if ctx.has_depths_per_gauss else None
+        )
 
         (
             v_means,
@@ -300,9 +315,7 @@ class _RasterizeToPixelsNHTEval3D(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_depths_per_gauss,
-        ) = _make_lazy_cuda_func(
-            "rasterize_to_pixels_from_world_nht_3dgs_bwd"
-        )(
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_nht_3dgs_bwd")(
             means,
             quats,
             scales,
@@ -340,9 +353,9 @@ class _RasterizeToPixelsNHTEval3D(torch.autograd.Function):
         v_backgrounds = None
         if ctx.needs_input_grad[5]:
             v_bg_colors = v_fused_renders[..., :-3]
-            v_backgrounds = (
-                v_bg_colors * (1.0 - render_alphas).float()
-            ).sum(dim=(-3, -2))
+            v_backgrounds = (v_bg_colors * (1.0 - render_alphas).float()).sum(
+                dim=(-3, -2)
+            )
 
         v_depths_out = (
             v_depths_per_gauss
@@ -351,35 +364,35 @@ class _RasterizeToPixelsNHTEval3D(torch.autograd.Function):
         )
 
         return (
-            v_means,           # means
-            v_quats,           # quats
-            v_scales,          # scales
-            v_colors,          # colors
-            v_opacities,       # opacities
-            v_backgrounds,     # backgrounds
-            None,              # masks
-            None,              # viewmats
-            None,              # Ks
-            None,              # width
-            None,              # height
-            None,              # tile_size
-            None,              # isect_offsets
-            None,              # flatten_ids
-            None,              # camera_model
-            None,              # ut_params
-            None,              # radial_coeffs
-            None,              # tangential_coeffs
-            None,              # thin_prism_coeffs
-            None,              # ftheta_coeffs
-            None,              # lidar_coeffs
-            None,              # external_distortion_coeffs
-            None,              # rolling_shutter
-            None,              # viewmats_rs
-            None,              # center_ray_mode
-            None,              # ray_dir_scale
-            v_depths_out,      # depths_per_gauss
-            None,              # use_hit_distance
-            None,              # with_normals
+            v_means,  # means
+            v_quats,  # quats
+            v_scales,  # scales
+            v_colors,  # colors
+            v_opacities,  # opacities
+            v_backgrounds,  # backgrounds
+            None,  # masks
+            None,  # viewmats
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # tile_size
+            None,  # isect_offsets
+            None,  # flatten_ids
+            None,  # camera_model
+            None,  # ut_params
+            None,  # radial_coeffs
+            None,  # tangential_coeffs
+            None,  # thin_prism_coeffs
+            None,  # ftheta_coeffs
+            None,  # lidar_coeffs
+            None,  # external_distortion_coeffs
+            None,  # rolling_shutter
+            None,  # viewmats_rs
+            None,  # center_ray_mode
+            None,  # ray_dir_scale
+            v_depths_out,  # depths_per_gauss
+            None,  # use_hit_distance
+            None,  # with_normals
         )
 
 
@@ -425,7 +438,12 @@ def rasterize_to_pixels_eval3d_nht_extra(
             "NHT does not support per-pixel `rays` input (camera model dispatch "
             "computes rays itself). Call rasterization() with rays=None."
         )
-    fused_renders, render_alphas, render_depth, render_normals = _rasterize_nht_features(
+    (
+        fused_renders,
+        render_alphas,
+        render_depth,
+        render_normals,
+    ) = _rasterize_nht_features(
         means=means,
         quats=quats,
         scales=scales,
@@ -523,6 +541,7 @@ def _rasterize_nht_features(
         ut_params = UnscentedTransformParameters()
     if nht_params is None:
         from gsplat.nht._rendering import NHTParams
+
         nht_params = NHTParams()
     center_ray_mode = bool(nht_params.center_ray_mode)
     ray_dir_scale = float(nht_params.ray_dir_scale)
@@ -535,7 +554,9 @@ def _rasterize_nht_features(
     # so strip it before feature interpolation and feed it to the fused aux
     # depth output instead.
     depth_feature = depths_per_gauss
-    maybe_depth = colors.shape[-1] % divisor != 0 and (colors.shape[-1] - 1) % divisor == 0
+    maybe_depth = (
+        colors.shape[-1] % divisor != 0 and (colors.shape[-1] - 1) % divisor == 0
+    )
     if maybe_depth:
         depth_feature = colors[..., -1].contiguous()
         colors = colors[..., :-1]

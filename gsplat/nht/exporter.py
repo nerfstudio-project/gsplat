@@ -48,11 +48,7 @@ def cast_state_dict_to_fp16(
     out: Dict[str, Any] = {}
     for k, v in state_dict.items():
         match = prefix is None or k.startswith(prefix)
-        if (
-            match
-            and torch.is_tensor(v)
-            and v.dtype == torch.float32
-        ):
+        if match and torch.is_tensor(v) and v.dtype == torch.float32:
             out[k] = v.detach().to(torch.float16)
         else:
             out[k] = v
@@ -206,9 +202,7 @@ def export_splats_nht(
 
     # Cast features through fp16 then re-interpret the bits as uint16 so they
     # can be written via a standard PLY ``ushort`` property.
-    features_fp16 = (
-        features.detach().to(torch.float16).contiguous().cpu().numpy()
-    )
+    features_fp16 = features.detach().to(torch.float16).contiguous().cpu().numpy()
     features_bits = features_fp16.view(np.uint16)
     for j in range(feature_dim):
         arr[f"f_nht_{j}"] = features_bits[:, j]

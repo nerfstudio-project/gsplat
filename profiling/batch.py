@@ -187,7 +187,7 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
         from tabulate import tabulate
     except ImportError:
         # Fallback. tabulate is not part of the standard dependencies
-        def tabulate(rows, headers, tablefmt="rst"): 
+        def tabulate(rows, headers, tablefmt="rst"):
             widths = [
                 max(len(str(h)), *(len(str(r[i])) for r in rows))
                 for i, h in enumerate(headers)
@@ -230,9 +230,7 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
                             world_rank=world_rank,
                             world_size=world_size,
                         )
-                        label = (
-                            f"NHT (feat={feature_dim})" if model == "NHT" else model
-                        )
+                        label = f"NHT (feat={feature_dim})" if model == "NHT" else model
                         collection.append(
                             [
                                 label,
@@ -294,10 +292,7 @@ if __name__ == "__main__":
         type=str,
         nargs="+",
         default=["3DGS", "3DGUT"],
-        help=(
-            "Model used for rasterization. One or more of: "
-            "3DGS, 3DGUT, NHT."
-        ),
+        help=("Model used for rasterization. One or more of: " "3DGS, 3DGUT, NHT."),
     )
     parser.add_argument(
         "--nht_feature_dim",

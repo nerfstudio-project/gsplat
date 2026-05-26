@@ -210,7 +210,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         K = torch.from_numpy(K).float().to(device)
         if render_tab_state.camera_model == "ortho":
             K = apply_ortho_scale_to_K(K, width, height, render_tab_state.ortho_scale)
-        viewmat = c2w.inverse().contiguous()
+        viewmat = c2w.inverse()
 
         if args.use_gaussian_render_inference_scene:
             bg_raw = render_tab_state.backgrounds

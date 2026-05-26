@@ -35,7 +35,7 @@ def _require_tcnn() -> Any:
     except ImportError as e:
         raise ImportError(
             "gsplat.nht.deferred_shader requires the optional 'tinycudann' "
-            "package. Install with: pip install \"gsplat[nht]\". Note that "
+            'package. Install with: pip install "gsplat[nht]". Note that '
             "tiny-cuda-nn needs a working CUDA toolchain at install time; "
             "see docs/nht.md for details."
         ) from e
@@ -83,6 +83,7 @@ class HarmonicFeatures:
         )  # [N, feature_dim]
         return features
 
+
 class DeferredShaderModule(torch.nn.Module):
     """Deferred NHT decoder for RGB plus optional AOV outputs.
 
@@ -123,7 +124,10 @@ class DeferredShaderModule(torch.nn.Module):
         if split_rgb_head and mlp_hidden_dim <= 3:
             raise ValueError("mlp_hidden_dim must be > 3 when split_rgb_head is True")
 
-        from gsplat.nht._wrapper import get_encoding_expansion_factor, get_feature_divisor
+        from gsplat.nht._wrapper import (
+            get_encoding_expansion_factor,
+            get_feature_divisor,
+        )
 
         tcnn = _require_tcnn()
         self.feature_dim = feature_dim
@@ -260,9 +264,7 @@ class DeferredShaderModule(torch.nn.Module):
         if self._architecture == "split_rgb_aux_linear":
             assert self.auxiliary_head is not None
             rgb = h[:, :3].view(C, H, W, 3)
-            aux = self.auxiliary_head(h[:, 3:]).view(
-                C, H, W, self.auxiliary_output_dim
-            )
+            aux = self.auxiliary_head(h[:, 3:]).view(C, H, W, self.auxiliary_output_dim)
             return rgb, aux
         if self._architecture == "fused_direct":
             rgb = h[:, :3].view(C, H, W, 3)

@@ -106,8 +106,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
         print("Applied EMA weights to deferred module")
     deferred_module.eval()
 
-
-
     @torch.no_grad()
     def viewer_render_fn(camera_state: CameraState, render_tab_state: RenderTabState):
         assert isinstance(render_tab_state, GsplatRenderTabState)
@@ -122,9 +120,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         c2w = torch.from_numpy(c2w).float().to(device)
         K = torch.from_numpy(K).float().to(device)
         if render_tab_state.camera_model == "ortho":
-            K = apply_ortho_scale_to_K(
-                K, width, height, render_tab_state.ortho_scale
-            )
+            K = apply_ortho_scale_to_K(K, width, height, render_tab_state.ortho_scale)
         viewmat = c2w.inverse()
 
         need_depth = render_tab_state.render_mode in [
@@ -134,9 +130,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         need_normals = render_tab_state.render_mode == "normal"
         if need_depth:
             depth_suffix = (
-                "D"
-                if render_tab_state.render_mode == "depth(accumulated)"
-                else "ED"
+                "D" if render_tab_state.render_mode == "depth(accumulated)" else "ED"
             )
             rast_render_mode = f"RGB+{depth_suffix}"
         else:
@@ -213,9 +207,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
             alpha = render_alphas[0, ..., 0:1]
             if render_tab_state.inverse:
                 alpha = 1 - alpha
-            return (
-                apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
-            )
+            return apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
 
     server = viser.ViserServer(port=args.port, verbose=False)
     _ = GsplatViewer(
