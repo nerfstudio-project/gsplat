@@ -4,7 +4,7 @@
  *
  * Operator declarations for the Neural Harmonic Textures (NHT) rasterization
  * path. Kept in a separate header so that core Ops.h has no NHT-specific
- * surface; Ops.h includes this header only when GSPLAT_BUILD_NHT is enabled.
+ * surface.
  */
 
 #pragma once
@@ -18,10 +18,6 @@
 #include "ExternalDistortion.h"
 #include "Lidars.h"
 // Include Config.h directly so the GSPLAT_BUILD_* guards below are well-defined
-// regardless of include order in the translation unit. Without this, ext.cpp
-// (which #include "Ops.h" before "csrc/Config.h") would see the declarations
-// suppressed even when NHT is enabled, leaving callers with undeclared-symbol
-// errors at compile time.
 #include "../csrc/Config.h"
 
 namespace gsplat {

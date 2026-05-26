@@ -20,7 +20,6 @@
 
 #include "Cameras.h"
 #include "ExternalDistortion.h"
-#include "OpsNHT.h"
 #include "csrc/Config.h"
 #include "csrc/Null.h"
 #include "csrc/Rasterization.h"
@@ -45,6 +44,10 @@ void register_relocation_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_cuda_impl(torch::Library &m);
 
 } // namespace gsplat
+
+#if GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
+#include "OpsNHT.h"
+#endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
