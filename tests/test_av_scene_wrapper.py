@@ -25,6 +25,16 @@ import torch
 
 from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 
+# Skip the whole module when av_trainer's optional dependencies are not
+# installed (e.g. upstream GitHub Actions core_tests.yml). The fixture
+# av_train_env in conftest applies the same skip, but this guard short-
+# circuits collection-time attribute access (e.g. av_trainer.GaussianScene
+# in test bodies) when av_trainer is None.
+pytestmark = pytest.mark.skipif(
+    av_trainer is None,
+    reason="av_trainer optional dependencies not installed (e.g. imageio)",
+)
+
 
 def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
     av_train_env,

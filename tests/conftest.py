@@ -31,6 +31,30 @@ import torch.distributed
 from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 
 
+# When optional libs/* subpackages are not installed (e.g. on the upstream
+# GitHub Actions ``core_tests.yml`` runner that only installs core gsplat),
+# drop the corresponding testpaths so ``pytest`` does not try to collect
+# tests whose imports would crash. ``pytest.ini`` keeps the full testpaths
+# list for the internal NVIDIA GPU validation environment where the libs
+# are installed by ``libs/install.sh``.
+_LIBS_TESTPATH_TO_PACKAGE = (
+    ("libs/geometry/functional", "gsplat_geometry"),
+    ("libs/scene/components", "gsplat_scene"),
+    ("libs/stage/components", "gsplat_stage"),
+)
+
+
+def pytest_ignore_collect(collection_path, config):
+    path_str = str(collection_path)
+    for testpath, package in _LIBS_TESTPATH_TO_PACKAGE:
+        if testpath in path_str:
+            try:
+                __import__(package)
+            except ImportError:
+                return True
+    return False
+
+
 @pytest.fixture(autouse=True)
 def setup_test_environment():
     """
@@ -94,7 +118,13 @@ def av_train_env(monkeypatch, tmp_path):
 
     Stubs out load_scene, init_gaussians_from_lidar, render_gaussians,
     and CUDA memory stats so train() runs without a GPU.
+
+    Skips the requesting test when av_trainer's optional dependencies are
+    not installed (e.g. upstream GitHub Actions core_tests.yml).
     """
+    if av_trainer is None:
+        pytest.skip("av_trainer optional dependencies not installed (e.g. imageio)")
+
     scene = make_av_scene()
     result_dir = str(tmp_path / "av_train")
 
