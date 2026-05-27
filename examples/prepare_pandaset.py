@@ -72,12 +72,25 @@ HF_DATASET_URL_PUBLIC = (
 def _http_read_range(
     url: str, start: int, length: int, token: str | None = None
 ) -> bytes:
-    """Read a byte range from a URL via HTTP Range request."""
+    """Read a byte range from a URL via HTTP Range request.
+
+    Verifies the server actually honored the ``Range`` header by checking
+    for a ``206 Partial Content`` response. If a proxy strips the header
+    and the origin returns ``200 OK`` with the full body instead, fail
+    loudly rather than silently slurping the entire (potentially
+    multi-gigabyte) zip into memory.
+    """
     req = Request(url)
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Range", f"bytes={start}-{start + length - 1}")
     with urlopen(req, timeout=60) as resp:
+        if resp.status != 206:
+            raise RuntimeError(
+                f"Expected 206 Partial Content for Range request to {url}, "
+                f"got {resp.status}. A proxy may be stripping the Range header; "
+                "refusing to download the full body."
+            )
         return resp.read()
 
 
@@ -87,6 +100,8 @@ def _http_get_size(url: str, token: str | None = None) -> int:
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     with urlopen(req, timeout=30) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"Expected 200 OK for HEAD {url}, got {resp.status}.")
         return int(resp.headers["Content-Length"])
 
 
