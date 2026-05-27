@@ -33,7 +33,16 @@ SCRIPT_DIR = os.path.dirname(__file__)
 
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "../examples"))
 
-import av_trainer
+# Import av_trainer behind importorskip so that this test module loads cleanly
+# on environments (e.g. upstream GitHub Actions core_tests.yml on
+# ubuntu-latest) that do not install av_trainer's optional dependencies
+# (imageio, numpy stack beyond what gsplat itself needs, etc.). When any of
+# those deps are missing the whole module is skipped at collection time
+# instead of raising ModuleNotFoundError during import.
+av_trainer = pytest.importorskip(
+    "av_trainer",
+    reason="av_trainer optional dependencies not installed (e.g. imageio)",
+)
 
 PANDASET_PATH = os.path.join(SCRIPT_DIR, "../assets/test_pandaset.npz")
 
