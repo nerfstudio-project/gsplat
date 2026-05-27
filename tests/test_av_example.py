@@ -53,9 +53,11 @@ class TestAVExample:
     @pytest.fixture(autouse=True)
     def _check_asset(self):
         if not os.path.exists(PANDASET_PATH):
-            raise FileNotFoundError(
-                f"Required test asset not found: {PANDASET_PATH}. "
-                "Download it or run the PandaSet npz creation script."
+            pytest.skip(
+                "PandaSet test asset not bundled in upstream repo. "
+                f"Materialize {PANDASET_PATH} locally (e.g. via "
+                "examples/prepare_pandaset.py against a user-provided "
+                "PandaSet checkout) to run this test."
             )
 
     @pytest.mark.slow
