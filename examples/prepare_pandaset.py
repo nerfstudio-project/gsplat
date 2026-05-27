@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 """Download and convert a PandaSet scene to npz for av_trainer.py.
 
 Produces an npz file compatible with av_trainer.py containing camera images,
