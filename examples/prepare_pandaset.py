@@ -3,8 +3,9 @@
 """Download and convert a PandaSet scene to npz for av_trainer.py.
 
 Produces an npz file compatible with av_trainer.py containing camera images,
-intrinsics, extrinsics, LiDAR points, LiDAR sensor poses, and optionally
-Pandar64 LiDAR sensor parameters for gsplat LiDAR rendering.
+intrinsics, extrinsics, LiDAR points, and LiDAR sensor poses. The PandaSet
+path in av_trainer uses the LiDAR points for sparse depth supervision; native
+LiDAR rasterization is currently NCore-only.
 
 Two input modes:
   1. From a local PandaSet directory (--pandaset-dir)
@@ -533,32 +534,17 @@ def convert_scene(
         "downsample": np.int32(downsample_factor),
     }
 
-    # Add LiDAR sensor parameters if available
-    if lidar_sensor_json and os.path.exists(lidar_sensor_json):
-        print(f"Loading LiDAR sensor parameters from {lidar_sensor_json}")
-        with open(lidar_sensor_json) as f:
-            sensor = json.load(f)
-        npz_data["lidar_row_elevations_rad"] = np.array(
-            sensor["row_elevations_rad"], dtype=np.float32
-        )
-        npz_data["lidar_column_azimuths_rad"] = np.array(
-            sensor["column_azimuths_rad"], dtype=np.float32
-        )
-        npz_data["lidar_row_azimuth_offsets_rad"] = np.array(
-            sensor["row_azimuth_offsets_rad"], dtype=np.float32
-        )
-        npz_data["lidar_spinning_frequency_hz"] = np.float32(
-            sensor["spinning_frequency_hz"]
-        )
-        npz_data["lidar_spinning_direction"] = np.array(sensor["spinning_direction"])
+    # --lidar-sensor-json is reserved for future PandaSet LiDAR rendering;
+    # av_trainer's PandaSet path currently consumes only `lidar_points` /
+    # `lidar_frame_indices` (sparse depth supervision) and never reads any of
+    # the per-sensor keys we used to write here, so writing them would just
+    # bloat the npz with dead data and mislead readers of the call site into
+    # thinking PandaSet LiDAR rasterization is wired up.
+    if lidar_sensor_json:
         print(
-            f"  Pandar64: {sensor['n_rows']} beams x {sensor['n_columns']} columns, "
-            f"{sensor['spinning_frequency_hz']} Hz {sensor['spinning_direction']}"
+            "note: --lidar-sensor-json is reserved for future PandaSet LiDAR "
+            "rendering and is currently not consumed by av_trainer"
         )
-    else:
-        print("No LiDAR sensor parameters file provided (--lidar-sensor-json).")
-        print("  LiDAR rendering with gsplat will not be available.")
-        print("  LiDAR points are still included for depth supervision.")
 
     # Save
     print(f"Saving to {output_path}...")
@@ -668,9 +654,8 @@ examples:
         "--lidar-sensor-json",
         type=str,
         default=None,
-        help="path to Pandar64 sensor parameters JSON (beam elevations, azimuths). "
-        "Enables gsplat LiDAR rendering. If not provided, LiDAR points are "
-        "still included for depth supervision but LiDAR rendering is unavailable.",
+        help="reserved for future PandaSet LiDAR rendering; currently a no-op "
+        "(av_trainer's PandaSet path uses sparse-LiDAR depth supervision only).",
     )
     parser.add_argument(
         "--hf-token",
