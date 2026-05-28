@@ -532,7 +532,8 @@ def load_checkpoint(
 
 
 def evaluate(
-    splats: torch.nn.ParameterDict,
+    stage: Stage,
+    gaussian_scene: GaussianScene,
     scene: SimpleNamespace,
     test_frame_ids: list[int],
     W: int,
@@ -540,6 +541,11 @@ def evaluate(
     renders_dir: str | None = None,
     sh_degree: int | None = None,
 ) -> float:
+    # Route through `stage.render` rather than calling `render_gaussians`
+    # directly so checkpoint eval shares the same forward path as `train()`
+    # (line ~860). Any future Stage-side change (e.g. an extra preprocess
+    # hook, a wrapped renderer) then applies to checkpoint eval automatically
+    # instead of silently diverging.
     psnrs = []
     with torch.no_grad():
         for tfid in test_frame_ids:
@@ -547,8 +553,8 @@ def evaluate(
                 gt = scene.images[tfid, tci].unsqueeze(0)
                 vm = scene.viewmats[tfid, tci].unsqueeze(0)
                 K = scene.Ks[tci]
-                rd, _, _, _, _ = render_gaussians(
-                    splats=splats,
+                rd, _, _, _, _ = stage.render(
+                    scene_id=gaussian_scene.id,
                     viewmat=vm,
                     K=K,
                     W=W,
@@ -602,9 +608,14 @@ def evaluate_checkpoint(
         "source_checkpoint": ckpt_path,
         "num_gaussians": gaussian_scene.splats["means"].shape[0],
     }
+    # Build a Stage exactly as `train()` does (line ~787) so the eval forward
+    # path is identical to the training forward path.
+    stage = Stage()
+    stage.add_scene(gaussian_scene, render_gaussians)
     if test_frame_ids:
         result["mean_psnr"] = evaluate(
-            gaussian_scene.splats,
+            stage,
+            gaussian_scene,
             scene,
             test_frame_ids,
             scene.W,
