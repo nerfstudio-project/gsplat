@@ -1,3 +1,4 @@
+<!-- Modifications Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved. -->
 # gsplat
 
 [![Core Tests.](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml/badge.svg?branch=main)](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml)
@@ -45,6 +46,34 @@ pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
 
 To build gsplat from source on Windows, please check [this instruction](docs/INSTALL_WIN.md).
 
+### Running with Docker (enables support for ROCm)
+
+A single tri-target [`Dockerfile`](Dockerfile) at the repo root builds a self-contained image for whichever backend you pick at build time. Backend-specific bases (`pytorch/pytorch` for CUDA, `rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.8.0` for ROCm) are selected via the `GSPLAT_BACKEND` build arg.
+
+```bash
+# Build (pick one — or all three)
+docker build --build-arg GSPLAT_BACKEND=cuda          -t gsplat:cuda     .
+docker build --build-arg GSPLAT_BACKEND=rocm_radeon   -t gsplat:radeon   .
+docker build --build-arg GSPLAT_BACKEND=rocm_instinct -t gsplat:instinct .
+```
+
+Override the default arch list with `--build-arg PYTORCH_ROCM_ARCH='gfx1100'` (or any semicolon-separated list); override the base image with `--build-arg BASE_IMAGE_ROCM=...` / `--build-arg BASE_IMAGE_CUDA=...`; narrow the NVIDIA fatbin with `--build-arg TORCH_CUDA_ARCH_LIST='7.5'`.
+
+```bash
+# Run — CUDA (NVIDIA Container Toolkit required)
+docker run --rm -it --gpus all --shm-size=8G gsplat:cuda
+
+# Run — ROCm Radeon / Instinct (KFD + DRI passthrough)
+docker run --rm -it \
+    --device /dev/kfd --device /dev/dri \
+    --group-add video \
+    --security-opt seccomp=unconfined \
+    --shm-size=8G \
+    gsplat:radeon       # or gsplat:instinct
+```
+
+> **Use BuildKit if your Docker is older than 23.x.** The Dockerfile uses BuildKit-only features (multi-stage `FROM` aliasing on `${ARG}`). Modern Docker uses BuildKit by default; on older daemons set `DOCKER_BUILDKIT=1` before `docker build`. The classic builder will silently skip critical install steps.
+
 ## Evaluation
 
 This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
@@ -85,6 +114,7 @@ This project is developed by the contributors coming from following institutes (
 - SpectacularAI
 - Aalto University
 - CMU
+- AMD
 
 We also have a white paper with about the project with benchmarking and mathematical supplement with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
 

@@ -1,0 +1,151 @@
+// Copyright (C) 2026 Advanced Micro Devices, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// HIP-safe shim for <cuda/std/optional> (CCCL).
+//
+// Why not just forward to libstdc++ <optional>?
+//   libstdc++'s std::optional uses __throw_bad_optional_access() for value()
+//   misuse. That helper is marked __host__-only, so any __host__ __device__
+//   translation unit that even *could* reach the throw path fails to compile
+//   under hipcc with:
+//     reference to __host__ function '__throw_bad_optional_access' in
+//     __host__ __device__ function
+//   This bites cuda::std::optional<T> kernel arguments — exactly the gsplat
+//   ProjectionUT3DGSFused / RasterizeToPixelsFromWorld* pattern.
+//
+// We provide a minimal, no-throw, trivially-relocatable optional usable from
+// both host and device code. The surface matches what gsplat needs:
+//   - default-construct = nullopt
+//   - construct from T or nullopt
+//   - has_value(), operator bool
+//   - operator*, operator->, value()  (no exceptions; UB if !has_value)
+//   - value_or(default)
+//   - reset(), emplace(...)
+//
+// T must be trivially-destructible and copy/move constructible. gsplat's
+// tensor-like parameter types satisfy this.
+#pragma once
+
+#include <hip/hip_runtime.h>
+#include <type_traits>
+#include <utility>
+
+namespace cuda { namespace std {
+
+struct nullopt_t {
+    explicit constexpr nullopt_t(int) {}
+};
+inline constexpr nullopt_t nullopt{0};
+
+template <typename T>
+class optional {
+public:
+    using value_type = T;
+
+    __host__ __device__ constexpr optional() noexcept : engaged_(false), storage_{} {}
+    __host__ __device__ constexpr optional(nullopt_t) noexcept : engaged_(false), storage_{} {}
+
+    __host__ __device__ optional(const T& v) : engaged_(true) {
+        new (&storage_.value) T(v);
+    }
+    __host__ __device__ optional(T&& v) : engaged_(true) {
+        new (&storage_.value) T(::std::move(v));
+    }
+
+    __host__ __device__ optional(const optional& other) : engaged_(other.engaged_) {
+        if (engaged_) new (&storage_.value) T(other.storage_.value);
+    }
+    __host__ __device__ optional(optional&& other) noexcept(::std::is_nothrow_move_constructible<T>::value)
+        : engaged_(other.engaged_) {
+        if (engaged_) new (&storage_.value) T(::std::move(other.storage_.value));
+    }
+
+    __host__ __device__ ~optional() { reset(); }
+
+    __host__ __device__ optional& operator=(nullopt_t) noexcept { reset(); return *this; }
+
+    __host__ __device__ optional& operator=(const optional& other) {
+        if (this == &other) return *this;
+        reset();
+        if (other.engaged_) {
+            new (&storage_.value) T(other.storage_.value);
+            engaged_ = true;
+        }
+        return *this;
+    }
+    __host__ __device__ optional& operator=(optional&& other)
+        noexcept(::std::is_nothrow_move_constructible<T>::value) {
+        if (this == &other) return *this;
+        reset();
+        if (other.engaged_) {
+            new (&storage_.value) T(::std::move(other.storage_.value));
+            engaged_ = true;
+        }
+        return *this;
+    }
+
+    template <typename U = T>
+    __host__ __device__ optional& operator=(U&& v) {
+        if (engaged_) {
+            storage_.value = ::std::forward<U>(v);
+        } else {
+            new (&storage_.value) T(::std::forward<U>(v));
+            engaged_ = true;
+        }
+        return *this;
+    }
+
+    __host__ __device__ bool has_value() const noexcept { return engaged_; }
+    __host__ __device__ explicit operator bool() const noexcept { return engaged_; }
+
+    // No-throw value access; UB if !has_value (matches CCCL device behavior).
+    __host__ __device__ T& value() & { return storage_.value; }
+    __host__ __device__ const T& value() const& { return storage_.value; }
+    __host__ __device__ T&& value() && { return ::std::move(storage_.value); }
+
+    __host__ __device__ T& operator*() & { return storage_.value; }
+    __host__ __device__ const T& operator*() const& { return storage_.value; }
+    __host__ __device__ T&& operator*() && { return ::std::move(storage_.value); }
+    __host__ __device__ T* operator->() { return &storage_.value; }
+    __host__ __device__ const T* operator->() const { return &storage_.value; }
+
+    template <typename U>
+    __host__ __device__ T value_or(U&& default_value) const& {
+        return engaged_ ? storage_.value : static_cast<T>(::std::forward<U>(default_value));
+    }
+
+    __host__ __device__ void reset() noexcept {
+        if (engaged_) {
+            storage_.value.~T();
+            engaged_ = false;
+        }
+    }
+
+    template <typename... Args>
+    __host__ __device__ T& emplace(Args&&... args) {
+        reset();
+        new (&storage_.value) T(::std::forward<Args>(args)...);
+        engaged_ = true;
+        return storage_.value;
+    }
+
+private:
+    union storage_t {
+        char dummy;
+        T    value;
+        __host__ __device__ storage_t() : dummy(0) {}
+        __host__ __device__ ~storage_t() {}
+    } storage_;
+    bool engaged_;
+};
+
+template <typename T>
+__host__ __device__ inline bool operator==(const optional<T>& o, nullopt_t) noexcept { return !o.has_value(); }
+template <typename T>
+__host__ __device__ inline bool operator==(nullopt_t, const optional<T>& o) noexcept { return !o.has_value(); }
+template <typename T>
+__host__ __device__ inline bool operator!=(const optional<T>& o, nullopt_t) noexcept { return o.has_value(); }
+template <typename T>
+__host__ __device__ inline bool operator!=(nullopt_t, const optional<T>& o) noexcept { return o.has_value(); }
+
+}}  // namespace cuda::std

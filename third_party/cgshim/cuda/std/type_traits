@@ -1,0 +1,26 @@
+// Copyright (C) 2026 Advanced Micro Devices, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+// HIP shim for <cuda/std/type_traits> (CCCL). Forwards to libstdc++ <type_traits>.
+#pragma once
+#include <type_traits>
+
+namespace cuda { namespace std {
+    using ::std::is_floating_point;
+    using ::std::is_floating_point_v;
+    using ::std::is_integral;
+    using ::std::is_integral_v;
+    using ::std::is_same;
+    using ::std::is_same_v;
+    using ::std::enable_if;
+    using ::std::enable_if_t;
+    using ::std::conditional;
+    using ::std::conditional_t;
+    using ::std::remove_reference;
+    using ::std::remove_reference_t;
+    using ::std::remove_cv;
+    using ::std::remove_cv_t;
+    using ::std::decay;
+    using ::std::decay_t;
+    using ::std::is_pointer;
+    using ::std::is_pointer_v;
+}}

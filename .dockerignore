@@ -1,0 +1,46 @@
+# Copyright (C) 2026 Advanced Micro Devices, Inc. All Rights Reserved.
+# gsplat tri-target Dockerfile — build-context exclusions
+#
+# Keep .git: required for `git submodule update --init` on the CUDA path.
+
+# Merger scratch artifacts (should not exist in a clean tree, but be safe)
+.merge-runs/
+merge_report.md
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+_deps/
+.cache/
+
+# Compiled artifacts
+*.so
+*.o
+*.a
+*.dll
+*.dylib
+
+# Logs
+*.log
+*.profile.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Training outputs (also at top-level when you mount results/ as a volume)
+examples/results/
+results/
+
+# Git history — only needed for the CUDA submodule init. The Dockerfile's
+# CUDA branch does `git submodule update --init --recursive`, which needs
+# .git/ — so we keep it for CUDA. ROCm builds don't need it. If you only
+# build Radeon/Instinct, uncomment to save another ~100 MB:
+# .git/

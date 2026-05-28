@@ -1,0 +1,19 @@
+// Copyright (C) 2026 Advanced Micro Devices, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+// HIP shim for <cuda/std/limits> (CCCL).
+// CCCL provides cuda::std::numeric_limits<T> as a __host__ __device__-safe
+// version of std::numeric_limits. ROCm has no equivalent header, so we forward
+// to the libstdc++ <limits> and alias the symbols.
+//
+// This is safe for the gsplat use case (numeric_limits<T>::epsilon, ::min,
+// ::max, ::infinity for fundamental types) because libstdc++'s
+// numeric_limits members for built-in types are constexpr __host__ __device__
+// callable in practice — they expand to literals.
+#pragma once
+#include <limits>
+
+namespace cuda { namespace std {
+    using ::std::numeric_limits;
+    using ::std::float_round_style;
+    using ::std::float_denorm_style;
+}}

@@ -1,0 +1,5 @@
+# Copyright (C) 2026 Advanced Micro Devices, Inc. All Rights Reserved.
+recursive-include gsplat/cuda/csrc *
+recursive-include gsplat/cuda/include *
+recursive-include gsplat/third_party/glm *
+include gsplat/cuda/ext.cpp
