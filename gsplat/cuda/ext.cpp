@@ -1,3 +1,4 @@
+// Modifications Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 /*
  * SPDX-FileCopyrightText: Copyright 2025 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
