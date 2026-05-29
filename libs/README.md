@@ -10,9 +10,11 @@ installable package. See `design.md` for the shared architectural contract
 | `libs/scene`     | `gsplat-scene`    | `gsplat_scene`     | `torch`                   |
 | `libs/stage`     | `gsplat-stage`    | `gsplat_stage`     | `torch`, `gsplat-scene`   |
 
-## Install
+## Build and Install
 
-Use `install.sh` from this directory:
+Install from an environment that already has the repo's expected PyTorch/CUDA
+toolchain. The libraries are editable installs, so Python-only edits are picked
+up immediately by the next `python` or `pytest` process.
 
 ```bash
 cd libs
@@ -22,7 +24,21 @@ cd libs
 ./install.sh stage          # install AFTER scene
 ```
 
-Each call runs `pip install -e <package>` against the active Python env. 
+Each call installs one package into the active Python environment. Equivalent
+manual commands are:
+
+```bash
+pip install -e geometry
+pip install -e scene
+pip install -e stage
+```
+
+Native/CUDA extensions are built or loaded through the package-specific kernel
+layers. `gsplat-scene` expects the scene CUDA extension to be available through
+the active PyTorch/CUDA setup, with fallback JIT build behavior handled by
+`gsplat_scene.kernels`. Re-run the relevant editable install after changing
+`pyproject.toml`, adding top-level packages, switching Python environments, or
+modifying native/CUDA extension sources.
 
 To verify what's installed and where it points:
 
@@ -34,11 +50,9 @@ The `Editable project location:` line should point back into this repo.
 
 ## Developing
 
-Installs are editable (`pip install -e`), so edits to any `.py` file under
-`libs/<pkg>/...` are picked up by the next `python` / `pytest` invocation with
-no reinstall. Re-run `./install.sh <pkg>` only when you change `pyproject.toml`,
-add a new top-level subpackage, switch Python envs, or modify native
-extensions.
+Installs are editable (`pip install -e`), so normal development should happen in
+place under `libs/<pkg>/...`. Keep dependency order in mind when reinstalling:
+`stage` depends on `scene`.
 
 ## Testing
 
@@ -47,15 +61,15 @@ Tests are colocated with the layer they exercise (typically alongside
 
 ```bash
 pytest libs/geometry/functional
-pytest libs/scene/components
+pytest libs/scene/components libs/scene/functional libs/scene/test_package_imports.py
 pytest libs/stage/components
 ```
 
 See `design.md` for the full testing contract.
 
-## Sanity check
+## Sanity Check
 
-After installing, this should print three workspace paths:
+After installing, this should print workspace paths for all libs:
 
 ```bash
 python - <<'PY'

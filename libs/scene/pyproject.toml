@@ -32,5 +32,14 @@ dependencies = [
 packages = [
     "gsplat_scene",
     "gsplat_scene.components",
+    "gsplat_scene.kernels",
+    "gsplat_scene.kernels.cuda",
+    "gsplat_scene.functional",
 ]
 package-dir = { "gsplat_scene" = "." }
+
+[tool.setuptools.package-data]
+gsplat_scene = [
+    "kernels/cuda/ext.cpp",
+    "kernels/cuda/csrc/*",
+]
