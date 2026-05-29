@@ -27,7 +27,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from PIL import Image
+
+# Pillow + tqdm are `[examples]` / `[dev]` extras — skip the whole module
+# cleanly if a fresh `pip install .` doesn't pull them (B13). Must
+# importorskip *before* we touch examples.dynamic_surgical_trainer which
+# imports tqdm at module top.
+Image = pytest.importorskip("PIL.Image")
+pytest.importorskip("tqdm")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -154,6 +160,35 @@ def test_build_deform_modules_constructs(trainer_dir: Path):
     assert deform_net.feature_dim == hexplane.feat_dim
     assert sum(p.numel() for p in hex_opt.param_groups[0]["params"]) > 0
     assert sum(p.numel() for p in deform_opt.param_groups[0]["params"]) > 0
+
+
+def test_init_means_inside_derived_hexplane_aabb(trainer_dir: Path):
+    """MR-036 / B11: pin the in-AABB invariant.
+
+    After ``build_splats_from_parser`` produces the init point cloud,
+    ``train()`` derives ``derived_bounds = max(cfg.hex_bounds,
+    init_means.abs().max() * 2.0)``. Every init Gaussian must then be
+    inside ``[-derived_bounds, +derived_bounds]^3`` — otherwise
+    ``HexPlaneField.forward``'s ``grid_sample(padding_mode="border")``
+    clamps the out-of-AABB queries to the same edge feature and the
+    deformation field collapses to a spatial constant. This is the
+    dead-HexPlane bug originally fixed in MR-026.
+    """
+    cfg = Config(data_dir=trainer_dir, init_max_points=200)
+    parser = EndoNeRFParser(data_dir=trainer_dir)
+    params, _ = build_splats_from_parser(parser, cfg, device=torch.device("cpu"))
+
+    means_abs_max = float(params["means"].detach().abs().max())
+    derived_bounds = max(cfg.hex_bounds, means_abs_max * 2.0)
+
+    inside = (params["means"].detach().abs() <= derived_bounds).all()
+    assert bool(inside), (
+        f"Init means escape derived HexPlane AABB: "
+        f"means.abs().max()={means_abs_max:.3f}, "
+        f"derived_bounds={derived_bounds:.3f}"
+    )
+    # And the 2× safety margin must actually exist (not just an equality).
+    assert means_abs_max <= derived_bounds * 0.5 + 1e-6
 
 
 # ---------------------------------------------------------------------------

@@ -688,6 +688,25 @@ def train(cfg: Config) -> None:
         f"init_means.abs().max()={init_means_abs_max:.3f}, "
         f"derived={derived_bounds:.3f}"
     )
+    # MR-036 / B11: pin the in-AABB invariant explicitly. After deriving
+    # bounds, every init Gaussian must be inside [-derived_bounds,
+    # +derived_bounds] on every axis — otherwise HexPlane.forward's
+    # grid_sample(padding_mode="border") will clamp the out-of-AABB
+    # queries to the same edge feature and the deformation collapses to
+    # a spatial constant (the dead-HexPlane bug fixed in MR-026). The
+    # assert is tautological at init time given how derived_bounds is
+    # computed, but it documents the contract and would catch a future
+    # refactor that decouples the two computations.
+    with torch.no_grad():
+        if not bool((params["means"].detach().abs() <= derived_bounds).all()):
+            raise RuntimeError(
+                "Post-init means escape the derived HexPlane AABB "
+                f"(derived_bounds={derived_bounds:.3f}, "
+                f"means.abs().max()={float(params['means'].detach().abs().max()):.3f}). "
+                "This should never happen at init given derived_bounds = "
+                "max(cfg.hex_bounds, init_means.abs().max() * 2.0); check "
+                "build_splats_from_parser for a stale snapshot."
+            )
     hexplane, deform_net, hex_opt, deform_opt = build_deform_modules(
         cfg, device, bounds_override=derived_bounds
     )

@@ -84,7 +84,10 @@ setup(
         "jaxtyping",
         "nvtx",
         "rich>=12",
-        "torch",
+        # Upper bound: torch 2.12 dropped support for older CUDA drivers
+        # (B13 finding I-9: fresh install pulled torch 2.12.0 incompatible
+        # with host driver 12080). Pin to the last known-good major series.
+        "torch>=2.0,<2.12",
         "typing_extensions; python_version<'3.8'",
         # gsplat-scene / gsplat-stage live under libs/scene and libs/stage and
         # are installed via ``libs/install.sh scene && libs/install.sh stage``;
@@ -113,6 +116,11 @@ setup(
             "pytest",
             "pytest-env",
             "pytest-xdist==2.5.0",
+            # Tests for examples/datasets/endonerf.py and the dynamic-surgical
+            # trainer import Pillow + tqdm at module top — without these the
+            # test collection ImportErrors on a fresh `[dev]` install. B13.
+            "Pillow",
+            "tqdm",
             "typeguard>=2.13.3",
             "pyyaml>=6.0.1",
             "build",
