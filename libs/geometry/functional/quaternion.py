@@ -13,10 +13,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[pytest]
-testpaths = tests libs/geometry/functional libs/scene/components libs/stage/components
-pythonpath = .
-env =
-    VERBOSE=1
-    BUILD_CAMERA_WRAPPERS=1
-    NUM_CHANNELS=1,3,4,5,8,24,32,128
+"""Quaternion operations (public API)."""
+
+from ..kernels.quaternion_ops import (
+    quat_angular_distance,
+    quat_conjugate,
+    quat_from_axis_angle,
+    quat_identity,
+    quat_inverse,
+    quat_lerp,
+    quat_manifold_interp,
+    quat_multiply,
+    quat_normalize_safe,
+    quat_rotate_vector,
+    quat_slerp,
+    quat_to_matrix,
+)
+
+__all__ = [
+    "quat_angular_distance",
+    "quat_conjugate",
+    "quat_from_axis_angle",
+    "quat_identity",
+    "quat_inverse",
+    "quat_lerp",
+    "quat_manifold_interp",
+    "quat_multiply",
+    "quat_normalize_safe",
+    "quat_rotate_vector",
+    "quat_slerp",
+    "quat_to_matrix",
+]

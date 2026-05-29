@@ -13,10 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[pytest]
-testpaths = tests libs/geometry/functional libs/scene/components libs/stage/components
-pythonpath = .
-env =
-    VERBOSE=1
-    BUILD_CAMERA_WRAPPERS=1
-    NUM_CHANNELS=1,3,4,5,8,24,32,128
+"""Geometry module: public operators live in :mod:`gsplat_geometry.functional`.
+
+Backend dispatch and CUDA integration are under :mod:`gsplat_geometry.kernels`
+but are not re-exported here; import submodules such as
+``gsplat_geometry.kernels.pose_ops`` only when internal access is required.
+"""
+
+from . import functional
+
+__all__ = ["functional"]

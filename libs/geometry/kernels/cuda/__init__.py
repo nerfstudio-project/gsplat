@@ -13,10 +13,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[pytest]
-testpaths = tests libs/geometry/functional libs/scene/components libs/stage/components
-pythonpath = .
-env =
-    VERBOSE=1
-    BUILD_CAMERA_WRAPPERS=1
-    NUM_CHANNELS=1,3,4,5,8,24,32,128
+# JIT CUDA extension build helpers for gsplat_geometry.

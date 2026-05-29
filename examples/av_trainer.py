@@ -44,6 +44,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 import gsplat
+from gsplat_scene import GaussianScene
+from gsplat_stage import Stage
 from gsplat.strategy import MCMCStrategy
 
 # ---------------------------------------------------------------------------
@@ -80,6 +82,11 @@ def load_scene_npz(path: str, device: str = "cuda") -> SimpleNamespace:
     scene.viewmats = torch.linalg.inv(cam_to_worlds)
 
     return scene
+
+
+def load_scene(path: str, device: str = "cuda") -> SimpleNamespace:
+    """Compatibility wrapper for PandaSet-style NPZ scenes."""
+    return load_scene_npz(path, device=device)
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +307,23 @@ def init_gaussians(
     return params
 
 
+def init_gaussians_from_lidar(
+    scene: SimpleNamespace,
+    device: str = "cuda",
+    sh_degree: int = 0,
+) -> torch.nn.ParameterDict:
+    """Initialize one Gaussian per train-frame PandaSet LiDAR point."""
+    train_mask = ~scene.is_test
+    train_frame_ids = torch.where(torch.from_numpy(train_mask))[0]
+    pts_mask = torch.zeros(len(scene.lidar_points), dtype=torch.bool, device=device)
+    for fid in train_frame_ids:
+        pts_mask |= scene.lidar_frame_indices == fid.item()
+    points = scene.lidar_points[pts_mask, :3]
+    intensities = scene.lidar_points[pts_mask, 3:4]
+    colors = intensities.expand(-1, 3)
+    return init_gaussians(points, colors, device, sh_degree)
+
+
 # ---------------------------------------------------------------------------
 # Rendering helpers
 # ---------------------------------------------------------------------------
@@ -342,8 +366,7 @@ def get_render_params(ncore_camera_data, camera_idx, device):
     return kwargs
 
 
-def rasterize(
-    params,
+def render_gaussians(
     viewmat,
     K,
     W,
@@ -355,16 +378,22 @@ def rasterize(
     radial_coeffs=None,
     tangential_coeffs=None,
     thin_prism_coeffs=None,
+    *,
+    splats: torch.nn.ParameterDict,
 ):
     """Rasterize Gaussians (matches simple_trainer.rasterize_splats pattern).
 
     Returns (renders, alphas, info, activated_scales, activated_opacities).
     Activations are computed once here to avoid redundant computation in loss.
+
+    ``splats`` is a required keyword-only argument; Stage supplies it via
+    ``splats=scene.splats`` on every dispatch.
     """
-    if "sh0" in params:
-        colors = torch.cat([params["sh0"], params["shN"]], dim=1)
+
+    if "sh0" in splats:
+        colors = torch.cat([splats["sh0"], splats["shN"]], dim=1)
     else:
-        colors = params["colors"]
+        colors = splats["colors"]
 
     # The unscented transform path is also required for pinhole cameras that
     # carry non-zero distortion coefficients (OpenCV radial/tangential/thin
@@ -375,12 +404,12 @@ def rasterize(
     )
     packed = not use_ut
 
-    activated_scales = torch.exp(params["scales"])
-    activated_opacities = torch.sigmoid(params["opacities"])
+    activated_scales = torch.exp(splats["scales"])
+    activated_opacities = torch.sigmoid(splats["opacities"])
 
     renders, alphas, info = gsplat.rasterization(
-        params["means"],
-        F.normalize(params["quats"], dim=-1),
+        splats["means"],
+        F.normalize(splats["quats"], dim=-1),
         activated_scales,
         activated_opacities,
         colors,
@@ -428,6 +457,207 @@ def create_optimizers(params, lr):
     }
 
 
+def log_training_step(
+    step: int, max_steps: int, total_loss: torch.Tensor, start_time: float
+) -> None:
+    elapsed = time.time() - start_time
+    mem_peak = torch.cuda.max_memory_allocated() / 1e6
+    print(
+        f"Step {step}/{max_steps} | loss={total_loss.item():.4f} | "
+        f"{max(1, step) / elapsed:.0f} it/s | {mem_peak:.0f} MB"
+    )
+
+
+def prepare_output_dirs(
+    result_dir: str, include_checkpoints: bool = False
+) -> tuple[str, str, str | None]:
+    os.makedirs(result_dir, exist_ok=True)
+    renders_dir = os.path.join(result_dir, "renders")
+    stats_dir = os.path.join(result_dir, "stats")
+    os.makedirs(renders_dir, exist_ok=True)
+    os.makedirs(stats_dir, exist_ok=True)
+
+    ckpt_dir = None
+    if include_checkpoints:
+        ckpt_dir = os.path.join(result_dir, "ckpts")
+        os.makedirs(ckpt_dir, exist_ok=True)
+
+    return renders_dir, stats_dir, ckpt_dir
+
+
+def checkpoint_name(step: int) -> str:
+    return f"ckpt_{step:05d}.pt"
+
+
+def gaussian_scene_from_checkpoint(checkpoint: dict) -> GaussianScene:
+    splats_state = checkpoint.get("splats")
+    if splats_state is None or (
+        "colors" not in splats_state and "sh0" not in splats_state
+    ):
+        raise ValueError(
+            "Checkpoint does not contain AV-compatible splats: "
+            "expected 'splats' with 'colors' or 'sh0' entries."
+        )
+    if "scene_id" not in checkpoint:
+        raise ValueError(
+            "Checkpoint missing 'scene_id'. Re-train with the current av_trainer "
+            "to produce a checkpoint that records scene_id."
+        )
+
+    splats = torch.nn.ParameterDict(
+        {key: torch.nn.Parameter(value.clone()) for key, value in splats_state.items()}
+    )
+    return GaussianScene.from_splats(splats, id=checkpoint["scene_id"])
+
+
+def save_checkpoint(
+    gaussian_scene: GaussianScene,
+    scene_path: str,
+    ckpt_dir: str,
+    step: int,
+) -> str:
+    ckpt_path = os.path.join(ckpt_dir, checkpoint_name(step))
+    torch.save(
+        {
+            "step": step,
+            "scene_path": scene_path,
+            "scene_id": gaussian_scene.id,
+            "splats": gaussian_scene.splats.state_dict(),
+        },
+        ckpt_path,
+    )
+    return ckpt_path
+
+
+def load_checkpoint(
+    ckpt_path: str,
+    device: str | torch.device = "cpu",
+) -> tuple[int, GaussianScene, str | None]:
+    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
+    if "step" not in checkpoint:
+        raise ValueError("Checkpoint is missing required 'step' field.")
+    return (
+        int(checkpoint["step"]),
+        gaussian_scene_from_checkpoint(checkpoint),
+        checkpoint.get("scene_path"),
+    )
+
+
+def evaluate(
+    stage: Stage,
+    gaussian_scene: GaussianScene,
+    scene: SimpleNamespace,
+    test_frame_ids: list[int],
+    W: int,
+    H: int,
+    renders_dir: str | None = None,
+    sh_degree: int | None = None,
+) -> float:
+    # Route through `stage.render` rather than calling `render_gaussians`
+    # directly so checkpoint eval shares the same forward path as `train()`
+    # (line ~860). Any future Stage-side change (e.g. an extra preprocess
+    # hook, a wrapped renderer) then applies to checkpoint eval automatically
+    # instead of silently diverging.
+    psnrs = []
+    with torch.no_grad():
+        for tfid in test_frame_ids:
+            for tci in range(scene.n_cams):
+                gt = scene.images[tfid, tci].unsqueeze(0)
+                vm = scene.viewmats[tfid, tci].unsqueeze(0)
+                K = scene.Ks[tci]
+                rd, _, _, _, _ = stage.render(
+                    scene_id=gaussian_scene.id,
+                    viewmat=vm,
+                    K=K,
+                    W=W,
+                    H=H,
+                    sh_degree_to_use=sh_degree,
+                )
+                psnrs.append(compute_psnr(rd[0].clamp(0, 1), gt[0]))
+
+                if renders_dir is not None:
+                    gt_np = (gt[0].cpu().numpy() * 255).astype(np.uint8)
+                    rd_np = (rd[0].clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+                    canvas = np.concatenate([gt_np, rd_np], axis=1)
+                    imageio.imwrite(
+                        os.path.join(
+                            renders_dir, f"eval_f{tfid}_{scene.camera_names[tci]}.png"
+                        ),
+                        canvas,
+                    )
+    return float(np.mean(psnrs)) if psnrs else 0.0
+
+
+def evaluate_checkpoint(
+    ckpt_path: str,
+    scene_path: str | None,
+    result_dir: str,
+) -> dict:
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+    if use_cuda:
+        torch.cuda.reset_peak_memory_stats()
+    renders_dir, stats_dir, _ = prepare_output_dirs(result_dir)
+
+    step, gaussian_scene, checkpoint_scene_path = load_checkpoint(ckpt_path, device)
+    if scene_path is None:
+        scene_path = checkpoint_scene_path
+    if scene_path is None:
+        raise ValueError("A scene path is required when the checkpoint has none.")
+    if (
+        scene_path.endswith(".json")
+        or scene_path.endswith(".zarr.itar")
+        or Path(scene_path).is_dir()
+    ):
+        raise ValueError("--ckpt evaluation currently supports PandaSet NPZ scenes.")
+
+    scene = load_scene(scene_path, device=device)
+    test_frame_ids = [i for i in range(scene.n_frames) if scene.is_test[i]]
+    start_time = time.time()
+    result = {
+        "step": step,
+        "scene_path": scene_path,
+        "source_checkpoint": ckpt_path,
+        "num_gaussians": gaussian_scene.splats["means"].shape[0],
+    }
+    # Build a Stage exactly as `train()` does (line ~787) so the eval forward
+    # path is identical to the training forward path.
+    stage = Stage()
+    stage.add_scene(gaussian_scene, render_gaussians)
+    if test_frame_ids:
+        result["mean_psnr"] = evaluate(
+            stage,
+            gaussian_scene,
+            scene,
+            test_frame_ids,
+            scene.W,
+            scene.H,
+            renders_dir=renders_dir,
+        )
+        print(
+            f"  Eval PSNR: {result['mean_psnr']:.2f} dB "
+            f"({len(test_frame_ids) * scene.n_cams} views)"
+        )
+
+    result["elapsed_s"] = time.time() - start_time
+    result["gpu_peak_mb"] = torch.cuda.max_memory_allocated() / 1e6 if use_cuda else 0.0
+    with open(os.path.join(stats_dir, f"step{step:05d}.json"), "w") as f:
+        json.dump(result, f, indent=2)
+    with open(os.path.join(result_dir, "summary.json"), "w") as f:
+        json.dump(
+            {
+                "loaded_checkpoint": ckpt_path,
+                "scene_path": scene_path,
+                "num_gaussians": result["num_gaussians"],
+                "checkpoints": [result],
+            },
+            f,
+            indent=2,
+        )
+    print(f"Results saved to {result_dir}/")
+    return result
+
+
 def train(
     scene_path: str,
     max_steps: int,
@@ -452,11 +682,9 @@ def train(
 ):
     device = torch.device("cuda:0")
     torch.cuda.reset_peak_memory_stats()
-    os.makedirs(result_dir, exist_ok=True)
-    renders_dir = os.path.join(result_dir, "renders")
-    stats_dir = os.path.join(result_dir, "stats")
-    os.makedirs(renders_dir, exist_ok=True)
-    os.makedirs(stats_dir, exist_ok=True)
+    renders_dir, stats_dir, ckpt_dir = prepare_output_dirs(
+        result_dir, include_checkpoints=True
+    )
 
     # --- Detect data format and load ---
     # NCore path follows simple_trainer.py: NCoreParser + NCoreDataset
@@ -563,16 +791,9 @@ def train(
         )
     else:
         # PandaSet NPZ path (not in simple_trainer)
-        scene = load_scene_npz(scene_path, device=device)
+        scene = load_scene(scene_path, device=device)
         train_mask = ~scene.is_test
-        train_frame_ids = torch.where(torch.from_numpy(train_mask))[0]
-        pts_mask = torch.zeros(len(scene.lidar_points), dtype=torch.bool, device=device)
-        for fid in train_frame_ids:
-            pts_mask |= scene.lidar_frame_indices == fid.item()
-        points = scene.lidar_points[pts_mask, :3]
-        intensities = scene.lidar_points[pts_mask, 3:4]
-        colors = intensities.expand(-1, 3)
-        params = init_gaussians(points, colors, device, sh_degree)
+        params = init_gaussians_from_lidar(scene, device=device, sh_degree=sh_degree)
         H, W = scene.H, scene.W
         n_train = (
             sum(1 for fi in range(scene.n_frames) if train_mask[fi]) * scene.n_cams
@@ -586,8 +807,13 @@ def train(
             f"{len(scene.lidar_points)} init pts | {len(params['means'])} Gaussians"
         )
 
-    N = len(params["means"])
-    optimizers = create_optimizers(params, lr)
+    gaussian_scene = GaussianScene.from_splats(params, id="av_scene")
+    stage = Stage()
+    stage.add_scene(gaussian_scene, render_gaussians)
+    splats = gaussian_scene.splats
+
+    N = len(splats["means"])
+    optimizers = create_optimizers(splats, lr)
 
     # MCMC (same as simple_trainer)
     strategy = None
@@ -601,7 +827,7 @@ def train(
             refine_every=100,
             verbose=True,
         )
-        strategy.check_sanity(params, optimizers)
+        strategy.check_sanity(splats, optimizers)
         strategy_state = strategy.initialize_state()
         print(f"MCMC: cap_max={cap_max}")
 
@@ -654,13 +880,13 @@ def train(
         # Forward (matches simple_trainer pattern). PandaSet gets an extra depth
         # channel ("RGB+ED") so sparse-LiDAR depth supervision below can sample it.
         render_mode = "RGB" if is_ncore else "RGB+ED"
-        renders, alphas, info, act_scales, act_opacities = rasterize(
-            params,
-            viewmat,
-            K,
-            width,
-            height,
-            render_mode,
+        renders, alphas, info, act_scales, act_opacities = stage.render(
+            scene_id=gaussian_scene.id,
+            viewmat=viewmat,
+            K=K,
+            W=width,
+            H=height,
+            render_mode=render_mode,
             sh_degree_to_use=sh_degree_to_use,
             camera_model=cam_model,
             **rp,
@@ -698,14 +924,14 @@ def train(
             lidar_vm = lidar_r.viewmats[lfi].unsqueeze(0)
             lidar_vm_rs = lidar_r.viewmats_rs[lfi].unsqueeze(0)
             lidar_K = torch.eye(3, device=device).unsqueeze(0)
-            N_gs = params["means"].shape[0]
+            N_gs = splats["means"].shape[0]
             dummy_colors = torch.zeros(N_gs, 3, device=device)
 
             lidar_renders, _, _ = gsplat.rasterization(
-                params["means"],
-                F.normalize(params["quats"], dim=-1),
-                torch.exp(params["scales"]),
-                torch.sigmoid(params["opacities"]),
+                splats["means"],
+                F.normalize(splats["quats"], dim=-1),
+                torch.exp(splats["scales"]),
+                torch.sigmoid(splats["opacities"]),
                 dummy_colors,
                 lidar_vm,
                 lidar_K,
@@ -787,14 +1013,15 @@ def train(
         # MCMC (same as simple_trainer)
         if strategy is not None:
             strategy.step_post_backward(
-                params,
+                splats,
                 optimizers,
                 strategy_state,
                 step,
                 info={},
                 lr=schedulers[0].get_last_lr()[0],
+                scene=gaussian_scene,
             )
-        N = len(params["means"])
+        N = len(splats["means"])
 
         # Logging
         if step % log_every == 0:
@@ -821,12 +1048,12 @@ def train(
                         erp = get_render_params(ncore_camera_data, ci, device)
                         ecm = erp.pop("camera_model")
                         val_h, val_w = gt.shape[1], gt.shape[2]
-                        rd, _, _, _, _ = rasterize(
-                            params,
-                            vm,
-                            Kv,
-                            val_w,
-                            val_h,
+                        rd, _, _, _, _ = stage.render(
+                            scene_id=gaussian_scene.id,
+                            viewmat=vm,
+                            K=Kv,
+                            W=val_w,
+                            H=val_h,
                             sh_degree_to_use=sh_degree_to_use,
                             camera_model=ecm,
                             **erp,
@@ -852,8 +1079,13 @@ def train(
                             gt = scene.images[tfid, tci].unsqueeze(0)
                             vm = scene.viewmats[tfid, tci].unsqueeze(0)
                             Kv = scene.Ks[tci]
-                            rd, _, _, _, _ = rasterize(
-                                params, vm, Kv, W, H, sh_degree_to_use=sh_degree_to_use
+                            rd, _, _, _, _ = stage.render(
+                                scene_id=gaussian_scene.id,
+                                viewmat=vm,
+                                K=Kv,
+                                W=W,
+                                H=H,
+                                sh_degree_to_use=sh_degree_to_use,
                             )
                             psnrs.append(compute_psnr(rd[0].clamp(0, 1), gt[0]))
                             if is_last and renders_dir:
@@ -873,6 +1105,7 @@ def train(
             elapsed = time.time() - start_time
             mem_peak = torch.cuda.max_memory_allocated() / 1e6
             mean_psnr = float(np.mean(psnrs)) if psnrs else 0.0
+            ckpt_path = save_checkpoint(gaussian_scene, scene_path, ckpt_dir, step + 1)
             ckpt = {
                 "step": step + 1,
                 "loss": loss.item(),
@@ -880,6 +1113,7 @@ def train(
                 "gpu_peak_mb": mem_peak,
                 "num_gaussians": N,
                 "mean_psnr": mean_psnr,
+                "checkpoint_path": ckpt_path,
             }
             print(f"  Eval PSNR: {mean_psnr:.2f} dB ({len(psnrs)} views)")
             with open(os.path.join(stats_dir, f"step{step + 1:05d}.json"), "w") as f:
@@ -900,7 +1134,7 @@ def train(
         json.dump(summary, f, indent=2)
     if save_model:
         model_path = os.path.join(result_dir, "model.pt")
-        torch.save({k: v.detach().cpu() for k, v in params.items()}, model_path)
+        torch.save({k: v.detach().cpu() for k, v in splats.items()}, model_path)
         print(f"Model saved to {model_path} ({N} Gaussians)")
 
     print(f"\nDone: {max_steps} steps in {elapsed:.1f}s")
@@ -914,12 +1148,21 @@ def train(
 
 
 def main():
+    default_scene_path = os.path.join(
+        os.path.dirname(__file__), "../assets/test_pandaset.npz"
+    )
     p = argparse.ArgumentParser(description="AV trainer with gsplat")
     p.add_argument(
         "--scene",
         type=str,
-        default=os.path.join(os.path.dirname(__file__), "../assets/test_pandaset.npz"),
+        default=None,
         help="NPZ file or NCore v4 JSON manifest",
+    )
+    p.add_argument(
+        "--ckpt",
+        type=str,
+        default=None,
+        help="path to an AV checkpoint for eval/render only",
     )
     p.add_argument(
         "--cameras", type=str, default=None, help="comma-separated camera IDs (NCore)"
@@ -954,12 +1197,20 @@ def main():
     p.add_argument("--lidar-render-weight", type=float, default=0.0003)
     args = p.parse_args()
 
+    if args.ckpt is not None:
+        evaluate_checkpoint(
+            ckpt_path=args.ckpt,
+            scene_path=args.scene,
+            result_dir=args.result_dir,
+        )
+        return
+
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for gsplat rasterization.")
 
     cameras_list = args.cameras.split(",") if args.cameras else None
     train(
-        scene_path=args.scene,
+        scene_path=args.scene or default_scene_path,
         max_steps=args.max_steps,
         lr=args.lr,
         log_every=args.log_every,

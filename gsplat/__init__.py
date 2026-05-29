@@ -89,7 +89,7 @@ from .cuda._lidar import (
     compute_tiling as compute_lidar_tiling,
 )
 
-all = [
+__all__ = [
     "color_correct_affine",
     "color_correct_quadratic",
     "PngCompression",
