@@ -1108,6 +1108,15 @@ def rasterization(
         }
     )
 
+    # The eval3d pixel rasterizer (rasterize_to_pixels_eval3d_extra) expects per-ray
+    # input flattened as (..., C, H*W, 6): it derives P = rays.shape[-2] and its
+    # assert_shape wants rank (num_batch_dims + 3). The public API above takes (and
+    # asserts) the image-shaped (..., C, H, W, 6), so flatten the H, W dims here.
+    # Row-major flattening matches the kernel's pixel index (row * W + col) and the
+    # image-shaped output, so no reshape is needed on the returned colors/alphas.
+    if rays is not None:
+        rays = rays.reshape(rays.shape[:-3] + (rays.shape[-3] * rays.shape[-2], 6))
+
     # print("rank", world_rank, "Before rasterize_to_pixels")
     if proj_features.shape[-1] > channel_chunk:
         # slice into chunks
