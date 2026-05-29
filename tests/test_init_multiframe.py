@@ -181,3 +181,36 @@ def test_knn_scale_init_uniform_grid_constant_scale():
     # Interior points have nearest-neighbor at exactly *spacing*; endpoints too.
     expected = torch.full_like(result, torch.tensor(spacing).log().item())
     assert torch.allclose(result, expected, atol=1e-6)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_knn_scale_init_large_n_peak_memory_bounded():
+    """Regression test pinning the chunked KNN memory contract (MR-024 / B6).
+
+    The old ``cdist(xyz, xyz)`` allocated ~N^2 * 4 bytes = ~10 GB at
+    N=50_000. The chunked impl is O(chunk_size * N). With the default
+    ``chunk_size=1024`` that's ~200 MB at N=50_000 — leave comfortable
+    headroom and assert well below 1 GB so a silent regression back to
+    the dense path fails loudly. The input is only ~600 KB
+    (50k * 3 * 4 bytes), so the measured peak is dominated by the kNN
+    scan itself.
+    """
+    n = 50_000
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    baseline_alloc = torch.cuda.memory_allocated()
+
+    xyz = torch.randn(n, 3, device="cuda")
+    result = knn_scale_init(xyz, k=3)  # chunk_size default = 1024
+
+    peak_alloc_during = torch.cuda.max_memory_allocated() - baseline_alloc
+
+    assert result.shape == (n,)
+    assert torch.isfinite(result).all()
+
+    one_gb = 1 * 1024**3
+    assert peak_alloc_during < one_gb, (
+        f"knn_scale_init peak CUDA allocation "
+        f"{peak_alloc_during / 1024**3:.2f} GB exceeds the 1 GB ceiling — "
+        f"looks like a regression back to the O(N^2) dense cdist path."
+    )
