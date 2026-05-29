@@ -34,10 +34,10 @@ from .strategy import DynamicStrategy
 
 # Public API: prefer `hexplane_regularization` over calling the three
 # lower-level regularizers with hand-partitioned plane lists; the
-# spatial / temporal partition lives on :class:`HexPlaneField` now
-# (MR-030). `DeformationTable` is intentionally NOT in `__all__`: it's
-# internal bookkeeping that the trainer wires through
-# `state["dynamic_mask"]` (MR-022). Back-compat callers can still
+# spatial / temporal partition lives on :class:`HexPlaneField`.
+# `DeformationTable` is intentionally NOT in `__all__`: it's internal
+# bookkeeping that the trainer wires through `state["dynamic_mask"]`.
+# Back-compat callers can still
 # `from gsplat.contrib.dynamic.deformation import DeformationTable`.
 __all__ = [
     "DeformNetwork",

@@ -185,7 +185,7 @@ def test_knn_scale_init_uniform_grid_constant_scale():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 def test_knn_scale_init_large_n_peak_memory_bounded():
-    """Regression test pinning the chunked KNN memory contract (MR-024 / B6).
+    """Regression test pinning the chunked KNN memory contract.
 
     The old ``cdist(xyz, xyz)`` allocated ~N^2 * 4 bytes = ~10 GB at
     N=50_000. The chunked impl is O(chunk_size * N). With the default

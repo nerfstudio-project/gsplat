@@ -149,7 +149,7 @@ def hexplane_regularization(
     lists — the spatial / temporal partition is a property of the
     HexPlane construction and lives on
     :class:`gsplat.contrib.dynamic.HexPlaneField`. Hand-rolled partitions
-    drift when HexPlaneField is refactored (MR-030).
+    drift when HexPlaneField is refactored.
 
     Args:
         field: A :class:`HexPlaneField` instance.

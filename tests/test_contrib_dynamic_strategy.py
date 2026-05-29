@@ -56,7 +56,7 @@ def test_dynamic_strategy_check_sanity_fails_on_missing_per_gaussian_keys():
 
 
 def test_dynamic_strategy_initialize_state_creates_dynamic_mask_tensor():
-    """MR-022: ``state["dynamic_mask"]`` is a plain bool tensor (not a wrapper).
+    """``state["dynamic_mask"]`` is a plain bool tensor (not a wrapper).
     Default is all-True so every Gaussian routes through DeformNet."""
     strategy = DynamicStrategy()
     state = strategy.initialize_state(scene_scale=1.0, num_gaussians=10)

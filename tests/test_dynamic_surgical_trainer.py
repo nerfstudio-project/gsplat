@@ -29,7 +29,7 @@ import pytest
 import torch
 
 # Pillow + tqdm are `[examples]` / `[dev]` extras — skip the whole module
-# cleanly if a fresh `pip install .` doesn't pull them (B13). Must
+# cleanly if a fresh `pip install .` doesn't pull them. Must
 # importorskip *before* we touch examples.dynamic_surgical_trainer which
 # imports tqdm at module top.
 Image = pytest.importorskip("PIL.Image")
@@ -163,7 +163,7 @@ def test_build_deform_modules_constructs(trainer_dir: Path):
 
 
 def test_init_means_inside_derived_hexplane_aabb(trainer_dir: Path):
-    """MR-036 / B11: pin the in-AABB invariant.
+    """Pin the in-AABB invariant.
 
     After ``build_splats_from_parser`` produces the init point cloud,
     ``train()`` derives ``derived_bounds = max(cfg.hex_bounds,
@@ -171,8 +171,7 @@ def test_init_means_inside_derived_hexplane_aabb(trainer_dir: Path):
     inside ``[-derived_bounds, +derived_bounds]^3`` — otherwise
     ``HexPlaneField.forward``'s ``grid_sample(padding_mode="border")``
     clamps the out-of-AABB queries to the same edge feature and the
-    deformation field collapses to a spatial constant. This is the
-    dead-HexPlane bug originally fixed in MR-026.
+    deformation field collapses to a spatial constant.
     """
     cfg = Config(data_dir=trainer_dir, init_max_points=200)
     parser = EndoNeRFParser(data_dir=trainer_dir)

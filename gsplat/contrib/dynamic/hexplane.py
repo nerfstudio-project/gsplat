@@ -266,9 +266,9 @@ class HexPlaneField(nn.Module):
         )
 
     # ------------------------------------------------------------------
-    # Plane-partition accessors (MR-030): keep the spatial / temporal
-    # grouping next to the grid construction code so regularizers don't
-    # have to hardcode the (0,1,3) / (2,4,5) indices.
+    # Plane-partition accessors: keep the spatial / temporal grouping
+    # next to the grid construction code so regularizers don't have to
+    # hardcode the (0,1,3) / (2,4,5) indices.
     # ------------------------------------------------------------------
 
     _SPATIAL_PLANE_IDXS: Tuple[int, ...] = (0, 1, 3)  # xy, xz, yz
