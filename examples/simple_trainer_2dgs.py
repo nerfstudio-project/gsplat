@@ -180,6 +180,21 @@ class Config:
     # Iteration to start distortion loss regulerization
     dist_start_iter: int = 3_000
 
+    # Post-processing method for appearance correction (experimental)
+    post_processing: Optional[Literal["ppisp"]] = None
+    # Enable PPISP controller
+    ppisp_use_controller: bool = True
+    # Use controller distillation in PPISP (only applies when post_processing="ppisp" and ppisp_use_controller=True)
+    # Defaults to False for 2DGS: DefaultStrategy's periodic opacity resets interfere with the frozen-Gaussian
+    # distillation phase, since Gaussians can't recover opacity while frozen.
+    ppisp_controller_distillation: bool = False
+    # Step at which the PPISP controller activates for distillation
+    ppisp_controller_activation_num_steps: int = 25_000
+    # Number of steps to suppress PPISP regularization loss after each opacity reset.
+    # Opacity resets cause a transient in rendered appearance; suppressing the reg loss
+    # during recovery avoids penalizing the PPISP module for this artifact.
+    ppisp_reset_pause_steps: int = 0
+
     # Model for splatting.
     model_type: Literal["2dgs", "2dgs-inria"] = "2dgs"
 
@@ -197,6 +212,10 @@ class Config:
         self.refine_stop_iter = int(self.refine_stop_iter * factor)
         self.reset_every = int(self.reset_every * factor)
         self.refine_every = int(self.refine_every * factor)
+        self.ppisp_controller_activation_num_steps = int(
+            self.ppisp_controller_activation_num_steps * factor
+        )
+        self.ppisp_reset_pause_steps = int(self.ppisp_reset_pause_steps * factor)
 
 
 def create_splats_with_optimizers(
@@ -275,6 +294,11 @@ class Runner:
 
         self.cfg = cfg
         self.device = "cuda"
+
+        if cfg.post_processing == "ppisp" and cfg.batch_size != 1:
+            raise ValueError(
+                f"PPISP post-processing requires batch_size=1, got batch_size={cfg.batch_size}"
+            )
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -386,6 +410,31 @@ class Runner:
                 ),
             ]
 
+        self.post_processing_module = None
+        self.post_processing_optimizers = []
+        if cfg.post_processing == "ppisp":
+            from ppisp import PPISP, PPISPConfig
+
+            ppisp_config = PPISPConfig(
+                use_controller=cfg.ppisp_use_controller,
+                controller_distillation=cfg.ppisp_controller_distillation,
+                controller_activation_ratio=cfg.ppisp_controller_activation_num_steps
+                / cfg.max_steps,
+            )
+            self.post_processing_module = PPISP(
+                num_cameras=self.parser.num_cameras,
+                num_frames=len(self.trainset),
+                config=ppisp_config,
+            ).to(self.device)
+            self.post_processing_optimizers = (
+                self.post_processing_module.create_optimizers()
+            )
+
+        # Track if Gaussians are frozen (for controller distillation)
+        self._gaussians_frozen = False
+        # Step until which PPISP reg loss is suppressed (after opacity resets)
+        self._ppisp_pause_until: int = 0
+
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
@@ -403,12 +452,22 @@ class Runner:
                 mode="training",
             )
 
+    def freeze_gaussians(self):
+        if self._gaussians_frozen:
+            return
+        for param in self.splats.values():
+            param.requires_grad = False
+        self._gaussians_frozen = True
+        print("[Distillation] Gaussian parameters frozen")
+
     def rasterize_splats(
         self,
         camtoworlds: Tensor,
         Ks: Tensor,
         width: int,
         height: int,
+        frame_idcs: Optional[Tensor] = None,
+        camera_idcs: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -479,6 +538,29 @@ class Runner:
             render_distort = info["render_distloss"]
             render_median = render_colors[..., 3]
 
+        if self.cfg.post_processing == "ppisp":
+            pixel_y, pixel_x = torch.meshgrid(
+                torch.arange(height, device=self.device) + 0.5,
+                torch.arange(width, device=self.device) + 0.5,
+                indexing="ij",
+            )
+            pixel_coords = torch.stack([pixel_x, pixel_y], dim=-1)  # [H, W, 2]
+            rgb = render_colors[..., :3]
+            extra = render_colors[..., 3:] if render_colors.shape[-1] > 3 else None
+            camera_idx = camera_idcs.item() if camera_idcs is not None else None
+            frame_idx = frame_idcs.item() if frame_idcs is not None else None
+            rgb = self.post_processing_module(
+                rgb=rgb,
+                pixel_coords=pixel_coords,
+                resolution=(width, height),
+                camera_idx=camera_idx,
+                frame_idx=frame_idx,
+                exposure_prior=None,
+            )
+            render_colors = (
+                torch.cat([rgb, extra], dim=-1) if extra is not None else rgb
+            )
+
         return (
             render_colors,
             render_alphas,
@@ -513,6 +595,12 @@ class Runner:
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
             )
+        if cfg.post_processing == "ppisp":
+            ppisp_schedulers = self.post_processing_module.create_schedulers(
+                self.post_processing_optimizers,
+                max_optimization_iters=max_steps,
+            )
+            schedulers.extend(ppisp_schedulers)
 
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
@@ -534,6 +622,15 @@ class Runner:
                 self.viewer.lock.acquire()
                 tic = time.time()
 
+            # Freeze Gaussians when PPISP controller distillation starts
+            if (
+                cfg.post_processing == "ppisp"
+                and cfg.ppisp_use_controller
+                and cfg.ppisp_controller_distillation
+                and step >= cfg.ppisp_controller_activation_num_steps
+            ):
+                self.freeze_gaussians()
+
             try:
                 data = next(trainloader_iter)
             except StopIteration:
@@ -547,6 +644,7 @@ class Runner:
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
             image_ids = data["image_id"].to(device)
+            camera_idcs = data["camera_idx"].to(device)
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
@@ -582,6 +680,8 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB+D",
                 distloss=self.cfg.dist_loss,
+                frame_idcs=image_ids,
+                camera_idcs=camera_idcs,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -651,6 +751,13 @@ class Runner:
                 distloss = render_distort.mean()
                 loss += distloss * curr_dist_lambda
 
+            if cfg.post_processing == "ppisp":
+                post_processing_reg_loss = (
+                    self.post_processing_module.get_regularization_loss()
+                )
+                if step >= self._ppisp_pause_until:
+                    loss += post_processing_reg_loss
+
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -677,6 +784,12 @@ class Runner:
                     self.writer.add_scalar("train/normalloss", normalloss.item(), step)
                 if cfg.dist_loss:
                     self.writer.add_scalar("train/distloss", distloss.item(), step)
+                if cfg.post_processing == "ppisp":
+                    self.writer.add_scalar(
+                        "train/post_processing_reg_loss",
+                        post_processing_reg_loss.item(),
+                        step,
+                    )
                 if cfg.tb_save_image:
                     canvas = (
                         torch.cat([pixels, colors[..., :3]], dim=2)
@@ -696,6 +809,14 @@ class Runner:
                 info=info,
                 packed=cfg.packed,
             )
+            if (
+                cfg.post_processing == "ppisp"
+                and cfg.ppisp_reset_pause_steps > 0
+                and step > 0
+                and step % cfg.reset_every == 0
+                and step < cfg.refine_stop_iter
+            ):
+                self._ppisp_pause_until = step + cfg.ppisp_reset_pause_steps + 1
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -722,6 +843,9 @@ class Runner:
             for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+            for optimizer in self.post_processing_optimizers:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
                 scheduler.step()
 
@@ -736,13 +860,15 @@ class Runner:
                 print("Step: ", step, stats)
                 with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
                     json.dump(stats, f)
-                torch.save(
-                    {
-                        "step": step,
-                        "splats": self.splats.state_dict(),
-                    },
-                    f"{self.ckpt_dir}/ckpt_{step}.pt",
-                )
+                ckpt_data = {
+                    "step": step,
+                    "splats": self.splats.state_dict(),
+                }
+                if self.post_processing_module is not None:
+                    ckpt_data["post_processing"] = (
+                        self.post_processing_module.state_dict()
+                    )
+                torch.save(ckpt_data, f"{self.ckpt_dir}/ckpt_{step}.pt")
 
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
@@ -779,6 +905,8 @@ class Runner:
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
             height, width = pixels.shape[1:3]
+            image_ids = data["image_id"].to(device)
+            camera_idcs = data["camera_idx"].to(device)
 
             torch.cuda.synchronize()
             tic = time.time()
@@ -799,6 +927,8 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 render_mode="RGB+ED",
+                frame_idcs=image_ids,
+                camera_idcs=camera_idcs,
             )  # [1, H, W, 3]
             colors = torch.clamp(colors, 0.0, 1.0)
             colors = colors[..., :3]  # Take RGB channels
@@ -1022,6 +1152,10 @@ class Runner:
 
 
 def main(cfg: Config):
+    if cfg.post_processing == "ppisp":
+        global PPISP, PPISPConfig
+        from ppisp import PPISP, PPISPConfig
+
     runner = Runner(cfg)
 
     if cfg.ckpt is not None:
@@ -1029,6 +1163,10 @@ def main(cfg: Config):
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
+        if runner.post_processing_module is not None:
+            pp_state = ckpt.get("post_processing")
+            if pp_state is not None:
+                runner.post_processing_module.load_state_dict(pp_state)
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
     else:
