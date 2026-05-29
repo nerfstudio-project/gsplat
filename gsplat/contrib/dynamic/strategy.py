@@ -69,13 +69,14 @@ class DynamicStrategy(DefaultStrategy):
     their own optimizers, wired separately by the trainer (see
     ``examples/dynamic_surgical_trainer.py:build_deform_modules``).
 
-    Historical note (MR-013 → MR-022): an earlier version of this strategy
-    stored a :class:`DeformationTable` wrapper at ``state["deformation_table"]``
-    and resized it via a custom ``_resize_table`` hook. That hook did not
-    preserve survivor identity across split, and the trainer never consulted
-    the mask anyway. Wiring it through *state* as a plain tensor (so gsplat's
-    ops do the right thing) closes both gaps. The wrapper class is still
-    importable for back-compat; the canonical mask is the tensor in *state*.
+    Historical note: an earlier version of this strategy stored a
+    :class:`DeformationTable` wrapper at ``state["deformation_table"]``
+    and resized it via a custom ``_resize_table`` hook. That hook did
+    not preserve survivor identity across split, and the trainer never
+    consulted the mask anyway. Wiring it through *state* as a plain
+    tensor (so gsplat's ops do the right thing) closes both gaps. The
+    wrapper class is still importable for back-compat; the canonical
+    mask is the tensor in *state*.
     """
 
     def check_sanity(

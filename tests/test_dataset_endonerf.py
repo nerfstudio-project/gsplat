@@ -16,7 +16,7 @@ import pytest
 import torch
 
 # Pillow is an `[examples]` / `[dev]` extra dep — skip the whole module
-# cleanly if a fresh `pip install .` doesn't pull it (B13).
+# cleanly if a fresh `pip install .` doesn't pull it.
 Image = pytest.importorskip("PIL.Image")
 
 # The ``examples`` directory is a sibling of ``gsplat/`` and isn't installed.
@@ -93,7 +93,7 @@ def test_endonerf_parser_loads_fixture(endonerf_dir: Path):
     assert parser.camtoworlds.shape == (4, 4, 4)
     # The fixture writes an identity rotation in LLFF raw format ([down,
     # right, backwards]). The parser applies the LLFF → OpenGL/Nerfstudio
-    # axis permutation (MR-027): `c2w[:, :, [1, 0, 2, 3]] * [1, -1, 1, 1]`.
+    # axis permutation: `c2w[:, :, [1, 0, 2, 3]] * [1, -1, 1, 1]`.
     # Identity LLFF maps to the column-permuted matrix below; translation
     # is unchanged.
     llff_identity_after_permutation = np.array(
@@ -113,7 +113,7 @@ def test_endonerf_parser_loads_fixture(endonerf_dir: Path):
 
 
 def test_endonerf_parser_applies_llff_axis_permutation(endonerf_dir: Path):
-    """MR-027: parser must apply ``c2w[:, :, [1, 0, 2, 3]] * [1, -1, 1, 1]`` to
+    """Parser must apply ``c2w[:, :, [1, 0, 2, 3]] * [1, -1, 1, 1]`` to
     match the OpenGL / Nerfstudio camera convention (G-SHARP ``endo_loader.py``).
 
     Verified by writing a non-trivial LLFF pose and asserting the parser's

@@ -28,8 +28,8 @@ jobs:
           pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
           # tests/test_dataset_endonerf.py and tests/test_dynamic_surgical_trainer.py
           # import PIL + tqdm; install the [examples] extra so the test
-          # collection doesn't ImportError on a fresh build (B13). The tests
-          # also have `pytest.importorskip` guards as a belt-and-braces.
+          # collection doesn't ImportError on a fresh build. The tests also
+          # have `pytest.importorskip` guards as a belt-and-braces.
           BUILD_NO_CUDA=1 pip install .[examples]
       - name: Code Formatting Check
         run: lint/format-code.sh --check --full

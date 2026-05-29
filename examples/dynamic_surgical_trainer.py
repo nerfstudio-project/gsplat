@@ -307,8 +307,9 @@ def build_deform_modules(
             HexPlane AABB. The trainer normally derives this from the init
             point cloud (see ``train()``); passing the override here keeps the
             HexPlane query inside ``[-1, 1]^3`` after ``_normalize_aabb`` so
-            ``grid_sample(padding_mode="border")`` doesn't clamp every Gaussian
-            to the same edge feature (the dead-HexPlane bug fixed in MR-026).
+            ``grid_sample(padding_mode="border")`` doesn't clamp every
+            Gaussian to the same edge feature (which would collapse the
+            deformation field to a spatial constant).
     """
     plane_cfg = {
         "grid_dimensions": 2,
@@ -334,7 +335,7 @@ def build_deform_modules(
 
 
 # ---------------------------------------------------------------------------
-# Deformation routing (MR-022 Option A: gather → DeformNet → scatter)
+# Deformation routing: gather → DeformNet → scatter
 # ---------------------------------------------------------------------------
 
 
@@ -472,7 +473,7 @@ def train_step(
         rgb_p
     )  # unmasked TV (mask wiring is dataset-specific)
 
-    # Spatial / temporal plane partition lives on HexPlaneField now (MR-030).
+    # Spatial / temporal plane partition lives on HexPlaneField.
     plane_smooth = plane_smoothness(hexplane.spatial_planes())
     time_smooth_v = time_smoothness(hexplane.temporal_planes())
     time_l1_v = time_l1(hexplane.temporal_planes())
@@ -669,12 +670,12 @@ def train(cfg: Config) -> None:
 
     params, optimizers = build_splats_from_parser(parser, cfg, device)
 
-    # MR-026: cfg.hex_bounds is a sentinel ceiling, not a fixed value. The
+    # cfg.hex_bounds is a sentinel lower bound, not a fixed value. The
     # actual init point cloud (EndoNeRF "pulling" has means ~[-8, +8]) blows
     # past the legacy 1.6 default, and HexPlane's grid_sample(padding_mode=
     # "border") would clamp every query to the same edge feature → spatially
     # constant deformation field. Derive the AABB from the init means with a
-    # 2× safety margin so subsequent gradient drift stays inside.
+    # 2x safety margin so subsequent gradient drift stays inside.
     with torch.no_grad():
         init_means_abs_max = float(params["means"].detach().abs().max())
     if init_means_abs_max <= 0.0:
@@ -688,15 +689,14 @@ def train(cfg: Config) -> None:
         f"init_means.abs().max()={init_means_abs_max:.3f}, "
         f"derived={derived_bounds:.3f}"
     )
-    # MR-036 / B11: pin the in-AABB invariant explicitly. After deriving
-    # bounds, every init Gaussian must be inside [-derived_bounds,
-    # +derived_bounds] on every axis — otherwise HexPlane.forward's
+    # Pin the in-AABB invariant explicitly. After deriving bounds, every
+    # init Gaussian must be inside [-derived_bounds, +derived_bounds] on
+    # every axis — otherwise HexPlane.forward's
     # grid_sample(padding_mode="border") will clamp the out-of-AABB
     # queries to the same edge feature and the deformation collapses to
-    # a spatial constant (the dead-HexPlane bug fixed in MR-026). The
-    # assert is tautological at init time given how derived_bounds is
-    # computed, but it documents the contract and would catch a future
-    # refactor that decouples the two computations.
+    # a spatial constant. The assert is tautological at init time given
+    # how derived_bounds is computed above, but it documents the contract
+    # and would catch a future refactor that decouples the two computations.
     with torch.no_grad():
         if not bool((params["means"].detach().abs() <= derived_bounds).all()):
             raise RuntimeError(
