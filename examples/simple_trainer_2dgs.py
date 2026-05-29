@@ -32,6 +32,7 @@ import tyro
 import viser
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
+from gsplat.losses import depth_l1_loss, l1_loss, ssim_loss
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
@@ -604,10 +605,8 @@ class Runner:
                 colors = colors * masks[..., None]
 
             # loss
-            l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - self.ssim(
-                pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
-            )
+            l1loss = l1_loss(colors, pixels).mean()
+            ssimloss = ssim_loss(colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2))
             loss = torch.lerp(l1loss, ssimloss, cfg.ssim_lambda)
             if cfg.depth_loss:
                 # query depths from depth map
@@ -624,9 +623,9 @@ class Runner:
                 )  # [1, 1, M, 1]
                 depths = depths.squeeze(3).squeeze(1)  # [1, M]
                 # calculate loss in disparity space
-                disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
-                disp_gt = 1.0 / depths_gt  # [1, M]
-                depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
+                depthloss = depth_l1_loss(
+                    depths, depths_gt, scene_scale=self.scene_scale
+                )
                 loss += depthloss * cfg.depth_lambda
 
             if cfg.normal_loss:
