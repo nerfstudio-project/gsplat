@@ -317,14 +317,19 @@
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">TYPE_CHECKING</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing_extensions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Strategy</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.ops</span><span class="w"> </span><span class="kn">import</span> <span class="n">duplicate</span><span class="p">,</span> <span class="n">remove</span><span class="p">,</span> <span class="n">reset_opa</span><span class="p">,</span> <span class="n">split</span>
+
+<span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">gsplat_scene</span><span class="w"> </span><span class="kn">import</span> <span class="n">Scene</span>
 
 
 <div class="viewcode-block" id="DefaultStrategy">
@@ -489,6 +494,7 @@
         <span class="n">step</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
         <span class="n">info</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
         <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+        <span class="n">scene</span><span class="p">:</span> <span class="n">Scene</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Callback function to be executed after the `loss.backward()` call.&quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">step</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_stop_iter</span><span class="p">:</span>
@@ -502,7 +508,9 @@
             <span class="ow">and</span> <span class="n">step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">reset_every</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pause_refine_after_reset</span>
         <span class="p">):</span>
             <span class="c1"># grow GSs</span>
-            <span class="n">n_dupli</span><span class="p">,</span> <span class="n">n_split</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_grow_gs</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">step</span><span class="p">)</span>
+            <span class="n">n_dupli</span><span class="p">,</span> <span class="n">n_split</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_grow_gs</span><span class="p">(</span>
+                <span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">step</span><span class="p">,</span> <span class="n">scene</span><span class="o">=</span><span class="n">scene</span>
+            <span class="p">)</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">verbose</span><span class="p">:</span>
                 <span class="nb">print</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">&quot;Step </span><span class="si">{</span><span class="n">step</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">n_dupli</span><span class="si">}</span><span class="s2"> GSs duplicated, </span><span class="si">{</span><span class="n">n_split</span><span class="si">}</span><span class="s2"> GSs split. &quot;</span>
@@ -510,7 +518,7 @@
                 <span class="p">)</span>
 
             <span class="c1"># prune GSs</span>
-            <span class="n">n_prune</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prune_gs</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">step</span><span class="p">)</span>
+            <span class="n">n_prune</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prune_gs</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">step</span><span class="p">,</span> <span class="n">scene</span><span class="o">=</span><span class="n">scene</span><span class="p">)</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">verbose</span><span class="p">:</span>
                 <span class="nb">print</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">&quot;Step </span><span class="si">{</span><span class="n">step</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">n_prune</span><span class="si">}</span><span class="s2"> GSs pruned. &quot;</span>
@@ -599,6 +607,7 @@
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>
         <span class="n">state</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
         <span class="n">step</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">scene</span><span class="p">:</span> <span class="n">Scene</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
         <span class="n">count</span> <span class="o">=</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;count&quot;</span><span class="p">]</span>
         <span class="n">grads</span> <span class="o">=</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;grad2d&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">count</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
@@ -620,7 +629,13 @@
 
         <span class="c1"># first duplicate</span>
         <span class="k">if</span> <span class="n">n_dupli</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="n">duplicate</span><span class="p">(</span><span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="o">=</span><span class="n">optimizers</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="n">state</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">is_dupli</span><span class="p">)</span>
+            <span class="n">duplicate</span><span class="p">(</span>
+                <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">,</span>
+                <span class="n">optimizers</span><span class="o">=</span><span class="n">optimizers</span><span class="p">,</span>
+                <span class="n">state</span><span class="o">=</span><span class="n">state</span><span class="p">,</span>
+                <span class="n">mask</span><span class="o">=</span><span class="n">is_dupli</span><span class="p">,</span>
+                <span class="n">scene</span><span class="o">=</span><span class="n">scene</span><span class="p">,</span>
+            <span class="p">)</span>
 
         <span class="c1"># new GSs added by duplication will not be split</span>
         <span class="n">is_split</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
@@ -638,6 +653,7 @@
                 <span class="n">state</span><span class="o">=</span><span class="n">state</span><span class="p">,</span>
                 <span class="n">mask</span><span class="o">=</span><span class="n">is_split</span><span class="p">,</span>
                 <span class="n">revised_opacity</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">revised_opacity</span><span class="p">,</span>
+                <span class="n">scene</span><span class="o">=</span><span class="n">scene</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">n_dupli</span><span class="p">,</span> <span class="n">n_split</span>
 
@@ -648,6 +664,7 @@
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>
         <span class="n">state</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
         <span class="n">step</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">scene</span><span class="p">:</span> <span class="n">Scene</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
         <span class="n">is_prune</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;opacities&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">flatten</span><span class="p">())</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">prune_opa</span>
         <span class="k">if</span> <span class="n">step</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">reset_every</span><span class="p">:</span>
@@ -667,7 +684,13 @@
 
         <span class="n">n_prune</span> <span class="o">=</span> <span class="n">is_prune</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
         <span class="k">if</span> <span class="n">n_prune</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="n">remove</span><span class="p">(</span><span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="o">=</span><span class="n">optimizers</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="n">state</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">is_prune</span><span class="p">)</span>
+            <span class="n">remove</span><span class="p">(</span>
+                <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">,</span>
+                <span class="n">optimizers</span><span class="o">=</span><span class="n">optimizers</span><span class="p">,</span>
+                <span class="n">state</span><span class="o">=</span><span class="n">state</span><span class="p">,</span>
+                <span class="n">mask</span><span class="o">=</span><span class="n">is_prune</span><span class="p">,</span>
+                <span class="n">scene</span><span class="o">=</span><span class="n">scene</span><span class="p">,</span>
+            <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">n_prune</span></div>
 
