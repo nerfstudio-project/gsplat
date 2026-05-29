@@ -16,7 +16,11 @@
 import argparse
 import math
 import os
+import sys
 import time
+
+sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import imageio
 import numpy as np
@@ -27,7 +31,10 @@ import viser
 from pathlib import Path
 from gsplat._helper import load_test_data
 from gsplat.distributed import cli
+from gsplat.exporter import load_ply_to_splats
 from gsplat.rendering import rasterization
+from libs.scene import GaussianScene
+import experimental
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
@@ -37,7 +44,29 @@ def main(local_rank: int, world_rank, world_size: int, args):
     torch.manual_seed(42)
     device = torch.device("cuda", local_rank)
 
-    if args.ckpt is None:
+    if args.ply is not None:
+        splats_dict = load_ply_to_splats(args.ply)
+        means = splats_dict["means"].to(device)
+        quats = F.normalize(splats_dict["quats"].to(device), p=2, dim=-1)
+        scales_raw = splats_dict["scales"].to(device)
+        opacities_raw = splats_dict["opacities"].to(device)
+        sh0_t = splats_dict["sh0"].to(device)
+        shN_t = splats_dict["shN"].to(device)
+        colors = torch.cat([sh0_t, shN_t], dim=-2)
+        sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
+        print("Number of Gaussians:", len(means))
+
+        splats = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(means, requires_grad=False),
+                "quats": torch.nn.Parameter(quats, requires_grad=False),
+                "scales": torch.nn.Parameter(scales_raw, requires_grad=False),
+                "opacities": torch.nn.Parameter(opacities_raw, requires_grad=False),
+                "colors": torch.nn.Parameter(colors, requires_grad=False),
+            }
+        )
+        gaussian_scene = GaussianScene.from_splats(splats, id="viewer_scene")
+    elif args.ckpt is None:
         (
             means,
             quats,
@@ -52,15 +81,10 @@ def main(local_rank: int, world_rank, world_size: int, args):
 
         assert world_size <= 2
         means = means[world_rank::world_size].contiguous()
-        means.requires_grad = True
         quats = quats[world_rank::world_size].contiguous()
-        quats.requires_grad = True
         scales = scales[world_rank::world_size].contiguous()
-        scales.requires_grad = True
         opacities = opacities[world_rank::world_size].contiguous()
-        opacities.requires_grad = True
         colors = colors[world_rank::world_size].contiguous()
-        colors.requires_grad = True
 
         viewmats = viewmats[world_rank::world_size][:1].contiguous()
         Ks = Ks[world_rank::world_size][:1].contiguous()
@@ -70,8 +94,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         N = len(means)
         print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
 
-        # batched render
-        for _ in tqdm.trange(1):
+        # batched render (skipped for inference render: no backward, no RGB+D)
+        for _ in tqdm.trange(0 if args.use_gaussian_render_inference_scene else 1):
             render_colors, render_alphas, meta = rasterization(
                 means,  # [N, 3]
                 quats,  # [N, 4]
@@ -86,56 +110,94 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 packed=False,
                 distributed=world_size > 1,
             )
-        C = render_colors.shape[0]
-        assert render_colors.shape == (C, height, width, 4)
-        assert render_alphas.shape == (C, height, width, 1)
-        render_colors.sum().backward()
+        if not args.use_gaussian_render_inference_scene:
+            C = render_colors.shape[0]
+            assert render_colors.shape == (C, height, width, 4)
+            assert render_alphas.shape == (C, height, width, 1)
 
-        render_rgbs = render_colors[..., 0:3]
-        render_depths = render_colors[..., 3:4]
-        render_depths = render_depths / render_depths.max()
+            render_rgbs = render_colors[..., 0:3]
+            render_depths = render_colors[..., 3:4]
+            render_depths = render_depths / render_depths.max()
 
-        # dump batch images
-        os.makedirs(args.output_dir, exist_ok=True)
-        canvas = (
-            torch.cat(
-                [
-                    render_rgbs.reshape(C * height, width, 3),
-                    render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
-                    render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
-                ],
-                dim=1,
+            # dump batch images
+            os.makedirs(args.output_dir, exist_ok=True)
+            canvas = (
+                torch.cat(
+                    [
+                        render_rgbs.reshape(C * height, width, 3),
+                        render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
+                        render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
+                    ],
+                    dim=1,
+                )
+                .detach()
+                .cpu()
+                .numpy()
             )
-            .detach()
-            .cpu()
-            .numpy()
+            imageio.imsave(
+                f"{args.output_dir}/render_rank{world_rank}.png",
+                (canvas * 255).astype(np.uint8),
+            )
+
+        # Build GaussianScene for viewer callback (needs raw/log-space tensors)
+        splats = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(means.detach(), requires_grad=False),
+                "quats": torch.nn.Parameter(quats.detach(), requires_grad=False),
+                "scales": torch.nn.Parameter(
+                    scales.detach().log(), requires_grad=False
+                ),
+                "opacities": torch.nn.Parameter(
+                    torch.logit(opacities.detach().clamp(1e-6, 1 - 1e-6)),
+                    requires_grad=False,
+                ),
+                "colors": torch.nn.Parameter(colors.detach(), requires_grad=False),
+            }
         )
-        imageio.imsave(
-            f"{args.output_dir}/render_rank{world_rank}.png",
-            (canvas * 255).astype(np.uint8),
-        )
+        gaussian_scene = GaussianScene.from_splats(splats, id="viewer_scene")
     else:
-        means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
+        means, quats_list, scales_raw, opacities_raw, sh0, shN = [], [], [], [], [], []
         for ckpt_path in args.ckpt:
             ckpt = torch.load(ckpt_path, map_location=device)["splats"]
             means.append(ckpt["means"])
-            quats.append(F.normalize(ckpt["quats"], p=2, dim=-1))
-            scales.append(torch.exp(ckpt["scales"]))
-            opacities.append(torch.sigmoid(ckpt["opacities"]))
+            quats_list.append(F.normalize(ckpt["quats"], p=2, dim=-1))
+            scales_raw.append(ckpt["scales"])  # raw log-space
+            opacities_raw.append(ckpt["opacities"])  # raw logit-space
             sh0.append(ckpt["sh0"])
             shN.append(ckpt["shN"])
         means = torch.cat(means, dim=0)
-        quats = torch.cat(quats, dim=0)
-        scales = torch.cat(scales, dim=0)
-        opacities = torch.cat(opacities, dim=0)
+        quats = torch.cat(quats_list, dim=0)
+        scales_raw = torch.cat(scales_raw, dim=0)
+        opacities_raw = torch.cat(opacities_raw, dim=0)
         sh0 = torch.cat(sh0, dim=0)
         shN = torch.cat(shN, dim=0)
         colors = torch.cat([sh0, shN], dim=-2)
         sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
         print("Number of Gaussians:", len(means))
 
+        splats = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(means, requires_grad=False),
+                "quats": torch.nn.Parameter(quats, requires_grad=False),
+                "scales": torch.nn.Parameter(scales_raw, requires_grad=False),
+                "opacities": torch.nn.Parameter(opacities_raw, requires_grad=False),
+                "colors": torch.nn.Parameter(colors, requires_grad=False),
+            }
+        )
+        gaussian_scene = GaussianScene.from_splats(splats, id="viewer_scene")
+
+    # Build Inference scene if requested (after both loading paths)
+    inference_scene = None
+    inference_renderer = None
+    if args.use_gaussian_render_inference_scene:
+        inference_scene = experimental.GaussianInferenceScene.from_gaussian_scene(
+            gaussian_scene, id="viewer_scene", sh_compression="32b"
+        )
+        inference_renderer = experimental.GaussianInferenceRenderer(
+            inference_scene
+        )
+
     # register and open viewer
-    @torch.no_grad()
     def viewer_render_fn(camera_state: CameraState, render_tab_state: RenderTabState):
         assert isinstance(render_tab_state, GsplatRenderTabState)
         if render_tab_state.preview_render:
@@ -148,53 +210,87 @@ def main(local_rank: int, world_rank, world_size: int, args):
         K = camera_state.get_K((width, height))
         c2w = torch.from_numpy(c2w).float().to(device)
         K = torch.from_numpy(K).float().to(device)
-        viewmat = c2w.inverse()
+        viewmat = c2w.inverse().contiguous()
 
-        RENDER_MODE_MAP = {
-            "rgb": "RGB",
-            "depth(accumulated)": "D",
-            "depth(expected)": "ED",
-            "alpha": "RGB",
-        }
+        if args.use_gaussian_render_inference_scene:
+            bg_raw = render_tab_state.backgrounds
+            bg = torch.tensor(bg_raw, device=device) / 255.0
+            render_kwargs = dict(
+                viewmat=viewmat,
+                K=K,
+                width=width,
+                height=height,
+                near_plane=render_tab_state.near_plane,
+                far_plane=render_tab_state.far_plane,
+                radius_clip=render_tab_state.radius_clip,
+                eps2d=render_tab_state.eps2d,
+                background=bg,
+            )
+        else:
+            RENDER_MODE_MAP = {
+                "rgb": "RGB",
+                "depth(accumulated)": "D",
+                "depth(expected)": "ED",
+                "alpha": "RGB",
+            }
+            splats = gaussian_scene.splats
+            render_kwargs = dict(
+                viewmats=viewmat[None],
+                Ks=K[None],
+                width=width,
+                height=height,
+                sh_degree=(
+                    min(render_tab_state.max_sh_degree, sh_degree)
+                    if sh_degree is not None
+                    else None
+                ),
+                near_plane=render_tab_state.near_plane,
+                far_plane=render_tab_state.far_plane,
+                radius_clip=render_tab_state.radius_clip,
+                eps2d=render_tab_state.eps2d,
+                backgrounds=torch.tensor([render_tab_state.backgrounds], device=device)
+                / 255.0,
+                render_mode=RENDER_MODE_MAP[render_tab_state.render_mode],
+                rasterize_mode=render_tab_state.rasterize_mode,
+                camera_model=render_tab_state.camera_model,
+                packed=False,
+                with_ut=args.with_ut,
+                with_eval3d=args.with_eval3d,
+            )
 
-        render_colors, render_alphas, info = rasterization(
-            means,  # [N, 3]
-            quats,  # [N, 4]
-            scales,  # [N, 3]
-            opacities,  # [N]
-            colors,  # [N, S, 3]
-            viewmat[None],  # [1, 4, 4]
-            K[None],  # [1, 3, 3]
-            width,
-            height,
-            sh_degree=(
-                min(render_tab_state.max_sh_degree, sh_degree)
-                if sh_degree is not None
-                else None
-            ),
-            near_plane=render_tab_state.near_plane,
-            far_plane=render_tab_state.far_plane,
-            radius_clip=render_tab_state.radius_clip,
-            eps2d=render_tab_state.eps2d,
-            backgrounds=torch.tensor([render_tab_state.backgrounds], device=device)
-            / 255.0,
-            render_mode=RENDER_MODE_MAP[render_tab_state.render_mode],
-            rasterize_mode=render_tab_state.rasterize_mode,
-            camera_model=render_tab_state.camera_model,
-            packed=False,
-            with_ut=args.with_ut,
-            with_eval3d=args.with_eval3d,
-        )
-        render_tab_state.total_gs_count = len(means)
-        render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
+        with torch.inference_mode():
+            if args.use_gaussian_render_inference_scene:
+                ret = inference_renderer.render(**render_kwargs)
+            else:
+                render_colors_out, render_alphas_out, render_info = rasterization(
+                    splats["means"],
+                    splats["quats"],
+                    splats["scales"].exp(),
+                    splats["opacities"].sigmoid(),
+                    splats.get("colors", splats.get("sh0")),
+                    **render_kwargs,
+                )
+
+        if args.use_gaussian_render_inference_scene:
+            render_tab_state.total_gs_count = inference_scene.num_gaussians
+            render_tab_state.rendered_gs_count = 0
+            # Stateful Inference returns native half4 RGBT; the viewer displays RGB.
+            renders = ret.frame.squeeze(0)[..., :3].float().clamp(0, 1).cpu().numpy()
+            return renders
+
+        # Vanilla branch post-processing (using direct rasterization outputs)
+        render_tab_state.total_gs_count = gaussian_scene.splats["means"].shape[0]
+        radii = render_info.get("radii")
+        if radii is not None:
+            render_tab_state.rendered_gs_count = (radii > 0).all(-1).sum().item()
+        else:
+            render_tab_state.rendered_gs_count = 0
 
         if render_tab_state.render_mode == "rgb":
-            # colors represented with sh are not guranteed to be in [0, 1]
-            render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
+            render_colors = render_colors_out[0, ..., 0:3].clamp(0, 1)
             renders = render_colors.cpu().numpy()
         elif render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
-            # normalize depth to [0, 1]
-            depth = render_colors[0, ..., 0:1]
+            depth = render_colors_out[0, ..., 0:1]
             if render_tab_state.normalize_nearfar:
                 near_plane = render_tab_state.near_plane
                 far_plane = render_tab_state.far_plane
@@ -211,19 +307,22 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 .numpy()
             )
         elif render_tab_state.render_mode == "alpha":
-            alpha = render_alphas[0, ..., 0:1]
+            alpha = render_alphas_out[0, ..., 0:1]
             renders = (
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )
         return renders
 
     server = viser.ViserServer(port=args.port, verbose=False)
-    _ = GsplatViewer(
+    viewer_kwargs = dict(
         server=server,
         render_fn=viewer_render_fn,
         output_dir=Path(args.output_dir),
         mode="rendering",
     )
+    if args.use_gaussian_render_inference_scene:
+        viewer_kwargs["render_modes"] = ("rgb",)
+    _ = GsplatViewer(**viewer_kwargs)
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(100000)
 
@@ -235,7 +334,7 @@ if __name__ == "__main__":
         --ckpt results/garden/ckpts/ckpt_6999_rank0.pt \
         --output_dir results/garden/ \
         --port 8082
-    
+
     CUDA_VISIBLE_DEVICES=9 python -m simple_viewer \
         --output_dir results/garden/ \
         --port 8082
@@ -250,6 +349,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt", type=str, nargs="+", default=None, help="path to the .pt file"
     )
+    parser.add_argument("--ply", type=str, default=None, help="path to a 3DGS PLY file")
     parser.add_argument(
         "--port", type=int, default=8080, help="port for the viewer server"
     )
@@ -257,6 +357,11 @@ if __name__ == "__main__":
         "--with_ut", action="store_true", help="use uncentered transform"
     )
     parser.add_argument("--with_eval3d", action="store_true", help="use eval 3D")
+    parser.add_argument(
+        "--use_gaussian_render_inference_scene",
+        action="store_true",
+        help="use the Inference (non-differentiable) rasterization path",
+    )
     args = parser.parse_args()
     assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 

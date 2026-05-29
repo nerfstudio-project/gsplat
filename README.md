@@ -13,6 +13,8 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 ## News
 
+[May 2026] **Inference Rendering (HiGS)** -- An experimental inference-only rendering path based on HiGS (Hierarchical 3D Gaussian Splatting) is now available under the `experimental` package. The inference path uses macro-tile fused rasterization with fp16 scene packing for low-latency rendering of pre-trained Gaussian scenes. See the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/) and the "Inference Rendering" section below.
+
 [Jan 2026] [PPISP](https://research.nvidia.com/labs/sil/projects/ppisp/) is integrated as an alternative way of bilateral grid to compensate the training views.
 
 [May 2025] Arbitrary batching (over multiple scenes and multiple viewpoints) is supported now!! Checkout [here](docs/batch.md) for more details! Kudos to [Junchen Liu](https://junchenliu77.github.io/).
@@ -68,6 +70,16 @@ the examples (requires installing some extrra dependencies via `pip install -r e
 - [Render a large scene in real-time.](https://docs.gsplat.studio/main/examples/large_scale.html)
 - [Train on an NCore v4 capture.](https://docs.gsplat.studio/main/examples/ncore.html)
 
+
+## Inference Rendering
+
+gsplat includes an experimental inference-only rendering path based on HiGS (Hierarchical 3D Gaussian Splatting) in the standalone `experimental` package, designed for low-latency rendering of pre-trained Gaussian scenes where training gradients are not needed. The inference path packs scene data into compact fp16 layouts and uses a macro-tile fused rasterization pipeline for fast single-camera rendering.
+
+```python
+from experimental import render_scene, GaussianInferenceScene
+```
+
+The `simple_viewer.py` example supports the Inference path via the `--use_gaussian_render_inference_scene` flag. A standalone benchmark comparing Inference rendering against the default `rasterization()` path is available at `examples/benchmarks/gaussian_render_inference_scene/`. For more details, [see project page](https://research.nvidia.com/labs/sil/projects/higs/).
 
 ## Development and Contribution
 
