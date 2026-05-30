@@ -47,17 +47,21 @@ def get_extensions():
     # the module directly from build.py.
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location(
-        "gsplat_cuda_build", os.path.join("gsplat", "cuda", "build.py")
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    params = module.get_build_parameters()
+    def _load_build_module(module_name, build_py_path):
+        spec = importlib.util.spec_from_file_location(module_name, build_py_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
 
     setup_dir = os.path.dirname(os.path.abspath(__file__))
-    sources = [os.path.relpath(s, setup_dir) for s in params.sources]
 
-    extension = CUDAExtension(
+    # --- gsplat main extension ---
+    gsplat_build = _load_build_module(
+        "gsplat_cuda_build", os.path.join("gsplat", "cuda", "build.py")
+    )
+    params = gsplat_build.get_build_parameters()
+    sources = [os.path.relpath(s, setup_dir) for s in params.sources]
+    gsplat_ext = CUDAExtension(
         "gsplat.csrc",
         sources=sources,
         include_dirs=params.extra_include_paths,
@@ -67,7 +71,28 @@ def get_extensions():
         },
         extra_link_args=params.extra_ldflags,
     )
-    return [extension]
+
+    # --- experimental Inference render extension ---
+    inference_build = _load_build_module(
+        "experimental_gaussian_render_inference_scene_build",
+        os.path.join("experimental", "render", "kernels", "cuda", "build.py"),
+    )
+    inference_params = inference_build.get_build_parameters()
+    inference_sources = [
+        os.path.relpath(s, setup_dir) for s in inference_params.sources
+    ]
+    inference_ext = CUDAExtension(
+        "experimental.render.kernels.csrc",
+        sources=inference_sources,
+        include_dirs=inference_params.extra_include_paths,
+        extra_compile_args={
+            "cxx": inference_params.extra_cflags,
+            "nvcc": inference_params.extra_cuda_cflags,
+        },
+        extra_link_args=inference_params.extra_ldflags,
+    )
+
+    return [gsplat_ext, inference_ext]
 
 
 setup(
