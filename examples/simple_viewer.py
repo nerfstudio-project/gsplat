@@ -193,9 +193,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         inference_scene = experimental.GaussianInferenceScene.from_gaussian_scene(
             gaussian_scene, id="viewer_scene", sh_compression="32b"
         )
-        inference_renderer = experimental.GaussianInferenceRenderer(
-            inference_scene
-        )
+        inference_renderer = experimental.GaussianInferenceRenderer(inference_scene)
 
     # register and open viewer
     def viewer_render_fn(camera_state: CameraState, render_tab_state: RenderTabState):
