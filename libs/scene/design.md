@@ -1,5 +1,103 @@
 # Scene Design
 
+## Scene Types
+
+`GaussianScene` is the training-oriented Gaussian container. It owns the
+parameter dictionary used by optimizer and strategy code (`means`, `quats`,
+`scales`, `opacities`, and either RGB or SH color tensors) and keeps those
+tensors in the source representation expected by training paths. Topology hooks
+mutate this owned state when gaussians are duplicated, split, removed,
+relocated, sampled, or permuted.
+
+`GaussianInferenceScene` is the packed QSO inference container. It owns detached
+render-time tensors in viewer/kernel layout: planar means, packed
+quaternion/scale/opacity (`qso_packed`), packed colors, SH metadata, and
+component indexing. It can be built from a `GaussianScene` or from already
+activated tensors, then used by inference render paths that expect packed
+storage. The conversion boundary is one-way: training code owns the
+editable Gaussian parameters, while inference scenes own compact packed tensors
+and do not participate in autograd.
+
+### Scene Type Summary
+
+| Scene Type                 | Representation           | Tensor Layout                         | Typical Use                  |
+| -------------------------- | ------------------------ | ------------------------------------- | ---------------------------- |
+| `GaussianScene`            | Raw log-space parameters | `splats` ParameterDict, row-aligned N | Training, optimization       |
+| `GaussianInferenceScene`   | Activated, packed QSO    | `means_planar` [3,N], `qso_packed` [N,8] fp16, `colors_packed` varies | Inference rendering  |
+
+Supported conversions:
+
+- `GaussianScene` → `GaussianInferenceScene` via `from_gaussian_scene()` (one-way, single-component only)
+- Raw tensors → `GaussianInferenceScene` via `from_gaussian_tensors()` (pre-activated inputs)
+- `GaussianInferenceScene` → training scene: not supported (the conversion boundary is one-way)
+
+## Module Layout
+
+```text
+libs/scene/
+  design.md
+  __init__.py
+  pyproject.toml
+  sh_compression.py
+  test_package_imports.py
+  kernels/
+    __init__.py
+    _backend.py
+    gaussian_inference_ops.py
+    cuda/
+      __init__.py
+      build.py
+      ext.cpp
+      csrc/
+        gaussian_scene_pack.cpp
+        gaussian_scene_pack.cuh
+  functional/
+    __init__.py
+    gaussian_inference.py
+    test_gaussian_inference.py
+  components/
+    __init__.py
+    base.py
+    gaussian_scene.py
+    gaussian_inference_scene.py
+    test_gaussian_scene.py
+    test_gaussian_inference_scene.py
+```
+
+## Package Roles
+
+### `functional/`
+
+`functional/` is the public Python surface of the scene module.
+
+It exports scene operators such as `pack_gaussian_inference_scene` and defines the
+API-level contract for arguments, shapes, dtypes, and return values.  Downstream
+code should import from `gsplat_scene.functional`.
+
+### `kernels/`
+
+`kernels/` is the backend implementation layer.
+
+- `_backend.py` loads the `gsplat_scene_cuda` extension (prebuilt then JIT).
+- `gaussian_inference_ops.py` owns Python-level input validation and native dispatch.
+- `kernels/cuda/` contains `build.py`, `ext.cpp` (PYBIND11), and `csrc/*.cu`.
+
+`kernels/` is not a curated user-facing API.
+
+### `components/`
+
+Scene class implementations (`Scene`, `GaussianScene`, `GaussianInferenceScene`) and
+their tests.  Components call into `kernels/` for CUDA work.
+
+### Dependency direction
+
+```text
+functional/  ->  kernels/  ->  kernels/cuda/
+components/  ->  kernels/
+```
+
+Scene CUDA ops live in `libs/scene/kernels/`.
+
 ## Goal
 
 Provide a minimal shared scene abstraction for the current Gaussian-based paths in:
@@ -20,7 +118,8 @@ The scene code lives under:
 The package exports:
 
 ```python
-from gsplat_scene import Scene, GaussianScene
+from gsplat_scene import Scene, GaussianScene, GaussianInferenceScene, SHCompressionMode
+from gsplat_scene.functional import pack_gaussian_inference_scene
 ```
 
 ## Base `Scene`
@@ -191,18 +290,11 @@ class GaussianScene(Scene):
     def on_permute(self, order: torch.Tensor) -> None: ...
 ```
 
-Notably absent from the current implementation:
-
-- `set_component()`
-- `names()`
-- `items()`
-- a separate radiance API
-
 ### `put(name, splats)`
 
 `put()` adds a named component backed by a `torch.nn.ParameterDict`.
 
-Current behavior:
+Behavior:
 
 - the first `put()` stores the passed `ParameterDict` directly
 - later `put()` calls append rows by concatenating the existing splat tensors with the new component tensors
@@ -217,7 +309,7 @@ Errors raised:
 - `ValueError("component splats must not be empty")` if the `ParameterDict` is empty or missing `"means"`
 - the splat-key concatenation iterates over keys of the *existing* `splats`; new keys present in `component` but not in `self.splats` are silently dropped, and missing keys raise `KeyError` from the underlying `torch.cat`
 
-Current limitations:
+Limitations:
 
 - `put()` only accepts splats; signal cannot be added per-component (callers seed it via `from_splats(..., signal=...)`)
 - appended components must match the existing splat-key layout
@@ -243,6 +335,60 @@ Notes:
 - `GaussianScene` extends that by also accepting integer component ids
 - this is a selected subset, not a zero-copy writable scene view
 
+## `GaussianInferenceScene`
+
+`GaussianInferenceScene` is the packed inference container.
+
+```python
+class GaussianInferenceScene(Scene):
+    def __init__(self, id: str) -> None: ...
+
+    means_planar: Optional[Tensor]        # [3, N] float32 CUDA
+    qso_packed: Optional[Tensor]          # [N, 8] float16 CUDA
+    colors_packed: Optional[Tensor]       # varies by sh_degree/compression
+    sh_degree: Optional[int]
+    sh_compression_mode: Optional[SHCompressionMode]
+    num_gaussians: int
+    component_names: list[str]
+    component_index: Tensor
+```
+
+### `from_gaussian_scene(scene, *, id, sh_compression="none")`
+
+Builds an inference scene from a training `GaussianScene`. Applies activations
+automatically (`F.normalize` on quaternions, `.exp()` on scales, `.sigmoid()` on
+opacities). Rejects appearance-optimized scenes (those with `"features"` in
+splats) and multi-component scenes. Not supported under `torch.distributed` with
+`world_size > 1`.
+
+### `from_gaussian_tensors(means, quats, scales, opacities, colors, sh_degree, sh_compression, *, id)`
+
+Builds an inference scene from pre-activated tensors. Validates activation
+contracts: quaternions must be unit-norm (wxyz order), scales positive, opacities
+in `[0, 1]`, all values finite.
+
+### `put(name, component)`
+
+Adds a pre-packed component dict with keys `means_planar`, `qso_packed`,
+`colors_packed`, `sh_degree`, `sh_compression_mode`. Validates shapes, dtypes,
+devices, and consistency with existing components.
+
+### `get(component)`
+
+Returns a component view by name or integer index, including a boolean `mask`
+for indexing into the concatenated tensors.
+
+### `is_empty()` / `release()`
+
+`is_empty()` returns `True` when the scene has no packed tensors or zero
+gaussians. `release()` clears all packed state and resets to empty.
+
+Out of scope for this API:
+
+- topology mutation hooks
+- scene-owned rendering helpers
+- scene-owned optimizer logic
+
 ## Validation Rules
 
 `validate()` checks:
@@ -254,11 +400,11 @@ Notes:
 - `component_names` is non-empty when `splats` is non-empty
 - `component_index` stays within `[0, len(component_names))`
 
-The implementation currently relies on assertions for most invariant checks.
+Validation relies on assertions for most invariant checks.
 
 ## Scene Serialization
 
-`GaussianScene.state_dict()` currently returns:
+`GaussianScene.state_dict()` returns:
 
 ```python
 {
@@ -283,7 +429,7 @@ The implementation currently relies on assertions for most invariant checks.
 5. `component_index`
 6. validation
 
-Legacy behavior supported today:
+Compatibility defaults:
 
 - missing `component_names` defaults to `["scene"]`
 - missing `component_index` defaults to all zeros
@@ -333,7 +479,7 @@ Key points:
 - simple trainer also does not save `scene.state_dict()`
 - on checkpoint load, it rebuilds the scene as `GaussianScene.from_splats(runner.splats, id=...)`
 
-> ⚠️ **Persistence trade-off**: trainer checkpoints currently store only `splats + scene_id`, **not** `scene.state_dict()`. Restored scenes therefore lose:
+> Trainer checkpoints store only `splats + scene_id`, **not** `scene.state_dict()`. Restored scenes therefore lose:
 >
 > - any custom `signal` rows the trainer added during training
 > - multi-component bookkeeping (`component_names`, `component_index`)
@@ -344,7 +490,7 @@ Key points:
 
 `GaussianScene` provides hooks so `component_index` and `signal` stay aligned with `splats` during topology-changing operations.
 
-Current update rules are:
+Update rules:
 
 ### Duplicate
 
@@ -404,9 +550,30 @@ The trainer and render paths remain responsible for:
 
 That keeps the scene object focused on storage and bookkeeping.
 
-## Current Scope
+## Gaussian Inference SH Packing
 
-Included today:
+`GaussianInferenceScene` stores packed geometry in `qso_packed`: an `[N, 8]`
+float16 tensor with quaternion in columns 0-3, scale in columns 4-6, and opacity
+in column 7.
+
+`GaussianInferenceScene` stores the public `sh_compression` string as
+`SHCompressionMode` metadata: `NONE` = `"none"`, `PACKED_32B` = `"32b"`, and
+`PACKED_16B` = `"16b"`. Nonzero compression modes are valid only for SH degree
+3. The Python wrappers require this enum; the native C++ ABI still receives the
+corresponding integer value and validates it before casting to its local enum.
+
+For SH3, scene packing uses distinct `colors_packed` layouts:
+
+- `NONE` (`"none"`): `[N, 16, 3]` float16, preserving raw SH layout
+- `PACKED_32B` (`"32b"`): `[N, 48]` float32, flattening coefficients into 32-bit lanes
+- `PACKED_16B` (`"16b"`): `[N, 48]` float16, flattening coefficients into fp16 lanes
+
+RGB remains `[N, 4]` float16 with an alignment pad, and SH0-SH2 remain
+`[N, K, 3]` float32.
+
+## Supported Surface
+
+Standardized scene APIs:
 
 - minimal abstract `Scene`
 - concrete `GaussianScene`
@@ -415,11 +582,17 @@ Included today:
 - exclusive components via `component_index`
 - sidecar update hooks for topology changes
 - AV checkpoint evaluation support from saved splats
+- concrete `GaussianInferenceScene` with packed QSO layout
+- `SHCompressionMode` enum (`NONE`, `PACKED_32B`, `PACKED_16B`)
+- `pack_gaussian_inference_scene` functional operator
+- `put`/`get` multi-component assembly for inference scenes
 
-Explicitly not standardized yet:
+Out of scope:
 
 - hierarchical scene access
 - scene-owned rendering helpers
 - scene-owned optimizer logic
 - generalized component mutation APIs like `set_component()`
 - trainer checkpoint persistence of full `GaussianScene.state_dict()`
+- appearance-optimized (`features`) conversion to inference scenes
+- inference-to-training scene conversion (the one-way boundary)
