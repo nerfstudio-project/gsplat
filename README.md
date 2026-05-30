@@ -17,7 +17,7 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gsplat/releases/tag/v1.5.3) tag (not yet on PyPI).
 
-- [May 2026] **Inference Rendering (HiGS)** -- An experimental inference-only rendering path based on HiGS (Hierarchical 3D Gaussian Splatting) is now available under the `experimental` package. The inference path uses macro-tile fused rasterization with fp16 scene packing for low-latency rendering of pre-trained Gaussian scenes. See the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/) and the "Inference Rendering" section below.
+- [May 2026] **Inference Rendering (HiGS)** -- An experimental inference-only rendering path based on HiGS (Hierarchical 3D Gaussian Splatting) is now available under the `experimental` package. The inference path uses macro-tile fused rasterization with fp16 scene packing for low-latency rendering of pre-trained Gaussian scenes. For more details, see the [Inference Rendering](#inference-rendering) section and the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/).
 - [May 2026] Native CUDA **MCMC perturb** (`inject_noise`) speeds up the noise-injection step used in MCMC-style Gaussian optimization.
 - [Apr 2026] **AccuTile** adds a conservative ellipse-based tile–Gaussian intersection test on the 3DGS path for tighter work scheduling before rasterization ([PR #927](https://github.com/nerfstudio-project/gsplat/pull/927)).
 - [Apr 2026] **NCore v4** capture support, including richer camera models and point-cloud loading via `PointCloudsSourceProtocol`. See the [NCore example](https://docs.gsplat.studio/main/examples/ncore.html).
@@ -88,7 +88,7 @@ gsplat includes an experimental inference-only rendering path based on HiGS (Hie
 from experimental import render_scene, GaussianInferenceScene
 ```
 
-The `simple_viewer.py` example supports the Inference path via the `--use_gaussian_render_inference_scene` flag. A standalone benchmark comparing Inference rendering against the default `rasterization()` path is available at `examples/benchmarks/gaussian_render_inference_scene/`. For more details, [see project page](https://research.nvidia.com/labs/sil/projects/higs/).
+The `simple_viewer.py` example supports the Inference path via the `--use_gaussian_render_inference_scene` flag. A standalone benchmark comparing Inference rendering against the default `rasterization()` path is available in [examples/benchmarks/gaussian_render_inference_scene/](examples/benchmarks/gaussian_render_inference_scene/); run [`gaussian_render_inference_scene_bench.py`](examples/benchmarks/gaussian_render_inference_scene/gaussian_render_inference_scene_bench.py) from the repo root. For more details, see the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/).
 
 ## Development and Contribution
 
