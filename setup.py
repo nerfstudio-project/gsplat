@@ -84,7 +84,11 @@ setup(
         "jaxtyping",
         "nvtx",
         "rich>=12",
-        "torch",
+        # Upper bound: torch 2.12 dropped support for older CUDA drivers,
+        # so a fresh install on a host with driver < the new minimum will
+        # pull a wheel that fails at import time. Pin to the last known-good
+        # major series.
+        "torch>=2.0,<2.12",
         "typing_extensions; python_version<'3.8'",
         # gsplat-scene / gsplat-stage live under libs/scene and libs/stage and
         # are installed via ``libs/install.sh scene && libs/install.sh stage``;
@@ -95,6 +99,16 @@ setup(
         "lidar": [
             "scipy",
         ],
+        # examples / tutorial dependencies. The dynamic-surgical trainer and
+        # the EndoNeRF parser/dataset import these at module top, but they
+        # are not needed to use the core gsplat library — install with
+        # `pip install gsplat[examples]`.
+        "examples": [
+            "Pillow",
+            "tqdm",
+            "tyro",
+            "imageio>=2.37.2",
+        ],
         # dev dependencies. Install them by `pip install gsplat[dev]`
         "dev": [
             "black[jupyter]==22.3.0",
@@ -103,6 +117,11 @@ setup(
             "pytest",
             "pytest-env",
             "pytest-xdist==2.5.0",
+            # Tests for examples/datasets/endonerf.py and the dynamic-surgical
+            # trainer import Pillow + tqdm at module top — without these the
+            # test collection ImportErrors on a fresh `[dev]` install.
+            "Pillow",
+            "tqdm",
             "typeguard>=2.13.3",
             "pyyaml>=6.0.1",
             "build",

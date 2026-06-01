@@ -1,3 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Loss functions for Gaussian Splatting training.
 
 This module provides loss functions commonly used in 3D Gaussian Splatting
@@ -14,7 +28,6 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 from typing import Optional
 
 import torch
@@ -203,6 +216,168 @@ def depth_l1_loss(
     disp = torch.where(pred_depth > 0.0, 1.0 / pred_depth, torch.zeros_like(pred_depth))
     disp_gt = torch.where(gt_depth > 0.0, 1.0 / gt_depth, torch.zeros_like(gt_depth))
     return F.l1_loss(disp, disp_gt) * scene_scale
+
+
+def binocular_disparity_l1(
+    pred_depth: Tensor,
+    gt_depth: Tensor,
+    mask: Optional[Tensor] = None,
+    eps: float = 1e-7,
+) -> Tensor:
+    """L1 loss in inverse-depth (disparity) space, with optional masking.
+
+    Ported from G-SHARP v0.2's binocular branch of
+    ``EndoRunner.compute_depth_loss``. Pixels whose predicted *or*
+    ground-truth depth has absolute value at or below *eps* are treated as
+    "no depth" and contribute 0 to the inverse-depth tensor (matching the
+    ``rendered_depth != 0`` sentinel convention used by the source).
+
+    Args:
+        pred_depth: Predicted depth, shape ``(..., H, W)``.
+        gt_depth: Ground-truth depth, same shape as *pred_depth*.
+        mask: Optional binary mask broadcastable to *pred_depth*; ``!= 0`` =
+            include pixel, ``0`` = ignore. Without a mask, the loss is the
+            mean over all pixels (the zero-depth ones contribute 0 on both
+            sides).
+        eps: Threshold below which depth is treated as invalid; also keeps
+            the divisor away from zero so the reciprocal stays finite.
+
+    Returns:
+        Scalar disparity-space L1 loss.
+    """
+    if pred_depth.shape != gt_depth.shape:
+        raise ValueError(
+            f"binocular_disparity_l1: pred_depth shape {pred_depth.shape} != "
+            f"gt_depth shape {gt_depth.shape}. Shapes must match."
+        )
+    # A pair (pred_i, gt_i) contributes only when *both* sides are valid.
+    # Otherwise the per-side `1/x ↔ 0` substitution leaks `|0 - 1/other|`
+    # into the loss when only one side is invalid, which is not what the
+    # docstring promises.
+    valid_pred = pred_depth.abs() > eps
+    valid_gt = gt_depth.abs() > eps
+    pair_valid = valid_pred & valid_gt
+
+    ones = torch.ones_like(pred_depth)
+    safe_pred = torch.where(valid_pred, pred_depth, ones)
+    safe_gt = torch.where(valid_gt, gt_depth, ones)
+    pred_inv = 1.0 / safe_pred
+    gt_inv = 1.0 / safe_gt
+
+    pair_mask = pair_valid.to(pred_depth.dtype)
+    if mask is not None:
+        pair_mask = pair_mask * mask.to(pred_depth.dtype)
+    return masked_l1(pred_inv, gt_inv, pair_mask)
+
+
+def pearson_depth_loss(
+    pred_depth: Tensor,
+    gt_depth: Tensor,
+    mask: Optional[Tensor] = None,
+) -> Tensor:
+    """Monocular depth loss: ``1 - Pearson r`` on (masked) flattened depth pairs.
+
+    Ported from G-SHARP v0.2 (monocular branch). Returns a differentiable 0
+    when fewer than two valid samples remain after masking, and clamps the
+    denominator to a tiny positive constant when either input has near-zero
+    variance — both situations would otherwise yield NaN.
+
+    Args:
+        pred_depth: Predicted depth, shape ``(..., H, W)``.
+        gt_depth: Ground-truth depth, same shape as *pred_depth*.
+        mask: Optional binary mask broadcastable to *pred_depth*; samples
+            where ``mask == 0`` are dropped before the correlation.
+
+    Returns:
+        Scalar loss in approximately ``[0, 2]``.
+    """
+    if pred_depth.shape != gt_depth.shape:
+        raise ValueError(
+            f"pearson_depth_loss: pred_depth shape {pred_depth.shape} != "
+            f"gt_depth shape {gt_depth.shape}. Shapes must match."
+        )
+    pred_flat = pred_depth.reshape(-1)
+    gt_flat = gt_depth.reshape(-1)
+    if mask is not None:
+        mask_flat = (mask != 0).reshape(-1)
+        pred_flat = pred_flat[mask_flat]
+        gt_flat = gt_flat[mask_flat]
+    if pred_flat.numel() < 2:
+        return pred_depth.sum() * 0.0
+
+    pred_centered = pred_flat - pred_flat.mean()
+    gt_centered = gt_flat - gt_flat.mean()
+    num = (pred_centered * gt_centered).sum()
+    denom = (
+        (pred_centered.pow(2).sum() * gt_centered.pow(2).sum()).clamp(min=1e-12).sqrt()
+    )
+    return 1.0 - num / denom
+
+
+# ---------------------------------------------------------------------------
+# Mask-aware photometric wrappers (G-SHARP v0.2)
+# ---------------------------------------------------------------------------
+
+
+def masked_l1(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
+    """L1 over only the ``mask != 0`` region.
+
+    Mask-aware wrapper around :func:`l1_loss`, ported from G-SHARP v0.2 to
+    zero out tool / dynamic-object regions. The mask is broadcast to *pred*'s
+    shape (so a ``[B, 1, H, W]`` mask works on ``[B, C, H, W]`` inputs) and
+    the mean is taken over unmasked elements only. Returns a differentiable 0
+    when the mask is all-zero (no NaN).
+
+    Args:
+        pred: Predicted tensor.
+        gt: Ground-truth tensor, same shape as *pred*.
+        mask: Mask broadcastable to *pred*; ``!= 0`` = include element.
+
+    Returns:
+        Scalar L1 loss.
+    """
+    if pred.shape != gt.shape:
+        raise ValueError(
+            f"masked_l1: pred shape {pred.shape} != gt shape {gt.shape}. "
+            "Shapes must match."
+        )
+    abs_diff = (pred - gt).abs()
+    bool_mask = mask != 0
+    if bool_mask.shape != abs_diff.shape:
+        bool_mask = bool_mask.expand_as(abs_diff)
+    selected = abs_diff[bool_mask]
+    if selected.numel() == 0:
+        return pred.sum() * 0.0
+    return selected.mean()
+
+
+def masked_ssim(pred: Tensor, gt: Tensor, mask: Tensor) -> Tensor:
+    """SSIM loss after zeroing both inputs in the masked region.
+
+    Mask-aware wrapper around :func:`ssim_loss`, ported from G-SHARP v0.2.
+    Both *pred* and *gt* are multiplied by *mask* before SSIM, matching the
+    G-SHARP training-loop convention (mask the rendered output and the GT,
+    then take an unmasked SSIM over the zeroed pair).
+
+    Note that the mean is taken over the full image, so the loss magnitude
+    scales with mask coverage — sparse masks dilute the reported loss in
+    proportion to the masked-out fraction. This bias is intentional and
+    matches the upstream G-SHARP convention.
+
+    Args:
+        pred: Predicted image batch ``[B, C, H, W]``, values in ``[0, 1]``.
+        gt: Ground-truth image batch, same shape as *pred*.
+        mask: Mask broadcastable to *pred* (e.g. ``[B, 1, H, W]``).
+
+    Returns:
+        Scalar SSIM loss (``1 - SSIM`` of the zeroed pair).
+    """
+    if pred.shape != gt.shape:
+        raise ValueError(
+            f"masked_ssim: pred shape {pred.shape} != gt shape {gt.shape}. "
+            "Shapes must match."
+        )
+    return ssim_loss(pred * mask, gt * mask)
 
 
 # ---------------------------------------------------------------------------
