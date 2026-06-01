@@ -588,7 +588,11 @@ def main() -> None:
             )
             from gsplat.cuda._wrapper import RollingShutterType
 
-            viewmats = inputs["viewmats"].reshape(-1, 4, 4)
+            original_viewmats = inputs["viewmats"]
+            # Preserve any leading batch dims; rasterization() requires
+            # rays.shape == viewmats.shape[:-2] + (H, W, 6).
+            leading_shape = original_viewmats.shape[:-2]
+            viewmats = original_viewmats.reshape(-1, 4, 4)
             viewmats_rs = inputs.get("viewmats_rs")
             if viewmats_rs is not None:
                 viewmats_rs = viewmats_rs.reshape(-1, 4, 4)
@@ -629,7 +633,7 @@ def main() -> None:
                 gen_height,
                 viewmats,
                 viewmats_rs,
-            ).reshape(-1, gen_height, gen_width, 6)
+            ).reshape(*leading_shape, gen_height, gen_width, 6)
             inputs["rays"] = rays
             print(
                 f"[gsplat.profile] --ensure-rays: generated rays {tuple(rays.shape)} "
