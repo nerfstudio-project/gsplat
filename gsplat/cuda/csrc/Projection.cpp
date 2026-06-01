@@ -491,6 +491,87 @@ struct TorchArgDef<ProjectionEWA3DGSFusedGrad>
     }
 };
 
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::optional<at::Tensor>
+>
+    projection_ewa_3dgs_fused_fwd_privateuseone(
+        const at::Tensor &means,                   // [..., N, 3]
+        const at::optional<at::Tensor> &covars,    // [..., N, 6] optional
+        const at::optional<at::Tensor> &quats,     // [..., N, 4] optional
+        const at::optional<at::Tensor> &scales,    // [..., N, 3] optional
+        const at::optional<at::Tensor> &opacities, // [..., N] optional
+        const at::Tensor &viewmats,                // [..., C, 4, 4]
+        const at::Tensor &Ks,                      // [..., C, 3, 3]
+        int64_t image_width,
+        int64_t image_height,
+        double eps2d,
+        double near_plane,
+        double far_plane,
+        double radius_clip,
+        bool calc_compensations,
+        int64_t camera_model
+    )
+{
+    check_projection_ewa_3dgs_fused_inputs(
+        means, covars, quats, scales, opacities, viewmats, Ks, static_cast<CameraModelType>(camera_model)
+    );
+
+    DEVICE_GUARD(means);
+    auto opt = means.options();
+    at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
+    uint32_t N = means.size(-2);
+    uint32_t C = viewmats.size(-3);
+
+    at::DimVector radii_shape(batch_dims);
+    radii_shape.append({C, N, 2});
+    at::Tensor radii = at::empty(radii_shape, opt.dtype(at::kInt));
+    at::DimVector means2d_shape(batch_dims);
+    means2d_shape.append({C, N, 2});
+    at::Tensor means2d = at::empty(means2d_shape, opt);
+    at::DimVector depths_shape(batch_dims);
+    depths_shape.append({C, N});
+    at::Tensor depths = at::empty(depths_shape, opt);
+    at::DimVector conics_shape(batch_dims);
+    conics_shape.append({C, N, 3});
+    at::Tensor conics = at::empty(conics_shape, opt);
+    at::Tensor compensations;
+    if(calc_compensations)
+    {
+        at::DimVector compensations_shape(batch_dims);
+        compensations_shape.append({C, N});
+        compensations = at::zeros(compensations_shape, opt);
+    }
+
+    launch_projection_ewa_3dgs_fused_fwd_kernels(
+        means,
+        covars,
+        quats,
+        scales,
+        opacities,
+        viewmats,
+        Ks,
+        image_width,
+        image_height,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        static_cast<CameraModelType>(camera_model),
+        radii,
+        means2d,
+        depths,
+        conics,
+        calc_compensations ? at::optional<at::Tensor>(compensations) : c10::nullopt
+    );
+    return std::make_tuple(
+        radii, means2d, depths, conics, calc_compensations ? at::optional<at::Tensor>(compensations) : c10::nullopt
+    );
+}
+
 // Full backward for projection_ewa_3dgs_fused.
 // `viewmats_requires_grad` selects whether to compute the viewmats gradient. It
 // is an explicit argument rather than something inferred from a tensor's
@@ -644,6 +725,109 @@ ProjectionEWA3DGSFusedResult projection_ewa_3dgs_fused(
         radius_clip,
         calc_compensations,
         camera_model
+    );
+}
+
+std::tuple<
+    at::Tensor,
+    at::optional<at::Tensor>,
+    at::optional<at::Tensor>,
+    at::optional<at::Tensor>,
+    at::optional<at::Tensor>
+>
+    projection_ewa_3dgs_fused_bwd_privateuseone(
+        // fwd inputs
+        const at::Tensor &means,                // [..., N, 3]
+        const at::optional<at::Tensor> &covars, // [..., N, 6] optional
+        const at::optional<at::Tensor> &quats,  // [..., N, 4] optional
+        const at::optional<at::Tensor> &scales, // [..., N, 3] optional
+        const at::Tensor &viewmats,             // [..., C, 4, 4]
+        const at::Tensor &Ks,                   // [..., C, 3, 3]
+        int64_t image_width,
+        int64_t image_height,
+        double eps2d,
+        int64_t camera_model,
+        // fwd outputs
+        const at::Tensor &radii,                       // [..., C, N, 2]
+        const at::Tensor &conics,                      // [..., C, N, 3]
+        const at::optional<at::Tensor> &compensations, // [..., C, N] optional
+        // grad outputs
+        const at::Tensor &v_means2d,                     // [..., C, N, 2]
+        const at::Tensor &v_depths,                      // [..., C, N]
+        const at::Tensor &v_conics,                      // [..., C, N, 3]
+        const at::optional<at::Tensor> &v_compensations, // [..., C, N] optional
+        bool viewmats_requires_grad
+    )
+{
+    DEVICE_GUARD(means);
+    check_projection_ewa_3dgs_fused_inputs(
+        means, covars, quats, scales, c10::nullopt, viewmats, Ks, static_cast<CameraModelType>(camera_model)
+    );
+    CHECK_INPUT(radii);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(v_means2d);
+    CHECK_INPUT(v_depths);
+    CHECK_INPUT(v_conics);
+    if(compensations.has_value())
+    {
+        CHECK_INPUT(compensations.value());
+    }
+    at::optional<at::Tensor> compensation_grad;
+    if(compensations.has_value() && v_compensations.has_value())
+    {
+        CHECK_INPUT(v_compensations.value());
+        compensation_grad = v_compensations;
+    }
+
+    at::Tensor v_means = at::zeros_like(means);
+    at::Tensor v_covars, v_quats, v_scales;
+    if(covars.has_value())
+    {
+        v_covars = at::zeros_like(covars.value());
+    }
+    else
+    {
+        v_quats  = at::zeros_like(quats.value());
+        v_scales = at::zeros_like(scales.value());
+    }
+    at::Tensor v_viewmats;
+    if(viewmats_requires_grad)
+    {
+        v_viewmats = at::zeros_like(viewmats);
+    }
+
+    launch_projection_ewa_3dgs_fused_bwd_kernels(
+        means,
+        covars,
+        quats,
+        scales,
+        viewmats,
+        Ks,
+        image_width,
+        image_height,
+        eps2d,
+        static_cast<CameraModelType>(camera_model),
+        radii,
+        conics,
+        compensations,
+        v_means2d,
+        v_depths,
+        v_conics,
+        compensation_grad,
+        viewmats_requires_grad,
+        v_means,
+        v_covars,
+        v_quats,
+        v_scales,
+        v_viewmats
+    );
+
+    return std::make_tuple(
+        v_means,
+        as_optional_tensor(v_covars),
+        as_optional_tensor(v_quats),
+        as_optional_tensor(v_scales),
+        as_optional_tensor(v_viewmats)
     );
 }
 
@@ -2007,5 +2191,13 @@ void register_projection_cuda_impl(torch::Library &m)
 #endif
 
     m.impl("projection_ut_3dgs_fused", to_torch_op<&projection_ut_3dgs_fused>);
+}
+
+void register_projection_privateuseone_impl(torch::Library &m)
+{
+#if GSPLAT_BUILD_3DGS
+    m.impl("projection_ewa_3dgs_fused", to_torch_op<&projection_ewa_3dgs_fused_fwd_privateuseone>);
+    m.impl("projection_ewa_3dgs_fused_bwd", to_torch_op<&projection_ewa_3dgs_fused_bwd_privateuseone>);
+#endif
 }
 } // namespace gsplat

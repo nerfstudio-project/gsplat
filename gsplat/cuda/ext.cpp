@@ -37,15 +37,22 @@ void register_adam_cuda_impl(torch::Library &m);
 void register_external_distortion_wrappers_cuda_impl(torch::Library &m);
 void register_gaussian_losses_cuda_impl(torch::Library &m);
 void register_intersect_cuda_impl(torch::Library &m);
+void register_intersect_privateuseone_impl(torch::Library &m);
 void register_mcmc_perturb_cuda_impl(torch::Library &m);
 void register_projection_cuda_impl(torch::Library &m);
+void register_projection_privateuseone_impl(torch::Library &m);
 void register_quat_scale_to_covar_cuda_impl(torch::Library &m);
+void register_quat_scale_to_covar_privateuseone_impl(torch::Library &m);
 void register_rasterization_cuda_impl(torch::Library &m);
 void register_rasterization_autograd_cuda_impl(torch::Library &m);
 void register_rendering_cuda_impl(torch::Library &m);
 void register_rendering_autograd_cuda_impl(torch::Library &m);
+void register_rendering_privateuseone_impl(torch::Library &m);
+void register_rendering_autograd_privateuseone_impl(torch::Library &m);
+void register_rasterization_privateuseone_impl(torch::Library &m);
 void register_relocation_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_cuda_impl(torch::Library &m);
+void register_spherical_harmonics_privateuseone_impl(torch::Library &m);
 } // namespace gsplat
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
@@ -1290,8 +1297,30 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m)
 #endif
 }
 
+TORCH_LIBRARY_IMPL(gsplat, PrivateUse1, m)
+{
+#if GSPLAT_BUILD_3DGS
+    gsplat::register_quat_scale_to_covar_privateuseone_impl(m);
+#endif
+
+    gsplat::register_intersect_privateuseone_impl(m);
+    gsplat::register_spherical_harmonics_privateuseone_impl(m);
+
+#if GSPLAT_BUILD_3DGS
+    gsplat::register_projection_privateuseone_impl(m);
+    gsplat::register_rasterization_privateuseone_impl(m);
+#endif
+
+    gsplat::register_rendering_privateuseone_impl(m);
+}
+
 TORCH_LIBRARY_IMPL(gsplat, AutogradCUDA, m)
 {
     gsplat::register_rasterization_autograd_cuda_impl(m);
     gsplat::register_rendering_autograd_cuda_impl(m);
+}
+
+TORCH_LIBRARY_IMPL(gsplat, AutogradPrivateUse1, m)
+{
+    gsplat::register_rendering_autograd_privateuseone_impl(m);
 }

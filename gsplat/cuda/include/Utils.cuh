@@ -19,7 +19,11 @@
 #pragma once
 
 #include "Common.h"
+#include "Utils.h"
 
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAStream.h>
+#include <c10/util/irange.h>
 #ifdef __CUDACC__
 #    include <cooperative_groups.h>
 #    include <cooperative_groups/reduce.h>
@@ -27,6 +31,7 @@
 #include <cuda/std/limits>
 #include <cuda/std/type_traits>
 #include <cmath>
+#include <tuple>
 #include <type_traits>
 
 namespace gsplat

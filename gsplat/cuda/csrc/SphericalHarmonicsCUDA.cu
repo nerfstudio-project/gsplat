@@ -433,6 +433,8 @@ __device__ void sh_coeffs_to_color_fast_vjp(
 // scalar_t is fp16 or fp32; reads are upcast to opmath_t (fp32) inside the helper.
 template<typename scalar_t, typename opmath_t>
 __global__ void spherical_harmonics_fwd_kernel(
+    const int64_t gaussian_offset,
+    const int64_t gaussian_count,
     const uint32_t B,
     const uint32_t N,
     const uint32_t K,
@@ -444,15 +446,18 @@ __global__ void spherical_harmonics_fwd_kernel(
     opmath_t *__restrict__ colors        // [..., N, D]
 )
 {
-    // parallelize over B * N * D
-    uint32_t idx = cg::this_grid().thread_rank();
-    if(idx >= B * N * D)
+    // parallelize over B * gaussian_count * D
+    auto idx            = cg::this_grid().thread_rank();
+    const int64_t count = static_cast<int64_t>(B) * gaussian_count * D;
+    if(idx >= count)
     {
         return;
     }
-    uint32_t elem_id     = idx / D;
-    uint32_t gaussian_id = elem_id % N;
-    uint32_t c           = idx % D; // output channel
+    const int64_t local_elem_id = idx / D;
+    const int64_t batch_id      = local_elem_id / gaussian_count;
+    const int64_t gaussian_id   = local_elem_id % gaussian_count + gaussian_offset;
+    const int64_t elem_id       = batch_id * N + gaussian_id;
+    const uint32_t c            = idx % D; // output channel
     if(masks != nullptr && !masks[elem_id])
     {
         return;
@@ -559,9 +564,9 @@ void launch_spherical_harmonics_fwd_kernel(
 
     if(K == 16 && D == 3 && wide_load_aligned)
     {
-        int64_t n_threads = B * N;
-        dim3 threads(256);
-        dim3 grid((n_threads + threads.x - 1) / threads.x);
+        int64_t n_elements             = B * N;
+        constexpr unsigned int threads = 256;
+        unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
 
         auto *masks_ptr = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
 
@@ -589,9 +594,10 @@ void launch_spherical_harmonics_fwd_kernel(
                 constexpr int DEGREE = DegConst::value;
                 auto *dirs_ptr       = reinterpret_cast<const vec3 *>(dirs.const_data_ptr<opmath_t>());
                 auto *colors_ptr     = colors.data_ptr<opmath_t>();
-                spherical_harmonics_fwd_kernel_k16_3channel<CoeffT, opmath_t, DEGREE><<<grid, threads, 0, stream>>>(
+                spherical_harmonics_fwd_kernel_k16_3channel<CoeffT, opmath_t, DEGREE><<<blocks, threads, 0, stream>>>(
                     B, N, dirs_ptr, coeffs.const_data_ptr<CoeffT>(), masks_ptr, colors_ptr
                 );
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
         );
         TORCH_CHECK(
@@ -600,10 +606,9 @@ void launch_spherical_harmonics_fwd_kernel(
     }
     else
     {
-        int64_t n_elements = static_cast<int64_t>(B) * N * D;
-        dim3 threads(256);
-        dim3 grid((n_elements + threads.x - 1) / threads.x);
-        int64_t shmem_size = 0; // No shared memory used in this kernel
+        int64_t n_elements             = static_cast<int64_t>(B) * N * D;
+        constexpr unsigned int threads = 256;
+        unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
 
         // Dispatch on the coeff dtype (fp16/fp32); dirs/colors read as opmath_t (float).
         AT_DISPATCH_V2(
@@ -617,9 +622,20 @@ void launch_spherical_harmonics_fwd_kernel(
                     auto *masks_ptr  = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
                     auto *colors_ptr = colors.data_ptr<opmath_t>();
 
-                    spherical_harmonics_fwd_kernel<scalar_t, opmath_t><<<grid, threads, shmem_size, stream>>>(
-                        B, N, K, D, degrees_to_use, dirs_ptr, coeffs.const_data_ptr<scalar_t>(), masks_ptr, colors_ptr
+                    spherical_harmonics_fwd_kernel<scalar_t, opmath_t><<<blocks, threads, 0, stream>>>(
+                        0,
+                        N,
+                        B,
+                        N,
+                        K,
+                        D,
+                        degrees_to_use,
+                        dirs_ptr,
+                        coeffs.const_data_ptr<scalar_t>(),
+                        masks_ptr,
+                        colors_ptr
                     );
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
                 }
             ),
             at::kFloat,
@@ -628,8 +644,73 @@ void launch_spherical_harmonics_fwd_kernel(
     }
 }
 
+void launch_spherical_harmonics_fwd_kernels(
+    // inputs
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor coeffs,              // [N, K, D]
+    const at::optional<at::Tensor> masks, // [..., N]
+    // outputs
+    at::Tensor colors // [..., N, D]
+)
+{
+    const uint32_t D = coeffs.size(-1);
+    const uint32_t K = coeffs.size(-2);
+    const uint32_t N = coeffs.size(-3);
+    const uint32_t B = c10::multiply_integers(dirs.sizes().slice(0, dirs.dim() - 2));
+
+    constexpr unsigned int threads = 256;
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+        int64_t gaussian_offset, gaussian_count;
+        std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
+        int64_t n_elements                        = static_cast<int64_t>(B) * gaussian_count * D;
+        unsigned int blocks                       = ::cuda::ceil_div(n_elements, threads);
+        if(blocks > 0)
+        {
+            AT_DISPATCH_V2(
+                coeffs.scalar_type(),
+                "spherical_harmonics_fwd_kernel",
+                AT_WRAP(
+                    [&]()
+                    {
+                        using opmath_t   = at::opmath_type<scalar_t>;
+                        auto *dirs_ptr   = reinterpret_cast<const vec3 *>(dirs.const_data_ptr<opmath_t>());
+                        auto *masks_ptr  = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
+                        auto *colors_ptr = colors.data_ptr<opmath_t>();
+
+                        spherical_harmonics_fwd_kernel<scalar_t, opmath_t><<<blocks, threads, 0, stream>>>(
+                            gaussian_offset,
+                            gaussian_count,
+                            B,
+                            N,
+                            K,
+                            D,
+                            degrees_to_use,
+                            dirs_ptr,
+                            coeffs.const_data_ptr<scalar_t>(),
+                            masks_ptr,
+                            colors_ptr
+                        );
+                        C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    }
+                ),
+                at::kFloat,
+                at::kHalf
+            );
+        }
+    }
+    merge_streams();
+}
+
 template<typename scalar_t, typename opmath_t>
 __global__ void spherical_harmonics_bwd_kernel(
+    const int64_t gaussian_offset,
+    const int64_t gaussian_count,
     const uint32_t B,
     const uint32_t N,
     const uint32_t K,
@@ -643,15 +724,18 @@ __global__ void spherical_harmonics_bwd_kernel(
     opmath_t *__restrict__ v_dirs          // [..., N, 3] optional
 )
 {
-    // parallelize over B * N * D
-    uint32_t idx = cg::this_grid().thread_rank();
-    if(idx >= B * N * D)
+    // parallelize over B * gaussian_count * D
+    auto idx            = cg::this_grid().thread_rank();
+    const int64_t count = static_cast<int64_t>(B) * gaussian_count * D;
+    if(idx >= count)
     {
         return;
     }
-    uint32_t elem_id     = idx / D;
-    uint32_t gaussian_id = elem_id % N;
-    uint32_t c           = idx % D; // output channel
+    const int64_t local_elem_id = idx / D;
+    const int64_t batch_id      = local_elem_id / gaussian_count;
+    const int64_t gaussian_id   = local_elem_id % gaussian_count + gaussian_offset;
+    const int64_t elem_id       = batch_id * N + gaussian_id;
+    const uint32_t c            = idx % D; // output channel
     if(masks != nullptr && !masks[elem_id])
     {
         return;
@@ -697,10 +781,9 @@ void launch_spherical_harmonics_bwd_kernel(
     auto stream = at::cuda::getCurrentCUDAStream();
 
     // parallelize over B * N * D
-    int64_t n_elements = static_cast<int64_t>(B) * N * D;
-    dim3 threads(256);
-    dim3 grid((n_elements + threads.x - 1) / threads.x);
-    int64_t shmem_size = 0; // No shared memory used in this kernel
+    int64_t n_elements             = static_cast<int64_t>(B) * N * D;
+    constexpr unsigned int threads = 256;
+    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
 
     if(n_elements == 0)
     {
@@ -722,7 +805,9 @@ void launch_spherical_harmonics_bwd_kernel(
                 auto *v_colors_ptr = v_colors.const_data_ptr<opmath_t>();
                 auto *v_dirs_ptr   = v_dirs.has_value() ? v_dirs.value().data_ptr<opmath_t>() : nullptr;
 
-                spherical_harmonics_bwd_kernel<scalar_t, opmath_t><<<grid, threads, shmem_size, stream>>>(
+                spherical_harmonics_bwd_kernel<scalar_t, opmath_t><<<blocks, threads, 0, stream>>>(
+                    0,
+                    N,
                     B,
                     N,
                     K,
@@ -735,6 +820,7 @@ void launch_spherical_harmonics_bwd_kernel(
                     v_coeffs.data_ptr<float>(),
                     v_dirs_ptr
                 );
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
             }
         ),
         at::kFloat,
@@ -1236,5 +1322,73 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
         );
         TORCH_CHECK(dispatched, "assemble_proj_features: dispatch failed for sh_degree=", degrees_to_use);
     }
+}
+
+void launch_spherical_harmonics_bwd_kernels(
+    // inputs
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor coeffs,              // [N, K, D]
+    const at::optional<at::Tensor> masks, // [..., N]
+    const at::Tensor v_colors,            // [..., N, D]
+    // outputs
+    at::Tensor v_coeffs,            // [N, K, D]
+    at::optional<at::Tensor> v_dirs // [..., N, 3]
+)
+{
+    const uint32_t D = coeffs.size(-1);
+    const uint32_t K = coeffs.size(-2);
+    const uint32_t N = coeffs.size(-3);
+    const uint32_t B = c10::multiply_integers(dirs.sizes().slice(0, dirs.dim() - 2));
+
+    constexpr unsigned int threads = 256;
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+        int64_t gaussian_offset, gaussian_count;
+        std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
+        int64_t n_elements                        = static_cast<int64_t>(B) * gaussian_count * D;
+        unsigned int blocks                       = ::cuda::ceil_div(n_elements, threads);
+        if(blocks > 0)
+        {
+            AT_DISPATCH_V2(
+                coeffs.scalar_type(),
+                "spherical_harmonics_bwd_kernel",
+                AT_WRAP(
+                    [&]()
+                    {
+                        using opmath_t     = at::opmath_type<scalar_t>;
+                        auto *dirs_ptr     = reinterpret_cast<const vec3 *>(dirs.const_data_ptr<opmath_t>());
+                        auto *masks_ptr    = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
+                        auto *v_colors_ptr = v_colors.const_data_ptr<opmath_t>();
+                        auto *v_dirs_ptr   = v_dirs.has_value() ? v_dirs.value().data_ptr<opmath_t>() : nullptr;
+
+                        spherical_harmonics_bwd_kernel<scalar_t, opmath_t><<<blocks, threads, 0, stream>>>(
+                            gaussian_offset,
+                            gaussian_count,
+                            B,
+                            N,
+                            K,
+                            D,
+                            degrees_to_use,
+                            dirs_ptr,
+                            coeffs.const_data_ptr<scalar_t>(),
+                            masks_ptr,
+                            v_colors_ptr,
+                            v_coeffs.data_ptr<float>(),
+                            v_dirs_ptr
+                        );
+                        C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    }
+                ),
+                at::kFloat,
+                at::kHalf
+            );
+        }
+    }
+    merge_streams();
 }
 } // namespace gsplat

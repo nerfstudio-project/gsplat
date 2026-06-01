@@ -16,10 +16,14 @@
  */
 
 #include <ATen/Dispatch.h>
+#include <ATen/Functions.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h>
 #include <cassert>
 #include <cooperative_groups.h>
+#include <cuda/std/functional>
+#include <tuple>
+#include <vector>
 
 // for CUB_WRAPPER
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -33,6 +37,44 @@
 namespace gsplat
 {
 namespace cg = cooperative_groups;
+
+#define CUB_WRAPPER_ASYNC(stream, func, ...)                                         \
+    do                                                                               \
+    {                                                                                \
+        size_t temp_storage_bytes = 0;                                               \
+        void *temp_storage        = nullptr;                                         \
+        C10_CUDA_CHECK(func(temp_storage, temp_storage_bytes, __VA_ARGS__, stream)); \
+        C10_CUDA_CHECK(cudaMallocAsync(&temp_storage, temp_storage_bytes, stream));  \
+        C10_CUDA_CHECK(func(temp_storage, temp_storage_bytes, __VA_ARGS__, stream)); \
+        C10_CUDA_CHECK(cudaFreeAsync(temp_storage, stream));                         \
+    } while(false)
+
+struct TileColumnRange
+{
+    int32_t start;
+    int32_t end;
+    bool done;
+};
+
+inline __device__ TileColumnRange row_key_column_range(
+    const int64_t image_id,
+    const int32_t row,
+    const uint32_t tile_width,
+    const uint32_t n_tiles,
+    const int2 rect_min,
+    const int2 rect_max,
+    const int64_t key_start,
+    const int64_t key_end
+)
+{
+    const int64_t row_key_offset = image_id * n_tiles + static_cast<int64_t>(row) * tile_width;
+    const bool done              = row_key_offset + rect_min.x >= key_end;
+    const int64_t col_start
+        = min(static_cast<int64_t>(rect_max.x), max(static_cast<int64_t>(rect_min.x), key_start - row_key_offset));
+    const int64_t col_end
+        = max(static_cast<int64_t>(rect_min.x), min(static_cast<int64_t>(rect_max.x), key_end - row_key_offset));
+    return {static_cast<int32_t>(col_start), static_cast<int32_t>(col_end), done};
+}
 
 // ============================================================
 // SNUGBOX + AccuTile helper functions
@@ -67,7 +109,11 @@ inline __device__ uint32_t accutile_process_tiles(
     int2 rect_max,
     uint32_t tile_size,
     uint32_t tile_width,
+    uint32_t n_tiles,
     bool isY,
+    int64_t image_id,
+    int64_t key_start,
+    int64_t key_end,
     int64_t iid_enc,
     uint32_t tile_n_bits,
     int64_t depth_id_enc,
@@ -136,14 +182,19 @@ inline __device__ uint32_t accutile_process_tiles(
         int min_tile_v = max(rect_min.y, min(rect_max.y, (int)(ellipse_min / BLOCK)));
         int max_tile_v = min(rect_max.y, max(rect_min.y, (int)(ellipse_max / BLOCK + 1)));
 
-        tiles_count += max_tile_v - min_tile_v;
-
-        if(isect_ids != nullptr)
-        {
 #pragma unroll 1
-            for(int v = min_tile_v; v < max_tile_v; v++)
+        for(int v = min_tile_v; v < max_tile_v; v++)
+        {
+            int64_t tile_id  = isY ? (int64_t)(u * tile_width + v) : (int64_t)(v * tile_width + u);
+            int64_t tile_key = image_id * n_tiles + tile_id;
+            if(tile_key < key_start || tile_key >= key_end)
             {
-                int64_t tile_id       = isY ? (int64_t)(u * tile_width + v) : (int64_t)(v * tile_width + u);
+                continue;
+            }
+            ++tiles_count;
+
+            if(isect_ids != nullptr)
+            {
                 isect_ids[*cur_idx]   = iid_enc | (tile_id << 32) | depth_id_enc;
                 flatten_ids[*cur_idx] = static_cast<int32_t>(flatten_idx);
                 ++(*cur_idx);
@@ -162,6 +213,8 @@ inline __device__ uint32_t accutile_process_tiles(
 
 template<typename scalar_t>
 __global__ void intersect_tile_kernel(
+    const int64_t offset,
+    const int64_t count,
     // if the data is [...,  N, ...] or [nnz, ...] (packed)
     const bool packed,
     // parallelize over I * N, only used if packed is False
@@ -183,6 +236,8 @@ __global__ void intersect_tile_kernel(
     const uint32_t tile_height,
     const uint32_t tile_n_bits,
     const uint32_t image_n_bits,
+    const int64_t key_start,
+    const int64_t key_end,
     const bool *__restrict__ tile_mask,    // [I, tile_height, tile_width] optional
     int32_t *__restrict__ tiles_per_gauss, // [..., N] or [nnz]
     int64_t *__restrict__ isect_ids,       // [n_isects]
@@ -192,10 +247,11 @@ __global__ void intersect_tile_kernel(
     // parallelize over I * N.
     uint32_t idx    = cg::this_grid().thread_rank();
     bool first_pass = cum_tiles_per_gauss == nullptr;
-    if(idx >= (packed ? nnz : I * N))
+    if(idx >= count)
     {
         return;
     }
+    idx += offset;
 
     const float radius_x = radii[idx * 2];
     const float radius_y = radii[idx * 2 + 1];
@@ -210,21 +266,11 @@ __global__ void intersect_tile_kernel(
 
     float2 mean2d = {(float)means2d[2 * idx], (float)means2d[2 * idx + 1]};
 
+    int64_t iid          = packed ? image_ids[idx] : idx / N;
     int64_t iid_enc      = 0;
     int64_t depth_id_enc = 0;
     if(!first_pass)
     {
-        int64_t iid;
-        if(packed)
-        {
-            // parallelize over nnz
-            iid = image_ids[idx];
-        }
-        else
-        {
-            // parallelize over I * N
-            iid = idx / N;
-        }
         iid_enc = iid << (32 + tile_n_bits);
 
         // Narrow to float so the 32-bit key is a monotonic depth ordering for
@@ -307,7 +353,11 @@ __global__ void intersect_tile_kernel(
             rect_max,
             tile_size,
             tile_width,
+            tile_width * tile_height,
             isY,
+            iid,
+            key_start,
+            key_end,
             iid_enc,
             tile_n_bits,
             depth_id_enc,
@@ -350,32 +400,53 @@ __global__ void intersect_tile_kernel(
 
         if(first_pass)
         {
-            if(mask_img == nullptr)
+            int32_t count = 0;
+            for(int32_t i = tile_min.y; i < tile_max.y; ++i)
             {
-                tiles_per_gauss[idx] = static_cast<int32_t>((tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
-            }
-            else
-            {
-                int32_t count = 0;
-                for(int32_t i = tile_min.y; i < tile_max.y; ++i)
+                TileColumnRange range = row_key_column_range(
+                    iid, i, tile_width, tile_width * tile_height, tile_min, tile_max, key_start, key_end
+                );
+                if(range.done)
                 {
-                    for(int32_t j = tile_min.x; j < tile_max.x; ++j)
+                    break;
+                }
+                if(range.start < range.end)
+                {
+                    if(mask_img == nullptr)
                     {
-                        if(mask_img[i * tile_width + j])
+                        count += range.end - range.start;
+                    }
+                    else
+                    {
+                        for(int32_t j = range.start; j < range.end; ++j)
                         {
-                            ++count;
+                            if(mask_img[i * tile_width + j])
+                            {
+                                ++count;
+                            }
                         }
                     }
                 }
-                tiles_per_gauss[idx] = count;
             }
+            tiles_per_gauss[idx] = count;
             return;
         }
 
         int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
         for(int32_t i = tile_min.y; i < tile_max.y; ++i)
         {
-            for(int32_t j = tile_min.x; j < tile_max.x; ++j)
+            TileColumnRange range = row_key_column_range(
+                iid, i, tile_width, tile_width * tile_height, tile_min, tile_max, key_start, key_end
+            );
+            if(range.done)
+            {
+                break;
+            }
+            if(range.start >= range.end)
+            {
+                continue;
+            }
+            for(int32_t j = range.start; j < range.end; ++j)
             {
                 if(mask_img != nullptr && !mask_img[i * tile_width + j])
                 {
@@ -418,7 +489,7 @@ void launch_intersect_tile_kernel(
 {
     bool packed = means2d.dim() == 2;
 
-    uint32_t N, nnz;
+    uint32_t N = 0, nnz = 0;
     int64_t n_elements;
     if(packed)
     {
@@ -431,11 +502,13 @@ void launch_intersect_tile_kernel(
         n_elements = I * N;
     }
 
-    uint32_t n_tiles            = tile_width * tile_height;
+    const uint32_t n_tiles      = tile_width * tile_height;
     // the number of bits needed to encode the image id and tile id; must match
     // the packing in intersect_tile so the (image, tile) id unpacks correctly.
     const uint32_t image_n_bits = bits_for_count(I);
     const uint32_t tile_n_bits  = bits_for_count(n_tiles);
+    const int64_t key_start     = 0;
+    const int64_t key_end       = static_cast<int64_t>(I) * n_tiles;
     // the first 32 bits are used for the image id and tile id altogether, so
     // check if we have enough bits for them.
     TORCH_CHECK(
@@ -449,9 +522,8 @@ void launch_intersect_tile_kernel(
         ")."
     );
 
-    dim3 threads(256);
-    dim3 grid((n_elements + threads.x - 1) / threads.x);
-    int64_t shmem_size = 0; // No shared memory used in this kernel
+    constexpr unsigned int threads = 256;
+    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
 
     if(n_elements == 0)
     {
@@ -459,12 +531,15 @@ void launch_intersect_tile_kernel(
         return;
     }
 
+    auto stream = at::cuda::getCurrentCUDAStream();
     AT_DISPATCH_FLOATING_TYPES(
         means2d.scalar_type(),
         "intersect_tile_kernel",
         [&]()
         {
-            intersect_tile_kernel<scalar_t><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            intersect_tile_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+                0,
+                n_elements,
                 packed,
                 I,
                 N,
@@ -482,16 +557,375 @@ void launch_intersect_tile_kernel(
                 tile_height,
                 tile_n_bits,
                 image_n_bits,
+                key_start,
+                key_end,
                 tile_mask.has_value() ? tile_mask.value().const_data_ptr<bool>() : nullptr,
                 tiles_per_gauss.has_value() ? tiles_per_gauss.value().data_ptr<int32_t>() : nullptr,
                 isect_ids.has_value() ? isect_ids.value().data_ptr<int64_t>() : nullptr,
                 flatten_ids.has_value() ? flatten_ids.value().data_ptr<int32_t>() : nullptr
             );
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     );
 }
 
+void launch_intersect_tile_kernels(
+    // inputs
+    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> conics,       // [..., N, 3] or [nnz, 3]
+    const at::optional<at::Tensor> opacities,    // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,    // [nnz]
+    const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const uint32_t I,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const at::optional<at::Tensor> cum_tiles_per_gauss, // [..., N] or [nnz]
+    // outputs
+    at::optional<at::Tensor> tiles_per_gauss, // [..., N] or [nnz]
+    at::optional<at::Tensor> isect_ids,       // [n_isects]
+    at::optional<at::Tensor> flatten_ids      // [n_isects]
+)
+{
+    bool packed = means2d.dim() == 2;
+
+    uint32_t N = 0, nnz = 0;
+    int64_t n_elements;
+    if(packed)
+    {
+        nnz        = means2d.size(0);
+        n_elements = nnz;
+    }
+    else
+    {
+        N          = means2d.size(-2);
+        n_elements = I * N;
+    }
+
+    const uint32_t n_tiles      = tile_width * tile_height;
+    const uint32_t image_n_bits = bits_for_count(I);
+    const uint32_t tile_n_bits  = bits_for_count(n_tiles);
+    const int64_t key_start     = 0;
+    const int64_t key_end       = static_cast<int64_t>(I) * n_tiles;
+    assert(image_n_bits + tile_n_bits <= 32);
+
+    constexpr unsigned int threads = 256;
+    if(n_elements == 0)
+    {
+        return;
+    }
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+        int64_t offset, count;
+        std::tie(offset, count) = chunk(n_elements, device_id);
+        unsigned int blocks     = ::cuda::ceil_div(count, threads);
+        if(blocks > 0)
+        {
+            AT_DISPATCH_FLOATING_TYPES(
+                means2d.scalar_type(),
+                "intersect_tile_kernel",
+                [&]()
+                {
+                    intersect_tile_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+                        offset,
+                        count,
+                        packed,
+                        I,
+                        N,
+                        nnz,
+                        image_ids.has_value() ? image_ids.value().const_data_ptr<int64_t>() : nullptr,
+                        gaussian_ids.has_value() ? gaussian_ids.value().const_data_ptr<int64_t>() : nullptr,
+                        means2d.const_data_ptr<scalar_t>(),
+                        radii.const_data_ptr<int32_t>(),
+                        depths.const_data_ptr<scalar_t>(),
+                        conics.has_value() ? conics.value().const_data_ptr<float>() : nullptr,
+                        opacities.has_value() ? opacities.value().const_data_ptr<float>() : nullptr,
+                        cum_tiles_per_gauss.has_value() ? cum_tiles_per_gauss.value().const_data_ptr<int64_t>()
+                                                        : nullptr,
+                        tile_size,
+                        tile_width,
+                        tile_height,
+                        tile_n_bits,
+                        image_n_bits,
+                        key_start,
+                        key_end,
+                        nullptr,
+                        tiles_per_gauss.has_value() ? tiles_per_gauss.value().data_ptr<int32_t>() : nullptr,
+                        isect_ids.has_value() ? isect_ids.value().data_ptr<int64_t>() : nullptr,
+                        flatten_ids.has_value() ? flatten_ids.value().data_ptr<int32_t>() : nullptr
+                    );
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                }
+            );
+        }
+    }
+    merge_streams();
+}
+
+__global__ void add_counts_kernel(
+    const int64_t count, const int32_t *__restrict__ local_counts, int32_t *__restrict__ tiles_per_gauss
+)
+{
+    int64_t idx = cg::this_grid().thread_rank();
+    if(idx >= count)
+    {
+        return;
+    }
+    int32_t local_count = local_counts[idx];
+    if(local_count > 0)
+    {
+        atomicAdd_system(tiles_per_gauss + idx, local_count);
+    }
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_kernels_privateuseone(
+    // inputs
+    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> conics,       // [..., N, 3] or [nnz, 3]
+    const at::optional<at::Tensor> opacities,    // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,    // [nnz]
+    const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const uint32_t I,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const bool sort
+)
+{
+    bool packed = means2d.dim() == 2;
+
+    uint32_t N = 0, nnz = 0;
+    int64_t n_elements;
+    if(packed)
+    {
+        nnz        = means2d.size(0);
+        n_elements = nnz;
+    }
+    else
+    {
+        N          = means2d.size(-2);
+        n_elements = static_cast<int64_t>(I) * N;
+    }
+
+    auto opt                   = depths.options();
+    at::Tensor tiles_per_gauss = at::zeros_like(depths, opt.dtype(at::kInt));
+    at::Tensor isect_ids;
+    at::Tensor flatten_ids;
+    if(n_elements == 0)
+    {
+        isect_ids   = at::empty({0}, opt.dtype(at::kLong));
+        flatten_ids = at::empty({0}, opt.dtype(at::kInt));
+        return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+    }
+
+    const uint32_t n_tiles      = tile_width * tile_height;
+    const uint32_t image_n_bits = bits_for_count(I);
+    const uint32_t tile_n_bits  = bits_for_count(n_tiles);
+    assert(image_n_bits + tile_n_bits <= 32);
+
+    constexpr unsigned int threads = 256;
+    const int device_count         = static_cast<int>(c10::cuda::device_count());
+    TORCH_CHECK(device_count > 0, "PrivateUse1 intersect_tile requires at least one CUDA device");
+    const int64_t total_tile_keys = static_cast<int64_t>(I) * n_tiles;
+    const unsigned int blocks     = ::cuda::ceil_div(n_elements, threads);
+
+    std::vector<int32_t *> device_counts(device_count, nullptr);
+    std::vector<int64_t *> device_cumsum(device_count, nullptr);
+    std::vector<int64_t> device_intersection_offsets(device_count, 0);
+    std::vector<int64_t> device_intersection_counts(device_count, 0);
+
+    int64_t *device_totals = nullptr;
+    C10_CUDA_CHECK(cudaMallocHost(&device_totals, device_count * sizeof(int64_t)));
+
+    for(const auto device_id: c10::irange(device_count))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+        C10_CUDA_CHECK(cudaMallocAsync(&device_counts[device_id], n_elements * sizeof(int32_t), stream));
+        C10_CUDA_CHECK(cudaMallocAsync(&device_cumsum[device_id], n_elements * sizeof(int64_t), stream));
+
+        size_t key_offset, key_count;
+        std::tie(key_offset, key_count) = chunk(total_tile_keys, device_id);
+        const int64_t key_start         = static_cast<int64_t>(key_offset);
+        const int64_t key_end           = static_cast<int64_t>(key_offset + key_count);
+
+        AT_DISPATCH_FLOATING_TYPES(
+            means2d.scalar_type(),
+            "intersect_tile_kernel_privateuseone_count",
+            [&]()
+            {
+                intersect_tile_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+                    0,
+                    n_elements,
+                    packed,
+                    I,
+                    N,
+                    nnz,
+                    image_ids.has_value() ? image_ids.value().const_data_ptr<int64_t>() : nullptr,
+                    gaussian_ids.has_value() ? gaussian_ids.value().const_data_ptr<int64_t>() : nullptr,
+                    means2d.const_data_ptr<scalar_t>(),
+                    radii.const_data_ptr<int32_t>(),
+                    depths.const_data_ptr<scalar_t>(),
+                    conics.has_value() ? conics.value().const_data_ptr<float>() : nullptr,
+                    opacities.has_value() ? opacities.value().const_data_ptr<float>() : nullptr,
+                    nullptr,
+                    tile_size,
+                    tile_width,
+                    tile_height,
+                    tile_n_bits,
+                    image_n_bits,
+                    key_start,
+                    key_end,
+                    nullptr,
+                    device_counts[device_id],
+                    nullptr,
+                    nullptr
+                );
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+        );
+
+        CUB_WRAPPER_ASYNC(
+            stream, cub::DeviceScan::InclusiveSum, device_counts[device_id], device_cumsum[device_id], n_elements
+        );
+
+        add_counts_kernel<<<blocks, threads, 0, stream>>>(
+            n_elements, device_counts[device_id], tiles_per_gauss.data_ptr<int32_t>()
+        );
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+        C10_CUDA_CHECK(cudaMemcpyAsync(
+            &device_totals[device_id],
+            device_cumsum[device_id] + n_elements - 1,
+            sizeof(int64_t),
+            cudaMemcpyDeviceToHost,
+            stream
+        ));
+    }
+
+    int64_t n_isects = 0;
+    for(const auto device_id: c10::irange(device_count))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaStreamSynchronize(stream));
+        device_intersection_offsets[device_id]  = n_isects;
+        device_intersection_counts[device_id]   = device_totals[device_id];
+        n_isects                               += device_totals[device_id];
+    }
+    C10_CUDA_CHECK(cudaFreeHost(device_totals));
+
+    isect_ids   = at::empty({n_isects}, opt.dtype(at::kLong));
+    flatten_ids = at::empty({n_isects}, opt.dtype(at::kInt));
+    if(n_isects == 0)
+    {
+        for(const auto device_id: c10::irange(device_count))
+        {
+            C10_CUDA_CHECK(cudaSetDevice(device_id));
+            auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+            C10_CUDA_CHECK(cudaFreeAsync(device_counts[device_id], stream));
+            C10_CUDA_CHECK(cudaFreeAsync(device_cumsum[device_id], stream));
+        }
+        merge_streams();
+        return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+    }
+
+    for(const auto device_id: c10::irange(device_count))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+        size_t key_offset, key_count;
+        std::tie(key_offset, key_count) = chunk(total_tile_keys, device_id);
+        const int64_t key_start         = static_cast<int64_t>(key_offset);
+        const int64_t key_end           = static_cast<int64_t>(key_offset + key_count);
+        const int64_t isect_offset      = device_intersection_offsets[device_id];
+        const int64_t isect_count       = device_intersection_counts[device_id];
+        if(isect_count == 0)
+        {
+            C10_CUDA_CHECK(cudaFreeAsync(device_counts[device_id], stream));
+            C10_CUDA_CHECK(cudaFreeAsync(device_cumsum[device_id], stream));
+            continue;
+        }
+
+        AT_DISPATCH_FLOATING_TYPES(
+            means2d.scalar_type(),
+            "intersect_tile_kernel_privateuseone_emit",
+            [&]()
+            {
+                intersect_tile_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+                    0,
+                    n_elements,
+                    packed,
+                    I,
+                    N,
+                    nnz,
+                    image_ids.has_value() ? image_ids.value().const_data_ptr<int64_t>() : nullptr,
+                    gaussian_ids.has_value() ? gaussian_ids.value().const_data_ptr<int64_t>() : nullptr,
+                    means2d.const_data_ptr<scalar_t>(),
+                    radii.const_data_ptr<int32_t>(),
+                    depths.const_data_ptr<scalar_t>(),
+                    conics.has_value() ? conics.value().const_data_ptr<float>() : nullptr,
+                    opacities.has_value() ? opacities.value().const_data_ptr<float>() : nullptr,
+                    device_cumsum[device_id],
+                    tile_size,
+                    tile_width,
+                    tile_height,
+                    tile_n_bits,
+                    image_n_bits,
+                    key_start,
+                    key_end,
+                    nullptr,
+                    nullptr,
+                    isect_ids.data_ptr<int64_t>() + isect_offset,
+                    flatten_ids.data_ptr<int32_t>() + isect_offset
+                );
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+        );
+
+        C10_CUDA_CHECK(cudaFreeAsync(device_counts[device_id], stream));
+        C10_CUDA_CHECK(cudaFreeAsync(device_cumsum[device_id], stream));
+    }
+
+    if(sort)
+    {
+        for(const auto device_id: c10::irange(device_count))
+        {
+            C10_CUDA_CHECK(cudaSetDevice(device_id));
+            auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+            const int64_t isect_offset = device_intersection_offsets[device_id];
+            const int64_t isect_count  = device_intersection_counts[device_id];
+            if(isect_count > 0)
+            {
+                CUB_WRAPPER_ASYNC(
+                    stream,
+                    cub::DeviceMergeSort::SortPairs,
+                    isect_ids.data_ptr<int64_t>() + isect_offset,
+                    flatten_ids.data_ptr<int32_t>() + isect_offset,
+                    isect_count,
+                    ::cuda::std::less<int64_t>{}
+                );
+            }
+        }
+    }
+    merge_streams();
+    return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+}
+
 __global__ void intersect_offset_kernel(
+    const uint32_t offset,
+    const uint32_t count,
     const uint32_t n_isects,
     const int64_t *__restrict__ isect_ids,
     const uint32_t I,
@@ -505,10 +939,11 @@ __global__ void intersect_offset_kernel(
     // cumsum: [0, 3, 3, 5, 5, 5]
     // offsets: [0, 0, 3, 3, 5, 5]
     uint32_t idx = cg::this_grid().thread_rank();
-    if(idx >= n_isects)
+    if(idx >= count)
     {
         return;
     }
+    idx += offset;
 
     int64_t isect_id_curr = isect_ids[idx] >> 32;
     int64_t iid_curr      = isect_id_curr >> (tile_n_bits);
@@ -563,10 +998,9 @@ void launch_intersect_offset_kernel(
     at::Tensor offsets // [I, tile_height, tile_width]
 )
 {
-    int64_t n_elements = isect_ids.size(0); // total number of intersections
-    dim3 threads(256);
-    dim3 grid((n_elements + threads.x - 1) / threads.x);
-    int64_t shmem_size = 0; // No shared memory used in this kernel
+    int64_t n_elements             = isect_ids.size(0); // total number of intersections
+    constexpr unsigned int threads = 256;
+    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
 
     if(n_elements == 0)
     {
@@ -574,13 +1008,70 @@ void launch_intersect_offset_kernel(
         return;
     }
 
-    uint32_t n_tiles           = tile_width * tile_height;
+    const uint32_t n_tiles     = tile_width * tile_height;
     // Must match the packing in launch_intersect_tile_kernel so the (image,
     // tile) id unpacks with the same field width it was packed with.
     const uint32_t tile_n_bits = bits_for_count(n_tiles);
-    intersect_offset_kernel<<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-        n_elements, isect_ids.const_data_ptr<int64_t>(), I, n_tiles, tile_n_bits, offsets.data_ptr<int32_t>()
+    auto stream                = at::cuda::getCurrentCUDAStream();
+    intersect_offset_kernel<<<blocks, threads, 0, stream>>>(
+        0,
+        n_elements,
+        n_elements,
+        isect_ids.const_data_ptr<int64_t>(),
+        I,
+        n_tiles,
+        tile_n_bits,
+        offsets.data_ptr<int32_t>()
     );
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+void launch_intersect_offset_kernels(
+    // inputs
+    const at::Tensor isect_ids, // [n_isects]
+    const uint32_t I,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    // outputs
+    at::Tensor offsets // [I, tile_height, tile_width]
+)
+{
+    int64_t n_elements             = isect_ids.size(0);
+    constexpr unsigned int threads = 256;
+
+    if(n_elements == 0)
+    {
+        offsets.fill_(0);
+        return;
+    }
+
+    const uint32_t n_tiles     = tile_width * tile_height;
+    const uint32_t tile_n_bits = bits_for_count(n_tiles);
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+        int64_t offset, count;
+        std::tie(offset, count) = chunk(n_elements, device_id);
+        unsigned int blocks     = ::cuda::ceil_div(count, threads);
+        if(blocks > 0)
+        {
+            intersect_offset_kernel<<<blocks, threads, 0, stream>>>(
+                offset,
+                count,
+                n_elements,
+                isect_ids.const_data_ptr<int64_t>(),
+                I,
+                n_tiles,
+                tile_n_bits,
+                offsets.data_ptr<int32_t>()
+            );
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+    }
+    merge_streams();
 }
 
 // https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceRadixSort.html

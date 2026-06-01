@@ -2056,4 +2056,18 @@ void register_rendering_autograd_cuda_impl(torch::Library &m)
     m.impl("rasterization_2dgs", to_torch_op<&rasterization_2dgs>);
 #endif
 }
+
+void register_rendering_privateuseone_impl(torch::Library &m)
+{
+#if GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT
+    m.impl("rasterization_3dgs", to_torch_op<&rasterization_3dgs>);
+#endif
+}
+
+void register_rendering_autograd_privateuseone_impl(torch::Library &m)
+{
+#if GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT
+    m.impl("rasterization_3dgs", to_torch_op<&rasterization_3dgs>);
+#endif
+}
 } // namespace gsplat

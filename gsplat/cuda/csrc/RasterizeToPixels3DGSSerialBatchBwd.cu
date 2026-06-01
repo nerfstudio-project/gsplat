@@ -55,6 +55,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
+    const uint32_t block_offset,
     const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
@@ -72,11 +73,18 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     scalar_t *__restrict__ v_opacities // [..., N] or [nnz]
 )
 {
-    auto block        = cg::this_thread_block();
-    uint32_t image_id = block.group_index().x;
-    uint32_t tile_id  = block.group_index().y * tile_width + block.group_index().z;
-    uint32_t i        = block.group_index().y * tile_size + block.thread_index().y;
-    uint32_t j        = block.group_index().z * tile_size + block.thread_index().x;
+    auto block              = cg::this_thread_block();
+    auto linear_block_index = block.group_index().x + block_offset;
+    dim3 block_index(
+        linear_block_index / (tile_width * tile_height),
+        (linear_block_index / tile_width) % tile_height,
+        linear_block_index % tile_width
+    );
+
+    uint32_t image_id = block_index.x;
+    uint32_t tile_id  = block_index.y * tile_width + block_index.z;
+    uint32_t i        = block_index.y * tile_size + block.thread_index().y;
+    uint32_t j        = block_index.z * tile_size + block.thread_index().x;
 
     tile_offsets    += image_id * tile_height * tile_width;
     render_alphas   += image_id * image_height * image_width;
@@ -286,26 +294,26 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
 #    pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
-                    gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                    atomicAdd_system(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
                 float *v_conic_ptr = (float *)(v_conics) + 3 * g;
-                gpuAtomicAdd(v_conic_ptr, v_conic_local.x);
-                gpuAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
-                gpuAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
+                atomicAdd_system(v_conic_ptr, v_conic_local.x);
+                atomicAdd_system(v_conic_ptr + 1, v_conic_local.y);
+                atomicAdd_system(v_conic_ptr + 2, v_conic_local.z);
 
                 float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
-                gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
-                gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
+                atomicAdd_system(v_xy_ptr, v_xy_local.x);
+                atomicAdd_system(v_xy_ptr + 1, v_xy_local.y);
 
                 if(v_means2d_abs != nullptr)
                 {
                     float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
-                    gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
-                    gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                    atomicAdd_system(v_xy_abs_ptr, v_xy_abs_local.x);
+                    atomicAdd_system(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
 
-                gpuAtomicAdd(v_opacities + g, v_opacity_local);
+                atomicAdd_system(v_opacities + g, v_opacity_local);
             }
         }
     }
@@ -350,8 +358,9 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
 
     // Each block covers a tile on the image. In total there are
     // I * tile_height * tile_width blocks.
-    dim3 threads = {tile_size, tile_size, 1};
-    dim3 grid    = {I, tile_height, tile_width};
+    dim3 threads     = {tile_size, tile_size, 1};
+    uint32_t n_tiles = I * tile_height * tile_width;
+    dim3 grid        = {n_tiles, 1, 1};
 
     if(n_isects == 0)
     {
@@ -402,6 +411,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
                 tile_size,
                 tile_width,
                 tile_height,
+                0,
                 tile_offsets.const_data_ptr<int32_t>(),
                 flatten_ids.const_data_ptr<int32_t>(),
                 render_alphas.const_data_ptr<float>(),
@@ -414,9 +424,138 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
                 v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>()
             );
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
     };
     const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
+}
+
+void launch_rasterize_to_pixels_3dgs_bwd_kernels(
+    // Gaussian parameters
+    const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
+    const at::Tensor conics,                    // [..., N, 3] or [nnz, 3]
+    const at::Tensor colors,                    // [..., N, 3] or [nnz, 3]
+    const at::Tensor opacities,                 // [..., N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [..., 3]
+    const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
+    const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    // outputs
+    at::optional<at::Tensor> v_means2d_abs, // [..., N, 2] or [nnz, 2]
+    at::Tensor v_means2d,                   // [..., N, 2] or [nnz, 2]
+    at::Tensor v_conics,                    // [..., N, 3] or [nnz, 3]
+    at::Tensor v_colors,                    // [..., N, 3] or [nnz, 3]
+    at::Tensor v_opacities                  // [..., N] or [nnz]
+)
+{
+    bool packed = means2d.dim() == 2;
+
+    uint32_t N           = packed ? 0 : means2d.size(-2);
+    uint32_t I           = render_alphas.numel() / (image_height * image_width);
+    uint32_t tile_height = tile_offsets.size(-2);
+    uint32_t tile_width  = tile_offsets.size(-1);
+    uint32_t n_isects    = flatten_ids.size(0);
+    uint32_t n_tiles     = I * tile_height * tile_width;
+
+    dim3 threads = {tile_size, tile_size, 1};
+
+    if(n_isects == 0)
+    {
+        return;
+    }
+
+    const int32_t channels = colors.size(-1);
+    TORCH_CHECK_VALUE(
+        SupportedChannels::contains(channels),
+        "Unsupported number of color channels: ",
+        channels,
+        ". To add support, rebuild gsplat with this channel count included "
+        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+    );
+
+    auto launch_kernels = [&]<typename ChannelsT>()
+    {
+        constexpr uint32_t CDIM = ChannelsT::value;
+
+        int64_t shmem_size
+            = tile_size * tile_size * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(float) * CDIM);
+
+        for(const auto device_id: c10::irange(c10::cuda::device_count()))
+        {
+            C10_CUDA_CHECK(cudaSetDevice(device_id));
+            if(cudaFuncSetAttribute(
+                   rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>,
+                   cudaFuncAttributeMaxDynamicSharedMemorySize,
+                   shmem_size
+               )
+               != cudaSuccess)
+            {
+                AT_ERROR(
+                    "Failed to set maximum shared memory size (requested ",
+                    shmem_size,
+                    " bytes), try lowering tile_size."
+                );
+            }
+            auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+            int64_t block_offset, block_count;
+            std::tie(block_offset, block_count) = chunk(n_tiles, device_id);
+            if(block_count > 0)
+            {
+                dim3 grid = {static_cast<uint32_t>(block_count), 1, 1};
+                rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float><<<grid, threads, shmem_size, stream>>>(
+                    I,
+                    N,
+                    n_isects,
+                    packed,
+                    reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
+                    reinterpret_cast<const vec3 *>(conics.const_data_ptr<float>()),
+                    colors.const_data_ptr<float>(),
+                    opacities.const_data_ptr<float>(),
+                    backgrounds.has_value() ? backgrounds.value().const_data_ptr<float>() : nullptr,
+                    masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
+                    image_width,
+                    image_height,
+                    tile_size,
+                    tile_width,
+                    tile_height,
+                    block_offset,
+                    tile_offsets.const_data_ptr<int32_t>(),
+                    flatten_ids.const_data_ptr<int32_t>(),
+                    render_alphas.const_data_ptr<float>(),
+                    last_ids.const_data_ptr<int32_t>(),
+                    v_render_colors.const_data_ptr<float>(),
+                    v_render_alphas.const_data_ptr<float>(),
+                    v_means2d_abs.has_value() ? reinterpret_cast<vec2 *>(v_means2d_abs.value().data_ptr<float>())
+                                              : nullptr,
+                    reinterpret_cast<vec2 *>(v_means2d.data_ptr<float>()),
+                    reinterpret_cast<vec3 *>(v_conics.data_ptr<float>()),
+                    v_colors.data_ptr<float>(),
+                    v_opacities.data_ptr<float>()
+                );
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+        }
+    };
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernels));
+    TORCH_CHECK(
+        dispatched,
+        "dispatch failed: no matching compile-time instantiation for runtime "
+        "parameters"
+    );
+
+    merge_streams();
 }
 } // namespace gsplat
 
