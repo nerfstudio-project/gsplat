@@ -3966,6 +3966,129 @@ def test_sh_zero_channels():
         spherical_harmonics(0, dirs, coeffs)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("kernel_path", ["generic", "specialized"])
+def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
+    """fp16 SH coeffs through the generic kernel (K != 16) and the K=16 specialized kernel."""
+    from gsplat.cuda._torch_impl import _spherical_harmonics
+    from gsplat.cuda._wrapper import spherical_harmonics
+
+    if kernel_path == "specialized":
+        if sh_degree == 4:
+            pytest.skip("K=16 caps at sh_degree=3")
+        K = 16
+    else:
+        K = (sh_degree + 1) ** 2
+        if K == 16:
+            pytest.skip("K=16 is covered by the specialized path")
+
+    torch.manual_seed(42)
+
+    N = 1000
+    coeffs_fp32 = torch.randn(N, K, 3, device=device)
+    dirs = torch.randn(N, 3, device=device)
+
+    # fp16 coefficients through CUDA kernel
+    coeffs_h = coeffs_fp32.half().requires_grad_(True)
+    dirs_h = dirs.clone().requires_grad_(True)
+    colors_h = spherical_harmonics(sh_degree, dirs_h, coeffs_h)
+
+    # Reference 1: roundtripped fp16->fp32 through pure-PyTorch (isolates kernel correctness)
+    coeffs_ref = coeffs_fp32.half().float().requires_grad_(True)
+    dirs_ref = dirs.clone().requires_grad_(True)
+    colors_ref = _spherical_harmonics(sh_degree, dirs_ref, coeffs_ref)
+
+    # Reference 2: true fp32 through pure-PyTorch (measures total fp16 precision loss)
+    coeffs_fp32_ref = coeffs_fp32.clone().requires_grad_(True)
+    dirs_fp32_ref = dirs.clone().requires_grad_(True)
+    colors_fp32_ref = _spherical_harmonics(sh_degree, dirs_fp32_ref, coeffs_fp32_ref)
+
+    # Forward: kernel correctness (tight, same quantized inputs)
+    torch.testing.assert_close(colors_h, colors_ref, rtol=1e-4, atol=1e-4)
+    # Forward: total fp16 precision loss vs true fp32
+    torch.testing.assert_close(colors_h, colors_fp32_ref, rtol=1e-3, atol=2e-3)
+
+    # Backward check
+    v_colors = torch.randn_like(colors_h)
+
+    v_coeffs_h, v_dirs_h = torch.autograd.grad(
+        (colors_h * v_colors).sum(),
+        (coeffs_h, dirs_h),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    v_coeffs_ref, v_dirs_ref = torch.autograd.grad(
+        (colors_ref * v_colors).sum(),
+        (coeffs_ref, dirs_ref),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    v_coeffs_fp32_ref, v_dirs_fp32_ref = torch.autograd.grad(
+        (colors_fp32_ref * v_colors).sum(),
+        (coeffs_fp32_ref, dirs_fp32_ref),
+        retain_graph=True,
+        allow_unused=True,
+    )
+
+    # v_coeffs kernel correctness (wider than forward, fp16 quantization on write-back)
+    torch.testing.assert_close(v_coeffs_h.float(), v_coeffs_ref, rtol=2e-3, atol=5e-4)
+    # v_coeffs total precision loss vs true fp32
+    torch.testing.assert_close(
+        v_coeffs_h.float(), v_coeffs_fp32_ref, rtol=1e-2, atol=1e-3
+    )
+    if sh_degree > 0:
+        torch.testing.assert_close(v_dirs_h, v_dirs_ref, rtol=1e-4, atol=1e-4)
+        # v_dirs total precision loss vs true fp32, higher-order bands amplify
+        # coefficient quantization error into direction gradients
+        torch.testing.assert_close(v_dirs_h, v_dirs_fp32_ref, rtol=5e-2, atol=1e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize(
+    "dtype, sh_degree, storage_offset",
+    [
+        # storage_offset = 1 fp16 elem (2 bytes): fails ushort4 (8-byte) and uint4 (16-byte).
+        (torch.float16, 0, 1),
+        (torch.float16, 3, 1),
+        # storage_offset = 4 fp16 elems (8 bytes): passes ushort4 but fails uint4.
+        # fp16 + degree >= 2 uses uint4, so this must still fall back to scalar.
+        (torch.float16, 3, 4),
+        # fp32: storage_offset = 1 elem (4 bytes): fails uint4 (16-byte).
+        (torch.float32, 0, 1),
+        (torch.float32, 3, 1),
+        # fp32 + storage_offset = 2 elems (8 bytes): still fails uint4 (need 16).
+        (torch.float32, 3, 2),
+    ],
+)
+def test_sh_k16_misaligned_coeffs(dtype, sh_degree, storage_offset):
+    """K=16 with a contiguous-but-misaligned coeffs view should fall back to the generic kernel.
+
+    Wide-load alignment by (dtype, degree):
+      ushort4 (8-byte): fp16 + degree <= 1
+      uint4 (16-byte):  fp16 + degree >= 2, or fp32 at any degree
+    """
+    from gsplat.cuda._wrapper import spherical_harmonics
+
+    torch.manual_seed(42)
+    N, K = 1000, 16
+
+    coeffs_aligned = torch.randn(N, K, 3, device=device, dtype=dtype)
+    dirs = torch.randn(N, 3, device=device)
+
+    storage = torch.empty(N * K * 3 + storage_offset, device=device, dtype=dtype)
+    storage[:storage_offset] = 0
+    coeffs_misaligned = storage[storage_offset:].view(N, K, 3)
+    coeffs_misaligned.copy_(coeffs_aligned)
+    assert coeffs_misaligned.is_contiguous()
+    assert coeffs_misaligned.storage_offset() == storage_offset
+
+    colors_aligned = spherical_harmonics(sh_degree, dirs, coeffs_aligned)
+    colors_misaligned = spherical_harmonics(sh_degree, dirs, coeffs_misaligned)
+
+    torch.testing.assert_close(colors_misaligned, colors_aligned)
+
+
 # ============================================================================
 # NaN/wrong-value safety tests for the 3DGUT code path
 # ============================================================================
