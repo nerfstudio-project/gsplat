@@ -328,6 +328,63 @@ TileIntersectResult intersect_tile(
     }
 }
 
+std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_privateuseone(
+    const at::Tensor &means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor &radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor &depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> &conics,       // [..., N, 3] or [nnz, 3]
+    const at::optional<at::Tensor> &opacities,    // [..., N] or [nnz]
+    const at::optional<at::Tensor> &image_ids,    // [nnz]
+    const at::optional<at::Tensor> &gaussian_ids, // [nnz]
+    const std::optional<int64_t> &n_images,
+    int64_t tile_size,
+    int64_t tile_width,
+    int64_t tile_height,
+    bool sort,
+    bool segmented
+)
+{
+    DEVICE_GUARD(means2d);
+    bool packed = means2d.dim() == 2;
+    check_intersect_tile_inputs(means2d, radii, depths, conics, opacities, image_ids, gaussian_ids, packed);
+    if(packed)
+    {
+        TORCH_CHECK(n_images.has_value(), "n_images is required when means2d is packed ([nnz, 2]).");
+    }
+    TORCH_CHECK(!segmented, "segmented mGPU intersect_tile is not supported");
+
+    int64_t I = packed ? n_images.value() : c10::multiply_integers(means2d.sizes().slice(0, means2d.dim() - 2));
+
+    uint32_t n_tiles            = tile_width * tile_height;
+    const uint32_t image_n_bits = bits_for_count(I);
+    const uint32_t tile_n_bits  = bits_for_count(n_tiles);
+    TORCH_CHECK(
+        image_n_bits + tile_n_bits <= 32,
+        "intersect_tile: (image, tile) id packing needs ",
+        image_n_bits + tile_n_bits,
+        " bits but only 32 are available (I=",
+        I,
+        ", n_tiles=",
+        n_tiles,
+        ")."
+    );
+
+    return intersect_tile_kernels_privateuseone(
+        means2d,
+        radii,
+        depths,
+        conics,
+        opacities,
+        packed ? image_ids : c10::nullopt,
+        packed ? gaussian_ids : c10::nullopt,
+        I,
+        tile_size,
+        tile_width,
+        tile_height,
+        sort
+    );
+}
+
 TileIntersectResult intersect_tile_lidar(
     const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &lidar,
     const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
@@ -731,6 +788,22 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> build_spa
     return std::make_tuple(active_tiles.to(at::kInt), active_tile_mask, tile_pixel_mask, tile_pixel_cumsum, pixel_map);
 }
 
+at::Tensor intersect_offset_privateuseone(
+    const at::Tensor &isect_ids, // [n_isects]
+    int64_t I,
+    int64_t tile_width,
+    int64_t tile_height
+)
+{
+    DEVICE_GUARD(isect_ids);
+    CHECK_INPUT(isect_ids);
+
+    auto opt           = isect_ids.options();
+    at::Tensor offsets = at::empty({I, tile_height, tile_width}, opt.dtype(at::kInt));
+    launch_intersect_offset_kernels(isect_ids, I, tile_width, tile_height, offsets);
+    return offsets;
+}
+
 void register_intersect_cuda_impl(torch::Library &m)
 {
     m.impl("intersect_tile", to_torch_op<&intersect_tile>);
@@ -738,5 +811,11 @@ void register_intersect_cuda_impl(torch::Library &m)
     m.impl("intersect_offset", to_torch_op<&intersect_offset>);
     m.impl("intersect_tile_sparse", &intersect_tile_sparse);
     m.impl("build_sparse_tile_layout", &build_sparse_tile_layout);
+}
+
+void register_intersect_privateuseone_impl(torch::Library &m)
+{
+    m.impl("intersect_tile", to_torch_op<&intersect_tile_privateuseone>);
+    m.impl("intersect_offset", to_torch_op<&intersect_offset_privateuseone>);
 }
 } // namespace gsplat

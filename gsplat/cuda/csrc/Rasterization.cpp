@@ -351,6 +351,93 @@ RasterizeToPixels3DGSFwdResult rasterize_to_pixels_3dgs_fwd(
     };
 }
 
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd_privateuseone(
+    // Gaussian parameters
+    const at::Tensor &means2d,                   // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,                    // [..., N, 3] or [nnz, 3]
+    const at::Tensor &colors,                    // [..., N, channels] or [nnz, channels]
+    const at::Tensor &opacities,                 // [..., N]  or [nnz]
+    const at::optional<at::Tensor> &backgrounds, // [..., channels]
+    const at::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]
+    // image size
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    // intersections
+    const at::Tensor &isect_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids,   // [n_isects]
+    bool packed,
+    bool absgrad
+)
+{
+    check_rasterize_to_pixels_3dgs_inputs(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets,
+        packed
+    );
+
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(isect_offsets);
+    CHECK_INPUT(flatten_ids);
+    if(backgrounds.has_value())
+    {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if(masks.has_value())
+    {
+        CHECK_INPUT(masks.value());
+    }
+
+    auto opt = means2d.options();
+    at::DimVector image_dims(isect_offsets.sizes().slice(0, isect_offsets.dim() - 2));
+    uint32_t channels = colors.size(-1);
+
+    at::DimVector renders_dims(image_dims);
+    renders_dims.append({image_height, image_width, channels});
+    at::Tensor renders = at::empty(renders_dims, opt);
+
+    at::DimVector alphas_dims(image_dims);
+    alphas_dims.append({image_height, image_width, 1});
+    at::Tensor alphas = at::empty(alphas_dims, opt);
+
+    at::DimVector last_ids_dims(image_dims);
+    last_ids_dims.append({image_height, image_width});
+    at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
+
+    launch_rasterize_to_pixels_3dgs_fwd_kernels(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        renders,
+        alphas,
+        last_ids
+    );
+
+    at::Tensor absgrad_holder = absgrad ? at::zeros_like(means2d) : at::empty({0}, means2d.options());
+
+    return std::make_tuple(renders, alphas.to(at::kFloat), absgrad_holder, last_ids);
+}
+
 // Gradients of the differentiable forward outputs.
 struct RasterizeToPixels3DGSGrad
 {
@@ -745,6 +832,98 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
         .v_opacities   = v_opacities,
         .v_backgrounds = as_optional_tensor(v_backgrounds),
     };
+}
+
+std::tuple<at::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
+    rasterize_to_pixels_3dgs_bwd_privateuseone(
+        // Gaussian parameters
+        const at::Tensor &means2d,                   // [..., N, 2] or [nnz, 2]
+        const at::Tensor &conics,                    // [..., N, 3] or [nnz, 3]
+        const at::Tensor &colors,                    // [..., N, channels] or [nnz, channels]
+        const at::Tensor &opacities,                 // [..., N] or [nnz]
+        const at::optional<at::Tensor> &backgrounds, // [..., channels]
+        const at::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]
+        // intersections
+        const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
+        const at::Tensor &flatten_ids,  // [n_isects]
+        // forward outputs
+        const at::Tensor &render_alphas, // [..., image_height, image_width, 1]
+        const at::Tensor &last_ids,      // [..., image_height, image_width]
+        // scalars
+        int64_t image_width,
+        int64_t image_height,
+        int64_t tile_size,
+        bool absgrad,
+        // gradients of outputs
+        const at::Tensor &v_render_colors, // [..., image_height, image_width, channels]
+        const at::Tensor &v_render_alphas, // [..., image_height, image_width, 1]
+        bool compute_v_backgrounds
+    )
+{
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(render_alphas);
+    CHECK_INPUT(last_ids);
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
+    if(backgrounds.has_value())
+    {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if(masks.has_value())
+    {
+        CHECK_INPUT(masks.value());
+    }
+
+    at::Tensor v_means2d   = at::zeros_like(means2d);
+    at::Tensor v_conics    = at::zeros_like(conics);
+    at::Tensor v_colors    = at::zeros_like(colors);
+    at::Tensor v_opacities = at::zeros_like(opacities);
+    at::Tensor v_means2d_abs;
+    if(absgrad)
+    {
+        v_means2d_abs = at::zeros_like(means2d);
+    }
+
+    launch_rasterize_to_pixels_3dgs_bwd_kernels(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+        render_alphas,
+        last_ids,
+        v_render_colors,
+        v_render_alphas,
+        absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt,
+        v_means2d,
+        v_conics,
+        v_colors,
+        v_opacities
+    );
+
+    at::Tensor v_backgrounds;
+    if(compute_v_backgrounds)
+    {
+        const at::Tensor one_minus_alpha
+            = at::sub(at::ones_like(render_alphas).to(at::kFloat), render_alphas.to(at::kFloat));
+        v_backgrounds = at::mul(v_render_colors, one_minus_alpha).sum({-3, -2});
+    }
+
+    return std::make_tuple(
+        as_optional_tensor(v_means2d_abs), v_means2d, v_conics, v_colors, v_opacities, as_optional_tensor(v_backgrounds)
+    );
 }
 
 RasterizeToIndices3DGSResult rasterize_to_indices_3dgs(
@@ -3404,6 +3583,14 @@ void register_rasterization_cuda_impl(torch::Library &m)
 #endif
 
     m.impl("rasterize_to_pixels_from_world_3dgs", to_torch_op<&rasterize_to_pixels_from_world_3dgs>);
+}
+
+void register_rasterization_privateuseone_impl(torch::Library &m)
+{
+#if GSPLAT_BUILD_3DGS
+    m.impl("rasterize_to_pixels_3dgs", to_torch_op<&rasterize_to_pixels_3dgs_fwd_privateuseone>);
+    m.impl("rasterize_to_pixels_3dgs_bwd", to_torch_op<&rasterize_to_pixels_3dgs_bwd_privateuseone>);
+#endif
 }
 
 void register_rasterization_autograd_cuda_impl(torch::Library &m)

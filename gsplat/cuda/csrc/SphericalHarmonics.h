@@ -45,6 +45,16 @@ void launch_spherical_harmonics_fwd_kernel(
     at::Tensor colors // [..., N, D]
 );
 
+void launch_spherical_harmonics_fwd_kernels(
+    // inputs
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor coeffs,              // [N, K, D]
+    const at::optional<at::Tensor> masks, // [..., N]
+    // outputs
+    at::Tensor colors // [..., N, D]
+);
+
 void launch_spherical_harmonics_bwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
@@ -130,5 +140,17 @@ void assemble_proj_features_unpacked_fwd(
     const at::optional<at::Tensor> &masks,
     at::Tensor &out,
     const at::optional<at::Tensor> &relu_mask
+);
+
+void launch_spherical_harmonics_bwd_kernels(
+    // inputs
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor coeffs,              // [N, K, D]
+    const at::optional<at::Tensor> masks, // [..., N]
+    const at::Tensor v_colors,            // [..., N, D]
+    // outputs
+    at::Tensor v_coeffs,            // [N, K, D]
+    at::optional<at::Tensor> v_dirs // [..., N, 3]
 );
 } // namespace gsplat
