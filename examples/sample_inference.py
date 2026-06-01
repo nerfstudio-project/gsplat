@@ -84,7 +84,7 @@ def _cam_entry(
     render_kwargs: dict | None = None,
 ) -> dict:
     return {
-        "viewmat": torch.linalg.inv(c2w).unsqueeze(0),
+        "viewmat": torch.linalg.inv_ex(c2w).inverse.unsqueeze(0),
         "K": K if K.ndim == 3 else K.unsqueeze(0),
         "W": W,
         "H": H,
@@ -173,7 +173,7 @@ def _extract_cameras_pandaset(
             if camera_filter and name not in camera_filter:
                 continue
             cameras[f"{name}_f{fi}"] = _cam_entry(
-                torch.linalg.inv(scene.viewmats[fi, ci]),
+                torch.linalg.inv_ex(scene.viewmats[fi, ci]).inverse,
                 scene.Ks[ci, 0],
                 scene.W,
                 scene.H,
@@ -185,7 +185,7 @@ def _extract_cameras_pandaset(
 
     # Synthetic: chase cam offset 5m back / 3m up from the front camera.
     ref = frames[0] if frames[0] < scene.n_frames else 0
-    front_c2w = torch.linalg.inv(scene.viewmats[ref, 0]).clone()
+    front_c2w = torch.linalg.inv_ex(scene.viewmats[ref, 0]).inverse.clone()
     forward = front_c2w[:3, 2]  # OpenGL camera looks down +z
     up = torch.tensor([0.0, 0.0, 1.0], device=device)
     chase_pos = front_c2w[:3, 3] - forward * 5.0 + up * 3.0
@@ -221,7 +221,7 @@ def _extract_cameras_pandaset(
     K_zoom[0, 0] *= 2
     K_zoom[1, 1] *= 2
     cameras["zoomed_front"] = _cam_entry(
-        torch.linalg.inv(scene.viewmats[ref, 0]),
+        torch.linalg.inv_ex(scene.viewmats[ref, 0]).inverse,
         K_zoom,
         scene.W,
         scene.H,
