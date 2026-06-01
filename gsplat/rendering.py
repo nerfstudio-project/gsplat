@@ -2332,7 +2332,7 @@ def rasterization_2dgs(
             depth_for_normal = render_median
 
         render_normals_from_depth = depth_to_normal(
-            depth_for_normal, torch.linalg.inv(viewmats), Ks
+            depth_for_normal, torch.linalg.inv_ex(viewmats).inverse, Ks
         ).squeeze(0)
 
     meta = {
@@ -2359,7 +2359,9 @@ def rasterization_2dgs(
     }
 
     render_normals = torch.einsum(
-        "...ij,...hwj->...hwi", torch.linalg.inv(viewmats)[..., :3, :3], render_normals
+        "...ij,...hwj->...hwi",
+        torch.linalg.inv_ex(viewmats).inverse[..., :3, :3],
+        render_normals,
     )
 
     return (
@@ -2501,7 +2503,9 @@ def rasterization_2dgs_inria_wrapper(
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
 
-    normals_surf = depth_to_normal(render_depth, torch.linalg.inv(viewmats), Ks)
+    normals_surf = depth_to_normal(
+        render_depth, torch.linalg.inv_ex(viewmats).inverse, Ks
+    )
     normals_surf = normals_surf * (render_alphas).detach()
 
     render_colors = torch.cat([render_colors, render_depth], dim=-1)

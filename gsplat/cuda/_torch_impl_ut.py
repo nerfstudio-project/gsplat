@@ -516,12 +516,12 @@ def _fully_fused_projection_with_ut(
     # Compute conics (inverse of 2D covariance)
     # This is more robust than manual formula, especially for non-symmetric matrices
     # (numerical errors in weighted sum can break exact symmetry)
-    # Add a small epsilon to the diagonal to prevent torch.linalg.inv from
+    # Add a small epsilon to the diagonal to prevent torch.linalg.inv_ex from
     # producing NaN on singular matrices (invalid Gaussians are masked out
-    # by valid_gaussian anyway, but autograd still propagates through inv).
-    cov_2d_inv = torch.linalg.inv(
+    # by valid_gaussian anyway, but autograd still propagates through the inverse).
+    cov_2d_inv = torch.linalg.inv_ex(
         cov_2d + 1e-6 * torch.eye(2, dtype=cov_2d.dtype, device=cov_2d.device)
-    )  # [B, C, N, 2, 2]
+    ).inverse  # [B, C, N, 2, 2]
 
     # Apply opacity-based culling
     # Reference: https://arxiv.org/pdf/2402.00525 Section B.2
