@@ -5437,3 +5437,52 @@ def test_backward_high_opacity_no_nan(tile_size):
         assert torch.isfinite(
             param.grad
         ).all(), f"NaN/Inf in {name}.grad (max={param.grad.abs().max().item():.2e})"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
+    # A masked-out tile takes the forward rasterizer's early-return branch,
+    # which must initialize ALL of its pixel outputs (the binding allocates
+    # them with at::empty, leaving render_alphas / last_ids uninitialized
+    # otherwise). The low-level fwd op exposes last_ids directly. Stale
+    # allocator contents could coincidentally match these defaults, so this
+    # only reliably catches a missing store when uninitialized memory differs
+    # from the default.
+    from gsplat.cuda._wrapper import _make_lazy_cuda_func
+
+    tile_size = 16
+    width = height = tile_size  # single tile
+    channels = 3
+    N = 1
+
+    means2d = torch.tensor([[[width / 2.0, height / 2.0]]], device=device)  # [1, 1, 2]
+    conics = torch.tensor([[[1.0, 0.0, 1.0]]], device=device)  # [1, 1, 3]
+    colors = torch.ones((1, N, channels), device=device)
+    opacities = torch.ones((1, N), device=device)
+    backgrounds = torch.zeros((1, channels), device=device)
+    masks = torch.zeros((1, 1, 1), dtype=torch.bool, device=device)  # tile masked off
+    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
+
+    render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+        "rasterize_to_pixels_3dgs_fwd"
+    )(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+    )
+
+    torch.testing.assert_close(
+        render_colors, backgrounds.reshape(1, 1, 1, channels).expand_as(render_colors)
+    )
+    torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
+    torch.testing.assert_close(last_ids, torch.zeros_like(last_ids))
