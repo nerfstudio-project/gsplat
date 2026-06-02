@@ -67,7 +67,7 @@ def load_scene_npz(path: str, device: str = "cuda") -> SimpleNamespace:
     scene.Ks[:, 0, 1, 2] = cam_intrinsics[:, 3]  # y principal point
     scene.Ks[:, 0, 2, 2] = 1.0
 
-    scene.viewmats = torch.linalg.inv(cam_to_worlds)
+    scene.viewmats = torch.linalg.inv_ex(cam_to_worlds).inverse
 
     return scene
 
@@ -169,9 +169,9 @@ def _load_ncore_lidar_gt(
         T_start_scene = parser._ncore_world_to_scene_poses(
             T_start.reshape(1, 4, 4)
         ).reshape(4, 4)
-        viewmats[lfi] = torch.linalg.inv(
+        viewmats[lfi] = torch.linalg.inv_ex(
             torch.from_numpy(T_start_scene).float().to(device)
-        )
+        ).inverse
 
         # End pose (rolling shutter end-of-frame)
         T_end = lidar_sensor.get_frames_T_sensor_target(
@@ -182,9 +182,9 @@ def _load_ncore_lidar_gt(
         T_end_scene = parser._ncore_world_to_scene_poses(
             T_end.reshape(1, 4, 4)
         ).reshape(4, 4)
-        viewmats_rs[lfi] = torch.linalg.inv(
+        viewmats_rs[lfi] = torch.linalg.inv_ex(
             torch.from_numpy(T_end_scene).float().to(device)
-        )
+        ).inverse
 
     return gt_dist, valid, viewmats, viewmats_rs
 
@@ -709,9 +709,9 @@ def train(
 
         def _stack_to_gpu(samples, dev):
             images = torch.stack([d["image"] for d in samples]).float().to(dev) / 255.0
-            viewmats = torch.linalg.inv(
+            viewmats = torch.linalg.inv_ex(
                 torch.stack([d["camtoworld"] for d in samples]).float().to(dev)
-            )
+            ).inverse
             Ks = torch.stack([d["K"] for d in samples]).to(dev)
             cam_idx = [d["camera_idx"] for d in samples]
             masks = None

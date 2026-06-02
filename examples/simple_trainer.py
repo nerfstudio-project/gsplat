@@ -708,7 +708,7 @@ class Runner:
             scales=scales,
             opacities=opacities,
             colors=colors,
-            viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+            viewmats=torch.linalg.inv_ex(camtoworlds).inverse,  # [C, 4, 4]
             Ks=Ks,  # [C, 3, 3]
             width=width,
             height=height,
