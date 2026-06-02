@@ -1,6 +1,18 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 // camera_torch.h — C++ host wrappers exposed to ext.cpp via TORCH_LIBRARY.
@@ -64,6 +76,55 @@ struct OpenCVPinholeProjection : public torch::CustomClassHolder {
 
 // Validates projection shape and non-null; throws TORCH_CHECK on failure.
 void check_projection(const c10::intrusive_ptr<OpenCVPinholeProjection>& projection);
+
+// TorchScript custom class carrying the FTheta camera intrinsics as
+// per-component float32 tensors.  Shape contract:
+//   principal_point        (2,) — [cx, cy]
+//   fw_poly                (6,) zero-padded; active terms = fw_poly_degree + 1
+//   bw_poly                (6,) zero-padded; active terms = bw_poly_degree + 1
+//   A                      (4,) row-major 2x2
+//   resolution             [width, height]
+//
+// Ainv is computed on demand from A (closed-form 2x2 inverse); only A is a
+// stored intrinsic.
+struct FThetaProjection : public torch::CustomClassHolder {
+    at::Tensor principal_point;
+    at::Tensor fw_poly;
+    at::Tensor bw_poly;
+    at::Tensor A;
+    // Backs the const float* Ainv pointer in FThetaProjection_KernelParameters;
+    // owned by the struct to outlive the returned params.
+    mutable at::Tensor Ainv_cache;
+    std::array<int64_t, 2> resolution;
+    int64_t reference_polynomial;
+    int64_t fw_poly_degree;
+    int64_t bw_poly_degree;
+    int64_t newton_iterations;
+    double max_angle;
+    double min_2d_norm;
+
+    FThetaProjection(
+        at::Tensor principal_point,
+        at::Tensor fw_poly,
+        at::Tensor bw_poly,
+        at::Tensor A,
+        std::array<int64_t, 2> resolution,
+        int64_t reference_polynomial,
+        int64_t fw_poly_degree,
+        int64_t bw_poly_degree,
+        int64_t newton_iterations,
+        double max_angle,
+        double min_2d_norm);
+
+    FThetaProjection_KernelParameters to_kernel_params() const;
+
+    // Compute the 2x2 inverse of A on demand and return it as a flat (4,)
+    // tensor with the same device/dtype/options as A.
+    at::Tensor compute_ainv() const;
+};
+
+// Validates projection shape and non-null; throws TORCH_CHECK on failure.
+void check_ftheta_projection(const c10::intrusive_ptr<FThetaProjection>& projection);
 
 // Returns (H, W, 2) float32 CUDA tensor of pixel-centre (x, y) coordinates.
 at::Tensor generate_image_points(int64_t width, int64_t height, c10::Device device);
@@ -538,6 +599,399 @@ image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield_back
     bool need_radial_coeffs_grad,
     bool need_tangential_coeffs_grad,
     bool need_thin_prism_coeffs_grad,
+    bool need_distortion_coeffs_grad);
+
+// ===========================================================================
+// FTheta forward passes (no_external and bivariate_windshield variants)
+// ===========================================================================
+// Same shapes as the OpenCVPinhole counterparts; scratch widths differ
+// (see camera_params.h Kernel N comments for per-kernel scratch sizes).
+
+// forward: returns (image_points (N,2), valid_flags (N,) bool, scratch (N,8))
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& camera_rays);
+
+// forward: returns (camera_rays (N,3), scratch (N,8))
+std::tuple<at::Tensor, at::Tensor>
+image_points_to_camera_rays_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points);
+
+// Returns (image_points (N,2), valid_flags (N,) bool, scratch (N,8))
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& camera_rays);
+
+// Returns (camera_rays (N,3), scratch (N,12))
+std::tuple<at::Tensor, at::Tensor>
+image_points_to_camera_rays_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translations,
+    const at::Tensor& rotations,
+    int64_t timestamp_us);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translations,
+    const at::Tensor& rotations,
+    int64_t timestamp_us);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    double stop_mean_error_px,
+    double stop_delta_mean_error_px,
+    double initial_relative_time);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    double stop_mean_error_px,
+    double stop_delta_mean_error_px,
+    double initial_relative_time);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us);
+
+// ===========================================================================
+// FTheta backward passes (no_external and bivariate_windshield variants)
+// ===========================================================================
+// Each backward returns its gradient tuple in the order
+// (primary input grad, [pose grads,] intrinsic grads), where intrinsic grads
+// are grad_principal_point (2,), grad_fw_poly (6,),
+// grad_bw_poly (6,), grad_A (4,), grad_Ainv (4,);
+// bivariate_windshield variants append grad_distortion_coeffs (42,).
+// Grad tensors for flags=false slots are empty (0,) scratch.
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& camera_rays,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_camera_ray_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_camera_rays_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& grad_camera_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& camera_rays,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_camera_ray_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_camera_rays_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& grad_camera_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad);
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad);
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translation,
+    const at::Tensor& rotation,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_translation_grad,
+    bool need_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translation,
+    const at::Tensor& rotation,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_translation_grad,
+    bool need_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad);
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    int64_t shutter_type,
+    int64_t max_iterations,
+    double initial_relative_time,
+    const at::Tensor& valid_flags,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad);
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    int64_t shutter_type,
+    int64_t max_iterations,
+    double initial_relative_time,
+    const at::Tensor& valid_flags,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad);
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    int64_t shutter_type,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad);
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    int64_t shutter_type,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
     bool need_distortion_coeffs_grad);
 
 } // namespace gsplat_sensors

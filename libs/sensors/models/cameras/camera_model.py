@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """
 Stateful camera model wrapping Layer 0 projection and external-distortion parameters.
@@ -28,6 +40,7 @@ from ...kernels.cameras.types import (
     BivariateWindshieldDistortion,
     CameraProjection,
     ExternalDistortion,
+    FThetaProjection,
     OpenCVPinholeProjection,
     ShutterType,
     script_class_name,
@@ -41,6 +54,11 @@ from ..common.utils import (
 
 
 def _move_projection(projection: CameraProjection, fn) -> CameraProjection:
+    """Apply ``fn`` to the tensor fields of a TorchScript projection struct.
+
+    Dispatches per concrete projection type so device/dtype moves rebuild the
+    struct with the moved tensors while preserving its static configuration.
+    """
     class_name = script_class_name(projection)
     if class_name == "OpenCVPinholeProjection":
         return OpenCVPinholeProjection(
@@ -51,12 +69,32 @@ def _move_projection(projection: CameraProjection, fn) -> CameraProjection:
             thin_prism_coeffs=fn(projection.thin_prism_coeffs),
             resolution=projection.resolution,
         )
+    if class_name == "FThetaProjection":
+        return FThetaProjection(
+            principal_point=fn(projection.principal_point),
+            fw_poly=fn(projection.fw_poly),
+            bw_poly=fn(projection.bw_poly),
+            A=fn(projection.A),
+            resolution=projection.resolution,
+            reference_polynomial=int(projection.reference_polynomial),
+            fw_poly_degree=int(projection.fw_poly_degree),
+            bw_poly_degree=int(projection.bw_poly_degree),
+            newton_iterations=int(projection.newton_iterations),
+            max_angle=float(projection.max_angle),
+            min_2d_norm=float(projection.min_2d_norm),
+        )
     raise TypeError(f"Unknown camera projection class: {class_name}")
 
 
 def _move_external_distortion(
     external_distortion: ExternalDistortion, fn
 ) -> ExternalDistortion:
+    """Apply ``fn`` to the tensor fields of a TorchScript external-distortion struct.
+
+    Returns the original instance unchanged when it is ``NoExternalDistortion`` (no
+    tensor fields), or when ``fn`` returns the identical tensor object (``is``-check)
+    for the held coefficients; otherwise rebuilds the struct with the new tensor.
+    """
     class_name = script_class_name(external_distortion)
     if class_name == "NoExternalDistortion":
         return external_distortion
@@ -644,17 +682,13 @@ class CameraModel(nn.Module):
             ``WorldRaysReturn`` with ``world_rays: (N, 6)`` packed
             ``[origin_xyz, direction_xyz]`` in world frame.
         """
-        rel = torch.full((1,), 0.5, device=image_points.device, dtype=torch.float32)
-        start_t, start_r, end_t, end_r = _camera_ops.unpack_dynamic_pose_components(
+        pose = _camera_ops.mean_pose_to_static_pose(
             dynamic_pose, image_points.device, torch.float32
         )
-        pose_t, pose_r = _camera_ops.interpolate_dynamic_pose(
-            start_t, start_r, end_t, end_r, rel
-        )
-        pose = Pose(translation=pose_t[0], rotation=pose_r[0])
         timestamp = None
         if start_timestamp_us is not None and end_timestamp_us is not None:
-            timestamp = int(round((start_timestamp_us + end_timestamp_us) / 2))
+            # Integer math; avoids float round-trip imprecision above 2^53 us.
+            timestamp = (start_timestamp_us + end_timestamp_us) // 2
         return self.image_points_to_world_rays_static_pose(
             image_points,
             pose,

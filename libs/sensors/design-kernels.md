@@ -92,7 +92,7 @@ libs/sensors/kernels/
 ```
 
 There is no `include/projective_sensor.h` trait header — the kernel layer does
-not use a C++17 traits contract.
+not use a C++ traits contract.
 
 ## Native split: bridge / CUDA-only / Torch-only
 
@@ -284,7 +284,10 @@ themselves, not in Python — see `trajectory_cuda::quat_slerp_pair_fwd_f` /
 
 The extension is built via `torch.utils.cpp_extension.load` driven by
 `build_and_load_sensors_cuda` in `kernels/cuda/build.py`. The extension name
-is `gsplat_sensors_cuda`. Sources split cleanly between compilers:
+is `gsplat_sensors_cuda`. Both host C++ and nvcc compile at `-std=c++20`
+(MSVC: `/std:c++20` with `/Zc:preprocessor` mirrored into nvcc via
+`-Xcompiler`); host and nvcc flags are populated independently rather than
+folded together on Windows. Sources split cleanly between compilers:
 
 - `nvcc`: `camera_kernel.cu`, `camera_kernel_backward.cu`.
 - Host C++: `ext.cpp`, `camera_torch.cpp`, `external_distortion_torch.cpp`.

@@ -1,12 +1,28 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Shared pytest fixtures for the gsplat-sensors test suite.
 
 Provides: ``sensor_device``, ``test_camera_params``, ``real_camera_record``,
 ``real_camera_projection``, ``ideal_projection``, ``distorted_projection``,
 ``no_external``, ``windshield_distortion``, ``static_pose``, ``dynamic_pose``,
-``pinhole_model``, ``pinhole_model_with_windshield``.
+``pinhole_model``, ``pinhole_model_with_windshield``, ``ftheta_projection``,
+``ftheta_projection_forward_ref``, ``ftheta_projection_backward_ref``,
+``ftheta_model``, ``ftheta_model_with_windshield``, ``real_ftheta_camera_record``,
+``real_ftheta_projection``, ``real_ftheta_camera_record_with_windshield``,
+``real_ftheta_windshield_distortion``, ``real_ftheta_projection_with_windshield``.
 
 Session-scoped CUDA fixtures (``sensor_device``, ``real_camera_projection``) skip
 automatically when no GPU is available.  ``_seed_test_rng`` and
@@ -24,19 +40,27 @@ import torch
 
 TEST_DATA_DIR = Path(__file__).resolve().parent / "test_data"
 TEST_CAMERA_PARAMS_PATH = TEST_DATA_DIR / "test_pinhole_camera_params.json"
+TEST_FTHETA_CAMERA_PARAMS_PATH = TEST_DATA_DIR / "test_ftheta_camera_params.json"
 
 
-def _load_test_camera_params() -> dict:
-    with TEST_CAMERA_PARAMS_PATH.open(encoding="utf-8") as f:
-        return json.load(f)
+def _load_json_or_none(path: Path) -> dict | None:
+    """Module-level JSON loader guarded against missing files."""
+    try:
+        with path.open(encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
 
 
-try:
-    TEST_CAMERA_PARAMS = _load_test_camera_params()
-except FileNotFoundError:
-    TEST_CAMERA_PARAMS = None
+TEST_CAMERA_PARAMS = _load_json_or_none(TEST_CAMERA_PARAMS_PATH)
 TEST_CAMERA_IDS = (
-    tuple(sorted(TEST_CAMERA_PARAMS)) if TEST_CAMERA_PARAMS is not None else ()
+    tuple(sorted(TEST_CAMERA_PARAMS)) if TEST_CAMERA_PARAMS is not None else (None,)
+)
+TEST_FTHETA_CAMERA_PARAMS = _load_json_or_none(TEST_FTHETA_CAMERA_PARAMS_PATH)
+TEST_FTHETA_CAMERA_IDS = (
+    tuple(sorted(TEST_FTHETA_CAMERA_PARAMS))
+    if TEST_FTHETA_CAMERA_PARAMS is not None
+    else (None,)
 )
 
 
@@ -64,6 +88,20 @@ def _require_sensor_cuda() -> None:
         pytest.skip("gsplat_sensors CUDA tests require CUDA")
 
 
+# gsplat_sensors is a CUDA-only library: importing it eagerly loads the
+# native extension (see kernels/_backend.py), so any test under
+# libs/sensors that imports the package at module scope cannot be
+# collected on a CUDA-less host. Rather than refactor the whole import
+# tree to be lazy, we accept that contract and use ``collect_ignore_glob``
+# to skip every sensor test on CUDA-less machines. CPU-only utility
+# tests (e.g. ``models/common/test_utils.py``) are caught by the same
+# blanket skip; that is intentional until the library has a
+# CUDA-optional CI lane that exercises them. CPU-only checks belong in
+# tests/ at the repo root, which uses a different conftest.
+if not torch.cuda.is_available():
+    collect_ignore_glob = ["**/test_*.py"]
+
+
 @pytest.fixture(scope="session")
 def sensor_device() -> torch.device:
     """Return the CUDA device for the session; skips the test suite if no GPU is found."""
@@ -86,8 +124,8 @@ def test_camera_params() -> dict:
 )
 def real_camera_record(request):
     """Yield one raw camera record dict per camera ID found in the test JSON file."""
-    if TEST_CAMERA_PARAMS is None or request.param is None:
-        pytest.skip("test data not available")
+    if request.param is None or TEST_CAMERA_PARAMS is None:
+        pytest.skip("test_pinhole_camera_params.json not available")
     return TEST_CAMERA_PARAMS[request.param]
 
 
@@ -240,4 +278,270 @@ def pinhole_model_with_windshield(ideal_projection, windshield_distortion):
         external_distortion=windshield_distortion,
         resolution=(100, 80),
         shutter_type=ShutterType.GLOBAL,
+    )
+
+
+# ===========================================================================
+# F-Theta fixtures
+# ===========================================================================
+
+
+def _make_ideal_ftheta_components(device: torch.device, dtype: torch.dtype):
+    """Synthetic linear-polynomial F-Theta intrinsics for unit tests.
+
+    The polynomials reduce to ``r = k * theta`` and ``theta = r / k`` so
+    Newton inversion converges in one step and the round-trip is exact
+    up to float32 rounding. The 2x2 warp ``A`` is identity.
+    """
+    k = 100.0
+    fw_poly = torch.zeros(6, device=device, dtype=dtype)
+    fw_poly[1] = k
+    bw_poly = torch.zeros(6, device=device, dtype=dtype)
+    bw_poly[1] = 1.0 / k
+    A = torch.tensor([1.0, 0.0, 0.0, 1.0], device=device, dtype=dtype)
+    principal_point = torch.tensor([50.0, 40.0], device=device, dtype=dtype)
+    return {
+        "principal_point": principal_point,
+        "fw_poly": fw_poly,
+        "bw_poly": bw_poly,
+        "A": A,
+        "resolution": (100, 80),
+        "fw_poly_degree": 1,
+        "bw_poly_degree": 1,
+        "newton_iterations": 10,
+        "max_angle": 1.4,
+        "min_2d_norm": 1e-6,
+    }
+
+
+def _make_ftheta_projection(device: torch.device, reference_polynomial: int):
+    from gsplat_sensors.kernels.cameras import FThetaProjection
+
+    components = _make_ideal_ftheta_components(device, dtype=torch.float32)
+    return FThetaProjection(
+        principal_point=components["principal_point"],
+        fw_poly=components["fw_poly"],
+        bw_poly=components["bw_poly"],
+        A=components["A"],
+        resolution=components["resolution"],
+        reference_polynomial=int(reference_polynomial),
+        fw_poly_degree=components["fw_poly_degree"],
+        bw_poly_degree=components["bw_poly_degree"],
+        newton_iterations=components["newton_iterations"],
+        max_angle=components["max_angle"],
+        min_2d_norm=components["min_2d_norm"],
+    )
+
+
+@pytest.fixture(
+    params=[0, 1],
+    ids=["forward_ref", "backward_ref"],
+)
+def ftheta_projection(request, sensor_device: torch.device):
+    """Linear-polynomial F-Theta projection. Parametrized over reference_polynomial."""
+    return _make_ftheta_projection(sensor_device, request.param)
+
+
+@pytest.fixture
+def ftheta_projection_forward_ref(sensor_device: torch.device):
+    """F-Theta projection with reference_polynomial=FORWARD (no Newton on forward)."""
+    return _make_ftheta_projection(sensor_device, 0)
+
+
+@pytest.fixture
+def ftheta_projection_backward_ref(sensor_device: torch.device):
+    """F-Theta projection with reference_polynomial=BACKWARD (Newton on forward path)."""
+    return _make_ftheta_projection(sensor_device, 1)
+
+
+@pytest.fixture
+def ftheta_model(ftheta_projection_forward_ref, no_external):
+    """F-Theta camera model with NoExternalDistortion. FORWARD-ref to keep tests fast."""
+    from gsplat_sensors.kernels.cameras import ShutterType
+    from gsplat_sensors.models import CameraModel
+
+    return CameraModel(
+        projection=ftheta_projection_forward_ref,
+        external_distortion=no_external,
+        resolution=(100, 80),
+        shutter_type=ShutterType.GLOBAL,
+    )
+
+
+@pytest.fixture
+def ftheta_model_with_windshield(ftheta_projection_forward_ref, windshield_distortion):
+    """F-Theta camera model layered with the identity-equivalent windshield distortion."""
+    from gsplat_sensors.kernels.cameras import ShutterType
+    from gsplat_sensors.models import CameraModel
+
+    return CameraModel(
+        projection=ftheta_projection_forward_ref,
+        external_distortion=windshield_distortion,
+        resolution=(100, 80),
+        shutter_type=ShutterType.GLOBAL,
+    )
+
+
+# Map the JSON ``reference_poly`` field under ``intrinsics`` onto the gsplat
+# ReferencePolynomial enum. Source encoding:
+#   "1" = PIXELDIST_TO_ANGLE  -> gsplat BACKWARD (Newton on fw_poly)
+#   "2" = ANGLE_TO_PIXELDIST  -> gsplat FORWARD (use fw_poly directly)
+_JSON_INTRINSICS_REF_POLY_TO_GSPLAT = {"1": 1, "2": 0}
+
+# Map the JSON ``reference_poly`` field under ``external_distortion`` onto the
+# gsplat ReferencePolynomial enum. This is a DIFFERENT encoding from the
+# intrinsics-side mapping above: the windshield field uses FORWARD=1 /
+# BACKWARD=2, while gsplat's enum is FORWARD=0 / BACKWARD=1.
+_JSON_WINDSHIELD_REF_POLY_TO_GSPLAT = {"1": 0, "2": 1}
+
+
+def _build_real_ftheta_projection(record: dict, device: torch.device):
+    """Construct an ``FThetaProjection`` from a real-camera intrinsics record.
+
+    Shared by ``real_ftheta_projection`` and the windshield-augmented
+    fixtures so both use exactly the same intrinsic build path.
+    """
+    from gsplat_sensors.kernels.cameras import (
+        FTHETA_MAX_POLYNOMIAL_TERMS,
+        FThetaProjection,
+    )
+
+    intrinsics = record["intrinsics"]
+    fw_poly = list(intrinsics["angle_to_pixeldist_poly"])
+    bw_poly = list(intrinsics["pixeldist_to_angle_poly"])
+    fw_degree = len(fw_poly) - 1
+    bw_degree = len(bw_poly) - 1
+    if len(fw_poly) > FTHETA_MAX_POLYNOMIAL_TERMS:
+        raise ValueError(
+            f"fw_poly degree exceeds kernel max ({FTHETA_MAX_POLYNOMIAL_TERMS}); "
+            f"got {len(fw_poly)}"
+        )
+    if len(bw_poly) > FTHETA_MAX_POLYNOMIAL_TERMS:
+        raise ValueError(
+            f"bw_poly degree exceeds kernel max ({FTHETA_MAX_POLYNOMIAL_TERMS}); "
+            f"got {len(bw_poly)}"
+        )
+    fw_poly = fw_poly + [0.0] * (FTHETA_MAX_POLYNOMIAL_TERMS - len(fw_poly))
+    bw_poly = bw_poly + [0.0] * (FTHETA_MAX_POLYNOMIAL_TERMS - len(bw_poly))
+    c, d, e = intrinsics["linear_cde"]
+    a_flat = [float(c), float(d), float(e), 1.0]
+    return FThetaProjection(
+        principal_point=torch.tensor(
+            intrinsics["principal_point"], device=device, dtype=torch.float32
+        ),
+        fw_poly=torch.tensor(fw_poly, device=device, dtype=torch.float32),
+        bw_poly=torch.tensor(bw_poly, device=device, dtype=torch.float32),
+        A=torch.tensor(a_flat, device=device, dtype=torch.float32),
+        resolution=tuple(record["resolution"]),
+        reference_polynomial=_JSON_INTRINSICS_REF_POLY_TO_GSPLAT[
+            intrinsics["reference_poly"]
+        ],
+        fw_poly_degree=fw_degree,
+        bw_poly_degree=bw_degree,
+        newton_iterations=10,
+        max_angle=float(intrinsics["max_angle_rad"]),
+        min_2d_norm=1e-6,
+    )
+
+
+@pytest.fixture(
+    scope="session",
+    params=TEST_FTHETA_CAMERA_IDS,
+    ids=lambda key: key.split("@", 1)[0] if key is not None else "no-data",
+)
+def real_ftheta_camera_record(request):
+    """Yield one raw F-Theta camera record dict per camera ID found in the test JSON file."""
+    if request.param is None or TEST_FTHETA_CAMERA_PARAMS is None:
+        pytest.skip("test_ftheta_camera_params.json not available")
+    return TEST_FTHETA_CAMERA_PARAMS[request.param]
+
+
+@pytest.fixture(scope="session")
+def real_ftheta_projection(real_ftheta_camera_record, sensor_device: torch.device):
+    """Build an FThetaProjection from a real_ftheta_camera_record on the session CUDA device."""
+    return _build_real_ftheta_projection(real_ftheta_camera_record, sensor_device)
+
+
+# Filter the camera records to those carrying a bivariate-windshield
+# external_distortion. ``or [None]`` keeps the parametrize list non-empty so
+# pytest still reports a single parametrized id (``no-windshield-data``) and
+# the fixture body skips cleanly when the JSON has no matching record.
+_TEST_FTHETA_WINDSHIELD_IDS = [
+    key
+    for key in TEST_FTHETA_CAMERA_IDS
+    if key is not None
+    and TEST_FTHETA_CAMERA_PARAMS is not None
+    and (TEST_FTHETA_CAMERA_PARAMS[key].get("external_distortion") or {}).get("type")
+    == "bivariate-windshield"
+] or [None]
+
+
+@pytest.fixture(
+    scope="module",
+    params=_TEST_FTHETA_WINDSHIELD_IDS,
+    ids=lambda key: key.split("@", 1)[0] if key is not None else "no-windshield-data",
+)
+def real_ftheta_camera_record_with_windshield(request):
+    """Yield one raw F-Theta camera record dict that carries a bivariate-windshield external_distortion."""
+    if request.param is None or TEST_FTHETA_CAMERA_PARAMS is None:
+        pytest.skip("no bivariate-windshield record in test_ftheta_camera_params.json")
+    return TEST_FTHETA_CAMERA_PARAMS[request.param]
+
+
+@pytest.fixture(scope="module")
+def real_ftheta_windshield_distortion(
+    real_ftheta_camera_record_with_windshield, sensor_device: torch.device
+):
+    """BivariateWindshieldDistortion built via ``from_components(int_code, ...)``.
+
+    The fixture packs the four JSON polynomial buffers into a
+    ``BivariateWindshieldDistortion`` through the
+    ``from_components(h_poly, v_poly, h_poly_inv, v_poly_inv, reference_polynomial)``
+    factory rather than calling the dataclass constructor directly. The
+    ``reference_polynomial`` argument is the *integer* code produced by
+    looking the JSON ``reference_poly`` string up in
+    ``_JSON_WINDSHIELD_REF_POLY_TO_GSPLAT`` (resolving to 0 or 1); it is
+    not a ``ReferencePolynomial`` enum member.
+
+    NOTE: the windshield ``reference_poly`` JSON field uses FORWARD=1 /
+    BACKWARD=2, the OPPOSITE direction of the intrinsics ``reference_poly``
+    (1=BACKWARD, 2=FORWARD). The distinct
+    ``_JSON_WINDSHIELD_REF_POLY_TO_GSPLAT`` table above keeps the two
+    from being conflated before the int_code reaches ``from_components``.
+    """
+    from gsplat_sensors.kernels.cameras import from_components
+
+    ext = real_ftheta_camera_record_with_windshield["external_distortion"]
+    if ext.get("type") != "bivariate-windshield":
+        raise ValueError(
+            f"expected bivariate-windshield external_distortion; got {ext.get('type')!r}"
+        )
+    h_poly = torch.tensor(
+        ext["horizontal_poly"], device=sensor_device, dtype=torch.float32
+    )
+    v_poly = torch.tensor(
+        ext["vertical_poly"], device=sensor_device, dtype=torch.float32
+    )
+    h_poly_inv = torch.tensor(
+        ext["horizontal_poly_inverse"], device=sensor_device, dtype=torch.float32
+    )
+    v_poly_inv = torch.tensor(
+        ext["vertical_poly_inverse"], device=sensor_device, dtype=torch.float32
+    )
+    return from_components(
+        h_poly,
+        v_poly,
+        h_poly_inv,
+        v_poly_inv,
+        _JSON_WINDSHIELD_REF_POLY_TO_GSPLAT[ext["reference_poly"]],
+    )
+
+
+@pytest.fixture(scope="module")
+def real_ftheta_projection_with_windshield(
+    real_ftheta_camera_record_with_windshield, sensor_device: torch.device
+):
+    """Build an FThetaProjection from a windshield-carrying camera record on the sensor device."""
+    return _build_real_ftheta_projection(
+        real_ftheta_camera_record_with_windshield, sensor_device
     )
