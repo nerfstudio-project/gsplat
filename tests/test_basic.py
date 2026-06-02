@@ -973,7 +973,8 @@ def test_fully_fused_projection_ut(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_isect(test_data, batch_dims: Tuple[int, ...]):
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_isect(test_data, dtype: torch.dtype, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
 
@@ -984,10 +985,16 @@ def test_isect(test_data, batch_dims: Tuple[int, ...]):
     I = B * C
     width, height = 40, 60
 
+    # Cover float64 as well as float32: intersect_tile_kernel is instantiated
+    # for scalar_t=double (dispatch keys on means2d), and its 32-bit depth sort
+    # key must narrow to float32 to stay a monotonic ordering -- a bare 32-bit
+    # reinterpret of a double reads only half its bits and scrambles the
+    # within-tile front-to-back order. The Python reference narrows the key to
+    # float32, so the float64 CUDA path must agree with it.
     test_data = {
-        "means2d": torch.randn(C, N, 2, device=device) * width,
+        "means2d": torch.randn(C, N, 2, device=device, dtype=dtype) * width,
         "radii": torch.randint(0, width, (C, N, 2), device=device, dtype=torch.int32),
-        "depths": torch.rand(C, N, device=device),
+        "depths": torch.rand(C, N, device=device, dtype=dtype),
     }
     test_data = expand(test_data, batch_dims)
     means2d = test_data["means2d"]

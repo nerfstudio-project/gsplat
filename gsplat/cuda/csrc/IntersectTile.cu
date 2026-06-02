@@ -18,6 +18,7 @@
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h>
+#include <cassert>
 #include <cooperative_groups.h>
 
 // for CUB_WRAPPER
@@ -187,9 +188,17 @@ __global__ void intersect_tile_kernel(
         }
         iid_enc = iid << (32 + tile_n_bits);
 
-        // tolerance for negative depth
-        int32_t depth_i32 = *(int32_t *)&(depths[idx]);  // Bit-level reinterpret
-        depth_id_enc = static_cast<uint32_t>(depth_i32);  // Zero-extend to 64-bit
+        // Narrow to float so the 32-bit key is a monotonic depth ordering for
+        // any scalar_t (a bare 32-bit reinterpret of a double would read only
+        // half its bits). Monotonic for the non-negative depths that reach
+        // here after near-plane culling; the sign bit would invert ordering.
+        float depth_f = static_cast<float>(depths[idx]);
+        // The float-bit key is monotonic only for non-negative depths: a set
+        // sign bit would invert the unsigned ordering. isect_tiles is a
+        // standalone op, so pin the invariant the comment relies on.
+        assert(depth_f >= 0.f);
+        // Bit-level reinterpret, zero-extended into the low 32 bits of the key.
+        depth_id_enc = __float_as_uint(depth_f);
     }
 
     if (conics != nullptr && opacities != nullptr) {
