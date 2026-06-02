@@ -357,18 +357,17 @@ __global__ void intersect_tile_lidar_kernel(
     }
     const int64_t image_id_enc = image_id << (32 + tile_n_bits);
 
-    int64_t depth_id_enc;
-    if constexpr(sizeof(depths[idxgauss]) == sizeof(uint32_t))
-    {
-        depth_id_enc = reinterpret_cast<const uint32_t &>(depths[idxgauss]);
-    }
-    else
-    {
-        static_assert(sizeof(depths[idxgauss]) == sizeof(uint64_t));
-        depth_id_enc = reinterpret_cast<const uint64_t &>(depths[idxgauss]);
-        assert((depth_id_enc & ~0xFF'FF'FF'FFULL) == 0);
-        depth_id_enc &= 0xFF'FF'FF'FFULL;
-    }
+    // Narrow to float so the 32-bit depth field is a monotonic ordering for
+    // any scalar_t; a 32-bit slice of a double would be its low mantissa bits
+    // (non-monotonic). The float-bit key is monotonic only for non-negative
+    // values, which holds here because lidar range is >= 0. Matches the
+    // __float_as_uint reinterpret in intersect_tile_kernel.
+    const float depth_f = static_cast<float>(depths[idxgauss]);
+    // Pin the non-negativity the float-bit key relies on (a set sign bit would
+    // invert the unsigned ordering).
+    assert(depth_f >= 0.f);
+    const int64_t depth_id_enc =
+        static_cast<int64_t>(__float_as_uint(depth_f));
 
     int64_t idxflatten = (idxgauss == 0) ? 0 : cum_tiles_per_gauss[idxgauss - 1];
     #pragma unroll

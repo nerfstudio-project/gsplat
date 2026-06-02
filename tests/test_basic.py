@@ -5493,3 +5493,47 @@ def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
     )
     torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
     torch.testing.assert_close(last_ids, torch.zeros_like(last_ids))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+def test_isect_tiles_lidar_double_depth():
+    # intersect_tile_lidar_kernel narrows the depth sort key to float32. With
+    # float64 depths a bare 32-bit slice of the double is its low mantissa bits
+    # (non-monotonic), scrambling the within-tile front-to-back order. The
+    # double path is reachable from Python (no dtype cast in the wrapper or
+    # binding), so the float64 result must match the float32 result tile-for-tile.
+    from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
+    from gsplat.cuda._wrapper import isect_tiles_lidar
+    from tests.test_cameras import parse_lidar_camera
+
+    torch.manual_seed(42)
+
+    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+        "pandar128", (), 0, 0, device=device
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
+
+    C, N = 3, 1000
+    means2d = (
+        torch.randn(C, N, 2, device=device)
+        * torch.tensor([2 * math.pi, math.pi], device=device)
+    ) * ANGLE_TO_PIXEL_SCALING_FACTOR
+    radii = torch.ceil(
+        torch.randn(C, N, 2, device=device).abs().clamp(max=1)
+        * torch.tensor([math.pi, lidar.fov_vert_rad.span / 2], device=device)
+        * ANGLE_TO_PIXEL_SCALING_FACTOR
+    ).to(torch.int32)
+    depths = torch.rand(C, N, device=device)
+
+    tpg32, iid32, fid32 = isect_tiles_lidar(lidar, means2d, radii, depths, sort=True)
+    # Same values, double dtype -> exercises the scalar_t=double instantiation.
+    tpg64, iid64, fid64 = isect_tiles_lidar(
+        lidar, means2d.double(), radii, depths.double(), sort=True
+    )
+
+    torch.testing.assert_close(tpg64, tpg32)
+    torch.testing.assert_close(iid64, iid32)
+    torch.testing.assert_close(fid64, fid32)
