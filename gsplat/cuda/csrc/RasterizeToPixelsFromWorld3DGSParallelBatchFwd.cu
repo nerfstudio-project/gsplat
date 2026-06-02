@@ -51,47 +51,6 @@ using DeviceExternalDistortionParamsOpt =
 
 namespace cg = cooperative_groups;
 
-// Same compact-CTA occupancy hint used by the serial-batch forward kernel.
-// The schedule was tuned at CTA_SIZE=32; for CTA_SIZE=256 we preserve the
-// target threads/SM and derive a physically valid min-blocks value.
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
-    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 32
-#else
-    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 16
-#endif
-
-#define GSPLAT_MIN_CDIM_FOR_HINT 4u
-#define GSPLAT_MAX_CDIM_FOR_HINT 24u
-#define GSPLAT_MIN_BLOCKS_AT_MIN_CDIM \
-    (GSPLAT_ARCH_MAX_BLOCKS_PER_SM < 24 ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM : 24)
-#define GSPLAT_MIN_BLOCKS_AT_MAX_CDIM 16u
-
-template <uint32_t CDIM, uint32_t CTA_SIZE>
-constexpr uint32_t min_blocks_for_cdim() {
-    if constexpr (CDIM > GSPLAT_MAX_CDIM_FOR_HINT) {
-        return 1;
-    } else {
-        constexpr uint32_t high = GSPLAT_MIN_BLOCKS_AT_MIN_CDIM;
-        constexpr uint32_t low = GSPLAT_MIN_BLOCKS_AT_MAX_CDIM;
-        constexpr uint32_t cdim_excess =
-            (CDIM > GSPLAT_MIN_CDIM_FOR_HINT)
-                ? (CDIM - GSPLAT_MIN_CDIM_FOR_HINT)
-                : 0u;
-        constexpr uint32_t cdim_span =
-            GSPLAT_MAX_CDIM_FOR_HINT - GSPLAT_MIN_CDIM_FOR_HINT;
-        constexpr uint32_t block_span = (high >= low) ? (high - low) : 0;
-        constexpr uint32_t decrement = (cdim_excess * block_span) / cdim_span;
-        constexpr uint32_t blocks_at_cta32 =
-            (high > decrement) ? (high - decrement) : low;
-        constexpr uint32_t threads_target = blocks_at_cta32 * 32u;
-        constexpr uint32_t blocks = threads_target / CTA_SIZE;
-        constexpr uint32_t lo_clamped = (blocks == 0u) ? 1u : blocks;
-        return (lo_clamped > GSPLAT_ARCH_MAX_BLOCKS_PER_SM)
-            ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM
-            : lo_clamped;
-    }
-}
-
 using PixelCoordsCompact = PixelCoords;
 
 __device__ __forceinline__ void mark_partials_meta_needs_batch_replay(
@@ -223,7 +182,6 @@ template <
     typename scalar_t
 >
 __device__ __forceinline__ void process_batch_gaussians_fwd(
-    cg::thread_block& block,
     const uint32_t batch_id,
     const int32_t range_start,
     const int32_t range_end,
@@ -252,7 +210,6 @@ __device__ __forceinline__ void process_batch_gaussians_fwd(
     int32_t (&n_accumulated)[TILE_SIZE * TILE_SIZE / CTA_SIZE],
     uint32_t& done_mask
 ) {
-    (void)block;
     constexpr uint32_t LOGICAL_BATCH = TILE_SIZE * TILE_SIZE;
     constexpr uint32_t FETCH_SIZE = CTA_SIZE;
     constexpr uint32_t PIXELS_PER_THREAD = TILE_SIZE * TILE_SIZE / CTA_SIZE;
@@ -564,7 +521,7 @@ rasterize_to_pixels_from_world_3dgs_fwd_partials_kernel(
             ? SaturationTPolicy::StorePostSaturationT
             : SaturationTPolicy::KeepPreAndCapturePostSaturationT,
         scalar_t>(
-        block, b, range_start, range_end, tid, C, N,
+        b, range_start, range_end, tid, C, N,
         flatten_ids, means, quats, scales, colors, opacities,
         ray_o, ray_d,
         smem.id_batch, smem.xyz_opacity_batch, smem.iscl_rot_batch,
@@ -1329,7 +1286,7 @@ rasterize_to_pixels_from_world_3dgs_fwd_batch_replay_kernel(
         CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance,
         SaturationTPolicy::KeepPreSaturationT,
         scalar_t>(
-        block, b, range_start, range_end, tid, C, N,
+        b, range_start, range_end, tid, C, N,
         flatten_ids, means, quats, scales, colors, opacities,
         ray_o, ray_d,
         smem.id_batch, smem.xyz_opacity_batch, smem.iscl_rot_batch,
@@ -1477,6 +1434,9 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     TORCH_CHECK(SupportedChannels::contains(channels),
                 "Unsupported number of channels: ", channels,
                 " (check GSPLAT_NUM_CHANNELS)");
+    TORCH_CHECK(SupportedTileSizes::contains(tile_size),
+                "Unsupported tile_size ", tile_size,
+                "; supported values are {8, 16}.");
 
     const bool return_normals = normals.has_value();
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
@@ -1484,8 +1444,10 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     // -- Dispatch the runtime options to the compiled specializations --------
     auto launch_kernel = [&]<
         typename ChannelsT,
+        typename TileSizeT,
         typename ReturnNormalsT,
-        typename UseHitDistanceT
+        typename UseHitDistanceT,
+        typename FwdOnlyT
     >() {
         constexpr uint32_t CDIM = ChannelsT::value;
         constexpr bool ReturnNormals  = static_cast<bool>(ReturnNormalsT::value);
@@ -1561,59 +1523,143 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
             "ParallelBatch priming_state exceeds signed 32-bit device "
             "offset range");
 
-        auto launch_variant = [&]<
-            uint32_t TILE_SIZE,
-            uint32_t CTA_SIZE,
-            bool ForBackward
-        >() {
-            const dim3 threads = {CTA_SIZE, 1, 1};
-            // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch +
-            // scale_batch + normal_batch — CTA_SIZE entries each.
-            const int64_t shmem_size =
-                CTA_SIZE *
-                (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) +
-                 sizeof(vec3) + sizeof(vec3));
+        // Launch the tuned (CTA_SIZE, pixels-per-thread) variant for this tile
+        // size. tile_size and fwd_only are resolved at compile time through the
+        // dispatch axes below; CtaSizeForTile maps each tile size to its tuned
+        // pair:
+        //  tile 8  -> CTA 32, 2 px/thread (compact: small shmem, many
+        //             co-resident CTAs; wins on training)
+        //  tile 16 -> CTA 256, 1 px/thread (one thread per pixel; wins on
+        //             high-res fwd-only)
+        constexpr uint32_t TILE_SIZE = TileSizeT::value;
+        constexpr uint32_t CTA_SIZE = CtaSizeForTile<TILE_SIZE>::value;
+        constexpr bool ForBackward = FwdOnlyT::value == 0;
+        const dim3 threads = {CTA_SIZE, 1, 1};
+        // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch +
+        // scale_batch + normal_batch — CTA_SIZE entries each.
+        const int64_t shmem_size =
+            CTA_SIZE *
+            (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) +
+             sizeof(vec3) + sizeof(vec3));
 
-            // -- Configure dynamic shared memory ----------------------------
-            const cudaError_t partials_attr_status = cudaFuncSetAttribute(
-                rasterize_to_pixels_from_world_3dgs_fwd_partials_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, float>,
-                cudaFuncAttributeMaxDynamicSharedMemorySize,
-                shmem_size);
-            if (partials_attr_status != cudaSuccess) {
+        // -- Configure dynamic shared memory ----------------------------
+        const cudaError_t partials_attr_status = cudaFuncSetAttribute(
+            rasterize_to_pixels_from_world_3dgs_fwd_partials_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, float>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shmem_size);
+        if (partials_attr_status != cudaSuccess) {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size, " bytes), try lowering tile_size."
+            );
+        }
+        if constexpr (ForBackward) {
+            const cudaError_t batch_replay_attr_status =
+                cudaFuncSetAttribute(
+                    rasterize_to_pixels_from_world_3dgs_fwd_batch_replay_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, float>,
+                    cudaFuncAttributeMaxDynamicSharedMemorySize,
+                    shmem_size);
+            if (batch_replay_attr_status != cudaSuccess) {
                 AT_ERROR(
-                    "Failed to set maximum shared memory size (requested ",
-                    shmem_size, " bytes), try lowering tile_size."
+                    "Failed to set max dynamic shmem on batch-replay kernel (",
+                    shmem_size, " bytes); try lowering tile_size."
                 );
             }
-            if constexpr (ForBackward) {
-                const cudaError_t batch_replay_attr_status =
-                    cudaFuncSetAttribute(
-                        rasterize_to_pixels_from_world_3dgs_fwd_batch_replay_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, float>,
-                        cudaFuncAttributeMaxDynamicSharedMemorySize,
-                        shmem_size);
-                if (batch_replay_attr_status != cudaSuccess) {
-                    AT_ERROR(
-                        "Failed to set max dynamic shmem on batch-replay kernel (",
-                        shmem_size, " bytes); try lowering tile_size."
-                    );
-                }
-            }
+        }
 
-            // ---- Partials pass: 1D grid over total_batches. Skip when
-            // total_batches == 0 (degenerate n_isects==0 case) — batch-scan
-            // short-circuits on num_batches_this_tile==0 and emits
-            // background-only output.
+        // ---- Partials pass: 1D grid over total_batches. Skip when
+        // total_batches == 0 (degenerate n_isects==0 case) — batch-scan
+        // short-circuits on num_batches_this_tile==0 and emits
+        // background-only output.
+        if (total_batches > 0) {
+            const dim3 grid_partials = {
+                static_cast<uint32_t>(total_batches), 1, 1};
+            rasterize_to_pixels_from_world_3dgs_fwd_partials_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, float>
+                <<<grid_partials, threads, shmem_size, stream>>>(
+                    B, C, N, n_isects,
+                    data_ptr_as<const vec3, float>(means),
+                    data_ptr_as<const vec4, float>(quats),
+                    data_ptr_as<const vec3, float>(scales),
+                    colors.const_data_ptr<float>(),
+                    opacities.const_data_ptr<float>(),
+                    data_ptr_or_null<const bool>(masks),
+                    image_width, image_height, tile_width, tile_height,
+                    viewmats0.const_data_ptr<float>(),
+                    data_ptr_or_null<const float>(viewmats1),
+                    Ks.const_data_ptr<float>(),
+                    camera_model, rs_type,
+                    data_ptr_or_null<const float>(rays),
+                    data_ptr_or_null<const float>(radial_coeffs),
+                    data_ptr_or_null<const float>(tangential_coeffs),
+                    data_ptr_or_null<const float>(thin_prism_coeffs),
+                    ftheta_device_coeffs, lidar_device_coeffs, external_distortion_device_params,
+                    tile_offsets.const_data_ptr<int32_t>(),
+                    flatten_ids.const_data_ptr<int32_t>(),
+                    batch_offsets.const_data_ptr<int32_t>(),
+                    data_ptr_or_null<const int32_t>(total_batches > 0, bid_to_slot),
+                    priming_state.data_ptr<int32_t>(),
+                    data_ptr_or_null<uint16_t>(ForBackward, compose_c_stop),
+                    data_ptr_or_null<float>(total_batches > 0, fwd_batch_state),
+                    data_ptr_as_or_null<ushort2, uint16_t>(total_batches > 0, partials_meta));
+        }
+
+        // ---- Batch-scan pass: one CTA per tile. It folds batch
+        // partials independently per pixel and records only the pixels
+        // that need exact per-gaussian batch-replay.
+        const dim3 grid_batch_scan = {I, tile_height, tile_width};
+        // Dispatch only batch-scan on SAFE_MASKED_OUTPUTS so partials and
+        // batch-replay keep a single instantiation. unsafe_masked_tile_outputs
+        // compiles out batch-scan's masked-tile safe-store.
+        auto launch_batch_scan = [&]<bool SAFE_MASKED_OUTPUTS>() {
+            rasterize_to_pixels_from_world_3dgs_fwd_batch_scan_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, SAFE_MASKED_OUTPUTS, float>
+                <<<grid_batch_scan, threads, 0, stream>>>(
+                    B, C, N, n_isects,
+                    data_ptr_as<const vec3, float>(means),
+                    data_ptr_as<const vec4, float>(quats),
+                    data_ptr_as<const vec3, float>(scales),
+                    colors.const_data_ptr<float>(),
+                    opacities.const_data_ptr<float>(),
+                    data_ptr_or_null<const float>(backgrounds),
+                    data_ptr_or_null<const bool>(masks),
+                    image_width, image_height, tile_width, tile_height,
+                    camera_model, lidar_device_coeffs,
+                    tile_offsets.const_data_ptr<int32_t>(),
+                    flatten_ids.const_data_ptr<int32_t>(),
+                    batches_per_tile.const_data_ptr<int32_t>(),
+                    batch_offsets.const_data_ptr<int32_t>(),
+                    priming_state.data_ptr<int32_t>(),
+                    data_ptr_or_null<float>(total_batches > 0, fwd_batch_state),
+                    data_ptr_as_or_null<ushort2, uint16_t>(total_batches > 0, partials_meta),
+                    data_ptr_as_or_null<int2, int32_t>(ForBackward, batch_replay_preamble),
+                    data_ptr_or_null<uint16_t>(ForBackward, compose_c_stop),
+                    renders.data_ptr<float>(),
+                    alphas.data_ptr<float>(),
+                    data_ptr_or_null<float>(normals),
+                    data_ptr_or_null<int32_t>(ForBackward, last_ids),
+                    data_ptr_or_null<int32_t>(ForBackward, sample_counts));
+        };
+        if (unsafe_masked_tile_outputs) {
+            launch_batch_scan.template operator()<false>();
+        } else {
+            launch_batch_scan.template operator()<true>();
+        }
+
+        // ---- Batch-replay pass: one CTA per batch slot. Most CTAs return
+        // after a metadata flag load; engaging CTAs replay only their
+        // threshold-crossing batch and patch bwd-visible state.
+        if constexpr (ForBackward) {
             if (total_batches > 0) {
-                const dim3 grid_partials = {
+                const dim3 grid_batch_replay = {
                     static_cast<uint32_t>(total_batches), 1, 1};
-                rasterize_to_pixels_from_world_3dgs_fwd_partials_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, float>
-                    <<<grid_partials, threads, shmem_size, stream>>>(
+                rasterize_to_pixels_from_world_3dgs_fwd_batch_replay_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, float>
+                    <<<grid_batch_replay, threads, shmem_size, stream>>>(
                         B, C, N, n_isects,
                         data_ptr_as<const vec3, float>(means),
                         data_ptr_as<const vec4, float>(quats),
                         data_ptr_as<const vec3, float>(scales),
                         colors.const_data_ptr<float>(),
                         opacities.const_data_ptr<float>(),
+                        data_ptr_or_null<const float>(backgrounds),
                         data_ptr_or_null<const bool>(masks),
                         image_width, image_height, tile_width, tile_height,
                         viewmats0.const_data_ptr<float>(),
@@ -1627,128 +1673,27 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
                         ftheta_device_coeffs, lidar_device_coeffs, external_distortion_device_params,
                         tile_offsets.const_data_ptr<int32_t>(),
                         flatten_ids.const_data_ptr<int32_t>(),
-                        batch_offsets.const_data_ptr<int32_t>(),
-                        data_ptr_or_null<const int32_t>(total_batches > 0, bid_to_slot),
-                        priming_state.data_ptr<int32_t>(),
-                        data_ptr_or_null<uint16_t>(ForBackward, compose_c_stop),
-                        data_ptr_or_null<float>(total_batches > 0, fwd_batch_state),
-                        data_ptr_as_or_null<ushort2, uint16_t>(total_batches > 0, partials_meta));
-            }
-
-            // ---- Batch-scan pass: one CTA per tile. It folds batch
-            // partials independently per pixel and records only the pixels
-            // that need exact per-gaussian batch-replay.
-            const dim3 grid_batch_scan = {I, tile_height, tile_width};
-            // Dispatch only batch-scan on SAFE_MASKED_OUTPUTS so partials and
-            // batch-replay keep a single instantiation. unsafe_masked_tile_outputs
-            // compiles out batch-scan's masked-tile safe-store.
-            auto launch_batch_scan = [&]<bool SAFE_MASKED_OUTPUTS>() {
-                rasterize_to_pixels_from_world_3dgs_fwd_batch_scan_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, SAFE_MASKED_OUTPUTS, float>
-                    <<<grid_batch_scan, threads, 0, stream>>>(
-                        B, C, N, n_isects,
-                        data_ptr_as<const vec3, float>(means),
-                        data_ptr_as<const vec4, float>(quats),
-                        data_ptr_as<const vec3, float>(scales),
-                        colors.const_data_ptr<float>(),
-                        opacities.const_data_ptr<float>(),
-                        data_ptr_or_null<const float>(backgrounds),
-                        data_ptr_or_null<const bool>(masks),
-                        image_width, image_height, tile_width, tile_height,
-                        camera_model, lidar_device_coeffs,
-                        tile_offsets.const_data_ptr<int32_t>(),
-                        flatten_ids.const_data_ptr<int32_t>(),
                         batches_per_tile.const_data_ptr<int32_t>(),
                         batch_offsets.const_data_ptr<int32_t>(),
-                        priming_state.data_ptr<int32_t>(),
+                        data_ptr_or_null<const int32_t>(total_batches > 0, bid_to_slot),
                         data_ptr_or_null<float>(total_batches > 0, fwd_batch_state),
-                        data_ptr_as_or_null<ushort2, uint16_t>(total_batches > 0, partials_meta),
-                        data_ptr_as_or_null<int2, int32_t>(ForBackward, batch_replay_preamble),
-                        data_ptr_or_null<uint16_t>(ForBackward, compose_c_stop),
+                        data_ptr_as_or_null<const ushort2, uint16_t>(total_batches > 0, partials_meta),
+                        data_ptr_as_or_null<const int2, int32_t>(ForBackward, batch_replay_preamble),
+                        data_ptr_or_null<const uint16_t>(ForBackward, compose_c_stop),
                         renders.data_ptr<float>(),
                         alphas.data_ptr<float>(),
                         data_ptr_or_null<float>(normals),
                         data_ptr_or_null<int32_t>(ForBackward, last_ids),
                         data_ptr_or_null<int32_t>(ForBackward, sample_counts));
-            };
-            if (unsafe_masked_tile_outputs) {
-                launch_batch_scan.template operator()<false>();
-            } else {
-                launch_batch_scan.template operator()<true>();
             }
-
-            // ---- Batch-replay pass: one CTA per batch slot. Most CTAs return
-            // after a metadata flag load; engaging CTAs replay only their
-            // threshold-crossing batch and patch bwd-visible state.
-            if constexpr (ForBackward) {
-                if (total_batches > 0) {
-                    const dim3 grid_batch_replay = {
-                        static_cast<uint32_t>(total_batches), 1, 1};
-                    rasterize_to_pixels_from_world_3dgs_fwd_batch_replay_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, float>
-                        <<<grid_batch_replay, threads, shmem_size, stream>>>(
-                            B, C, N, n_isects,
-                            data_ptr_as<const vec3, float>(means),
-                            data_ptr_as<const vec4, float>(quats),
-                            data_ptr_as<const vec3, float>(scales),
-                            colors.const_data_ptr<float>(),
-                            opacities.const_data_ptr<float>(),
-                            data_ptr_or_null<const float>(backgrounds),
-                            data_ptr_or_null<const bool>(masks),
-                            image_width, image_height, tile_width, tile_height,
-                            viewmats0.const_data_ptr<float>(),
-                            data_ptr_or_null<const float>(viewmats1),
-                            Ks.const_data_ptr<float>(),
-                            camera_model, rs_type,
-                            data_ptr_or_null<const float>(rays),
-                            data_ptr_or_null<const float>(radial_coeffs),
-                            data_ptr_or_null<const float>(tangential_coeffs),
-                            data_ptr_or_null<const float>(thin_prism_coeffs),
-                            ftheta_device_coeffs, lidar_device_coeffs, external_distortion_device_params,
-                            tile_offsets.const_data_ptr<int32_t>(),
-                            flatten_ids.const_data_ptr<int32_t>(),
-                            batches_per_tile.const_data_ptr<int32_t>(),
-                            batch_offsets.const_data_ptr<int32_t>(),
-                            data_ptr_or_null<const int32_t>(total_batches > 0, bid_to_slot),
-                            data_ptr_or_null<float>(total_batches > 0, fwd_batch_state),
-                            data_ptr_as_or_null<const ushort2, uint16_t>(total_batches > 0, partials_meta),
-                            data_ptr_as_or_null<const int2, int32_t>(ForBackward, batch_replay_preamble),
-                            data_ptr_or_null<const uint16_t>(ForBackward, compose_c_stop),
-                            renders.data_ptr<float>(),
-                            alphas.data_ptr<float>(),
-                            data_ptr_or_null<float>(normals),
-                            data_ptr_or_null<int32_t>(ForBackward, last_ids),
-                            data_ptr_or_null<int32_t>(ForBackward, sample_counts));
-                }
-            }
-        };
-
-        // Tile-size selector (matches ftrudel's compact-CTA dispatch):
-        //  tile_size=8 → CTA=32, PPT=2 (compact path: small shmem, many
-        //                                CTAs co-resident; wins on training)
-        //  tile_size=16 → CTA=256, PPT=1 (one thread per pixel; wins on
-        //                                 high-res fwd-only workloads)
-        if (tile_size == 8u) {
-            if (fwd_only) {
-                launch_variant.template operator()<8u, 32u, false>();
-            } else {
-                launch_variant.template operator()<8u, 32u, true>();
-            }
-        } else if (tile_size == 16u) {
-            if (fwd_only) {
-                launch_variant.template operator()<16u, 256u, false>();
-            } else {
-                launch_variant.template operator()<16u, 256u, true>();
-            }
-        } else {
-            AT_ERROR(
-                "Unsupported tile_size ", tile_size,
-                "; supported values are {8, 16}."
-            );
         }
     };
     const bool dispatched = dispatch::dispatch(
         SupportedChannels{channels},
+        SupportedTileSizes{static_cast<int>(tile_size)},
         dispatch::IntParam<0, 1>{return_normals  ? 1 : 0},
         dispatch::IntParam<0, 1>{use_hit_distance ? 1 : 0},
+        dispatch::IntParam<0, 1>{fwd_only ? 1 : 0},
         std::move(launch_kernel));
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
