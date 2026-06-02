@@ -65,6 +65,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
         CHECK_INPUT(gaussian_ids.value());
     }
 
+    // packed-mode `offsets` (below) reduce a 1-D [nnz] tiles_per_gauss and
+    // collapse to a single [0, total] segment, so a per-image segmented sort
+    // would index past the 2-entry offsets buffer. Reject until packed offsets
+    // are built per image.
+    TORCH_CHECK(
+        !(packed && segmented),
+        "segmented sort is not supported for packed inputs"
+    );
+
     uint32_t n_tiles = tile_width * tile_height;
     // the number of bits needed to encode the image id and tile id
     // Note: std::bit_width requires C++20
@@ -207,6 +216,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
         CHECK_INPUT(image_ids.value());
         CHECK_INPUT(gaussian_ids.value());
     }
+
+    // packed-mode `offsets` (below) reduce a 1-D [nnz] tiles_per_gauss and
+    // collapse to a single [0, total] segment, so a per-image segmented sort
+    // would index past the 2-entry offsets buffer. Reject until packed offsets
+    // are built per image.
+    TORCH_CHECK(
+        !(packed && segmented),
+        "segmented sort is not supported for packed inputs"
+    );
 
     uint32_t n_tiles = lidar->n_bins_azimuth*lidar->n_bins_elevation;
     // the number of bits needed to encode the image id and tile id
