@@ -5542,3 +5542,78 @@ def test_isect_tiles_lidar_double_depth():
     torch.testing.assert_close(tpg64, tpg32)
     torch.testing.assert_close(iid64, iid32)
     torch.testing.assert_close(fid64, fid32)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+def test_isect_tiles_packed_segmented_rejected():
+    # In packed mode tiles_per_gauss is 1-D [nnz], so the per-image segment
+    # offsets collapse to a single [0, total] buffer; a segmented radix sort
+    # over n_images segments would read past it. The op must reject the
+    # combination rather than corrupt the sort.
+    from gsplat.cuda._wrapper import isect_tiles
+
+    torch.manual_seed(42)
+    nnz = 8
+    means2d = torch.randn(nnz, 2, device=device) * 40
+    radii = torch.randint(1, 10, (nnz, 2), device=device, dtype=torch.int32)
+    depths = torch.rand(nnz, device=device)
+    image_ids = torch.zeros(nnz, dtype=torch.int32, device=device)
+    gaussian_ids = torch.arange(nnz, dtype=torch.int32, device=device)
+
+    with pytest.raises(
+        RuntimeError, match="segmented sort is not supported for packed inputs"
+    ):
+        isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size=16,
+            tile_width=4,
+            tile_height=4,
+            sort=True,
+            segmented=True,
+            packed=True,
+            n_images=1,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+def test_isect_tiles_lidar_packed_segmented_rejected():
+    # Lidar sibling of the camera packed+segmented guard.
+    from gsplat.cuda._wrapper import isect_tiles_lidar
+    from tests.test_cameras import parse_lidar_camera
+
+    torch.manual_seed(42)
+    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+        "pandar128", (), 0, 0, device=device
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
+
+    nnz = 8
+    means2d = torch.randn(nnz, 2, device=device)
+    radii = torch.randint(1, 10, (nnz, 2), device=device, dtype=torch.int32)
+    depths = torch.rand(nnz, device=device)
+    image_ids = torch.zeros(nnz, dtype=torch.int32, device=device)
+    gaussian_ids = torch.arange(nnz, dtype=torch.int32, device=device)
+
+    with pytest.raises(
+        RuntimeError, match="segmented sort is not supported for packed inputs"
+    ):
+        isect_tiles_lidar(
+            lidar,
+            means2d,
+            radii,
+            depths,
+            sort=True,
+            segmented=True,
+            packed=True,
+            n_images=1,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
