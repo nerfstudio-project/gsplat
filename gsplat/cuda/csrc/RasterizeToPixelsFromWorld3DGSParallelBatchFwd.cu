@@ -686,6 +686,10 @@ template <
     bool ReturnNormals,
     bool UseHitDistance,
     bool ForBackward,
+    // When false (unsafe_masked_tile_outputs=True), the masked-tile safe-store
+    // below compiles out — masked outputs are left undefined. Mirrors the
+    // serial path's SAFE_MASKED_OUTPUTS opt-out.
+    bool SAFE_MASKED_OUTPUTS,
     typename scalar_t
 >
 __global__ void __launch_bounds__(
@@ -792,29 +796,34 @@ rasterize_to_pixels_from_world_3dgs_fwd_batch_scan_kernel(
             image_width, image_height, lidar_device_coeffs);
     }
 
-    // Masked tiles: write background and bail. No batch slots to touch.
+    // Masked tiles: under the default (SAFE_MASKED_OUTPUTS) write background /
+    // empty defaults so the masked region reads as a defined empty image; under
+    // unsafe_masked_tile_outputs the stores compile out and outputs stay
+    // undefined. Either way there are no batch slots to touch, so we bail.
     if (masks != nullptr && !masks[tile_id]) {
-        #pragma unroll
-        for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
-            if (!pcs[p].inside) {
-                continue;
-            }
-            const int32_t pix_id = pcs[p].pix_id;
+        if constexpr (SAFE_MASKED_OUTPUTS) {
             #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k) {
-                render_colors[pix_id * CDIM + k] =
-                    backgrounds == nullptr ? 0.0f : static_cast<float>(backgrounds[k]);
-            }
-            render_alphas[pix_id] = 0.0f;
-            if constexpr (ReturnNormals) {
-                render_normals[pix_id * 3 + 0] = 0.0f;
-                render_normals[pix_id * 3 + 1] = 0.0f;
-                render_normals[pix_id * 3 + 2] = 0.0f;
-            }
-            if constexpr (ForBackward) {
-                last_ids[pix_id] = -1;
-                if (sample_counts != nullptr) {
-                    sample_counts[pix_id] = 0;
+            for (uint32_t p = 0; p < PIXELS_PER_THREAD; ++p) {
+                if (!pcs[p].inside) {
+                    continue;
+                }
+                const int32_t pix_id = pcs[p].pix_id;
+                #pragma unroll
+                for (uint32_t k = 0; k < CDIM; ++k) {
+                    render_colors[pix_id * CDIM + k] =
+                        backgrounds == nullptr ? 0.0f : static_cast<float>(backgrounds[k]);
+                }
+                render_alphas[pix_id] = 0.0f;
+                if constexpr (ReturnNormals) {
+                    render_normals[pix_id * 3 + 0] = 0.0f;
+                    render_normals[pix_id * 3 + 1] = 0.0f;
+                    render_normals[pix_id * 3 + 2] = 0.0f;
+                }
+                if constexpr (ForBackward) {
+                    last_ids[pix_id] = -1;
+                    if (sample_counts != nullptr) {
+                        sample_counts[pix_id] = 0;
+                    }
                 }
             }
         }
@@ -1408,6 +1417,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     const at::Tensor tile_offsets, // [..., C, grid_h, grid_w]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
+    const bool unsafe_masked_tile_outputs,
     // CSR batch structure (precomputed by caller, shared with bwd)
     const at::Tensor batches_per_tile, // [num_tiles] int32
     const at::Tensor batch_offsets,   // [num_tiles + 1] int32
@@ -1629,32 +1639,42 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
             // partials independently per pixel and records only the pixels
             // that need exact per-gaussian batch-replay.
             const dim3 grid_batch_scan = {I, tile_height, tile_width};
-            rasterize_to_pixels_from_world_3dgs_fwd_batch_scan_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, float>
-                <<<grid_batch_scan, threads, 0, stream>>>(
-                    B, C, N, n_isects,
-                    data_ptr_as<const vec3, float>(means),
-                    data_ptr_as<const vec4, float>(quats),
-                    data_ptr_as<const vec3, float>(scales),
-                    colors.const_data_ptr<float>(),
-                    opacities.const_data_ptr<float>(),
-                    data_ptr_or_null<const float>(backgrounds),
-                    data_ptr_or_null<const bool>(masks),
-                    image_width, image_height, tile_width, tile_height,
-                    camera_model, lidar_device_coeffs,
-                    tile_offsets.const_data_ptr<int32_t>(),
-                    flatten_ids.const_data_ptr<int32_t>(),
-                    batches_per_tile.const_data_ptr<int32_t>(),
-                    batch_offsets.const_data_ptr<int32_t>(),
-                    priming_state.data_ptr<int32_t>(),
-                    data_ptr_or_null<float>(total_batches > 0, fwd_batch_state),
-                    data_ptr_as_or_null<ushort2, uint16_t>(total_batches > 0, partials_meta),
-                    data_ptr_as_or_null<int2, int32_t>(ForBackward, batch_replay_preamble),
-                    data_ptr_or_null<uint16_t>(ForBackward, compose_c_stop),
-                    renders.data_ptr<float>(),
-                    alphas.data_ptr<float>(),
-                    data_ptr_or_null<float>(normals),
-                    data_ptr_or_null<int32_t>(ForBackward, last_ids),
-                    data_ptr_or_null<int32_t>(ForBackward, sample_counts));
+            // Dispatch only batch-scan on SAFE_MASKED_OUTPUTS so partials and
+            // batch-replay keep a single instantiation. unsafe_masked_tile_outputs
+            // compiles out batch-scan's masked-tile safe-store.
+            auto launch_batch_scan = [&]<bool SAFE_MASKED_OUTPUTS>() {
+                rasterize_to_pixels_from_world_3dgs_fwd_batch_scan_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, SAFE_MASKED_OUTPUTS, float>
+                    <<<grid_batch_scan, threads, 0, stream>>>(
+                        B, C, N, n_isects,
+                        data_ptr_as<const vec3, float>(means),
+                        data_ptr_as<const vec4, float>(quats),
+                        data_ptr_as<const vec3, float>(scales),
+                        colors.const_data_ptr<float>(),
+                        opacities.const_data_ptr<float>(),
+                        data_ptr_or_null<const float>(backgrounds),
+                        data_ptr_or_null<const bool>(masks),
+                        image_width, image_height, tile_width, tile_height,
+                        camera_model, lidar_device_coeffs,
+                        tile_offsets.const_data_ptr<int32_t>(),
+                        flatten_ids.const_data_ptr<int32_t>(),
+                        batches_per_tile.const_data_ptr<int32_t>(),
+                        batch_offsets.const_data_ptr<int32_t>(),
+                        priming_state.data_ptr<int32_t>(),
+                        data_ptr_or_null<float>(total_batches > 0, fwd_batch_state),
+                        data_ptr_as_or_null<ushort2, uint16_t>(total_batches > 0, partials_meta),
+                        data_ptr_as_or_null<int2, int32_t>(ForBackward, batch_replay_preamble),
+                        data_ptr_or_null<uint16_t>(ForBackward, compose_c_stop),
+                        renders.data_ptr<float>(),
+                        alphas.data_ptr<float>(),
+                        data_ptr_or_null<float>(normals),
+                        data_ptr_or_null<int32_t>(ForBackward, last_ids),
+                        data_ptr_or_null<int32_t>(ForBackward, sample_counts));
+            };
+            if (unsafe_masked_tile_outputs) {
+                launch_batch_scan.template operator()<false>();
+            } else {
+                launch_batch_scan.template operator()<true>();
+            }
 
             // ---- Batch-replay pass: one CTA per batch slot. Most CTAs return
             // after a metadata flag load; engaging CTAs replay only their

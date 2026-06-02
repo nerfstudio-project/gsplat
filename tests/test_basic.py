@@ -3393,7 +3393,12 @@ def test_rasterize_to_pixels_eval3d(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
-def test_eval3d_masked_tile_writes_safe_defaults(tile_size):
+@pytest.mark.parametrize(
+    "renderer_config",
+    [gsplat.RendererConfig_MixedBatch(), gsplat.RendererConfig_ParallelBatch()],
+    ids=["mixed_batch", "parallel_batch"],
+)
+def test_eval3d_masked_tile_writes_safe_defaults(tile_size, renderer_config):
     # The public binding allocates outputs internally with at::empty. If a
     # kernel store is accidentally skipped, stale allocator contents could
     # still match these expected defaults and let this test pass.
@@ -3447,6 +3452,7 @@ def test_eval3d_masked_tile_writes_safe_defaults(tile_size):
         masks=masks,
         return_sample_counts=True,
         return_normals=True,
+        renderer_config=renderer_config,
     )
 
     expected_background = backgrounds.reshape(1, 1, 1, channels).expand_as(
@@ -3462,8 +3468,14 @@ def test_eval3d_masked_tile_writes_safe_defaults(tile_size):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
+@pytest.mark.parametrize(
+    "renderer_config",
+    [gsplat.RendererConfig_MixedBatch(), gsplat.RendererConfig_ParallelBatch()],
+    ids=["mixed_batch", "parallel_batch"],
+)
 def test_eval3d_unsafe_masked_tile_outputs_match_safe_outputs_on_active_tiles(
     tile_size,
+    renderer_config,
 ):
     from gsplat.cuda._wrapper import (
         fully_fused_projection_with_ut,
@@ -3550,6 +3562,7 @@ def test_eval3d_unsafe_masked_tile_outputs_match_safe_outputs_on_active_tiles(
             return_sample_counts=True,
             return_normals=True,
             unsafe_masked_tile_outputs=unsafe_masked_tile_outputs,
+            renderer_config=renderer_config,
         )
 
     safe_outputs = run(False)
