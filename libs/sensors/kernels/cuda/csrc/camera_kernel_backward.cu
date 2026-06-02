@@ -1,12 +1,24 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
-// Backward CUDA kernels for OpenCV pinhole camera models. Implements the VJPs
-// for each forward kernel in camera_kernel.cu. Inline quaternion VJP adapters
-// at the top of this TU delegate to libs/geometry's
-// `quat_rotate_vector_bwd_impl<float>` / `quat_inverse_rotate_vector_bwd_impl<float>`.
+// Native CUDA VJPs for OpenCV pinhole camera models, called by the PyTorch
+// autograd wrappers for each forward kernel in camera_kernel.cu. Shared
+// quaternion VJP adapters live in camera_kernel.cuh and delegate to
+// libs/geometry.
 
 #include "camera_kernel.cuh"
 
@@ -25,137 +37,6 @@ dim3 grid_for_count(int64_t count) {
     return dim3(static_cast<unsigned int>((count + kThreads - 1) / kThreads));
 }
 
-// ===========================================================================
-// Private quaternion VJP adapters
-//
-// quat_rotate_bwd_xyzw_geom and quat_inverse_rotate_bwd_xyzw_geom are private
-// adapters around `quat_rotate_vector_bwd_impl<float>` from
-// libs/geometry/kernels/cuda/csrc/quaternion.cuh. Both accept and return xyzw
-// quaternion ordering (matching sensorlib's internal convention). They
-// accumulate into the caller's float4& d_q and float3& d_v rather than
-// overwriting, so backward callsites can simply `+=` multiple contributions.
-// ===========================================================================
-
-__device__ __forceinline__ void quat_rotate_bwd_xyzw_geom(
-    float4 q,
-    float3 v,
-    float3 d_v_out,
-    float4& d_q,
-    float3& d_v) {
-    float gqx = 0.0f;
-    float gqy = 0.0f;
-    float gqz = 0.0f;
-    float gqw = 0.0f;
-    float gvx = 0.0f;
-    float gvy = 0.0f;
-    float gvz = 0.0f;
-    quat_rotate_vector_bwd_impl<float>(
-        q.x,
-        q.y,
-        q.z,
-        q.w,
-        v.x,
-        v.y,
-        v.z,
-        d_v_out.x,
-        d_v_out.y,
-        d_v_out.z,
-        &gqx,
-        &gqy,
-        &gqz,
-        &gqw,
-        &gvx,
-        &gvy,
-        &gvz);
-    d_q.x += gqx;
-    d_q.y += gqy;
-    d_q.z += gqz;
-    d_q.w += gqw;
-    d_v.x += gvx;
-    d_v.y += gvy;
-    d_v.z += gvz;
-}
-
-// Like quat_rotate_bwd_xyzw_geom but for the conjugate (inverse rotation).
-// Calls quat_rotate_vector_bwd_impl with negated imaginary parts to represent
-// q^{-1}, then undoes the sign flip on the imaginary-gradient outputs.
-__device__ __forceinline__ void quat_inverse_rotate_bwd_xyzw_geom(
-    float4 q,
-    float3 v,
-    float3 d_v_out,
-    float4& d_q,
-    float3& d_v) {
-    float gqx = 0.0f;
-    float gqy = 0.0f;
-    float gqz = 0.0f;
-    float gqw = 0.0f;
-    float gvx = 0.0f;
-    float gvy = 0.0f;
-    float gvz = 0.0f;
-    quat_rotate_vector_bwd_impl<float>(
-        -q.x,
-        -q.y,
-        -q.z,
-        q.w,
-        v.x,
-        v.y,
-        v.z,
-        d_v_out.x,
-        d_v_out.y,
-        d_v_out.z,
-        &gqx,
-        &gqy,
-        &gqz,
-        &gqw,
-        &gvx,
-        &gvy,
-        &gvz);
-    // Conjugate chain rule: imaginary parts negate, real part unchanged.
-    d_q.x += -gqx;
-    d_q.y += -gqy;
-    d_q.z += -gqz;
-    d_q.w += gqw;
-    d_v.x += gvx;
-    d_v.y += gvy;
-    d_v.z += gvz;
-}
-
-// ===========================================================================
-// Block-reduction and intrinsic-grad accumulation helpers
-// ===========================================================================
-
-// Returns the block sum of `value` on every lane of warp 0 (threadIdx.x < 32);
-// lanes in other warps read 0. Current callers consume only threadIdx.x == 0.
-template <int BlockThreads>
-__device__ __forceinline__ float block_sum(float value) {
-    static_assert(BlockThreads % 32 == 0, "BlockThreads must be a multiple of warp size");
-    constexpr int kNumWarps = BlockThreads / 32;
-    __shared__ float warp_sums[kNumWarps];
-
-    unsigned int mask = 0xffffffffu;
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        value += __shfl_xor_sync(mask, value, offset);
-    }
-    int lane = threadIdx.x & 31;
-    int warp = threadIdx.x >> 5;
-    if (lane == 0) {
-        warp_sums[warp] = value;
-    }
-    __syncthreads();
-
-    float total = 0.0f;
-    if (warp == 0) {
-        total = threadIdx.x < kNumWarps ? warp_sums[lane] : 0.0f;
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            total += __shfl_xor_sync(mask, total, offset);
-        }
-    }
-    __syncthreads();
-    return total;
-}
-
-// Per-thread accumulator for all intrinsic parameter gradients. Flushed once
-// per block via reduce_intrinsic_grads to keep atomicAdd pressure low.
 struct IntrinsicLocalGrads {
     float fx = 0.0f;
     float fy = 0.0f;

@@ -1,7 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-"""Stateless functional wrappers for OpenCV pinhole camera operations (Layer 1).
+"""Stateless functional wrappers for projective camera operations (Layer 1).
 
 This module bridges the Layer 0 CUDA kernel bindings and the Layer 2 camera model
 classes.  Every function here is a thin, stateless wrapper: it forwards arguments
@@ -16,8 +28,8 @@ from torch import Tensor
 
 from ..kernels.cameras import ops as _kernel_ops
 from ..kernels.cameras.types import (
+    CameraProjection,
     ExternalDistortion,
-    OpenCVPinholeProjection,
     ShutterType,
 )
 from ..kernels.common.utils import poses_to_matrix, valid_flags_to_indices
@@ -31,16 +43,16 @@ from .return_types import (
 
 def camera_rays_to_image_points(
     camera_rays: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     *,
     allow_device_transfer: bool = False,
 ) -> ImagePointsReturn:
-    """Project camera-space rays to image points using an OpenCV pinhole model.
+    """Project camera-space rays to image points using a registered projection model.
 
     Args:
         camera_rays: (N, 3) unit direction vectors in camera space.
-        projection: OpenCV pinhole intrinsic parameters.
+        projection: Camera projection intrinsic parameters (OpenCV pinhole or FTheta).
         external_distortion: External distortion model (e.g. windshield) applied
             after standard lens distortion, or ``NoExternalDistortion``.
         allow_device_transfer: If ``False`` (default), raises ``RuntimeError`` when
@@ -64,7 +76,7 @@ def camera_rays_to_image_points(
 
 def image_points_to_camera_rays(
     image_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     *,
     allow_device_transfer: bool = False,
@@ -77,7 +89,7 @@ def image_points_to_camera_rays(
 
     Args:
         image_points: (N, 2) image coordinates.
-        projection: OpenCV pinhole intrinsic parameters.
+        projection: Camera projection intrinsic parameters (OpenCV pinhole or FTheta).
         external_distortion: External distortion model applied during projection,
             whose inverse is applied here, or ``NoExternalDistortion``.
         allow_device_transfer: If ``False`` (default), raises ``RuntimeError`` when
@@ -96,7 +108,7 @@ def image_points_to_camera_rays(
 
 def project_world_points_mean_pose(
     world_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     resolution: tuple[int, int],
     dynamic_pose: DynamicPose,
@@ -118,7 +130,7 @@ def project_world_points_mean_pose(
 
     Args:
         world_points: (N, 3) world coordinates.
-        projection: OpenCV pinhole intrinsic parameters.
+        projection: Camera projection intrinsic parameters (OpenCV pinhole or FTheta).
         external_distortion: External distortion model, or ``NoExternalDistortion``.
         resolution: (width, height) in pixels used for validity checking.
         dynamic_pose: Time-varying dynamic pose interpolated over the exposure window.
@@ -178,7 +190,7 @@ def project_world_points_mean_pose(
 
 def project_world_points_shutter_pose(
     world_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     resolution: tuple[int, int],
     shutter_type: ShutterType,
@@ -205,7 +217,7 @@ def project_world_points_shutter_pose(
 
     Args:
         world_points: (N, 3) world coordinates.
-        projection: OpenCV pinhole intrinsic parameters.
+        projection: Camera projection intrinsic parameters (OpenCV pinhole or FTheta).
         external_distortion: External distortion model, or ``NoExternalDistortion``.
         resolution: (width, height) in pixels, used for both validity checking and
             scanline-time computation.
@@ -281,7 +293,7 @@ def project_world_points_shutter_pose(
 
 def image_points_to_world_rays_static_pose(
     image_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     pose: Pose,
     *,
@@ -297,7 +309,7 @@ def image_points_to_world_rays_static_pose(
 
     Args:
         image_points: (N, 2) image coordinates.
-        projection: OpenCV pinhole intrinsic parameters.
+        projection: Camera projection intrinsic parameters (OpenCV pinhole or FTheta).
         external_distortion: External distortion model, or ``NoExternalDistortion``.
         pose: Static sensor-to-world pose used to rotate camera-space rays
             into world space.
@@ -342,7 +354,7 @@ def image_points_to_world_rays_static_pose(
 
 def image_points_to_world_rays_shutter_pose(
     image_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     resolution: tuple[int, int],
     shutter_type: ShutterType,
@@ -364,7 +376,7 @@ def image_points_to_world_rays_shutter_pose(
 
     Args:
         image_points: (N, 2) image coordinates.
-        projection: OpenCV pinhole intrinsic parameters.
+        projection: Camera projection intrinsic parameters (OpenCV pinhole or FTheta).
         external_distortion: External distortion model, or ``NoExternalDistortion``.
         resolution: (width, height) in pixels, used to derive per-scanline times
             (per row for vertical shutters, per column for horizontal shutters).
@@ -417,7 +429,7 @@ def image_points_to_world_rays_shutter_pose(
 
 
 def pixel_grid_to_world_rays_shutter_pose(
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     resolution: tuple[int, int],
     shutter_type: ShutterType,
@@ -432,13 +444,13 @@ def pixel_grid_to_world_rays_shutter_pose(
     """Back-project every pixel in a full image grid to world-space rays.
 
     Convenience wrapper that generates the dense (H * W, 2) pixel-center grid
-    internally and then dispatches to the rolling-shutter ray kernel.  Equivalent
+    internally and then dispatches to the rolling-shutter ray kernel. Equivalent
     to calling :func:`generate_image_points` followed by
     :func:`image_points_to_world_rays_shutter_pose`, but spares the caller the
     explicit ``generate_image_points`` call.
 
     Args:
-        projection: OpenCV pinhole intrinsic parameters.
+        projection: Camera projection intrinsic parameters (OpenCV pinhole or FTheta).
         external_distortion: External distortion model, or ``NoExternalDistortion``.
         resolution: (width, height) in pixels defining the grid dimensions.
         shutter_type: Shutter mode (e.g. ``ShutterType.ROLLING_TOP_TO_BOTTOM``).

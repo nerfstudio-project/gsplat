@@ -1,0 +1,768 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+// Device-side math helpers for the FTheta camera CUDA kernels.
+// Provides the forward/backward PODs, polynomial evaluators, Newton solvers,
+// and project/backproject primitives (with matching adjoints). Shared
+// pose/quat/lerp helpers come from camera_kernel.cuh.
+
+#include "camera_kernel.cuh"
+#include "camera_params.h"
+#include "math.cuh"
+
+#include <cuda_runtime.h>
+
+#include <cstdint>
+
+// Newton-iteration convergence epsilon: short-circuits the solver when |delta|
+// or |df| collapses to numerical noise.
+constexpr float kFThetaNewtonEpsilon = 1.0e-10f;
+
+// IFT one-step det-guard epsilon. Shared by the forward IFT correction step
+// and the backward adjoint so they zero gradient on the same set of
+// near-singular rays. Loosening below 1e-10 produces systematic 1-step phase
+// offsets under Adam.
+constexpr float kFThetaIftDfEpsilon = 1.0e-10f;
+
+// sin^2(theta) lower bound used by ftheta_project_ray_bwd to gate the
+// 1/sin(theta) factor in d_acos. Two orders tighter than the Newton/IFT
+// epsilons because sin_theta_sq is a squared quantity; outside this band
+// the gradient through ray_norm.z is set to zero (clamp boundary).
+constexpr float kFThetaSinThetaSqEpsilon = 1.0e-12f;
+
+// Reference-polynomial selector. Values must match the Python IntEnum.
+//   Forward  (0): r = fw_poly(theta) is the direct evaluation; backproject
+//                 must Newton-invert fw_poly.
+//   Backward (1): theta = bw_poly(rdist) is the direct evaluation; project
+//                 must Newton-invert bw_poly.
+enum class FThetaReferencePolynomial : int64_t {
+    Forward = 0,
+    Backward = 1,
+};
+
+// Number of differentiable scalar slots in the FTheta intrinsic surface:
+//   2 (pp) + 6 (fw_poly) + 6 (bw_poly) + 4 (A) + 4 (Ainv) = 22.
+constexpr int kFThetaNumDiffParams = 2 + 2 * kFThetaMaxPolynomialTerms + 4 + 4;
+
+// Register-resident parameter cache loaded once per thread. Mirrors the
+// OpenCVPinholeParams pattern from camera_kernel.cuh.
+struct FThetaParams {
+    float2 principal_point;
+    float fw_poly[kFThetaMaxPolynomialTerms];
+    float bw_poly[kFThetaMaxPolynomialTerms];
+    float A[2][2];
+    float Ainv[2][2];
+    FThetaReferencePolynomial reference_polynomial;
+    int64_t fw_poly_degree;
+    int64_t bw_poly_degree;
+    int64_t newton_iterations;
+    float max_angle;
+    float min_2d_norm;
+    int64_t width;
+    int64_t height;
+};
+
+// Forward intermediate state captured per-thread in ftheta_project_ray.
+// The bool flags are bit-packed into a single float scratch slot by the
+// per-kernel save layer.
+struct FThetaProjectState {
+    float3 ray_norm;
+    float theta;
+    float r;
+    float xy_norm;
+    bool behind_camera;
+    bool angle_clamped;
+    bool min2d_clamped;
+};
+
+// Backproject intermediate state. `min2d_clamped` short-circuits to (0,0,1)
+// with no upstream gradient. `ray_raw` is the pre-normalize3 vector; the bwd
+// chains normalize3_bwd through it.
+struct FThetaBackprojectState {
+    float2 transformed;
+    float rdist;
+    float theta;
+    float3 ray_raw;
+    bool min2d_clamped;
+};
+
+// Unpacks the flat KernelParameters into a register-resident FThetaParams.
+// FTheta has no fx/fy denominators; the IFT det-guard at kFThetaIftDfEpsilon
+// plays the equivalent role on the polynomial Newton path.
+__device__ __forceinline__ FThetaParams load_ftheta_params(
+    FThetaProjection_KernelParameters projection) {
+    FThetaParams p;
+    p.principal_point.x = projection.principal_point[0];
+    p.principal_point.y = projection.principal_point[1];
+#pragma unroll
+    for (int i = 0; i < kFThetaMaxPolynomialTerms; ++i) {
+        p.fw_poly[i] = projection.fw_poly[i];
+        p.bw_poly[i] = projection.bw_poly[i];
+    }
+    p.A[0][0] = projection.A[0];
+    p.A[0][1] = projection.A[1];
+    p.A[1][0] = projection.A[2];
+    p.A[1][1] = projection.A[3];
+    p.Ainv[0][0] = projection.Ainv[0];
+    p.Ainv[0][1] = projection.Ainv[1];
+    p.Ainv[1][0] = projection.Ainv[2];
+    p.Ainv[1][1] = projection.Ainv[3];
+    p.reference_polynomial =
+        static_cast<FThetaReferencePolynomial>(projection.reference_polynomial);
+    p.fw_poly_degree = projection.fw_poly_degree;
+    p.bw_poly_degree = projection.bw_poly_degree;
+    p.newton_iterations = projection.newton_iterations;
+    p.max_angle = projection.max_angle;
+    p.min_2d_norm = projection.min_2d_norm;
+    p.width = projection.width;
+    p.height = projection.height;
+    return p;
+}
+
+// ---- Polynomial helpers ---------------------------------------------------
+
+__device__ __forceinline__ int64_t clamp_ftheta_poly_degree(
+    int64_t const degree) {
+    return degree < kFThetaMaxPolynomialTerms
+               ? degree
+               : kFThetaMaxPolynomialTerms - 1;
+}
+
+// Evaluates the power-basis polynomial c[0] + c[1]*x + ... + c[degree]*x^degree.
+// The `i <= d` predicate inside the unrolled loop folds into the FMA chain.
+__device__ __forceinline__ float ftheta_poly_eval(
+    float const x,
+    float const* __restrict__ c,
+    int64_t const degree) {
+    int64_t const d = clamp_ftheta_poly_degree(degree);
+    float result = 0.0f;
+    float x_pow = 1.0f;
+#pragma unroll
+    for (int i = 0; i < kFThetaMaxPolynomialTerms; ++i) {
+        if (i <= d) {
+            result += c[i] * x_pow;
+        }
+        x_pow *= x;
+    }
+    return result;
+}
+
+// Evaluates the polynomial derivative sum_{i>=1} i * c[i] * x^(i-1).
+// Returns 0 when degree == 0.
+__device__ __forceinline__ float ftheta_poly_eval_derivative(
+    float const x,
+    float const* __restrict__ c,
+    int64_t const degree) {
+    int64_t const d = clamp_ftheta_poly_degree(degree);
+    if (d == 0) {
+        return 0.0f;
+    }
+    float result = 0.0f;
+    float x_pow = 1.0f;
+#pragma unroll
+    for (int i = 1; i < kFThetaMaxPolynomialTerms; ++i) {
+        if (i <= d) {
+            result += static_cast<float>(i) * c[i] * x_pow;
+        }
+        x_pow *= x;
+    }
+    return result;
+}
+
+// ---- Newton solvers (non-diff) --------------------------------------------
+
+__device__ __forceinline__ float ftheta_solve_newton(
+    float const target,
+    float const initial_guess,
+    float const* __restrict__ poly,
+    int64_t const degree,
+    int64_t const newton_iterations) {
+    float solution = initial_guess;
+    for (int64_t i = 0; i < newton_iterations; ++i) {
+        float const df = ftheta_poly_eval_derivative(solution, poly, degree);
+        if (fabsf(df) < kFThetaNewtonEpsilon) {
+            break;
+        }
+        float const f = ftheta_poly_eval(solution, poly, degree);
+        float const delta = (f - target) / df;
+        solution -= delta;
+        if (fabsf(delta) < kFThetaNewtonEpsilon) {
+            break;
+        }
+    }
+    return fmaxf(solution, 0.0f);
+}
+
+// Solves bw_poly(r) = theta for r on the BACKWARD reference branch of
+// ftheta_project_ray. Initial guess fw_poly(theta) is exact when fw_poly is
+// the algebraic inverse of bw_poly; typical convergence is 2-3 iterations.
+// Returns max(r, 0) since negative roots are non-physical for radial distance.
+__device__ __forceinline__ float ftheta_solve_bw_newton(
+    float const theta,
+    FThetaParams const& p) {
+    float const initial = ftheta_poly_eval(theta, p.fw_poly, p.fw_poly_degree);
+    return ftheta_solve_newton(
+        theta, initial, p.bw_poly, p.bw_poly_degree, p.newton_iterations);
+}
+
+// Solves fw_poly(theta) = r for theta on the FORWARD reference branch of
+// ftheta_backproject_image_point. Initial guess: bw_poly(r).
+__device__ __forceinline__ float ftheta_solve_fw_newton(
+    float const r,
+    FThetaParams const& p) {
+    float const initial = ftheta_poly_eval(r, p.bw_poly, p.bw_poly_degree);
+    return ftheta_solve_newton(
+        r, initial, p.fw_poly, p.fw_poly_degree, p.newton_iterations);
+}
+
+// ---- Bit-packed flag helpers (used by per-kernel scratch save) ------------
+
+// Packs the three singularity flags into one float scratch slot via the
+// IEEE-754 bit pattern; the bwd recovers them with ftheta_unpack_flags.
+// The slot is only ever read back through __float_as_uint (no float
+// arithmetic, no comparisons), so storing a non-canonical bit pattern in
+// the float buffer is safe end-to-end.
+__device__ __forceinline__ float ftheta_pack_flags(
+    bool behind_camera,
+    bool angle_clamped,
+    bool min2d_clamped) {
+    uint32_t bits = 0u;
+    if (behind_camera) bits |= 1u;
+    if (angle_clamped) bits |= 2u;
+    if (min2d_clamped) bits |= 4u;
+    return __uint_as_float(bits);
+}
+
+__device__ __forceinline__ void ftheta_unpack_flags(
+    float packed,
+    bool& behind_camera,
+    bool& angle_clamped,
+    bool& min2d_clamped) {
+    uint32_t bits = __float_as_uint(packed);
+    behind_camera = (bits & 1u) != 0u;
+    angle_clamped = (bits & 2u) != 0u;
+    min2d_clamped = (bits & 4u) != 0u;
+}
+
+// One-flag variant for the backproject path; only `min2d_clamped` is meaningful.
+__device__ __forceinline__ float ftheta_bp_pack_flags(bool min2d_clamped) {
+    return __uint_as_float(min2d_clamped ? 1u : 0u);
+}
+
+__device__ __forceinline__ bool ftheta_bp_unpack_flags(float packed) {
+    return (__float_as_uint(packed) & 1u) != 0u;
+}
+
+// Projects a camera-space ray to an image coordinate using the FTheta model.
+// `valid_out` reports projection-success only (ray in front of camera and
+// theta <= max_angle). The finite/in-frame check is applied separately at the
+// write site via ftheta_image_point_in_frame so rolling-shutter loops can
+// recover from mid-iteration poses that briefly fall outside the frame.
+//
+// Singular cases (in order):
+//   1. ray.z <= 0           -> (0, 0), valid=false, behind_camera=true.
+//   2. theta > max_angle    -> (0, 0), valid=false, angle_clamped=true.
+//   3. xy_norm < min_2d_norm -> principal_point exactly, valid=true,
+//                               min2d_clamped=true.
+//
+// Composition: image_point = A @ (ray_norm.xy * (r / xy_norm)) + pp.
+//
+// IFT correction (BACKWARD ref branch): non-diff Newton to r_star, then one
+// differentiable correction step r = r_star - (bw_poly(r_star) - theta)/safe_df,
+// where safe_df = bw_poly'(r_star) when |bw_poly'| > kFThetaIftDfEpsilon and
+// 1.0 otherwise. The near-singular sanitization keeps r finite; the matching
+// bwd uses the same safe_df branch, including the saturated safe_df = 1.0f
+// local derivative and polynomial coefficient adjoint.
+__device__ __forceinline__ float2 ftheta_project_ray(
+    float3 const camera_ray,
+    FThetaParams const& p,
+    FThetaProjectState& state,
+    bool& valid_out) {
+    state.ray_norm = make_float3(0.0f, 0.0f, 0.0f);
+    state.theta = 0.0f;
+    state.r = 0.0f;
+    state.xy_norm = 0.0f;
+    state.behind_camera = false;
+    state.angle_clamped = false;
+    state.min2d_clamped = false;
+
+    if (camera_ray.z <= 0.0f) {
+        state.behind_camera = true;
+        valid_out = false;
+        return make_float2(0.0f, 0.0f);
+    }
+
+    state.ray_norm = normalize3(camera_ray);
+    float const cz = fminf(fmaxf(state.ray_norm.z, -1.0f), 1.0f);
+    state.theta = acosf(cz);
+    if (state.theta > p.max_angle) {
+        state.angle_clamped = true;
+        valid_out = false;
+        return make_float2(0.0f, 0.0f);
+    }
+
+    if (p.reference_polynomial == FThetaReferencePolynomial::Forward) {
+        state.r = ftheta_poly_eval(state.theta, p.fw_poly, p.fw_poly_degree);
+    } else {
+        // BACKWARD ref: non-diff Newton to r_star, then one-step IFT correction.
+        float const r_star = ftheta_solve_bw_newton(state.theta, p);
+        float const f_val = ftheta_poly_eval(r_star, p.bw_poly, p.bw_poly_degree);
+        float const df_val = ftheta_poly_eval_derivative(r_star, p.bw_poly, p.bw_poly_degree);
+        float const safe_df = (fabsf(df_val) > kFThetaIftDfEpsilon) ? df_val : 1.0f;
+        state.r = r_star - (f_val - state.theta) / safe_df;
+    }
+
+    state.xy_norm = sqrtf(state.ray_norm.x * state.ray_norm.x
+                          + state.ray_norm.y * state.ray_norm.y);
+    // `<=` because min_2d_norm may be configured to 0; the bwd divides by
+    // xy_norm, so xy_norm == 0 must take the clamp path.
+    if (state.xy_norm <= p.min_2d_norm) {
+        state.min2d_clamped = true;
+        valid_out = true;
+        return p.principal_point;
+    }
+
+    float const scale = state.r / state.xy_norm;
+    float2 const off = make_float2(state.ray_norm.x * scale, state.ray_norm.y * scale);
+    float2 const xf = make_float2(
+        p.A[0][0] * off.x + p.A[0][1] * off.y,
+        p.A[1][0] * off.x + p.A[1][1] * off.y);
+    valid_out = true;
+    return make_float2(xf.x + p.principal_point.x, xf.y + p.principal_point.y);
+}
+
+// Lifts an image-plane pixel to a unit camera-space ray via the FTheta model.
+// Composition order:
+//   1. offset      = image_point - pp.
+//   2. transformed = Ainv @ offset.
+//   3. rdist       = sqrt(transformed.x^2 + transformed.y^2).
+//   4. rdist < min_2d_norm -> (0, 0, 1) short-circuit, min2d_clamped=true.
+//   5. theta       = bw_poly(rdist) (BACKWARD ref) OR Newton-invert fw_poly
+//                    on rdist (FORWARD ref) with IFT correction.
+//   6. ray_raw     = (transformed.xy * sin(theta)/rdist, cos(theta)).
+//   7. return normalize3(ray_raw).
+__device__ __forceinline__ float3 ftheta_backproject_image_point(
+    float2 const image_point,
+    FThetaParams const& p,
+    FThetaBackprojectState& state) {
+    state.transformed = make_float2(0.0f, 0.0f);
+    state.rdist = 0.0f;
+    state.theta = 0.0f;
+    state.ray_raw = make_float3(0.0f, 0.0f, 1.0f);
+    state.min2d_clamped = false;
+
+    float2 const offset = make_float2(
+        image_point.x - p.principal_point.x,
+        image_point.y - p.principal_point.y);
+    state.transformed = make_float2(
+        p.Ainv[0][0] * offset.x + p.Ainv[0][1] * offset.y,
+        p.Ainv[1][0] * offset.x + p.Ainv[1][1] * offset.y);
+    state.rdist = sqrtf(state.transformed.x * state.transformed.x
+                        + state.transformed.y * state.transformed.y);
+
+    // `<=` because min_2d_norm may be 0; the bwd divides by rdist, so
+    // rdist == 0 must take the clamp path.
+    if (state.rdist <= p.min_2d_norm) {
+        state.min2d_clamped = true;
+        return make_float3(0.0f, 0.0f, 1.0f);
+    }
+
+    if (p.reference_polynomial == FThetaReferencePolynomial::Backward) {
+        state.theta = ftheta_poly_eval(state.rdist, p.bw_poly, p.bw_poly_degree);
+    } else {
+        // FORWARD ref: Newton-invert fw_poly(theta) = rdist + IFT correction.
+        float const theta_star = ftheta_solve_fw_newton(state.rdist, p);
+        float const f_val = ftheta_poly_eval(theta_star, p.fw_poly, p.fw_poly_degree);
+        float const df_val = ftheta_poly_eval_derivative(theta_star, p.fw_poly, p.fw_poly_degree);
+        float const safe_df = (fabsf(df_val) > kFThetaIftDfEpsilon) ? df_val : 1.0f;
+        state.theta = theta_star - (f_val - state.rdist) / safe_df;
+    }
+
+    float const sin_theta = sinf(state.theta);
+    float const cos_theta = cosf(state.theta);
+    float const scale = sin_theta / state.rdist;
+    state.ray_raw = make_float3(
+        state.transformed.x * scale,
+        state.transformed.y * scale,
+        cos_theta);
+    return normalize3(state.ray_raw);
+}
+
+// ---- Bounds helpers (FTheta variants) -------------------------------------
+
+// Returns true iff image_point falls inside [0, width) x [0, height).
+// FTheta produces pixel-space output directly via the A warp, so width/height
+// are read straight off the POD.
+__device__ __forceinline__ bool is_in_bounds_ftheta(
+    float2 image_point,
+    int64_t width,
+    int64_t height) {
+    return image_point.x >= 0.0f
+           && image_point.x < static_cast<float>(width)
+           && image_point.y >= 0.0f
+           && image_point.y < static_cast<float>(height);
+}
+
+// Final-validity predicate applied at kernel write sites: image_point must be
+// finite and inside [0, width) x [0, height). Split out of ftheta_project_ray
+// so rolling-shutter loops can iterate back in from a brief out-of-frame pose.
+__device__ __forceinline__ bool ftheta_image_point_in_frame(
+    float2 image_point,
+    FThetaParams const& p) {
+    return isfinite(image_point.x) && isfinite(image_point.y)
+        && is_in_bounds_ftheta(image_point, p.width, p.height);
+}
+
+// =============================================================================
+// Backward POD + device functions
+// =============================================================================
+
+// Per-thread intrinsic-grad accumulator. Default-initialized so a thread that
+// bails (behind_camera, angle_clamped, etc.) contributes zero to the block
+// reduction without touching uninitialized memory. Slot count matches
+// kFThetaNumDiffParams (2 + 6 + 6 + 4 + 4 = 22).
+struct FThetaParamGrads {
+    float pp[2] = {};
+    float fw_poly[kFThetaMaxPolynomialTerms] = {};
+    float bw_poly[kFThetaMaxPolynomialTerms] = {};
+    float A[4] = {};      // row-major 2x2
+    float Ainv[4] = {};   // row-major 2x2
+};
+
+// ---- Polynomial bwd helpers ------------------------------------------------
+
+// Backward of ftheta_poly_eval. For y = sum c[i]*x^i:
+//   dy/dx    = sum_{i>=1} i * c[i] * x^(i-1) = ftheta_poly_eval_derivative.
+//   dy/dc[i] = x^i.
+__device__ __forceinline__ void ftheta_poly_eval_bwd(
+    float const x,
+    float const* __restrict__ c,
+    int64_t const degree,
+    float const d_y,
+    float& __restrict__ d_x,
+    float* __restrict__ d_c) {
+    d_x += d_y * ftheta_poly_eval_derivative(x, c, degree);
+    int64_t const d = clamp_ftheta_poly_degree(degree);
+    float x_pow = 1.0f;
+#pragma unroll
+    for (int i = 0; i < kFThetaMaxPolynomialTerms; ++i) {
+        if (i <= d) {
+            d_c[i] += d_y * x_pow;
+        }
+        x_pow *= x;
+    }
+}
+
+// Backward of ftheta_poly_eval_derivative. For dy = sum_{i>=1} i*c[i]*x^(i-1):
+//   d(dy)/dx    = sum_{i>=2} i*(i-1)*c[i]*x^(i-2).
+//   d(dy)/dc[i] = i * x^(i-1) for i >= 1.
+__device__ __forceinline__ void ftheta_poly_eval_derivative_bwd(
+    float const x,
+    float const* __restrict__ c,
+    int64_t const degree,
+    float const d_dy,
+    float& __restrict__ d_x,
+    float* __restrict__ d_c) {
+    int64_t const d = clamp_ftheta_poly_degree(degree);
+    if (d == 0) {
+        return;
+    }
+    // d(dy)/dx contribution
+    float second_deriv = 0.0f;
+    {
+        float x_pow = 1.0f;
+#pragma unroll
+        for (int i = 2; i < kFThetaMaxPolynomialTerms; ++i) {
+            if (i <= d) {
+                second_deriv +=
+                    static_cast<float>(i) * static_cast<float>(i - 1) * c[i] * x_pow;
+            }
+            x_pow *= x;
+        }
+    }
+    d_x += d_dy * second_deriv;
+    // d(dy)/dc[i] contribution: i * x^(i-1) for i in [1..d].
+    {
+        float x_pow = 1.0f; // x^(i-1) starting at i=1
+#pragma unroll
+        for (int i = 1; i < kFThetaMaxPolynomialTerms; ++i) {
+            if (i <= d) {
+                d_c[i] += d_dy * static_cast<float>(i) * x_pow;
+            }
+            x_pow *= x;
+        }
+    }
+}
+
+// ---- Forward project bwd (camera ray -> image point) ----------------------
+//
+// Backward of ftheta_project_ray. Recovers d_camera_ray and accumulates into
+// d_params. IFT adjoint:
+//
+//   * Det-guard `|df_val| > kFThetaIftDfEpsilon` zeroes the gradient on the
+//     same set of near-singular rays as the forward IFT correction step.
+//   * Both terms of the polynomial-coefficient adjoint are emitted: the
+//     direct path through f_val and the indirect path through df_val.
+//   * r_star is recomputed deterministically via ftheta_solve_bw_newton; the
+//     re-solve avoids paying for an extra scratch slot.
+__device__ __forceinline__ void ftheta_project_ray_bwd(
+    float3 const camera_ray,
+    FThetaParams const& p,
+    FThetaProjectState const& state,
+    float2 const d_img,
+    float3& __restrict__ d_camera_ray,
+    FThetaParamGrads& __restrict__ d_params) {
+    if (state.behind_camera || state.angle_clamped) {
+        return;
+    }
+    // d_pp gets the full d_img regardless of the min2d_clamped branch
+    // (that branch returns pp exactly).
+    d_params.pp[0] += d_img.x;
+    d_params.pp[1] += d_img.y;
+    if (state.min2d_clamped) {
+        return;
+    }
+
+    // Recover off from saved state (off = ray_norm.xy * (r / xy_norm)).
+    float const inv_xy = 1.0f / state.xy_norm;
+    float const scale = state.r * inv_xy;
+    float const off_x = state.ray_norm.x * scale;
+    float const off_y = state.ray_norm.y * scale;
+
+    // d_A row-major.
+    d_params.A[0] += d_img.x * off_x;
+    d_params.A[1] += d_img.x * off_y;
+    d_params.A[2] += d_img.y * off_x;
+    d_params.A[3] += d_img.y * off_y;
+
+    // d_off = A^T @ d_img.
+    float const d_off_x = p.A[0][0] * d_img.x + p.A[1][0] * d_img.y;
+    float const d_off_y = p.A[0][1] * d_img.x + p.A[1][1] * d_img.y;
+
+    // off = ray_norm.xy * scale -> d_scale and d_ray_norm via off chain.
+    float const d_scale = state.ray_norm.x * d_off_x + state.ray_norm.y * d_off_y;
+    float d_ray_norm_x = d_off_x * scale;
+    float d_ray_norm_y = d_off_y * scale;
+
+    // scale = r / xy_norm; the d_xy_norm path folds an extra 1/xy_norm
+    // through to d_ray_norm via xy_norm = sqrt(ray_norm.x^2 + ray_norm.y^2),
+    // giving the inv_xy^3 pre-factor below.
+    float const d_r = d_scale * inv_xy;
+    float const inv_xy3 = inv_xy * inv_xy * inv_xy;
+    float const d_xy_norm_via_scale = -d_scale * state.r * inv_xy3;
+
+    // xy_norm = sqrt(ray_norm.x^2 + ray_norm.y^2).
+    d_ray_norm_x += d_xy_norm_via_scale * state.ray_norm.x;
+    d_ray_norm_y += d_xy_norm_via_scale * state.ray_norm.y;
+
+    // r path: FORWARD ref = direct fw_poly eval; BACKWARD ref = IFT.
+    float d_theta = 0.0f;
+    if (p.reference_polynomial == FThetaReferencePolynomial::Forward) {
+        ftheta_poly_eval_bwd(state.theta, p.fw_poly, p.fw_poly_degree, d_r, d_theta, d_params.fw_poly);
+    } else {
+        // Recompute r_star deterministically rather than spending a scratch slot.
+        float const r_star = ftheta_solve_bw_newton(state.theta, p);
+        float const f_val = ftheta_poly_eval(r_star, p.bw_poly, p.bw_poly_degree);
+        float const df_val =
+            ftheta_poly_eval_derivative(r_star, p.bw_poly, p.bw_poly_degree);
+        if (fabsf(df_val) > kFThetaIftDfEpsilon) {
+            float const inv_df = 1.0f / df_val;
+            // r = r_star - (f_val - theta) * inv_df. Treat r_star as constant
+            // per the IFT trick, so d_f_val/d_r_star contributes nothing.
+            d_theta += d_r * inv_df;
+            float const d_f_val = -d_r * inv_df;
+            float const d_df_val = d_r * (f_val - state.theta) * inv_df * inv_df;
+            // Fused accumulation over d_params.bw_poly[i]: f_val term (all i)
+            // and df_val term (i>=1) collapse to one slot-touch each.
+            int64_t const bdeg = clamp_ftheta_poly_degree(p.bw_poly_degree);
+            float r_pow = 1.0f;
+            float r_pow_prev = 0.0f; // r_star^(i-1); unused at i=0
+#pragma unroll
+            for (int i = 0; i < kFThetaMaxPolynomialTerms; ++i) {
+                if (i <= bdeg) {
+                    float grad = d_f_val * r_pow;
+                    if (i >= 1) {
+                        grad += d_df_val * static_cast<float>(i) * r_pow_prev;
+                    }
+                    d_params.bw_poly[i] += grad;
+                }
+                r_pow_prev = r_pow;
+                r_pow *= r_star;
+            }
+        } else {
+            // Saturated branch: safe_df was set to 1.0f in the forward, so
+            //   state.r = r_star - f_val + state.theta
+            // Local derivatives (r_star treated constant per IFT trick):
+            //   d_r/d_theta       = +1
+            //   d_r/d_bw_poly[i]  = -r_star^i
+            d_theta += d_r;
+            int64_t const bdeg = clamp_ftheta_poly_degree(p.bw_poly_degree);
+            float r_pow = 1.0f;
+#pragma unroll
+            for (int i = 0; i < kFThetaMaxPolynomialTerms; ++i) {
+                if (i <= bdeg) {
+                    d_params.bw_poly[i] += -d_r * r_pow;
+                }
+                r_pow *= r_star;
+            }
+        }
+    }
+
+    // theta = acos(clamp(ray_norm.z, -1, 1)). d_acos(cz)/d_cz = -1/sqrt(1-cz^2).
+    // Gradient is conventionally zero at the |cz|=1 clamp boundary.
+    float const cz = fminf(fmaxf(state.ray_norm.z, -1.0f), 1.0f);
+    float const sin_theta_sq = 1.0f - cz * cz;
+    if (sin_theta_sq > kFThetaSinThetaSqEpsilon) {
+        float const sin_theta = sqrtf(sin_theta_sq);
+        float const d_cz = -d_theta / sin_theta;
+        // Inside the open interval the clamp gradient is 1.
+        if (state.ray_norm.z > -1.0f && state.ray_norm.z < 1.0f) {
+            float d_ray_norm_z = d_cz;
+            float3 d_ray_norm =
+                make_float3(d_ray_norm_x, d_ray_norm_y, d_ray_norm_z);
+            float3 d_in = normalize3_bwd(camera_ray, d_ray_norm);
+            d_camera_ray.x += d_in.x;
+            d_camera_ray.y += d_in.y;
+            d_camera_ray.z += d_in.z;
+            return;
+        }
+    }
+    // Fallthrough: cz pinned to clamp boundary or theta = 0/pi -- d_theta path
+    // contributes 0 to d_ray_norm.z.
+    float3 d_ray_norm = make_float3(d_ray_norm_x, d_ray_norm_y, 0.0f);
+    float3 d_in = normalize3_bwd(camera_ray, d_ray_norm);
+    d_camera_ray.x += d_in.x;
+    d_camera_ray.y += d_in.y;
+    d_camera_ray.z += d_in.z;
+}
+
+// ---- Inverse backproject bwd (image point -> camera ray) ------------------
+//
+// Backward of ftheta_backproject_image_point. Recovers d_image_point from
+// d_camera_ray and accumulates into d_params. Mirrors the IFT adjoint of
+// ftheta_project_ray_bwd, with theta_star as the converged Newton point on
+// the FORWARD-ref branch.
+__device__ __forceinline__ void ftheta_backproject_image_point_bwd(
+    float2 const image_point,
+    FThetaParams const& p,
+    FThetaBackprojectState const& state,
+    float3 const d_camera_ray,
+    float2& __restrict__ d_image_point,
+    FThetaParamGrads& __restrict__ d_params) {
+    if (state.min2d_clamped) {
+        // ray = (0, 0, 1) constant; no upstream flow.
+        return;
+    }
+
+    // d_ray_raw = normalize3_bwd(ray_raw, d_camera_ray).
+    float3 const d_ray_raw = normalize3_bwd(state.ray_raw, d_camera_ray);
+
+    // ray_raw.xy = transformed.xy * (sin(theta) / rdist); ray_raw.z = cos(theta).
+    float const inv_rdist = 1.0f / state.rdist;
+    float const sin_theta = sinf(state.theta);
+    float const cos_theta = cosf(state.theta);
+    float const scale = sin_theta * inv_rdist;
+
+    // d_transformed direct contribution from ray_raw.xy = transformed.xy * scale.
+    float d_transformed_x = d_ray_raw.x * scale;
+    float d_transformed_y = d_ray_raw.y * scale;
+    float const d_scale = state.transformed.x * d_ray_raw.x
+        + state.transformed.y * d_ray_raw.y;
+
+    // scale = sin_theta / rdist.
+    float const d_sin_theta = d_scale * inv_rdist;
+    float d_rdist = -d_scale * sin_theta * inv_rdist * inv_rdist;
+    float const d_cos_theta = d_ray_raw.z;
+
+    // d_theta from sin/cos.
+    float d_theta = d_sin_theta * cos_theta - d_cos_theta * sin_theta;
+
+    // theta path: BACKWARD ref = direct bw_poly(rdist); FORWARD ref = IFT.
+    if (p.reference_polynomial == FThetaReferencePolynomial::Backward) {
+        ftheta_poly_eval_bwd(
+            state.rdist, p.bw_poly, p.bw_poly_degree, d_theta, d_rdist, d_params.bw_poly);
+    } else {
+        float const theta_star = ftheta_solve_fw_newton(state.rdist, p);
+        float const f_val = ftheta_poly_eval(theta_star, p.fw_poly, p.fw_poly_degree);
+        float const df_val =
+            ftheta_poly_eval_derivative(theta_star, p.fw_poly, p.fw_poly_degree);
+        if (fabsf(df_val) > kFThetaIftDfEpsilon) {
+            float const inv_df = 1.0f / df_val;
+            d_rdist += d_theta * inv_df;
+            float const d_f_val = -d_theta * inv_df;
+            float const d_df_val = d_theta * (f_val - state.rdist) * inv_df * inv_df;
+            // Fused accumulation over d_params.fw_poly[i] -- mirrors the
+            // bw_poly counterpart in ftheta_project_ray_bwd.
+            int64_t const fdeg = clamp_ftheta_poly_degree(p.fw_poly_degree);
+            float t_pow = 1.0f;
+            float t_pow_prev = 0.0f; // theta_star^(i-1); unused at i=0
+#pragma unroll
+            for (int i = 0; i < kFThetaMaxPolynomialTerms; ++i) {
+                if (i <= fdeg) {
+                    float grad = d_f_val * t_pow;
+                    if (i >= 1) {
+                        grad += d_df_val * static_cast<float>(i) * t_pow_prev;
+                    }
+                    d_params.fw_poly[i] += grad;
+                }
+                t_pow_prev = t_pow;
+                t_pow *= theta_star;
+            }
+        } else {
+            // Saturated branch: safe_df was set to 1.0f, so
+            //   state.theta = theta_star - f_val + state.rdist
+            // Local derivatives (theta_star treated constant):
+            //   d_theta/d_rdist      = +1
+            //   d_theta/d_fw_poly[i] = -theta_star^i
+            d_rdist += d_theta;
+            int64_t const fdeg = clamp_ftheta_poly_degree(p.fw_poly_degree);
+            float t_pow = 1.0f;
+#pragma unroll
+            for (int i = 0; i < kFThetaMaxPolynomialTerms; ++i) {
+                if (i <= fdeg) {
+                    d_params.fw_poly[i] += -d_theta * t_pow;
+                }
+                t_pow *= theta_star;
+            }
+        }
+    }
+
+    // rdist = sqrt(transformed.x^2 + transformed.y^2); chain into d_transformed.
+    d_transformed_x += d_rdist * state.transformed.x * inv_rdist;
+    d_transformed_y += d_rdist * state.transformed.y * inv_rdist;
+
+    // transformed = Ainv @ offset; d_offset = Ainv^T @ d_transformed.
+    float const d_offset_x = p.Ainv[0][0] * d_transformed_x + p.Ainv[1][0] * d_transformed_y;
+    float const d_offset_y = p.Ainv[0][1] * d_transformed_x + p.Ainv[1][1] * d_transformed_y;
+
+    // d_Ainv: row-major.
+    float2 const offset = make_float2(
+        image_point.x - p.principal_point.x,
+        image_point.y - p.principal_point.y);
+    d_params.Ainv[0] += d_transformed_x * offset.x;
+    d_params.Ainv[1] += d_transformed_x * offset.y;
+    d_params.Ainv[2] += d_transformed_y * offset.x;
+    d_params.Ainv[3] += d_transformed_y * offset.y;
+
+    // offset = image_point - pp.
+    d_image_point.x += d_offset_x;
+    d_image_point.y += d_offset_y;
+    d_params.pp[0] += -d_offset_x;
+    d_params.pp[1] += -d_offset_y;
+}

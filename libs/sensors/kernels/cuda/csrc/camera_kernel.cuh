@@ -1,6 +1,18 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 // Device-side math helpers for the OpenCV pinhole camera CUDA kernels.
@@ -229,6 +241,90 @@ __device__ __forceinline__ float4 normalize_quat_geom(float4 q) {
     float ow = 0.0f;
     quat_normalize_safe_fwd_write<float>(q.x, q.y, q.z, q.w, &ox, &oy, &oz, &ow);
     return make_float4(ox, oy, oz, ow);
+}
+
+// Backward (VJP) call-boundary glue for libs/geometry quaternion primitives.
+// Same shape as the forward `_geom` helpers above, but accumulating into
+// caller-supplied float4&/float3& grad slots.
+__device__ __forceinline__ void quat_rotate_bwd_xyzw_geom(
+    float4 q,
+    float3 v,
+    float3 d_v_out,
+    float4& d_q,
+    float3& d_v) {
+    float gqx = 0.0f;
+    float gqy = 0.0f;
+    float gqz = 0.0f;
+    float gqw = 0.0f;
+    float gvx = 0.0f;
+    float gvy = 0.0f;
+    float gvz = 0.0f;
+    quat_rotate_vector_bwd_impl<float>(
+        q.x,
+        q.y,
+        q.z,
+        q.w,
+        v.x,
+        v.y,
+        v.z,
+        d_v_out.x,
+        d_v_out.y,
+        d_v_out.z,
+        &gqx,
+        &gqy,
+        &gqz,
+        &gqw,
+        &gvx,
+        &gvy,
+        &gvz);
+    d_q.x += gqx;
+    d_q.y += gqy;
+    d_q.z += gqz;
+    d_q.w += gqw;
+    d_v.x += gvx;
+    d_v.y += gvy;
+    d_v.z += gvz;
+}
+
+__device__ __forceinline__ void quat_inverse_rotate_bwd_xyzw_geom(
+    float4 q,
+    float3 v,
+    float3 d_v_out,
+    float4& d_q,
+    float3& d_v) {
+    float gqx = 0.0f;
+    float gqy = 0.0f;
+    float gqz = 0.0f;
+    float gqw = 0.0f;
+    float gvx = 0.0f;
+    float gvy = 0.0f;
+    float gvz = 0.0f;
+    quat_rotate_vector_bwd_impl<float>(
+        -q.x,
+        -q.y,
+        -q.z,
+        q.w,
+        v.x,
+        v.y,
+        v.z,
+        d_v_out.x,
+        d_v_out.y,
+        d_v_out.z,
+        &gqx,
+        &gqy,
+        &gqz,
+        &gqw,
+        &gvx,
+        &gvy,
+        &gvz);
+    // Conjugate chain rule: imaginary parts negate, real part unchanged.
+    d_q.x += -gqx;
+    d_q.y += -gqy;
+    d_q.z += -gqz;
+    d_q.w += gqw;
+    d_v.x += gvx;
+    d_v.y += gvy;
+    d_v.z += gvz;
 }
 
 // Reads a wxyz quaternion from the tensor buffer and converts it to xyzw for

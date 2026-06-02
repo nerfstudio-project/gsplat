@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Cross-family projective sensor dispatch tables.
 
@@ -14,6 +26,7 @@ from collections.abc import Callable
 from .cameras import ops as camera_ops
 from .cameras.types import (
     BivariateWindshieldDistortion,
+    FThetaProjection,
     NoExternalDistortion,
     OpenCVPinholeProjection,
     script_class_name,
@@ -30,6 +43,14 @@ _CAMERA_RAYS_TO_IMAGE_POINTS_BACKENDS: dict[DispatchKey, Callable] = {
         OpenCVPinholeProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.camera_rays_to_image_points,
+    (
+        FThetaProjection,
+        NoExternalDistortion,
+    ): camera_ops.camera_rays_to_image_points,
+    (
+        FThetaProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.camera_rays_to_image_points,
 }
 _IMAGE_POINTS_TO_CAMERA_RAYS_BACKENDS: dict[DispatchKey, Callable] = {
     (
@@ -38,6 +59,14 @@ _IMAGE_POINTS_TO_CAMERA_RAYS_BACKENDS: dict[DispatchKey, Callable] = {
     ): camera_ops.image_points_to_camera_rays,
     (
         OpenCVPinholeProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.image_points_to_camera_rays,
+    (
+        FThetaProjection,
+        NoExternalDistortion,
+    ): camera_ops.image_points_to_camera_rays,
+    (
+        FThetaProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.image_points_to_camera_rays,
 }
@@ -50,6 +79,14 @@ _PROJECT_WORLD_POINTS_MEAN_POSE_BACKENDS: dict[DispatchKey, Callable] = {
         OpenCVPinholeProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.project_world_points_mean_pose,
+    (
+        FThetaProjection,
+        NoExternalDistortion,
+    ): camera_ops.project_world_points_mean_pose,
+    (
+        FThetaProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.project_world_points_mean_pose,
 }
 _PROJECT_WORLD_POINTS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
     (
@@ -58,6 +95,14 @@ _PROJECT_WORLD_POINTS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
     ): camera_ops.project_world_points_shutter_pose,
     (
         OpenCVPinholeProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.project_world_points_shutter_pose,
+    (
+        FThetaProjection,
+        NoExternalDistortion,
+    ): camera_ops.project_world_points_shutter_pose,
+    (
+        FThetaProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.project_world_points_shutter_pose,
 }
@@ -70,6 +115,14 @@ _IMAGE_POINTS_TO_WORLD_RAYS_STATIC_POSE_BACKENDS: dict[DispatchKey, Callable] = 
         OpenCVPinholeProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.image_points_to_world_rays_static_pose,
+    (
+        FThetaProjection,
+        NoExternalDistortion,
+    ): camera_ops.image_points_to_world_rays_static_pose,
+    (
+        FThetaProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.image_points_to_world_rays_static_pose,
 }
 _IMAGE_POINTS_TO_WORLD_RAYS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
     (
@@ -80,6 +133,14 @@ _IMAGE_POINTS_TO_WORLD_RAYS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] =
         OpenCVPinholeProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.image_points_to_world_rays_shutter_pose,
+    (
+        FThetaProjection,
+        NoExternalDistortion,
+    ): camera_ops.image_points_to_world_rays_shutter_pose,
+    (
+        FThetaProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.image_points_to_world_rays_shutter_pose,
 }
 _PIXEL_GRID_TO_WORLD_RAYS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
     (
@@ -88,6 +149,14 @@ _PIXEL_GRID_TO_WORLD_RAYS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
     ): camera_ops.pixel_grid_to_world_rays_shutter_pose,
     (
         OpenCVPinholeProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.pixel_grid_to_world_rays_shutter_pose,
+    (
+        FThetaProjection,
+        NoExternalDistortion,
+    ): camera_ops.pixel_grid_to_world_rays_shutter_pose,
+    (
+        FThetaProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.pixel_grid_to_world_rays_shutter_pose,
 }
@@ -104,6 +173,7 @@ _DISPATCH_TABLES = {
 
 _REGISTERED_CLASS_NAMES = {
     OpenCVPinholeProjection: "OpenCVPinholeProjection",
+    FThetaProjection: "FThetaProjection",
     NoExternalDistortion: "NoExternalDistortion",
     BivariateWindshieldDistortion: "BivariateWindshieldDistortion",
 }
