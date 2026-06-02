@@ -63,9 +63,10 @@ at::Tensor spherical_harmonics_fwd(
         ")"
     );
 
+    // colors dtype follows dirs; the kernel converts fp16 coeffs to fp32 on read.
     auto out_shape = dirs.sizes().vec();
     out_shape.back() = coeffs.size(-1);
-    at::Tensor colors = at::empty(out_shape, coeffs.options()); // [..., N, D]
+    at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
 
     launch_spherical_harmonics_fwd_kernel(
         degrees_to_use, dirs, coeffs, masks, colors
@@ -117,7 +118,11 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
         ")"
     );
 
-    at::Tensor v_coeffs = at::zeros_like(coeffs);
+    // Always accumulate v_coeffs in fp32 to avoid precision loss when multiple
+    // (batch, gaussian) elements atomic-add into the same slot. For fp32
+    // coeffs the accumulator IS the output; for fp16 we cast at the end.
+    at::Tensor v_coeffs_accum =
+        at::zeros(coeffs.sizes(), coeffs.options().dtype(at::kFloat));
     at::Tensor v_dirs;
     if (compute_v_dirs) {
         v_dirs = at::zeros_like(dirs);
@@ -129,9 +134,13 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
         coeffs,
         masks,
         v_colors,
-        v_coeffs,
+        v_coeffs_accum,
         v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
     );
+
+    at::Tensor v_coeffs = (coeffs.scalar_type() == at::kFloat)
+        ? v_coeffs_accum
+        : v_coeffs_accum.to(coeffs.scalar_type());
     return std::make_tuple(v_coeffs, v_dirs); // [N, K, D], [..., N, 3]
 }
 
