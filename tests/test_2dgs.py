@@ -630,3 +630,99 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
     torch.testing.assert_close(render_median, torch.zeros_like(render_median))
     torch.testing.assert_close(last_ids, torch.zeros_like(last_ids))
     torch.testing.assert_close(median_ids, torch.zeros_like(median_ids))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterize_to_pixels_2dgs_densify_gradient():
+    # The densification gradient is the gradient w.r.t. the `densify` input and
+    # equals the depth-scaled ray-transform z-gradients:
+    #   v_densify[..., 0] == v_ray_transforms[..., 0, 2] * depth
+    #   v_densify[..., 1] == v_ray_transforms[..., 1, 2] * depth
+    # The backward must accumulate it race-free (warp-reduce + atomicAdd), the
+    # same path as v_ray_transforms. Reading the still-accumulating global
+    # v_ray_transforms instead yields a last-writer-wins partial sum that
+    # undercounts whenever a gaussian spans multiple tiles, so the identity
+    # holds only for the race-free accumulation.
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_2dgs,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_2dgs,
+    )
+
+    torch.manual_seed(42)
+    C = 1
+    N = 1000
+    means = torch.randn(N, 3, device=device)
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.ones(N, 3, device=device)
+    scales[..., :2] *= 0.1
+    opacities = torch.rand(C, N, device=device) * 0.5
+    W, H = 640, 480
+    viewmats = torch.broadcast_to(torch.eye(4, device=device), (C, 4, 4))
+    Ks = torch.broadcast_to(
+        torch.tensor(
+            [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        ),
+        (C, 3, 3),
+    )
+    channels = 3
+    colors = torch.rand(C, N, channels, device=device)
+
+    radii, means2d, depths, ray_transforms, normals = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, W, H
+    )
+    colors = torch.cat([colors, depths[..., None]], dim=-1)
+    backgrounds = torch.zeros(C, channels + 1, device=device)
+
+    tile_size = 16
+    tile_width = math.ceil(W / float(tile_size))
+    tile_height = math.ceil(H / float(tile_size))
+    _, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    densify = torch.zeros_like(means2d)
+
+    ray_transforms.requires_grad = True
+    densify.requires_grad = True
+
+    render_colors, render_alphas, render_normals, _, _ = rasterize_to_pixels_2dgs(
+        means2d,
+        ray_transforms,
+        colors,
+        opacities,
+        normals,
+        densify,
+        W,
+        H,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+        distloss=True,
+    )
+
+    v_render_colors = torch.randn_like(render_colors)
+    v_densify, v_ray_transforms = torch.autograd.grad(
+        (render_colors * v_render_colors).sum(),
+        (densify, ray_transforms),
+    )
+
+    expected = torch.stack(
+        [
+            v_ray_transforms[..., 0, 2] * depths,
+            v_ray_transforms[..., 1, 2] * depths,
+        ],
+        dim=-1,
+    )
+
+    # The densify gradient is zero for non-contributing gaussians; compare only
+    # entries with meaningful magnitude.
+    scale = expected.abs().max().item()
+    mask = expected.abs() > 1e-4 * scale
+    torch.testing.assert_close(
+        v_densify[mask], expected[mask], rtol=2e-2, atol=1e-3 * scale
+    )
