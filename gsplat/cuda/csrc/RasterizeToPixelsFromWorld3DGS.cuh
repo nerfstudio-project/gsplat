@@ -26,8 +26,138 @@
 #include "Lidars.cuh"
 #include "RasterizeCSR.cuh"
 #include "Utils.cuh"
+#include "Dispatch.h"
 
 namespace gsplat {
+
+////////////////////////////////////////////////////////////////
+// Compact-CTA __launch_bounds__ occupancy hint, shared by the serial- and
+// parallel-batch world-space 3DGS forward kernels (both #include this header).
+////////////////////////////////////////////////////////////////
+
+// Per-architecture hardware cap on thread blocks per SM. ptxas rejects
+// min_blocks_per_sm > HW cap under --warning-as-error.
+//   sm_90, sm_100, sm_120: 32 blocks/SM
+//   everything else:       16 blocks/SM (covers Ampere/Ada and anything older)
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 32
+#else
+    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 16
+#endif
+
+// Range endpoints of the CDIM-indexed schedule. The schedule plateaus at
+// `high` blocks/SM for CDIM in [1, MIN_CDIM_FOR_HINT], then linearly descends
+// to `low` at MAX_CDIM_FOR_HINT. The plateau covers the camera-inference
+// CDIM=4 path so it sustains max occupancy alongside CDIM={1,2,3}.
+#define GSPLAT_MIN_CDIM_FOR_HINT 4u
+#define GSPLAT_MAX_CDIM_FOR_HINT 24u
+
+// Target min_blocks at the endpoints of the schedule.
+//   - CDIM <= MIN_CDIM_FOR_HINT (plateau): push occupancy up to the HW cap,
+//              but not above 24 (beyond this the kernel's natural register
+//              usage forces ptxas to spill).
+//   - CDIM=24: 16. HW cap on pre-sm_90, 25% occ on sm_90+; fits within the
+//              kernel's register footprint at full SH + extras.
+#define GSPLAT_MIN_BLOCKS_AT_MIN_CDIM \
+    (GSPLAT_ARCH_MAX_BLOCKS_PER_SM < 24 ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM : 24)
+#define GSPLAT_MIN_BLOCKS_AT_MAX_CDIM 16u
+
+// Per-CDIM occupancy hint for __launch_bounds__ min_blocks_per_sm.
+// Plateau at `high` for CDIM in [1, MIN_CDIM_FOR_HINT]; linear descent from
+// `high` (at MIN_CDIM_FOR_HINT) to `low` (at MAX_CDIM_FOR_HINT) above. Beyond
+// MAX_CDIM_FOR_HINT we emit min_blocks=1, high-channel kernels carry enough
+// register pressure that forcing occupancy would spill.
+//   cdim_excess     = max(0, CDIM - MIN_CDIM_FOR_HINT)   (saturating sub)
+//   blocks_at_cta32 = high - cdim_excess * (high - low) / (max_cdim - min_cdim)
+// Collapses to the constant low value on archs where high == low.
+//
+// The schedule was tuned at CTA_SIZE=32. To use the same kernel at larger
+// CTAs, we preserve the threads/SM target (= blocks_at_cta32 * 32) and
+// re-derive min_blocks at the actual CTA_SIZE; otherwise asking 16-24
+// blocks/SM at CTA=256 yields physically impossible 4096-6144 threads/SM
+// and ptxas either rejects (under -Werror) or produces a degenerate spill.
+
+// Here's a table of the different values you can expect per variables and arch
+//  CDIM | sm90+ CTA=32 | sm90+ CTA=256 | < sm90 CTA=32 | < sm90 CTA=256
+// ----------------------------------------------------------------------
+//     1 |      24      |       3       |      16       |       2
+//     2 |      24      |       3       |      16       |       2
+//     3 |      24      |       3       |      16       |       2
+//     4 |      24      |       3       |      16       |       2
+//     5 |      24      |       3       |      16       |       2
+//     6 |      24      |       3       |      16       |       2
+//     7 |      23      |       2       |      16       |       2
+//     8 |      23      |       2       |      16       |       2
+//     9 |      22      |       2       |      16       |       2
+//    10 |      22      |       2       |      16       |       2
+//    11 |      22      |       2       |      16       |       2
+//    12 |      21      |       2       |      16       |       2
+//    13 |      21      |       2       |      16       |       2
+//    14 |      20      |       2       |      16       |       2
+//    15 |      20      |       2       |      16       |       2
+//    16 |      20      |       2       |      16       |       2
+//    17 |      19      |       2       |      16       |       2
+//    18 |      19      |       2       |      16       |       2
+//    19 |      18      |       2       |      16       |       2
+//    20 |      18      |       2       |      16       |       2
+//    21 |      18      |       2       |      16       |       2
+//    22 |      17      |       2       |      16       |       2
+//    23 |      17      |       2       |      16       |       2
+//    24 |      16      |       2       |      16       |       2
+//   >24 |       1      |       1       |       1       |       1
+
+template <uint32_t CDIM, uint32_t CTA_SIZE>
+constexpr uint32_t min_blocks_for_cdim() {
+    if constexpr (CDIM > GSPLAT_MAX_CDIM_FOR_HINT) {
+        return 1;
+    } else {
+        constexpr uint32_t high = GSPLAT_MIN_BLOCKS_AT_MIN_CDIM;
+        constexpr uint32_t low = GSPLAT_MIN_BLOCKS_AT_MAX_CDIM;
+        constexpr uint32_t cdim_excess =
+            (CDIM > GSPLAT_MIN_CDIM_FOR_HINT)
+                ? (CDIM - GSPLAT_MIN_CDIM_FOR_HINT)
+                : 0u;
+        constexpr uint32_t cdim_span =
+            GSPLAT_MAX_CDIM_FOR_HINT - GSPLAT_MIN_CDIM_FOR_HINT;
+        constexpr uint32_t block_span = (high >= low) ? (high - low) : 0;
+        constexpr uint32_t decrement = (cdim_excess * block_span) / cdim_span;
+        constexpr uint32_t blocks_at_cta32 =
+            (high > decrement) ? (high - decrement) : low;
+        constexpr uint32_t threads_target = blocks_at_cta32 * 32u;
+        constexpr uint32_t blocks = threads_target / CTA_SIZE;
+        constexpr uint32_t lo_clamped = (blocks == 0u) ? 1u : blocks;
+        constexpr uint32_t hi_clamped =
+            (lo_clamped > GSPLAT_ARCH_MAX_BLOCKS_PER_SM)
+                ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM
+                : lo_clamped;
+        return hi_clamped;
+    }
+}
+
+#undef GSPLAT_ARCH_MAX_BLOCKS_PER_SM
+#undef GSPLAT_MIN_CDIM_FOR_HINT
+#undef GSPLAT_MAX_CDIM_FOR_HINT
+#undef GSPLAT_MIN_BLOCKS_AT_MIN_CDIM
+#undef GSPLAT_MIN_BLOCKS_AT_MAX_CDIM
+
+// TILE_SIZE and CTA_SIZE are a tuned launch-variant pair. Add a specialization
+// here whenever a new supported tile size needs its own CTA size.
+template <uint32_t TILE_SIZE>
+struct CtaSizeForTile;
+
+template <>
+struct CtaSizeForTile<8u> {
+    static constexpr uint32_t value = 32u;
+};
+
+template <>
+struct CtaSizeForTile<16u> {
+    static constexpr uint32_t value = 256u;
+};
+
+// Supported forward tile sizes, shared so the serial- and parallel-batch
+// launchers select tile_size through the same compile-time dispatch set.
+using SupportedTileSizes = dispatch::IntParam<8, 16>;
 
 ////////////////////////////////////////////////////////////////
 // Reusable building blocks for the world-space 3DGS rasterizer
