@@ -1,6 +1,18 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 // camera_torch.cpp — C++ wrapper layer between TORCH_LIBRARY (ext.cpp) and
@@ -32,6 +44,8 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 
+#include <cmath>
+#include <numbers>
 #include <utility>
 
 namespace gsplat_sensors {
@@ -512,7 +526,7 @@ image_points_to_world_rays_static_pose_opencv_pinhole_no_external(
     check_matrix(pts, 2, "image_points");
     check_matrix(trans, 3, "translations");
     check_matrix(rots, 4, "rotations");
-    TORCH_CHECK(trans.size(0) >= 1 && rots.size(0) >= 1, "static pose requires one control pose");
+    TORCH_CHECK(trans.size(0) == 1 && rots.size(0) == 1, "static pose requires exactly one control pose");
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(trans, "translations");
     check_cuda_float_contiguous(rots, "rotations");
@@ -958,7 +972,7 @@ image_points_to_world_rays_static_pose_opencv_pinhole_no_external_backward(
     check_matrix(pts, 2, "image_points");
     check_matrix(translation, 3, "translation");
     check_matrix(rotation, 4, "rotation");
-    TORCH_CHECK(translation.size(0) >= 1 && rotation.size(0) >= 1, "static pose requires one control pose");
+    TORCH_CHECK(translation.size(0) == 1 && rotation.size(0) == 1, "static pose requires exactly one control pose");
     check_matrix(grad, 6, "grad_world_rays");
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(translation, "translation");
@@ -1323,7 +1337,7 @@ image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield(
     check_matrix(pts, 2, "image_points");
     check_matrix(trans, 3, "translations");
     check_matrix(rots, 4, "rotations");
-    TORCH_CHECK(trans.size(0) >= 1 && rots.size(0) >= 1, "static pose requires one control pose");
+    TORCH_CHECK(trans.size(0) == 1 && rots.size(0) == 1, "static pose requires exactly one control pose");
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(trans, "translations");
     check_cuda_float_contiguous(rots, "rotations");
@@ -1724,7 +1738,7 @@ image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield_backw
     check_matrix(pts, 2, "image_points");
     check_matrix(translation, 3, "translation");
     check_matrix(rotation, 4, "rotation");
-    TORCH_CHECK(translation.size(0) >= 1 && rotation.size(0) >= 1, "static pose requires one control pose");
+    TORCH_CHECK(translation.size(0) == 1 && rotation.size(0) == 1, "static pose requires exactly one control pose");
     check_matrix(grad, 6, "grad_world_rays");
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(translation, "translation");
@@ -1843,6 +1857,1750 @@ image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield_back
         scratch.data_ptr<float>(),
         current_stream(pts));
     return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r, intrinsic_grads.focal_length, intrinsic_grads.principal_point, intrinsic_grads.radial_coeffs, intrinsic_grads.tangential_coeffs, intrinsic_grads.thin_prism_coeffs, grad_distortion};
+}
+
+// =============================================================================
+// FThetaProjection — class definition, validators, and forward host wrappers
+//   each of the 6 op families is bound twice: no_external + bivariate_windshield
+// =============================================================================
+
+FThetaProjection::FThetaProjection(
+    at::Tensor principal_point_,
+    at::Tensor fw_poly_,
+    at::Tensor bw_poly_,
+    at::Tensor A_,
+    std::array<int64_t, 2> resolution_,
+    int64_t reference_polynomial_,
+    int64_t fw_poly_degree_,
+    int64_t bw_poly_degree_,
+    int64_t newton_iterations_,
+    double max_angle_,
+    double min_2d_norm_)
+    : principal_point(std::move(principal_point_)),
+      fw_poly(std::move(fw_poly_)),
+      bw_poly(std::move(bw_poly_)),
+      A(std::move(A_)),
+      resolution(resolution_),
+      reference_polynomial(reference_polynomial_),
+      fw_poly_degree(fw_poly_degree_),
+      bw_poly_degree(bw_poly_degree_),
+      newton_iterations(newton_iterations_),
+      max_angle(max_angle_),
+      min_2d_norm(min_2d_norm_) {}
+
+at::Tensor FThetaProjection::compute_ainv() const {
+    // Closed-form 2x2 inverse of row-major A = [[a, b], [c, d]]:
+    // Ainv = 1/det * [[d, -b], [-c, a]] with det = a*d - b*c. Computing this
+    // on the same device as A keeps the result usable as a kernel-side
+    // pointer without an extra host/device transfer.
+    TORCH_CHECK(
+        A.numel() == 4, "FThetaProjection: A must be a flat 4-element tensor");
+    auto flat = A.reshape({4});
+    auto a = flat.select(0, 0);
+    auto b = flat.select(0, 1);
+    auto c = flat.select(0, 2);
+    auto d = flat.select(0, 3);
+    auto det = a * d - b * c;
+    return at::stack({d / det, -b / det, -c / det, a / det}).contiguous();
+}
+
+FThetaProjection_KernelParameters FThetaProjection::to_kernel_params() const {
+    Ainv_cache = compute_ainv();
+    FThetaProjection_KernelParameters params{};
+    params.principal_point = principal_point.const_data_ptr<float>();
+    params.fw_poly = fw_poly.const_data_ptr<float>();
+    params.bw_poly = bw_poly.const_data_ptr<float>();
+    params.A = A.const_data_ptr<float>();
+    params.Ainv = Ainv_cache.const_data_ptr<float>();
+    params.width = resolution[0];
+    params.height = resolution[1];
+    params.reference_polynomial = reference_polynomial;
+    params.fw_poly_degree = fw_poly_degree;
+    params.bw_poly_degree = bw_poly_degree;
+    params.newton_iterations = newton_iterations;
+    params.max_angle = static_cast<float>(max_angle);
+    params.min_2d_norm = static_cast<float>(min_2d_norm);
+    return params;
+}
+
+void check_ftheta_projection(const c10::intrusive_ptr<FThetaProjection>& projection) {
+    TORCH_CHECK(projection != nullptr, "projection must be FThetaProjection");
+    check_component_shape(projection->principal_point, {2}, "principal_point");
+    check_component_shape(projection->fw_poly, {kFThetaMaxPolynomialTerms}, "fw_poly");
+    check_component_shape(projection->bw_poly, {kFThetaMaxPolynomialTerms}, "bw_poly");
+    check_component_shape(projection->A, {4}, "A");
+    TORCH_CHECK(
+        projection->resolution[0] >= 0 && projection->resolution[1] >= 0,
+        "resolution must be non-negative");
+    TORCH_CHECK(
+        projection->reference_polynomial == 0 || projection->reference_polynomial == 1,
+        "reference_polynomial must be 0 (FORWARD) or 1 (BACKWARD)");
+    TORCH_CHECK(
+        projection->fw_poly_degree >= 0
+            && projection->fw_poly_degree < kFThetaMaxPolynomialTerms,
+        "fw_poly_degree must be in [0, kFThetaMaxPolynomialTerms)");
+    TORCH_CHECK(
+        projection->bw_poly_degree >= 0
+            && projection->bw_poly_degree < kFThetaMaxPolynomialTerms,
+        "bw_poly_degree must be in [0, kFThetaMaxPolynomialTerms)");
+    // kFThetaMaxNewtonIterations lives next to kMaxRollingShutterIterations in
+    // camera_params.h so both iterative-solve caps sit together.
+    TORCH_CHECK(
+        projection->newton_iterations >= 0
+            && projection->newton_iterations <= kFThetaMaxNewtonIterations,
+        "newton_iterations must be in [0, ", kFThetaMaxNewtonIterations, "]");
+    // max_angle in [0, pi]: theta = acos(...) is bounded by pi, so anything
+    // larger has no geometric meaning. NaN and -inf are rejected by the
+    // lower bound (NaN >= 0.0 is false in IEEE-754); +inf is rejected by the
+    // upper bound. The pair therefore implies finiteness without an extra
+    // isfinite check.
+    TORCH_CHECK(
+        projection->max_angle >= 0.0 && projection->max_angle <= std::numbers::pi_v<double>,
+        "max_angle must be in [0, pi]");
+    // Strict positivity AND finiteness: the device path divides by
+    // xy_norm / rdist when xy_norm > min_2d_norm, so allowing min_2d_norm = 0
+    // means an exactly on-axis ray slips past the clamp into a 1/0. The
+    // separate isfinite is required because `+inf > 0.0` is true, so without
+    // it a serialized +inf would satisfy the positivity check while making
+    // `xy_norm <= min_2d_norm` hold for every ray, short-circuiting all
+    // projections to principal_point on device.
+    TORCH_CHECK(projection->min_2d_norm > 0.0, "min_2d_norm must be strictly positive");
+    TORCH_CHECK(
+        std::isfinite(projection->min_2d_norm), "min_2d_norm must be finite");
+    // The polynomial constant-term invariant (fw_poly[0] == 0,
+    // bw_poly[0] == 0) and the requirement that A be non-singular require
+    // reading tensor entries, which would force a CUDA->host sync. Callers that
+    // need these checks can opt in through
+    // gsplat_sensors.kernels.cameras.validate_camera_projection.
+}
+
+namespace {
+
+void check_ftheta_projection_for_device(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const at::Device& device) {
+    check_ftheta_projection(projection);
+    check_cuda_float_contiguous(projection->principal_point, "principal_point");
+    check_cuda_float_contiguous(projection->fw_poly, "fw_poly");
+    check_cuda_float_contiguous(projection->bw_poly, "bw_poly");
+    check_cuda_float_contiguous(projection->A, "A");
+    TORCH_CHECK(
+        projection->principal_point.device() == device,
+        "principal_point device must match inputs");
+    TORCH_CHECK(
+        projection->fw_poly.device() == device,
+        "fw_poly device must match inputs");
+    TORCH_CHECK(
+        projection->bw_poly.device() == device,
+        "bw_poly device must match inputs");
+    TORCH_CHECK(projection->A.device() == device, "A device must match inputs");
+}
+
+bool needs_ftheta_projection_grad(
+    const c10::intrusive_ptr<FThetaProjection>& projection) {
+    return projection->principal_point.requires_grad()
+        || projection->fw_poly.requires_grad()
+        || projection->bw_poly.requires_grad()
+        || projection->A.requires_grad();
+}
+
+FThetaProjection_KernelParameters ftheta_kernel_params_with_resolution(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    int64_t width,
+    int64_t height) {
+    auto params = projection->to_kernel_params();
+    params.width = width;
+    params.height = height;
+    return params;
+}
+
+struct FThetaIntrinsicGradOutputs {
+    at::Tensor principal_point;
+    at::Tensor fw_poly;
+    at::Tensor bw_poly;
+    at::Tensor A;
+    at::Tensor Ainv;
+};
+
+FThetaIntrinsicGradOutputs make_ftheta_intrinsic_grad_outputs(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad) {
+    // The kernel backward writes a separate grad_Ainv buffer; the Python
+    // autograd Function consolidates that contribution into grad_A via the
+    // inverse-matrix VJP. The buffer mirrors A's shape/options.
+    return {
+        maybe_intrinsic_grad(need_principal_point_grad, {2}, projection->principal_point),
+        maybe_intrinsic_grad(
+            need_fw_poly_grad, {kFThetaMaxPolynomialTerms}, projection->fw_poly),
+        maybe_intrinsic_grad(
+            need_bw_poly_grad, {kFThetaMaxPolynomialTerms}, projection->bw_poly),
+        maybe_intrinsic_grad(need_A_grad, {4}, projection->A),
+        maybe_intrinsic_grad(need_Ainv_grad, {4}, projection->A),
+    };
+}
+
+} // namespace
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& camera_rays) {
+    check_optional_distortion(external_distortion);
+    const auto& rays = camera_rays;
+    check_matrix(rays, 3, "camera_rays");
+    check_cuda_float_contiguous(rays, "camera_rays");
+    check_ftheta_projection_for_device(projection, rays.device());
+    auto guard = c10::cuda::CUDAGuard(rays.device());
+
+    auto image_points = at::empty({rays.size(0), 2}, rays.options());
+    auto valid_flags = at::empty({rays.size(0)}, rays.options().dtype(at::kBool));
+    const bool save_scratch =
+        rays.requires_grad() || needs_ftheta_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(rays.size(0), 8, rays)
+        : empty_scratch(rays.options());
+    camera_rays_to_image_points_ftheta_no_external_forward_launch(
+        rays.size(0),
+        projection->to_kernel_params(),
+        rays.data_ptr<float>(),
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(rays));
+    return {image_points, valid_flags, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor>
+image_points_to_camera_rays_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    check_matrix(pts, 2, "image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto camera_rays = at::empty({pts.size(0), 3}, pts.options());
+    const bool save_scratch =
+        pts.requires_grad() || needs_ftheta_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 8, pts)
+        : empty_scratch(pts.options());
+    image_points_to_camera_rays_ftheta_no_external_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        camera_rays.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {camera_rays, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& camera_rays) {
+    const auto& rays = camera_rays;
+    check_matrix(rays, 3, "camera_rays");
+    check_cuda_float_contiguous(rays, "camera_rays");
+    check_ftheta_projection_for_device(projection, rays.device());
+    check_bivariate_windshield_for_device(external_distortion, rays.device());
+    auto guard = c10::cuda::CUDAGuard(rays.device());
+
+    auto image_points = at::empty({rays.size(0), 2}, rays.options());
+    auto valid_flags = at::empty({rays.size(0)}, rays.options().dtype(at::kBool));
+    const bool save_scratch = rays.requires_grad()
+        || needs_ftheta_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(rays.size(0), 8, rays)
+        : empty_scratch(rays.options());
+    camera_rays_to_image_points_ftheta_bivariate_windshield_forward_launch(
+        rays.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        rays.data_ptr<float>(),
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(rays));
+    return {image_points, valid_flags, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor>
+image_points_to_camera_rays_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points) {
+    const auto& pts = image_points;
+    check_matrix(pts, 2, "image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto camera_rays = at::empty({pts.size(0), 3}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || needs_ftheta_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 12, pts)
+        : empty_scratch(pts.options());
+    image_points_to_camera_rays_ftheta_bivariate_windshield_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        camera_rays.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {camera_rays, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = world_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match world_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match world_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match world_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match world_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto image_points = at::empty({pts.size(0), 2}, pts.options());
+    auto valid_flags = at::empty({pts.size(0)}, pts.options().dtype(at::kBool));
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_ftheta_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 10, pts)
+        : empty_scratch(pts.options());
+    const auto mean_timestamp_us = static_cast<int64_t>(
+        static_cast<double>(start_timestamp_us)
+        + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us));
+    project_world_points_mean_pose_ftheta_no_external_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        mean_timestamp_us,
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {image_points, valid_flags, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us) {
+    const auto& pts = world_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match world_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match world_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match world_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match world_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto image_points = at::empty({pts.size(0), 2}, pts.options());
+    auto valid_flags = at::empty({pts.size(0)}, pts.options().dtype(at::kBool));
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_ftheta_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 10, pts)
+        : empty_scratch(pts.options());
+    const auto mean_timestamp_us = static_cast<int64_t>(
+        static_cast<double>(start_timestamp_us)
+        + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us));
+    project_world_points_mean_pose_ftheta_bivariate_windshield_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        mean_timestamp_us,
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {image_points, valid_flags, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translations,
+    const at::Tensor& rotations,
+    int64_t timestamp_us) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    const auto& trans = translations;
+    const auto& rots = rotations;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(trans, 3, "translations");
+    check_matrix(rots, 4, "rotations");
+    TORCH_CHECK(
+        trans.size(0) == 1 && rots.size(0) == 1,
+        "static pose requires exactly one control pose");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(trans, "translations");
+    check_cuda_float_contiguous(rots, "rotations");
+    TORCH_CHECK(
+        trans.device() == pts.device() && rots.device() == pts.device(),
+        "pose tensors device must match image_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto world_rays = at::empty({pts.size(0), 6}, pts.options());
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad() || trans.requires_grad()
+        || rots.requires_grad() || needs_ftheta_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 8, pts)
+        : empty_scratch(pts.options());
+    image_points_to_world_rays_static_pose_ftheta_no_external_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        trans.data_ptr<float>(),
+        rots.data_ptr<float>(),
+        timestamp_us,
+        world_rays.data_ptr<float>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {world_rays, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translations,
+    const at::Tensor& rotations,
+    int64_t timestamp_us) {
+    const auto& pts = image_points;
+    const auto& trans = translations;
+    const auto& rots = rotations;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(trans, 3, "translations");
+    check_matrix(rots, 4, "rotations");
+    TORCH_CHECK(
+        trans.size(0) == 1 && rots.size(0) == 1,
+        "static pose requires exactly one control pose");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(trans, "translations");
+    check_cuda_float_contiguous(rots, "rotations");
+    TORCH_CHECK(
+        trans.device() == pts.device() && rots.device() == pts.device(),
+        "pose tensors device must match image_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto world_rays = at::empty({pts.size(0), 6}, pts.options());
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad() || trans.requires_grad()
+        || rots.requires_grad() || needs_ftheta_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 12, pts)
+        : empty_scratch(pts.options());
+    image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        trans.data_ptr<float>(),
+        rots.data_ptr<float>(),
+        timestamp_us,
+        world_rays.data_ptr<float>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {world_rays, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    double stop_mean_error_px,
+    double stop_delta_mean_error_px,
+    double initial_relative_time) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = world_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    TORCH_CHECK(
+        width > 0 && height > 0,
+        "resolution dimensions must be positive for shutter-pose ops");
+    check_shutter_type(shutter_type);
+    check_max_iterations(max_iterations);
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match world_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match world_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match world_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match world_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto image_points = at::empty({pts.size(0), 2}, pts.options());
+    auto valid_flags = at::empty({pts.size(0)}, pts.options().dtype(at::kBool));
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_ftheta_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 11, pts)
+        : empty_scratch(pts.options());
+    project_world_points_shutter_pose_ftheta_no_external_forward_launch(
+        pts.size(0),
+        ftheta_kernel_params_with_resolution(projection, width, height),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        max_iterations,
+        static_cast<float>(stop_mean_error_px),
+        static_cast<float>(stop_delta_mean_error_px),
+        static_cast<float>(initial_relative_time),
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {image_points, valid_flags, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    double stop_mean_error_px,
+    double stop_delta_mean_error_px,
+    double initial_relative_time) {
+    const auto& pts = world_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    TORCH_CHECK(
+        width > 0 && height > 0,
+        "resolution dimensions must be positive for shutter-pose ops");
+    check_shutter_type(shutter_type);
+    check_max_iterations(max_iterations);
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match world_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match world_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match world_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match world_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto image_points = at::empty({pts.size(0), 2}, pts.options());
+    auto valid_flags = at::empty({pts.size(0)}, pts.options().dtype(at::kBool));
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_ftheta_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 11, pts)
+        : empty_scratch(pts.options());
+    project_world_points_shutter_pose_ftheta_bivariate_windshield_forward_launch(
+        pts.size(0),
+        ftheta_kernel_params_with_resolution(projection, width, height),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        max_iterations,
+        static_cast<float>(stop_mean_error_px),
+        static_cast<float>(stop_delta_mean_error_px),
+        static_cast<float>(initial_relative_time),
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {image_points, valid_flags, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    check_matrix(pts, 2, "image_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    TORCH_CHECK(
+        width > 0 && height > 0,
+        "resolution dimensions must be positive for shutter-pose ops");
+    check_shutter_type(shutter_type);
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match image_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match image_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match image_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match image_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto world_rays = at::empty({pts.size(0), 6}, pts.options());
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_ftheta_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 9, pts)
+        : empty_scratch(pts.options());
+    image_points_to_world_rays_shutter_pose_ftheta_no_external_forward_launch(
+        pts.size(0),
+        ftheta_kernel_params_with_resolution(projection, width, height),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        world_rays.data_ptr<float>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {world_rays, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us) {
+    const auto& pts = image_points;
+    check_matrix(pts, 2, "image_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    TORCH_CHECK(
+        width > 0 && height > 0,
+        "resolution dimensions must be positive for shutter-pose ops");
+    check_shutter_type(shutter_type);
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match image_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match image_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match image_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match image_points");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto world_rays = at::empty({pts.size(0), 6}, pts.options());
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_ftheta_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 12, pts)
+        : empty_scratch(pts.options());
+    image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_forward_launch(
+        pts.size(0),
+        ftheta_kernel_params_with_resolution(projection, width, height),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        world_rays.data_ptr<float>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {world_rays, timestamps, pose_t, pose_r, scratch};
+}
+
+// =============================================================================
+// FTheta backward host wrappers
+//   Re-run the guards that the matching forward applied: shape and contiguity
+//   of the grad/ray/scratch tensors, scratch.numel() against the per-op
+//   element budget, device alignment, and the FThetaProjection invariants via
+//   check_ftheta_projection_for_device. Shutter-pose variants additionally
+//   re-check shutter_type. autograd hands us tensors the user can substitute,
+//   so we cannot rely on forward having validated this exact call.
+// =============================================================================
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& camera_rays,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_camera_ray_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& rays = camera_rays;
+    const auto& grad = grad_image_points;
+    check_matrix(rays, 3, "camera_rays");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(grad.size(0) == rays.size(0), "grad_image_points batch must match camera_rays");
+    check_cuda_float_contiguous(rays, "camera_rays");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= rays.size(0) * 8,
+        "scratch too small for camera_rays_to_image_points_ftheta_no_external backward");
+    check_ftheta_projection_for_device(projection, rays.device());
+    auto guard = c10::cuda::CUDAGuard(rays.device());
+
+    auto grad_rays = need_camera_ray_grad ? at::empty_like(rays) : empty_scratch(rays.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    camera_rays_to_image_points_ftheta_no_external_backward_launch(
+        rays.size(0),
+        projection->to_kernel_params(),
+        rays.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_camera_ray_grad ? grad_rays.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        scratch.data_ptr<float>(),
+        current_stream(rays));
+    return {grad_rays, intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_camera_rays_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& grad_camera_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    const auto& grad = grad_camera_rays;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(grad, 3, "grad_camera_rays");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_camera_rays batch must match image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(grad, "grad_camera_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 8,
+        "scratch too small for image_points_to_camera_rays_ftheta_no_external backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    image_points_to_camera_rays_ftheta_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& camera_rays,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_camera_ray_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& rays = camera_rays;
+    const auto& grad = grad_image_points;
+    check_matrix(rays, 3, "camera_rays");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(grad.size(0) == rays.size(0), "grad_image_points batch must match camera_rays");
+    check_cuda_float_contiguous(rays, "camera_rays");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= rays.size(0) * 8,
+        "scratch too small for camera_rays_to_image_points_ftheta_bivariate_windshield backward");
+    check_ftheta_projection_for_device(projection, rays.device());
+    check_bivariate_windshield_for_device(external_distortion, rays.device());
+    auto guard = c10::cuda::CUDAGuard(rays.device());
+
+    auto grad_rays = need_camera_ray_grad ? at::empty_like(rays) : empty_scratch(rays.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    camera_rays_to_image_points_ftheta_bivariate_windshield_backward_launch(
+        rays.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        rays.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_camera_ray_grad ? grad_rays.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(rays));
+    return {grad_rays, intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv, grad_distortion};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_camera_rays_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& grad_camera_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = image_points;
+    const auto& grad = grad_camera_rays;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(grad, 3, "grad_camera_rays");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_camera_rays batch must match image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(grad, "grad_camera_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 12,
+        "scratch too small for image_points_to_camera_rays_ftheta_bivariate_windshield backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    image_points_to_camera_rays_ftheta_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv, grad_distortion};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = world_points;
+    const auto& grad = grad_image_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_image_points batch must match world_points");
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 10,
+        "scratch too small for project_world_points_mean_pose_ftheta_no_external backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_world_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    project_world_points_mean_pose_ftheta_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_world_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = world_points;
+    const auto& grad = grad_image_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_image_points batch must match world_points");
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 10,
+        "scratch too small for project_world_points_mean_pose_ftheta_bivariate_windshield backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_world_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    project_world_points_mean_pose_ftheta_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_world_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv, grad_distortion};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translation,
+    const at::Tensor& rotation,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_translation_grad,
+    bool need_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    const auto& grad = grad_world_rays;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(translation, 3, "translation");
+    check_matrix(rotation, 4, "rotation");
+    TORCH_CHECK(translation.size(0) == 1 && rotation.size(0) == 1, "static pose requires exactly one control pose");
+    check_matrix(grad, 6, "grad_world_rays");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(translation, "translation");
+    check_cuda_float_contiguous(rotation, "rotation");
+    check_cuda_float_contiguous(grad, "grad_world_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 8,
+        "scratch too small for image_points_to_world_rays_static_pose_ftheta_no_external backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_t = need_translation_grad ? at::zeros_like(translation) : empty_scratch(translation.options());
+    auto grad_r = need_rotation_grad ? at::zeros_like(rotation) : empty_scratch(rotation.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    image_points_to_world_rays_static_pose_ftheta_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        translation.data_ptr<float>(),
+        rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_translation_grad ? grad_t.data_ptr<float>() : nullptr,
+        need_rotation_grad ? grad_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_t, grad_r, intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translation,
+    const at::Tensor& rotation,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_translation_grad,
+    bool need_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = image_points;
+    const auto& grad = grad_world_rays;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(translation, 3, "translation");
+    check_matrix(rotation, 4, "rotation");
+    TORCH_CHECK(translation.size(0) == 1 && rotation.size(0) == 1, "static pose requires exactly one control pose");
+    check_matrix(grad, 6, "grad_world_rays");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(translation, "translation");
+    check_cuda_float_contiguous(rotation, "rotation");
+    check_cuda_float_contiguous(grad, "grad_world_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 12,
+        "scratch too small for image_points_to_world_rays_static_pose_ftheta_bivariate_windshield backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_t = need_translation_grad ? at::zeros_like(translation) : empty_scratch(translation.options());
+    auto grad_r = need_rotation_grad ? at::zeros_like(rotation) : empty_scratch(rotation.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        translation.data_ptr<float>(),
+        rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_translation_grad ? grad_t.data_ptr<float>() : nullptr,
+        need_rotation_grad ? grad_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_t, grad_r, intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv, grad_distortion};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    int64_t shutter_type,
+    int64_t max_iterations,
+    double initial_relative_time,
+    const at::Tensor& valid_flags,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = world_points;
+    const auto& valid = valid_flags;
+    const auto& grad = grad_image_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(valid.dim() == 1 && valid.size(0) == pts.size(0), "valid_flags must be (N,)");
+    check_shutter_type(shutter_type);
+    check_max_iterations(max_iterations);
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(valid.is_cuda(), "valid_flags must be a CUDA tensor");
+    TORCH_CHECK(valid.scalar_type() == at::kBool, "valid_flags must be bool");
+    TORCH_CHECK(valid.is_contiguous(), "valid_flags must be contiguous");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 11,
+        "scratch too small for project_world_points_shutter_pose_ftheta_no_external backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_world_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    project_world_points_shutter_pose_ftheta_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        max_iterations,
+        static_cast<float>(initial_relative_time),
+        valid.data_ptr<bool>(),
+        grad.data_ptr<float>(),
+        need_world_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    int64_t shutter_type,
+    int64_t max_iterations,
+    double initial_relative_time,
+    const at::Tensor& valid_flags,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = world_points;
+    const auto& valid = valid_flags;
+    const auto& grad = grad_image_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(valid.dim() == 1 && valid.size(0) == pts.size(0), "valid_flags must be (N,)");
+    check_shutter_type(shutter_type);
+    check_max_iterations(max_iterations);
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(valid.is_cuda(), "valid_flags must be a CUDA tensor");
+    TORCH_CHECK(valid.scalar_type() == at::kBool, "valid_flags must be bool");
+    TORCH_CHECK(valid.is_contiguous(), "valid_flags must be contiguous");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 11,
+        "scratch too small for project_world_points_shutter_pose_ftheta_bivariate_windshield backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_world_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    project_world_points_shutter_pose_ftheta_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        max_iterations,
+        static_cast<float>(initial_relative_time),
+        valid.data_ptr<bool>(),
+        grad.data_ptr<float>(),
+        need_world_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv, grad_distortion};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_ftheta_no_external_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    int64_t shutter_type,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    const auto& grad = grad_world_rays;
+    check_matrix(pts, 2, "image_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 6, "grad_world_rays");
+    check_shutter_type(shutter_type);
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_world_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 9,
+        "scratch too small for image_points_to_world_rays_shutter_pose_ftheta_no_external backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    image_points_to_world_rays_shutter_pose_ftheta_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward(
+    const c10::intrusive_ptr<FThetaProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    int64_t shutter_type,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_fw_poly_grad,
+    bool need_bw_poly_grad,
+    bool need_A_grad,
+    bool need_Ainv_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = image_points;
+    const auto& grad = grad_world_rays;
+    check_matrix(pts, 2, "image_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 6, "grad_world_rays");
+    check_shutter_type(shutter_type);
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_world_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 12,
+        "scratch too small for image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield backward");
+    check_ftheta_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_ftheta_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_fw_poly_grad,
+        need_bw_poly_grad,
+        need_A_grad,
+        need_Ainv_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.fw_poly, need_fw_poly_grad),
+        maybe_data_ptr(intr.bw_poly, need_bw_poly_grad),
+        maybe_data_ptr(intr.A, need_A_grad),
+        maybe_data_ptr(intr.Ainv, need_Ainv_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv, grad_distortion};
 }
 
 } // namespace gsplat_sensors

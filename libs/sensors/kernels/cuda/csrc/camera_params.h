@@ -1,6 +1,18 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 // camera_params.h — kernel parameter-pack structs and CUDA launch prototypes.
@@ -25,6 +37,12 @@ using cudaStream_t = CUstream_st*;
 // it; raising it requires recompilation.
 constexpr int64_t kMaxRollingShutterIterations = 12;
 
+// Hard upper bound on the FTheta Newton-iteration count exposed via the
+// FThetaProjection.newton_iterations field. check_ftheta_projection in
+// camera_torch.cpp rejects user-supplied values that exceed it; well above
+// the 2-3 iterations FTheta needs in practice for convergence.
+constexpr int64_t kFThetaMaxNewtonIterations = 32;
+
 // Parameter pack consumed by every OpenCV pinhole projection kernel.
 // Passed by value so the struct lands in registers / constant memory.
 //
@@ -33,6 +51,12 @@ constexpr int64_t kMaxRollingShutterIterations = 12;
 //              image_points_to_world_rays_{static,shutter}_pose
 //              (and their _backward variants), for both no_external and
 //              bivariate_windshield distortion flavours.
+
+// Cap on the number of polynomial coefficients shipped to FTheta CUDA kernels.
+// Host code uses this for shape/stride validation (e.g. fw_poly.numel() >= 6);
+// device code references the same constant for register-allocated POD members.
+constexpr int kFThetaMaxPolynomialTerms = 6;
+
 struct OpenCVPinholeProjection_KernelParameters {
     const float* __restrict__ focal_length;      // (2,) float32 — [fx, fy]
     const float* __restrict__ principal_point;   // (2,) float32 — [cx, cy]
@@ -41,6 +65,32 @@ struct OpenCVPinholeProjection_KernelParameters {
     const float* __restrict__ thin_prism_coeffs; // (4,) float32 — [s1..s4]
     int64_t width;  // sensor width in pixels; required for rolling-shutter kernels
     int64_t height; // sensor height in pixels; required for rolling-shutter kernels
+};
+
+// FThetaProjection_KernelParameters mirrors the OpenCVPinhole layout but for
+// the polynomial-radial F-Theta camera. Component pointers are obtained from
+// per-component nn.Parameter tensors via const_data_ptr<float>(). The Python
+// class exposes only the five differentiable components (pp, fw_poly, bw_poly,
+// A, Ainv) and the six scalar config fields below; polynomial derivatives are
+// recomputed device-side via ftheta_poly_eval_derivative.
+//
+// Pointer fields are `const float* __restrict__`: callers building this POD
+// must guarantee the five component tensors do not alias one another (the
+// per-component nn.Parameter pattern satisfies this trivially).
+struct FThetaProjection_KernelParameters {
+    const float* __restrict__ principal_point;     // (2,)
+    const float* __restrict__ fw_poly;             // (kFThetaMaxPolynomialTerms,)
+    const float* __restrict__ bw_poly;             // (kFThetaMaxPolynomialTerms,)
+    const float* __restrict__ A;                   // (4,) row-major 2x2
+    const float* __restrict__ Ainv;                // (4,) row-major 2x2
+    int64_t width;
+    int64_t height;
+    int64_t reference_polynomial;                  // 0=FORWARD, 1=BACKWARD
+    int64_t fw_poly_degree;                        // <= kFThetaMaxPolynomialTerms - 1
+    int64_t bw_poly_degree;                        // <= kFThetaMaxPolynomialTerms - 1
+    int64_t newton_iterations;
+    float max_angle;
+    float min_2d_norm;
 };
 
 // ===========================================================================
@@ -536,5 +586,444 @@ void image_points_to_world_rays_shutter_pose_backward_launch(
     float* grad_radial_coeffs,
     float* grad_tangential_coeffs,
     float* grad_thin_prism_coeffs,
+    const float* scratch,
+    cudaStream_t stream);
+
+// =============================================================================
+// FTheta launchers -- 12 forward + 12 backward (6 ops x 2 distortions each).
+// Naming: <verb>_ftheta_<distortion>_<forward|backward>_launch.
+// Per-op scratch strides are listed at the top of ftheta_kernel.cuh; all are
+// gated by save_scratch in the host wrapper.
+// =============================================================================
+
+// ---- D1 (no_external) ------------------------------------------------------
+
+void camera_rays_to_image_points_ftheta_no_external_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* camera_rays,
+    float* image_points,
+    bool* valid_flags,
+    float* scratch,
+    cudaStream_t stream);
+
+void camera_rays_to_image_points_ftheta_no_external_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* camera_rays,
+    const float* grad_image_points,
+    float* grad_camera_rays,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    const float* scratch,
+    cudaStream_t stream);
+
+// ---- D2 (no_external) ------------------------------------------------------
+
+void image_points_to_camera_rays_ftheta_no_external_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* image_points,
+    float* camera_rays,
+    float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_camera_rays_ftheta_no_external_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* image_points,
+    const float* grad_camera_rays,
+    float* grad_image_points,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    const float* scratch,
+    cudaStream_t stream);
+
+// ---- D3 (bivariate_windshield) --------------------------------------------
+
+void camera_rays_to_image_points_ftheta_bivariate_windshield_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* camera_rays,
+    float* image_points,
+    bool* valid_flags,
+    float* scratch,
+    cudaStream_t stream);
+
+void camera_rays_to_image_points_ftheta_bivariate_windshield_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* camera_rays,
+    const float* grad_image_points,
+    float* grad_camera_rays,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    float* grad_distortion_coeffs,
+    const float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_camera_rays_ftheta_bivariate_windshield_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* image_points,
+    float* camera_rays,
+    float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_camera_rays_ftheta_bivariate_windshield_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* image_points,
+    const float* grad_camera_rays,
+    float* grad_image_points,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    float* grad_distortion_coeffs,
+    const float* scratch,
+    cudaStream_t stream);
+
+// ---- D4 (mean-pose, no_external + bivariate) ------------------------------
+
+void project_world_points_mean_pose_ftheta_no_external_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* world_points,
+    const float* start_translation,
+    const float* start_rotation,
+    const float* end_translation,
+    const float* end_rotation,
+    int64_t mean_timestamp_us,
+    float* image_points,
+    bool* valid_flags,
+    int64_t* timestamps_us,
+    float* pose_translations,
+    float* pose_rotations,
+    float* scratch,
+    cudaStream_t stream);
+
+void project_world_points_mean_pose_ftheta_no_external_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* world_points,
+    const float* start_rotation,
+    const float* end_rotation,
+    const float* grad_image_points,
+    float* grad_world_points,
+    float* grad_start_translation,
+    float* grad_end_translation,
+    float* grad_start_rotation,
+    float* grad_end_rotation,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    const float* scratch,
+    cudaStream_t stream);
+
+void project_world_points_mean_pose_ftheta_bivariate_windshield_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* world_points,
+    const float* start_translation,
+    const float* start_rotation,
+    const float* end_translation,
+    const float* end_rotation,
+    int64_t mean_timestamp_us,
+    float* image_points,
+    bool* valid_flags,
+    int64_t* timestamps_us,
+    float* pose_translations,
+    float* pose_rotations,
+    float* scratch,
+    cudaStream_t stream);
+
+void project_world_points_mean_pose_ftheta_bivariate_windshield_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* world_points,
+    const float* start_rotation,
+    const float* end_rotation,
+    const float* grad_image_points,
+    float* grad_world_points,
+    float* grad_start_translation,
+    float* grad_end_translation,
+    float* grad_start_rotation,
+    float* grad_end_rotation,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    float* grad_distortion_coeffs,
+    const float* scratch,
+    cudaStream_t stream);
+
+// ---- D5 (static-pose image -> world rays, no_external + bivariate) --------
+
+void image_points_to_world_rays_static_pose_ftheta_no_external_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* image_points,
+    const float* translation,
+    const float* rotation,
+    int64_t timestamp_us,
+    float* world_rays,
+    int64_t* timestamps_us,
+    float* pose_translations,
+    float* pose_rotations,
+    float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_world_rays_static_pose_ftheta_no_external_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* image_points,
+    const float* translation,
+    const float* rotation,
+    const float* grad_world_rays,
+    float* grad_image_points,
+    float* grad_translation,
+    float* grad_rotation,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    const float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* image_points,
+    const float* translation,
+    const float* rotation,
+    int64_t timestamp_us,
+    float* world_rays,
+    int64_t* timestamps_us,
+    float* pose_translations,
+    float* pose_rotations,
+    float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* image_points,
+    const float* translation,
+    const float* rotation,
+    const float* grad_world_rays,
+    float* grad_image_points,
+    float* grad_translation,
+    float* grad_rotation,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    float* grad_distortion_coeffs,
+    const float* scratch,
+    cudaStream_t stream);
+
+// ---- D6 (shutter-pose project_world_points, no_external + bivariate) ------
+
+void project_world_points_shutter_pose_ftheta_no_external_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* world_points,
+    const float* start_translation,
+    const float* start_rotation,
+    const float* end_translation,
+    const float* end_rotation,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    float stop_mean_error_px,
+    float stop_delta_mean_error_px,
+    float initial_relative_time,
+    float* image_points,
+    bool* valid_flags,
+    int64_t* timestamps_us,
+    float* pose_translations,
+    float* pose_rotations,
+    float* scratch,
+    cudaStream_t stream);
+
+void project_world_points_shutter_pose_ftheta_no_external_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* world_points,
+    const float* start_rotation,
+    const float* end_rotation,
+    int64_t shutter_type,
+    int64_t max_iterations,
+    float initial_relative_time,
+    const bool* valid_flags,
+    const float* grad_image_points,
+    float* grad_world_points,
+    float* grad_start_translation,
+    float* grad_end_translation,
+    float* grad_start_rotation,
+    float* grad_end_rotation,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    const float* scratch,
+    cudaStream_t stream);
+
+void project_world_points_shutter_pose_ftheta_bivariate_windshield_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* world_points,
+    const float* start_translation,
+    const float* start_rotation,
+    const float* end_translation,
+    const float* end_rotation,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    float stop_mean_error_px,
+    float stop_delta_mean_error_px,
+    float initial_relative_time,
+    float* image_points,
+    bool* valid_flags,
+    int64_t* timestamps_us,
+    float* pose_translations,
+    float* pose_rotations,
+    float* scratch,
+    cudaStream_t stream);
+
+void project_world_points_shutter_pose_ftheta_bivariate_windshield_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* world_points,
+    const float* start_rotation,
+    const float* end_rotation,
+    int64_t shutter_type,
+    int64_t max_iterations,
+    float initial_relative_time,
+    const bool* valid_flags,
+    const float* grad_image_points,
+    float* grad_world_points,
+    float* grad_start_translation,
+    float* grad_end_translation,
+    float* grad_start_rotation,
+    float* grad_end_rotation,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    float* grad_distortion_coeffs,
+    const float* scratch,
+    cudaStream_t stream);
+
+// ---- D7 (shutter-pose image_points -> world rays, no_external + bivariate) -
+
+void image_points_to_world_rays_shutter_pose_ftheta_no_external_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* image_points,
+    const float* start_translation,
+    const float* start_rotation,
+    const float* end_translation,
+    const float* end_rotation,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    float* world_rays,
+    int64_t* timestamps_us,
+    float* pose_translations,
+    float* pose_rotations,
+    float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_world_rays_shutter_pose_ftheta_no_external_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    const float* image_points,
+    const float* start_rotation,
+    const float* end_rotation,
+    int64_t shutter_type,
+    const float* grad_world_rays,
+    float* grad_image_points,
+    float* grad_start_translation,
+    float* grad_end_translation,
+    float* grad_start_rotation,
+    float* grad_end_rotation,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    const float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_forward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* image_points,
+    const float* start_translation,
+    const float* start_rotation,
+    const float* end_translation,
+    const float* end_rotation,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    float* world_rays,
+    int64_t* timestamps_us,
+    float* pose_translations,
+    float* pose_rotations,
+    float* scratch,
+    cudaStream_t stream);
+
+void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward_launch(
+    int64_t count,
+    FThetaProjection_KernelParameters projection,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    const float* image_points,
+    const float* start_rotation,
+    const float* end_rotation,
+    int64_t shutter_type,
+    const float* grad_world_rays,
+    float* grad_image_points,
+    float* grad_start_translation,
+    float* grad_end_translation,
+    float* grad_start_rotation,
+    float* grad_end_rotation,
+    float* grad_principal_point,
+    float* grad_fw_poly,
+    float* grad_bw_poly,
+    float* grad_A,
+    float* grad_Ainv,
+    float* grad_distortion_coeffs,
     const float* scratch,
     cudaStream_t stream);

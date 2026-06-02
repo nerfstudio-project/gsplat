@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """JIT-compiles the sensorlib camera CUDA extension via torch.utils.cpp_extension.load.
 
@@ -19,14 +31,15 @@ Environment variable honored at load time:
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import shutil
 import sys
 import time
 from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 
+import torch
 import torch.utils.cpp_extension as jit
 
 PATH = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +64,8 @@ def get_build_parameters() -> SimpleNamespace:
         os.path.join(PATH, "csrc", "external_distortion_torch.cpp"),
         os.path.join(PATH, "csrc", "camera_kernel.cu"),
         os.path.join(PATH, "csrc", "camera_kernel_backward.cu"),
+        os.path.join(PATH, "csrc", "ftheta_kernel.cu"),
+        os.path.join(PATH, "csrc", "ftheta_kernel_backward.cu"),
     ]
     geometry_csrc = os.path.normpath(
         os.path.join(PATH, "..", "..", "..", "geometry", "kernels", "cuda", "csrc")
@@ -61,17 +76,32 @@ def get_build_parameters() -> SimpleNamespace:
     extra_ldflags: list[str] = []
 
     if sys.platform == "win32":
-        extra_cflags = ["/std=c++17", "-DWIN32_LEAN_AND_MEAN"]
+        extra_cflags += ["/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN"]
+        extra_cuda_cflags += [
+            "-std=c++20",
+            "-allow-unsupported-compiler",
+            "-Xcompiler",
+            "/Zc:preprocessor",
+            "-DWIN32_LEAN_AND_MEAN",
+        ]
     else:
-        extra_cflags = ["-std=c++17"]
+        extra_cflags = ["-std=c++20"]
 
     extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
+    extra_cuda_cflags += ["-lineinfo"] if DEBUG else []
     extra_cflags += ["-Wno-attributes"]
     if os.name != "nt":
         extra_cflags += ["-Wno-sign-compare"]
-    if NVCC_FLAGS:
-        extra_cuda_cflags += NVCC_FLAGS.split(" ")
+
+    if torch.version.hip:
+        extra_cflags += ["-DUSE_ROCM", "-U__HIP_NO_HALF_CONVERSIONS__"]
+    else:
+        extra_cuda_cflags += ["--forward-unknown-opts", "--expt-relaxed-constexpr"]
+
+    if sys.platform != "win32":
+        extra_cuda_cflags += extra_cflags
+    extra_cuda_cflags += [] if NVCC_FLAGS == "" else NVCC_FLAGS.split(" ")
 
     return SimpleNamespace(
         name=name,

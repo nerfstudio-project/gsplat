@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Layer 0 Python bindings for camera kernel operations.
 
@@ -19,9 +31,13 @@ from .._backend import _C  # noqa: F401  # ensures torch.ops registrations exist
 from ..common.pose import DynamicPose, Pose, Trajectory
 from .types import (
     BivariateWindshieldDistortion,
+    CameraProjection,
     ExternalDistortion,
+    FThetaProjection,
     NoExternalDistortion,
     OpenCVPinholeProjection,
+    REGISTERED_CAMERA_PROJECTION_NAMES,
+    REGISTERED_DISTORTION_NAMES,
     ShutterType,
     script_class_name,
 )
@@ -80,11 +96,15 @@ def _to_dev(
     return converted if converted.is_contiguous() else converted.contiguous()
 
 
+_SUPPORTED_PROJECTIONS = frozenset(REGISTERED_CAMERA_PROJECTION_NAMES)
+_SUPPORTED_DISTORTIONS = frozenset(REGISTERED_DISTORTION_NAMES)
+
+
 def _check_pair(projection: object, external_distortion: object) -> None:
     """Validate that the projection/distortion pair is a supported combination.
 
     Args:
-        projection: Camera projection parameters (must be OpenCVPinholeProjection).
+        projection: Supported camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion). Passing None raises TypeError.
     """
@@ -93,9 +113,10 @@ def _check_pair(projection: object, external_distortion: object) -> None:
             "external_distortion=None is not supported; pass NoExternalDistortion() explicitly"
         )
 
-    if script_class_name(projection) != "OpenCVPinholeProjection" or script_class_name(
-        external_distortion
-    ) not in {"NoExternalDistortion", "BivariateWindshieldDistortion"}:
+    if (
+        script_class_name(projection) not in _SUPPORTED_PROJECTIONS
+        or script_class_name(external_distortion) not in _SUPPORTED_DISTORTIONS
+    ):
         raise TypeError(
             "Unsupported camera projection/distortion pair: "
             f"({type(projection).__name__}, {type(external_distortion).__name__})"
@@ -201,6 +222,99 @@ def _external_distortion_on_device(
         ),
         distortion_coeffs,
     )
+
+
+def _projection_tensors_ftheta(
+    projection: FThetaProjection,
+    device: torch.device,
+    dtype: torch.dtype,
+    allow_device_transfer: bool,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Extract and transfer the four FTheta intrinsic tensors to the target device.
+
+    Args:
+        projection: FTheta projection parameters.
+        device: Target CUDA device.
+        dtype: Target floating-point dtype.
+        allow_device_transfer: Passed through to ``_to_dev``; see its docstring.
+
+    Returns:
+        Four-tuple of (principal_point, fw_poly, bw_poly, A) on the target device.
+        ``Ainv`` is derived on demand from ``A`` inside the CUDA struct's
+        ``to_kernel_params()``.
+    """
+    return (
+        _to_dev(projection.principal_point, device, dtype, allow_device_transfer),
+        _to_dev(projection.fw_poly, device, dtype, allow_device_transfer),
+        _to_dev(projection.bw_poly, device, dtype, allow_device_transfer),
+        _to_dev(projection.A, device, dtype, allow_device_transfer),
+    )
+
+
+def _projection_on_device_ftheta(
+    projection: FThetaProjection,
+    device: torch.device,
+    dtype: torch.dtype,
+    allow_device_transfer: bool,
+    resolution: tuple[int, int] | None = None,
+) -> tuple[FThetaProjection, tuple[Tensor, Tensor, Tensor, Tensor]]:
+    """Build a device-local FThetaProjection and return its component tensors.
+
+    Args:
+        projection: FTheta projection parameters whose tensors may be on CPU.
+        device: Target CUDA device.
+        dtype: Target floating-point dtype.
+        allow_device_transfer: Passed through to ``_to_dev``; see its docstring.
+        resolution: If provided, overrides ``projection.resolution`` on the returned
+            struct (useful when resolution is passed as a kernel argument separately).
+
+    Returns:
+        Tuple of (projection_on_device, (principal_point, fw_poly, bw_poly, A)).
+    """
+    tensors = _projection_tensors_ftheta(
+        projection, device, dtype, allow_device_transfer
+    )
+    projected = FThetaProjection(
+        principal_point=tensors[0],
+        fw_poly=tensors[1],
+        bw_poly=tensors[2],
+        A=tensors[3],
+        resolution=projection.resolution if resolution is None else resolution,
+        reference_polynomial=int(projection.reference_polynomial),
+        fw_poly_degree=int(projection.fw_poly_degree),
+        bw_poly_degree=int(projection.bw_poly_degree),
+        newton_iterations=int(projection.newton_iterations),
+        max_angle=float(projection.max_angle),
+        min_2d_norm=float(projection.min_2d_norm),
+    )
+    return projected, tensors
+
+
+def _projection_on_device_any(
+    projection: CameraProjection,
+    device: torch.device,
+    dtype: torch.dtype,
+    allow_device_transfer: bool,
+    resolution: tuple[int, int] | None = None,
+) -> tuple[CameraProjection, tuple]:
+    """Dispatch to the projection-specific transfer helper.
+
+    Returns ``(device_projection, component_tensors)`` where the second slot is
+    a tuple of component tensors in the order the autograd Function forwards
+    expect (pinhole: 5-tuple ``focal_length, principal_point, radial_coeffs,
+    tangential_coeffs, thin_prism_coeffs``; FTheta: 4-tuple
+    ``principal_point, fw_poly, bw_poly, A``).
+    """
+    dispatch = {
+        "OpenCVPinholeProjection": _projection_on_device,
+        "FThetaProjection": _projection_on_device_ftheta,
+    }
+    class_name = script_class_name(projection)
+    try:
+        transfer = dispatch[class_name]
+    except KeyError as exc:
+        raise TypeError(f"Unknown camera projection class: {class_name}") from exc
+    return transfer(projection, device, dtype, allow_device_transfer, resolution)
 
 
 def _select_camera_op(
@@ -1549,9 +1663,1305 @@ class _ImagePointsToWorldRaysShutterPoseBivariateWindshield(torch.autograd.Funct
         )
 
 
+# =============================================================================
+# FTheta autograd Function classes (6 ops x 2 distortion variants).
+# CUDA backward kernels emit (grad_A, grad_Ainv); these Functions consolidate
+# grad_Ainv into grad_A via the inverse-matrix VJP so the user-facing
+# FThetaProjection exposes a single trainable A.
+# =============================================================================
+
+
+def _consolidate_ftheta_grad_a(
+    grad_A: Tensor, grad_Ainv: Tensor, projection: FThetaProjection
+) -> Tensor:
+    """Fold grad_Ainv into grad_A using the matrix-inverse VJP.
+
+    With ``B = inv(A)``, ``dB = -B (dA) B`` gives the cotangent pullback
+    ``grad_A_contrib = -B.T @ grad_B @ B.T``. ``A`` is stored as a flat
+    (4,) row-major 2x2 tensor; reshape to 2x2 for the matmul, then
+    flatten back to (4,) before adding to ``grad_A``.
+    """
+    Ainv_2x2 = projection.Ainv.to(grad_A.dtype).view(2, 2)
+    grad_Ainv_2x2 = grad_Ainv.view(2, 2)
+    grad_A_contrib = -Ainv_2x2.T @ grad_Ainv_2x2 @ Ainv_2x2.T
+    return grad_A + grad_A_contrib.reshape(4)
+
+
+class _CameraRaysToImagePointsFTheta(torch.autograd.Function):
+    """Autograd Function wrapping ``camera_rays_to_image_points_ftheta_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        camera_rays: Tensor,
+        projection: FThetaProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        del principal_point, fw_poly, bw_poly, A
+        (
+            image_points,
+            valid_flags,
+            scratch,
+        ) = torch.ops.gsplat_sensors.camera_rays_to_image_points_ftheta_no_external(
+            projection, external_distortion, camera_rays
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(camera_rays, scratch)
+        ctx.mark_non_differentiable(valid_flags)
+        return image_points, valid_flags
+
+    @staticmethod
+    def backward(
+        ctx, grad_image_points: Tensor | None, grad_valid_flags: Tensor | None
+    ):
+        del grad_valid_flags
+        camera_rays, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((camera_rays.shape[0], 2), camera_rays)
+        need_A = ctx.needs_input_grad[6]
+        grads = torch.ops.gsplat_sensors.camera_rays_to_image_points_ftheta_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            camera_rays,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[5],
+            need_A,
+            need_A,
+        )
+        grad_camera_rays, grad_pp, grad_fw, grad_bw, grad_A, grad_Ainv = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_camera_rays if ctx.needs_input_grad[0] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[3] else None,
+            grad_fw if ctx.needs_input_grad[4] else None,
+            grad_bw if ctx.needs_input_grad[5] else None,
+            grad_A if need_A else None,
+        )
+
+
+class _ImagePointsToCameraRaysFTheta(torch.autograd.Function):
+    """Autograd Function wrapping ``image_points_to_camera_rays_ftheta_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        projection: FThetaProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+    ) -> Tensor:
+        del principal_point, fw_poly, bw_poly, A
+        (
+            camera_rays,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_camera_rays_ftheta_no_external(
+            projection, external_distortion, image_points
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, scratch)
+        return camera_rays
+
+    @staticmethod
+    def backward(ctx, grad_camera_rays: Tensor | None):
+        image_points, scratch = ctx.saved_tensors
+        if grad_camera_rays is None:
+            grad_camera_rays = _zero_like((image_points.shape[0], 3), image_points)
+        need_A = ctx.needs_input_grad[6]
+        grads = torch.ops.gsplat_sensors.image_points_to_camera_rays_ftheta_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            grad_camera_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[5],
+            need_A,
+            need_A,
+        )
+        grad_image_points, grad_pp, grad_fw, grad_bw, grad_A, grad_Ainv = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_image_points if ctx.needs_input_grad[0] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[3] else None,
+            grad_fw if ctx.needs_input_grad[4] else None,
+            grad_bw if ctx.needs_input_grad[5] else None,
+            grad_A if need_A else None,
+        )
+
+
+class _CameraRaysToImagePointsFThetaBivariateWindshield(torch.autograd.Function):
+    """Autograd Function wrapping ``camera_rays_to_image_points_ftheta_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        camera_rays: Tensor,
+        projection: FThetaProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        del distortion_coeffs, principal_point, fw_poly, bw_poly, A
+        (
+            image_points,
+            valid_flags,
+            scratch,
+        ) = torch.ops.gsplat_sensors.camera_rays_to_image_points_ftheta_bivariate_windshield(
+            projection, external_distortion, camera_rays
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(camera_rays, scratch)
+        ctx.mark_non_differentiable(valid_flags)
+        return image_points, valid_flags
+
+    @staticmethod
+    def backward(
+        ctx, grad_image_points: Tensor | None, grad_valid_flags: Tensor | None
+    ):
+        del grad_valid_flags
+        camera_rays, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((camera_rays.shape[0], 2), camera_rays)
+        need_A = ctx.needs_input_grad[7]
+        grads = torch.ops.gsplat_sensors.camera_rays_to_image_points_ftheta_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            camera_rays,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[5],
+            ctx.needs_input_grad[6],
+            need_A,
+            need_A,
+            ctx.needs_input_grad[3],
+        )
+        (
+            grad_camera_rays,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+            grad_distortion,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_camera_rays if ctx.needs_input_grad[0] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[3] else None,
+            grad_pp if ctx.needs_input_grad[4] else None,
+            grad_fw if ctx.needs_input_grad[5] else None,
+            grad_bw if ctx.needs_input_grad[6] else None,
+            grad_A if need_A else None,
+        )
+
+
+class _ImagePointsToCameraRaysFThetaBivariateWindshield(torch.autograd.Function):
+    """Autograd Function wrapping ``image_points_to_camera_rays_ftheta_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        projection: FThetaProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+    ) -> Tensor:
+        del distortion_coeffs, principal_point, fw_poly, bw_poly, A
+        (
+            camera_rays,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_camera_rays_ftheta_bivariate_windshield(
+            projection, external_distortion, image_points
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, scratch)
+        return camera_rays
+
+    @staticmethod
+    def backward(ctx, grad_camera_rays: Tensor | None):
+        image_points, scratch = ctx.saved_tensors
+        if grad_camera_rays is None:
+            grad_camera_rays = _zero_like((image_points.shape[0], 3), image_points)
+        need_A = ctx.needs_input_grad[7]
+        grads = torch.ops.gsplat_sensors.image_points_to_camera_rays_ftheta_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            grad_camera_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[5],
+            ctx.needs_input_grad[6],
+            need_A,
+            need_A,
+            ctx.needs_input_grad[3],
+        )
+        (
+            grad_image_points,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+            grad_distortion,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_image_points if ctx.needs_input_grad[0] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[3] else None,
+            grad_pp if ctx.needs_input_grad[4] else None,
+            grad_fw if ctx.needs_input_grad[5] else None,
+            grad_bw if ctx.needs_input_grad[6] else None,
+            grad_A if need_A else None,
+        )
+
+
+class _ProjectWorldPointsMeanPoseFTheta(torch.autograd.Function):
+    """Autograd Function wrapping ``project_world_points_mean_pose_ftheta_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        world_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: FThetaProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        del principal_point, fw_poly, bw_poly, A
+        (
+            image_points,
+            valid_flags,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_ftheta_no_external(
+            projection,
+            external_distortion,
+            world_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(world_points, start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(valid_flags, timestamps_us)
+        return image_points, valid_flags, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_image_points: Tensor | None,
+        grad_valid_flags: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_valid_flags, grad_timestamps_us, grad_pose_t, grad_pose_r
+        world_points, start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((world_points.shape[0], 2), world_points)
+        need_A = ctx.needs_input_grad[10]
+        grads = torch.ops.gsplat_sensors.project_world_points_mean_pose_ftheta_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            world_points,
+            start_rotation,
+            end_rotation,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[7],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            need_A,
+            need_A,
+        )
+        (
+            grad_world,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_world if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[7] else None,
+            grad_fw if ctx.needs_input_grad[8] else None,
+            grad_bw if ctx.needs_input_grad[9] else None,
+            grad_A if need_A else None,
+            None,
+            None,
+        )
+
+
+class _ProjectWorldPointsMeanPoseFThetaBivariateWindshield(torch.autograd.Function):
+    """Autograd Function wrapping ``project_world_points_mean_pose_ftheta_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        world_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: FThetaProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        del distortion_coeffs, principal_point, fw_poly, bw_poly, A
+        (
+            image_points,
+            valid_flags,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_ftheta_bivariate_windshield(
+            projection,
+            external_distortion,
+            world_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(world_points, start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(valid_flags, timestamps_us)
+        return image_points, valid_flags, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_image_points: Tensor | None,
+        grad_valid_flags: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_valid_flags, grad_timestamps_us, grad_pose_t, grad_pose_r
+        world_points, start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((world_points.shape[0], 2), world_points)
+        need_A = ctx.needs_input_grad[11]
+        grads = torch.ops.gsplat_sensors.project_world_points_mean_pose_ftheta_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            world_points,
+            start_rotation,
+            end_rotation,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            ctx.needs_input_grad[10],
+            need_A,
+            need_A,
+            ctx.needs_input_grad[7],
+        )
+        (
+            grad_world,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+            grad_distortion,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_world if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[7] else None,
+            grad_pp if ctx.needs_input_grad[8] else None,
+            grad_fw if ctx.needs_input_grad[9] else None,
+            grad_bw if ctx.needs_input_grad[10] else None,
+            grad_A if need_A else None,
+            None,
+            None,
+        )
+
+
+class _ImagePointsToWorldRaysStaticPoseFTheta(torch.autograd.Function):
+    """Autograd Function wrapping ``image_points_to_world_rays_static_pose_ftheta_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        translations: Tensor,
+        rotations: Tensor,
+        projection: FThetaProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+        timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        del principal_point, fw_poly, bw_poly, A
+        (
+            world_rays,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_world_rays_static_pose_ftheta_no_external(
+            projection,
+            external_distortion,
+            image_points,
+            translations,
+            rotations,
+            int(timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, translations, rotations, scratch)
+        ctx.mark_non_differentiable(timestamps_us)
+        return world_rays, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_world_rays: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_timestamps_us, grad_pose_t, grad_pose_r
+        image_points, translations, rotations, scratch = ctx.saved_tensors
+        if grad_world_rays is None:
+            grad_world_rays = _zero_like((image_points.shape[0], 6), image_points)
+        need_A = ctx.needs_input_grad[8]
+        grads = torch.ops.gsplat_sensors.image_points_to_world_rays_static_pose_ftheta_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            translations,
+            rotations,
+            grad_world_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[5],
+            ctx.needs_input_grad[6],
+            ctx.needs_input_grad[7],
+            need_A,
+            need_A,
+        )
+        grad_pts, grad_t, grad_r, grad_pp, grad_fw, grad_bw, grad_A, grad_Ainv = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_pts if ctx.needs_input_grad[0] else None,
+            grad_t if ctx.needs_input_grad[1] else None,
+            grad_r if ctx.needs_input_grad[2] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[5] else None,
+            grad_fw if ctx.needs_input_grad[6] else None,
+            grad_bw if ctx.needs_input_grad[7] else None,
+            grad_A if need_A else None,
+            None,
+        )
+
+
+class _ImagePointsToWorldRaysStaticPoseFThetaBivariateWindshield(
+    torch.autograd.Function
+):
+    """Autograd Function wrapping ``image_points_to_world_rays_static_pose_ftheta_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        translations: Tensor,
+        rotations: Tensor,
+        projection: FThetaProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+        timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        del distortion_coeffs, principal_point, fw_poly, bw_poly, A
+        (
+            world_rays,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_world_rays_static_pose_ftheta_bivariate_windshield(
+            projection,
+            external_distortion,
+            image_points,
+            translations,
+            rotations,
+            int(timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, translations, rotations, scratch)
+        ctx.mark_non_differentiable(timestamps_us)
+        return world_rays, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_world_rays: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_timestamps_us, grad_pose_t, grad_pose_r
+        image_points, translations, rotations, scratch = ctx.saved_tensors
+        if grad_world_rays is None:
+            grad_world_rays = _zero_like((image_points.shape[0], 6), image_points)
+        need_A = ctx.needs_input_grad[9]
+        grads = torch.ops.gsplat_sensors.image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            translations,
+            rotations,
+            grad_world_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[6],
+            ctx.needs_input_grad[7],
+            ctx.needs_input_grad[8],
+            need_A,
+            need_A,
+            ctx.needs_input_grad[5],
+        )
+        (
+            grad_pts,
+            grad_t,
+            grad_r,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+            grad_distortion,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_pts if ctx.needs_input_grad[0] else None,
+            grad_t if ctx.needs_input_grad[1] else None,
+            grad_r if ctx.needs_input_grad[2] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[5] else None,
+            grad_pp if ctx.needs_input_grad[6] else None,
+            grad_fw if ctx.needs_input_grad[7] else None,
+            grad_bw if ctx.needs_input_grad[8] else None,
+            grad_A if need_A else None,
+            None,
+        )
+
+
+class _ProjectWorldPointsShutterPoseFTheta(torch.autograd.Function):
+    """Autograd Function wrapping ``project_world_points_shutter_pose_ftheta_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        world_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: FThetaProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+        width: int,
+        height: int,
+        shutter_type: int,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+        max_iterations: int,
+        stop_mean_error_px: float,
+        stop_delta_mean_error_px: float,
+        initial_relative_time: float,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        del principal_point, fw_poly, bw_poly, A
+        (
+            image_points,
+            valid_flags,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_ftheta_no_external(
+            projection,
+            external_distortion,
+            world_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(width),
+            int(height),
+            int(shutter_type),
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+            int(max_iterations),
+            float(stop_mean_error_px),
+            float(stop_delta_mean_error_px),
+            float(initial_relative_time),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.shutter_type = int(shutter_type)
+        ctx.max_iterations = int(max_iterations)
+        ctx.initial_relative_time = float(initial_relative_time)
+        ctx.save_for_backward(
+            world_points, start_rotation, end_rotation, valid_flags, scratch
+        )
+        ctx.mark_non_differentiable(valid_flags, timestamps_us)
+        return image_points, valid_flags, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_image_points: Tensor | None,
+        grad_valid_flags: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_valid_flags, grad_timestamps_us, grad_pose_t, grad_pose_r
+        (
+            world_points,
+            start_rotation,
+            end_rotation,
+            valid_flags,
+            scratch,
+        ) = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((world_points.shape[0], 2), world_points)
+        need_A = ctx.needs_input_grad[10]
+        grads = torch.ops.gsplat_sensors.project_world_points_shutter_pose_ftheta_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            world_points,
+            start_rotation,
+            end_rotation,
+            ctx.shutter_type,
+            ctx.max_iterations,
+            ctx.initial_relative_time,
+            valid_flags,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[7],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            need_A,
+            need_A,
+        )
+        (
+            grad_world,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_world if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[7] else None,
+            grad_fw if ctx.needs_input_grad[8] else None,
+            grad_bw if ctx.needs_input_grad[9] else None,
+            grad_A if need_A else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _ProjectWorldPointsShutterPoseFThetaBivariateWindshield(torch.autograd.Function):
+    """Autograd Function wrapping ``project_world_points_shutter_pose_ftheta_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        world_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: FThetaProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+        width: int,
+        height: int,
+        shutter_type: int,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+        max_iterations: int,
+        stop_mean_error_px: float,
+        stop_delta_mean_error_px: float,
+        initial_relative_time: float,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        del distortion_coeffs, principal_point, fw_poly, bw_poly, A
+        (
+            image_points,
+            valid_flags,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_ftheta_bivariate_windshield(
+            projection,
+            external_distortion,
+            world_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(width),
+            int(height),
+            int(shutter_type),
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+            int(max_iterations),
+            float(stop_mean_error_px),
+            float(stop_delta_mean_error_px),
+            float(initial_relative_time),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.shutter_type = int(shutter_type)
+        ctx.max_iterations = int(max_iterations)
+        ctx.initial_relative_time = float(initial_relative_time)
+        ctx.save_for_backward(
+            world_points, start_rotation, end_rotation, valid_flags, scratch
+        )
+        ctx.mark_non_differentiable(valid_flags, timestamps_us)
+        return image_points, valid_flags, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_image_points: Tensor | None,
+        grad_valid_flags: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_valid_flags, grad_timestamps_us, grad_pose_t, grad_pose_r
+        (
+            world_points,
+            start_rotation,
+            end_rotation,
+            valid_flags,
+            scratch,
+        ) = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((world_points.shape[0], 2), world_points)
+        need_A = ctx.needs_input_grad[11]
+        grads = torch.ops.gsplat_sensors.project_world_points_shutter_pose_ftheta_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            world_points,
+            start_rotation,
+            end_rotation,
+            ctx.shutter_type,
+            ctx.max_iterations,
+            ctx.initial_relative_time,
+            valid_flags,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            ctx.needs_input_grad[10],
+            need_A,
+            need_A,
+            ctx.needs_input_grad[7],
+        )
+        (
+            grad_world,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+            grad_distortion,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_world if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[7] else None,
+            grad_pp if ctx.needs_input_grad[8] else None,
+            grad_fw if ctx.needs_input_grad[9] else None,
+            grad_bw if ctx.needs_input_grad[10] else None,
+            grad_A if need_A else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _ImagePointsToWorldRaysShutterPoseFTheta(torch.autograd.Function):
+    """Autograd Function wrapping ``image_points_to_world_rays_shutter_pose_ftheta_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: FThetaProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+        width: int,
+        height: int,
+        shutter_type: int,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        del principal_point, fw_poly, bw_poly, A
+        (
+            world_rays,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_world_rays_shutter_pose_ftheta_no_external(
+            projection,
+            external_distortion,
+            image_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(width),
+            int(height),
+            int(shutter_type),
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.shutter_type = int(shutter_type)
+        ctx.save_for_backward(image_points, start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(timestamps_us)
+        return world_rays, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_world_rays: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_timestamps_us, grad_pose_t, grad_pose_r
+        image_points, start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_world_rays is None:
+            grad_world_rays = _zero_like((image_points.shape[0], 6), image_points)
+        need_A = ctx.needs_input_grad[10]
+        grads = torch.ops.gsplat_sensors.image_points_to_world_rays_shutter_pose_ftheta_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            start_rotation,
+            end_rotation,
+            ctx.shutter_type,
+            grad_world_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[7],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            need_A,
+            need_A,
+        )
+        (
+            grad_points,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_points if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[7] else None,
+            grad_fw if ctx.needs_input_grad[8] else None,
+            grad_bw if ctx.needs_input_grad[9] else None,
+            grad_A if need_A else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _ImagePointsToWorldRaysShutterPoseFThetaBivariateWindshield(
+    torch.autograd.Function
+):
+    """Autograd Function wrapping ``image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: FThetaProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        fw_poly: Tensor,
+        bw_poly: Tensor,
+        A: Tensor,
+        width: int,
+        height: int,
+        shutter_type: int,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        del distortion_coeffs, principal_point, fw_poly, bw_poly, A
+        (
+            world_rays,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield(
+            projection,
+            external_distortion,
+            image_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(width),
+            int(height),
+            int(shutter_type),
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.shutter_type = int(shutter_type)
+        ctx.save_for_backward(image_points, start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(timestamps_us)
+        return world_rays, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_world_rays: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_timestamps_us, grad_pose_t, grad_pose_r
+        image_points, start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_world_rays is None:
+            grad_world_rays = _zero_like((image_points.shape[0], 6), image_points)
+        need_A = ctx.needs_input_grad[11]
+        grads = torch.ops.gsplat_sensors.image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            start_rotation,
+            end_rotation,
+            ctx.shutter_type,
+            grad_world_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            ctx.needs_input_grad[10],
+            need_A,
+            need_A,
+            ctx.needs_input_grad[7],
+        )
+        (
+            grad_points,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_fw,
+            grad_bw,
+            grad_A,
+            grad_Ainv,
+            grad_distortion,
+        ) = grads
+        if need_A:
+            grad_A = _consolidate_ftheta_grad_a(grad_A, grad_Ainv, ctx.projection)
+        return (
+            grad_points if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[7] else None,
+            grad_pp if ctx.needs_input_grad[8] else None,
+            grad_fw if ctx.needs_input_grad[9] else None,
+            grad_bw if ctx.needs_input_grad[10] else None,
+            grad_A if need_A else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+# op_name -> (no_external_fn, bivariate_fn)
+_FTHETA_OP_TABLE = {
+    "camera_rays_to_image_points": (
+        _CameraRaysToImagePointsFTheta,
+        _CameraRaysToImagePointsFThetaBivariateWindshield,
+    ),
+    "image_points_to_camera_rays": (
+        _ImagePointsToCameraRaysFTheta,
+        _ImagePointsToCameraRaysFThetaBivariateWindshield,
+    ),
+    "project_world_points_mean_pose": (
+        _ProjectWorldPointsMeanPoseFTheta,
+        _ProjectWorldPointsMeanPoseFThetaBivariateWindshield,
+    ),
+    "image_points_to_world_rays_static_pose": (
+        _ImagePointsToWorldRaysStaticPoseFTheta,
+        _ImagePointsToWorldRaysStaticPoseFThetaBivariateWindshield,
+    ),
+    "project_world_points_shutter_pose": (
+        _ProjectWorldPointsShutterPoseFTheta,
+        _ProjectWorldPointsShutterPoseFThetaBivariateWindshield,
+    ),
+    "image_points_to_world_rays_shutter_pose": (
+        _ImagePointsToWorldRaysShutterPoseFTheta,
+        _ImagePointsToWorldRaysShutterPoseFThetaBivariateWindshield,
+    ),
+}
+
+
+def _select_op(
+    projection: CameraProjection,
+    op_name: str,
+    pinhole_no_external: type,
+    pinhole_bivariate: type,
+    external_distortion: ExternalDistortion,
+    device: torch.device,
+    dtype: torch.dtype,
+    allow_device_transfer: bool,
+) -> tuple[object, object, tuple]:
+    """Dispatch on (projection family, distortion family) -> autograd Function.
+
+    Mirrors :func:`_select_camera_op` for pinhole; for FTheta projections the
+    classes come from ``_FTHETA_OP_TABLE``.
+    """
+    projection_class = script_class_name(projection)
+    if projection_class == "OpenCVPinholeProjection":
+        no_external, bivariate = pinhole_no_external, pinhole_bivariate
+    elif projection_class == "FThetaProjection":
+        no_external, bivariate = _FTHETA_OP_TABLE[op_name]
+    else:
+        raise TypeError(f"Unknown camera projection class: {projection_class}")
+    return _select_camera_op(
+        external_distortion,
+        no_external,
+        bivariate,
+        device,
+        dtype,
+        allow_device_transfer,
+    )
+
+
 def camera_rays_to_image_points(
     camera_rays: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     *,
     allow_device_transfer: bool = False,
@@ -1575,13 +2985,15 @@ def camera_rays_to_image_points(
     _check_pair(projection, external_distortion)
     device = _raise_or_target_device(camera_rays, allow_device_transfer)
     rays = _to_dev(camera_rays, device, torch.float32, allow_device_transfer)
-    projection_cuda, tensors = _projection_on_device(
+    projection_cuda, tensors = _projection_on_device_any(
         projection, device, torch.float32, allow_device_transfer
     )
-    apply_fn, distortion_arg, extra_distortion_args = _select_camera_op(
-        external_distortion,
+    apply_fn, distortion_arg, extra_distortion_args = _select_op(
+        projection,
+        "camera_rays_to_image_points",
         _CameraRaysToImagePoints,
         _CameraRaysToImagePointsBivariateWindshield,
+        external_distortion,
         device,
         torch.float32,
         allow_device_transfer,
@@ -1591,17 +3003,13 @@ def camera_rays_to_image_points(
         projection_cuda,
         distortion_arg,
         *extra_distortion_args,
-        tensors[0],
-        tensors[1],
-        tensors[2],
-        tensors[3],
-        tensors[4],
+        *tensors,
     )
 
 
 def image_points_to_camera_rays(
     image_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     *,
     allow_device_transfer: bool = False,
@@ -1624,13 +3032,15 @@ def image_points_to_camera_rays(
     _check_pair(projection, external_distortion)
     device = _raise_or_target_device(image_points, allow_device_transfer)
     pts = _to_dev(image_points, device, torch.float32, allow_device_transfer)
-    projection_cuda, tensors = _projection_on_device(
+    projection_cuda, tensors = _projection_on_device_any(
         projection, device, torch.float32, allow_device_transfer
     )
-    apply_fn, distortion_arg, extra_distortion_args = _select_camera_op(
-        external_distortion,
+    apply_fn, distortion_arg, extra_distortion_args = _select_op(
+        projection,
+        "image_points_to_camera_rays",
         _ImagePointsToCameraRays,
         _ImagePointsToCameraRaysBivariateWindshield,
+        external_distortion,
         device,
         torch.float32,
         allow_device_transfer,
@@ -1640,11 +3050,7 @@ def image_points_to_camera_rays(
         projection_cuda,
         distortion_arg,
         *extra_distortion_args,
-        tensors[0],
-        tensors[1],
-        tensors[2],
-        tensors[3],
-        tensors[4],
+        *tensors,
     )
 
 
@@ -1838,6 +3244,25 @@ def interpolate_dynamic_pose(
     return trans, rot
 
 
+def mean_pose_to_static_pose(
+    dynamic_pose: DynamicPose,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+) -> Pose:
+    """Return the static pose at the midpoint of ``dynamic_pose``.
+
+    Uses the same lerp + slerp the kernel-side mean-pose ops use internally,
+    so callers can hand the result to a static-pose op as a drop-in
+    replacement for the dynamic-pose path.
+    """
+    start_t, start_r, end_t, end_r = unpack_dynamic_pose_components(
+        dynamic_pose, device, dtype
+    )
+    rel = torch.full((1,), 0.5, device=device, dtype=dtype)
+    pose_t, pose_r = interpolate_dynamic_pose(start_t, start_r, end_t, end_r, rel)
+    return Pose(translation=pose_t[0], rotation=pose_r[0])
+
+
 def relative_frame_times(
     image_points: Tensor, resolution: tuple[int, int], shutter_type: ShutterType
 ) -> Tensor:
@@ -1880,7 +3305,7 @@ def relative_frame_times(
 
 def project_world_points_mean_pose(
     world_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     dynamic_pose: DynamicPose,
     resolution: tuple[int, int],
@@ -1927,17 +3352,19 @@ def project_world_points_mean_pose(
     _check_pair(projection, external_distortion)
     device = _raise_or_target_device(world_points, allow_device_transfer)
     pts = _to_dev(world_points, device, torch.float32, allow_device_transfer)
-    projection_cuda, tensors = _projection_on_device(
+    projection_cuda, tensors = _projection_on_device_any(
         projection, device, torch.float32, allow_device_transfer, resolution=resolution
     )
     start_t, start_r, end_t, end_r = unpack_dynamic_pose_components(
         dynamic_pose, device, torch.float32, allow_device_transfer
     )
     start, end = _timestamp_bounds(start_timestamp_us, end_timestamp_us)
-    apply_fn, distortion_arg, extra_distortion_args = _select_camera_op(
-        external_distortion,
+    apply_fn, distortion_arg, extra_distortion_args = _select_op(
+        projection,
+        "project_world_points_mean_pose",
         _ProjectWorldPointsMeanPose,
         _ProjectWorldPointsMeanPoseBivariateWindshield,
+        external_distortion,
         device,
         torch.float32,
         allow_device_transfer,
@@ -1951,11 +3378,7 @@ def project_world_points_mean_pose(
         projection_cuda,
         distortion_arg,
         *extra_distortion_args,
-        tensors[0],
-        tensors[1],
-        tensors[2],
-        tensors[3],
-        tensors[4],
+        *tensors,
         start,
         end,
     )
@@ -1970,7 +3393,7 @@ def project_world_points_mean_pose(
 
 def project_world_points_shutter_pose(
     world_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     resolution: tuple[int, int],
     shutter_type: ShutterType,
@@ -2030,7 +3453,7 @@ def project_world_points_shutter_pose(
     _check_pair(projection, external_distortion)
     device = _raise_or_target_device(world_points, allow_device_transfer)
     pts = _to_dev(world_points, device, torch.float32, allow_device_transfer)
-    projection_cuda, tensors = _projection_on_device(
+    projection_cuda, tensors = _projection_on_device_any(
         projection, device, torch.float32, allow_device_transfer, resolution=resolution
     )
     start_t, start_r, end_t, end_r = unpack_dynamic_pose_components(
@@ -2038,10 +3461,12 @@ def project_world_points_shutter_pose(
     )
     start, end = _timestamp_bounds(start_timestamp_us, end_timestamp_us)
     width, height = resolution
-    apply_fn, distortion_arg, extra_distortion_args = _select_camera_op(
-        external_distortion,
+    apply_fn, distortion_arg, extra_distortion_args = _select_op(
+        projection,
+        "project_world_points_shutter_pose",
         _ProjectWorldPointsShutterPose,
         _ProjectWorldPointsShutterPoseBivariateWindshield,
+        external_distortion,
         device,
         torch.float32,
         allow_device_transfer,
@@ -2055,11 +3480,7 @@ def project_world_points_shutter_pose(
         projection_cuda,
         distortion_arg,
         *extra_distortion_args,
-        tensors[0],
-        tensors[1],
-        tensors[2],
-        tensors[3],
-        tensors[4],
+        *tensors,
         int(width),
         int(height),
         int(ShutterType(shutter_type)),
@@ -2088,7 +3509,7 @@ def project_world_points_shutter_pose(
 
 def image_points_to_world_rays_static_pose(
     image_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     pose: Pose,
     *,
@@ -2127,17 +3548,19 @@ def image_points_to_world_rays_static_pose(
     _check_pair(projection, external_distortion)
     device = _raise_or_target_device(image_points, allow_device_transfer)
     pts = _to_dev(image_points, device, torch.float32, allow_device_transfer)
-    projection_cuda, tensors = _projection_on_device(
+    projection_cuda, tensors = _projection_on_device_any(
         projection, device, torch.float32, allow_device_transfer
     )
     translations, rotations, _ = _unpack_static_pose(
         pose, device, torch.float32, allow_device_transfer
     )
     timestamp = 0 if timestamp_us is None else int(timestamp_us)
-    apply_fn, distortion_arg, extra_distortion_args = _select_camera_op(
-        external_distortion,
+    apply_fn, distortion_arg, extra_distortion_args = _select_op(
+        projection,
+        "image_points_to_world_rays_static_pose",
         _ImagePointsToWorldRaysStaticPose,
         _ImagePointsToWorldRaysStaticPoseBivariateWindshield,
+        external_distortion,
         device,
         torch.float32,
         allow_device_transfer,
@@ -2149,11 +3572,7 @@ def image_points_to_world_rays_static_pose(
         projection_cuda,
         distortion_arg,
         *extra_distortion_args,
-        tensors[0],
-        tensors[1],
-        tensors[2],
-        tensors[3],
-        tensors[4],
+        *tensors,
         timestamp,
     )
     return (
@@ -2166,7 +3585,7 @@ def image_points_to_world_rays_static_pose(
 
 def _image_points_to_world_rays_shutter_pose_impl(
     pts: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     resolution: tuple[int, int],
     shutter_type: ShutterType,
@@ -2204,7 +3623,7 @@ def _image_points_to_world_rays_shutter_pose_impl(
         pose_t: (N, 3), or None if ``return_poses=False``.
         pose_r: (N, 4) wxyz, or None if ``return_poses=False``.
     """
-    projection_cuda, tensors = _projection_on_device(
+    projection_cuda, tensors = _projection_on_device_any(
         projection,
         pts.device,
         torch.float32,
@@ -2216,10 +3635,12 @@ def _image_points_to_world_rays_shutter_pose_impl(
     )
     start, end = _timestamp_bounds(start_timestamp_us, end_timestamp_us)
     width, height = resolution
-    apply_fn, distortion_arg, extra_distortion_args = _select_camera_op(
-        external_distortion,
+    apply_fn, distortion_arg, extra_distortion_args = _select_op(
+        projection,
+        "image_points_to_world_rays_shutter_pose",
         _ImagePointsToWorldRaysShutterPose,
         _ImagePointsToWorldRaysShutterPoseBivariateWindshield,
+        external_distortion,
         pts.device,
         torch.float32,
         allow_device_transfer,
@@ -2233,11 +3654,7 @@ def _image_points_to_world_rays_shutter_pose_impl(
         projection_cuda,
         distortion_arg,
         *extra_distortion_args,
-        tensors[0],
-        tensors[1],
-        tensors[2],
-        tensors[3],
-        tensors[4],
+        *tensors,
         int(width),
         int(height),
         int(ShutterType(shutter_type)),
@@ -2260,7 +3677,7 @@ def _image_points_to_world_rays_shutter_pose_impl(
 
 def image_points_to_world_rays_shutter_pose(
     image_points: Tensor,
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     resolution: tuple[int, int],
     shutter_type: ShutterType,
@@ -2298,6 +3715,12 @@ def image_points_to_world_rays_shutter_pose(
             ``return_timestamps=False``.
         pose_t: (N, 3) per-point pose translations, or None if ``return_poses=False``.
         pose_r: (N, 4) per-point pose rotations (wxyz), or None if ``return_poses=False``.
+
+    Note:
+        Rolling-shutter relative time is treated as non-differentiable, matching
+        the Slang reference implementation's ``no_diff`` time computation. The
+        direct image-point gradient through projection and external distortion
+        is still preserved.
     """
     _check_pair(projection, external_distortion)
     device = _raise_or_target_device(image_points, allow_device_transfer)
@@ -2318,7 +3741,7 @@ def image_points_to_world_rays_shutter_pose(
 
 
 def pixel_grid_to_world_rays_shutter_pose(
-    projection: OpenCVPinholeProjection,
+    projection: CameraProjection,
     external_distortion: ExternalDistortion,
     resolution: tuple[int, int],
     shutter_type: ShutterType,
@@ -2333,9 +3756,10 @@ def pixel_grid_to_world_rays_shutter_pose(
     """Generate world-frame rays for every pixel in the full sensor grid with rolling shutter.
 
     Equivalent to calling ``generate_image_points`` followed by
-    ``image_points_to_world_rays_shutter_pose``, but avoids allocating an explicit
-    pixel-coordinate tensor when the caller does not need it. Supports both
-    NoExternalDistortion and BivariateWindshieldDistortion variants.
+    ``image_points_to_world_rays_shutter_pose``. This spares the caller from
+    creating the grid manually, but still allocates the internal pixel-coordinate
+    tensor before dispatching to the ray kernel. Supports both NoExternalDistortion
+    and BivariateWindshieldDistortion variants.
 
     Args:
         projection: OpenCV pinhole projection parameters.
@@ -2390,6 +3814,7 @@ __all__ = [
     "image_points_to_world_rays_static_pose",
     "image_points_to_world_rays_shutter_pose",
     "interpolate_dynamic_pose",
+    "mean_pose_to_static_pose",
     "pixel_grid_to_world_rays_shutter_pose",
     "project_world_points_mean_pose",
     "project_world_points_shutter_pose",
