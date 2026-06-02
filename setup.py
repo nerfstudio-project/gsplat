@@ -109,11 +109,11 @@ setup(
         "jaxtyping",
         "nvtx",
         "rich>=12",
-        # Upper bound: torch 2.12 dropped support for older CUDA drivers,
-        # so a fresh install on a host with driver < the new minimum will
-        # pull a wheel that fails at import time. Pin to the last known-good
-        # major series.
-        "torch>=2.0,<2.12",
+        # N.B. Starting with PyTorch 2.11, the default install wheel uses CUDA 13.
+        # However, PyTorch >= 2.11 still provides a prebuilt CUDA 12.6 wheel
+        # for compatibility with older CUDA drivers and versions which can be installed
+        # by passing --index-url https://download.pytorch.org/whl/cu126
+        "torch>=2.0",
         "typing_extensions; python_version<'3.8'",
         # gsplat-scene / gsplat-stage live under libs/scene and libs/stage and
         # are installed via ``libs/install.sh scene && libs/install.sh stage``;
