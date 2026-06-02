@@ -863,6 +863,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
             rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids, use_hit_distance,
+            unsafe_masked_tile_outputs,
             batches_per_tile, batch_offsets, bid_to_slot, total_batches,
             fwd_only,
             renders, alphas, last_ids,
