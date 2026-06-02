@@ -47,14 +47,26 @@ except ImportError:
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 DEBUG = os.getenv("DEBUG", "0") == "1"
-FAST_MATH = os.getenv("FAST_MATH", "1") == "1"
+# ROCm's -ffast-math is more aggressive than CUDA's -use_fast_math: it perturbs a
+# few ill-conditioned projection-covariance gradients enough to exceed gsplat's
+# own test tolerances (a handful of single-element outliers). Default fast-math
+# OFF on ROCm so the test suite passes out of the box; users can opt back in with
+# FAST_MATH=1. CUDA keeps the historical default of on.
+FAST_MATH = os.getenv("FAST_MATH", "0" if torch.version.hip else "1") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 NVCC_FLAGS = os.getenv("NVCC_FLAGS", "")
 MAX_JOBS = os.getenv("MAX_JOBS")
 NINJA_STATUS = os.getenv("NINJA_STATUS")
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 
-BUILD_3DGUT = os.getenv("BUILD_3DGUT")
+# On ROCm, 3DGUT needs cuda::std::optional. The ROCm stack ships no libcu++, but
+# the header-only ROCm/libhipcxx port provides the cuda::std namespace. Point
+# LIBHIPCXX_INCLUDE at its include/ dir (a clone of github.com/ROCm/libhipcxx) to
+# build 3DGUT on ROCm; if unset, 3DGUT stays off so a plain pip install does not
+# hard-error on the missing header. Opt in with BUILD_3DGUT=1. CUDA is unchanged.
+LIBHIPCXX_INCLUDE = os.getenv("LIBHIPCXX_INCLUDE")
+_rocm_3dgut_default = "1" if (torch.version.hip and LIBHIPCXX_INCLUDE) else "0"
+BUILD_3DGUT = os.getenv("BUILD_3DGUT", _rocm_3dgut_default if torch.version.hip else None)
 BUILD_3DGS = os.getenv("BUILD_3DGS")
 BUILD_2DGS = os.getenv("BUILD_2DGS")
 BUILD_ADAM = os.getenv("BUILD_ADAM")
@@ -76,8 +88,12 @@ def get_build_parameters():
     ]
 
     # Source files ------------------------------------
+    # *_winhip.cu are generated .cu shims of the host .cpp wrappers (see the
+    # win32+HIP block near the end of this function); exclude them from the glob
+    # so a rebuild does not pick up stale copies as standalone device sources.
     sources = (
-        list(glob.glob(os.path.join(PATH, "csrc/*.cu")))
+        [s for s in glob.glob(os.path.join(PATH, "csrc/*.cu"))
+         if not s.endswith("_winhip.cu")]
         + list(glob.glob(os.path.join(PATH, "csrc/*.cpp")))
         + [os.path.join(PATH, "ext.cpp")]
     )
@@ -89,13 +105,22 @@ def get_build_parameters():
 
     if sys.platform == "win32":
         extra_cflags += ["/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN"]
-        extra_cuda_cflags += [
-            "-std=c++20",
-            "-allow-unsupported-compiler",
-            "-Xcompiler",
-            "/Zc:preprocessor",
-            "-DWIN32_LEAN_AND_MEAN",
-        ]
+        if torch.version.hip:
+            # The Windows device compiler is amdclang (gcc-style driver), not
+            # nvcc/cl: -allow-unsupported-compiler is nvcc-only and the MSVC
+            # /Zc:preprocessor conformance flag is meaningless to clang (whose
+            # preprocessor is already conforming). Only -std and the portable
+            # -D survive to the hipcc device pass; the MSVC host (.cpp via cl)
+            # still gets /Zc:preprocessor above.
+            extra_cuda_cflags += ["-std=c++20", "-DWIN32_LEAN_AND_MEAN"]
+        else:
+            extra_cuda_cflags += [
+                "-std=c++20",
+                "-allow-unsupported-compiler",
+                "-Xcompiler",
+                "/Zc:preprocessor",
+                "-DWIN32_LEAN_AND_MEAN",
+            ]
     else:
         extra_cflags = ["-std=c++20"]
 
@@ -104,7 +129,9 @@ def get_build_parameters():
         extra_cflags += ["-arch", "arm64"]
         extra_ldflags += ["-arch", "arm64"]
 
-    extra_cuda_cflags += ["--forward-unknown-opts"]
+    # --forward-unknown-opts is an nvcc-only flag; hipcc/clang++ rejects it.
+    if not torch.version.hip:
+        extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
     # MSVC (cl) does not support -O3/-O0; use -O2/-Od (torch converts - to /)
@@ -128,11 +155,15 @@ def get_build_parameters():
             ]
         else:
             extra_cflags += ["-O3", "-DNDEBUG"]
-    extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
+    if FAST_MATH:
+        # nvcc spells it -use_fast_math; hipcc/clang++ uses -ffast-math.
+        extra_cuda_cflags += ["-ffast-math"] if torch.version.hip else ["-use_fast_math"]
 
     # Silencing of warnings
-    # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
-    extra_cuda_cflags += ["-diag-suppress", "20012,186"]
+    # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses.
+    # -diag-suppress is nvcc-only; hipcc/clang++ does not accept it.
+    if not torch.version.hip:
+        extra_cuda_cflags += ["-diag-suppress", "20012,186"]
     if not os.name == "nt":
         extra_cflags += ["-Wno-attributes"]
         # #pragma unroll is standard CUDA idiom but unknown to gcc
@@ -176,6 +207,11 @@ def get_build_parameters():
         # USE_ROCM was added to later versions of PyTorch.
         # Define here to support older PyTorch versions as well:
         extra_cflags += ["-DUSE_ROCM", "-U__HIP_NO_HALF_CONVERSIONS__"]
+        # 3DGUT's cuda::std::optional comes from ROCm/libhipcxx (header-only). Add
+        # its include/ to the device-compile flags so <cuda/std/*> resolves under
+        # hipcc. NVIDIA gets cuda::std from the CUDA toolkit, so this is ROCm-only.
+        if LIBHIPCXX_INCLUDE:
+            extra_cuda_cflags += [f"-I{LIBHIPCXX_INCLUDE}"]
     else:
         extra_cuda_cflags += ["--expt-relaxed-constexpr"]
 
@@ -188,7 +224,12 @@ def get_build_parameters():
         extra_cflags += ["-DAT_PARALLEL_OPENMP"]
         if sys.platform == "win32":
             extra_cflags += ["/openmp"]
-            extra_cuda_cflags += ["-Xcompiler", "/openmp"]
+            if torch.version.hip:
+                # amdclang on Windows is a gcc-style driver: it wants -fopenmp,
+                # not MSVC's /openmp (which it would treat as an input file).
+                extra_cuda_cflags += ["-fopenmp"]
+            else:
+                extra_cuda_cflags += ["-Xcompiler", "/openmp"]
         else:
             extra_cflags += ["-fopenmp"]
         if sys.platform == "win32":
@@ -212,6 +253,26 @@ def get_build_parameters():
         extra_cflags += [f"-DGSPLAT_NUM_CHANNELS={NUM_CHANNELS}"]
 
     extra_cuda_cflags += [] if NVCC_FLAGS == "" else NVCC_FLAGS.split(" ")
+
+    if sys.platform == "win32" and torch.version.hip:
+        # The host .cpp op-wrappers include c10/cuda/CUDAGuard.h, which on ROCm
+        # pulls in the HIP runtime headers (amd_hip_vector_types.h etc.). Those
+        # use GCC __attribute__ syntax that MSVC cl.exe -- the host compiler torch
+        # picks for .cpp -- cannot parse. amdclang (hipcc) handles them, so route
+        # each host wrapper through the device toolchain by handing it to torch
+        # with a .cu extension. The shims are byte copies placed next to their
+        # source so every relative #include resolves identically; they carry no
+        # device code, so the extra device pass compiles nothing. Linux and CUDA
+        # keep the .cpp host TUs untouched (this whole block is win32+HIP only).
+        shim_sources = []
+        for s in sources:
+            if s.endswith(".cpp"):
+                shim = s[:-4] + "_winhip.cu"
+                shutil.copyfile(s, shim)
+                shim_sources.append(shim)
+            else:
+                shim_sources.append(s)
+        sources = shim_sources
 
     return SimpleNamespace(
         name=name,

@@ -119,7 +119,9 @@ public:
 
         // Convert image point (in scaled pixel space) back to angles
         // image_point = [x, y] = [azimuth, elevation]
-        constexpr float kToAngle = 1.f / lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+        // NB: a static-constexpr member read through an instance (lidar.) is not
+        // a constant expression under clang/HIP; use const so both toolchains accept it.
+        const float kToAngle = 1.f / lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
         const float azimuth = image_point.x * kToAngle;
         const float elevation = image_point.y * kToAngle;
 

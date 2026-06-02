@@ -146,8 +146,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     // each thread loads one gaussian at a time before rasterizing
     const uint32_t tr = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int32_t warp_bin_final =
-        cg::reduce(warp, bin_final, cg::greater<int>());
+    const int32_t warp_bin_final = warpReduceMax(bin_final, warp);
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before writing next batch of shared mem
         block.sync();
@@ -355,7 +354,9 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>,
+            // HIP's hipFuncSetAttribute takes const void*; cast the kernel
+            // (portable: CUDA's cudaFuncSetAttribute also accepts const void*).
+            (const void *)rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {

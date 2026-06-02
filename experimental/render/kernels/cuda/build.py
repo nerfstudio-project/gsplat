@@ -24,6 +24,7 @@ import time
 from contextlib import nullcontext, contextmanager
 from types import SimpleNamespace
 
+import torch
 from torch.utils.cpp_extension import CUDA_HOME
 
 try:
@@ -132,7 +133,9 @@ def get_build_parameters():
         extra_cflags += ["-arch", "arm64"]
         extra_ldflags += ["-arch", "arm64"]
 
-    extra_cuda_cflags += ["--forward-unknown-opts"]
+    # --forward-unknown-opts is an nvcc-only flag; hipcc/clang++ rejects it.
+    if not torch.version.hip:
+        extra_cuda_cflags += ["--forward-unknown-opts"]
 
     if DEBUG:
         extra_cflags += ["-g", "-O0"]
@@ -153,9 +156,13 @@ def get_build_parameters():
             extra_cflags += ["/O2", "-DNDEBUG"]
             extra_cuda_cflags += ["-O2", "-DNDEBUG"]
 
-    extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
+    if FAST_MATH:
+        # nvcc spells it -use_fast_math; hipcc/clang++ uses -ffast-math.
+        extra_cuda_cflags += ["-ffast-math"] if torch.version.hip else ["-use_fast_math"]
 
-    extra_cuda_cflags += ["-diag-suppress", "20012,186"]
+    # -diag-suppress is nvcc-only; hipcc/clang++ does not accept it.
+    if not torch.version.hip:
+        extra_cuda_cflags += ["-diag-suppress", "20012,186"]
     if not os.name == "nt":
         extra_cflags += ["-Wno-attributes"]
         extra_cflags += ["-Wno-unknown-pragmas"]
@@ -164,8 +171,6 @@ def get_build_parameters():
 
     if WITH_SYMBOLS:
         extra_cuda_cflags += ["-lineinfo"]
-
-    import torch
 
     if torch.version.hip:
         extra_cflags += ["-DUSE_ROCM", "-U__HIP_NO_HALF_CONVERSIONS__"]

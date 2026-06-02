@@ -90,3 +90,21 @@ This can be done through these steps:
     ```bash
     pip install .
     ```
+
+## AMD GPUs (ROCm) on Windows
+
+gsplat also builds on Windows AMD GPUs through ROCm/HIP. This needs a ROCm build of PyTorch for Windows (for example the [TheRock](https://github.com/ROCm/TheRock) `torch[device-gfx<arch>]` wheels). With the Visual Studio environment activated, build from a clone:
+
+```bash
+set PYTORCH_ROCM_ARCH=gfx1151
+pip install -e . --no-build-isolation
+```
+
+A few Windows-specific environment requirements:
+
+- **Use a space-free Python install path.** torch's `hipcc` include handling mangles paths containing spaces (e.g. the Microsoft Store Python under `C:\Program Files\WindowsApps\...`), so `Python.h` is not found. Install Python from python.org to a path without spaces.
+- Set `DISTUTILS_USE_SDK=1` (torch requires it when the VS environment is already active).
+- Set `HIP_DEVICE_LIB_PATH` to the device bitcode directory (`<rocm>\lib\llvm\amdgcn\bitcode` in the TheRock layout), or the build reports "cannot find ROCm device library".
+- Ensure MSVC's `link.exe` precedes any MSYS/Git `link.exe` on `PATH`, or the final `.pyd` link fails.
+
+The core 3DGS/2DGS rasterization is validated on gfx1151 (RDNA3.5). For the optional 3DGUT path, also clone [ROCm/libhipcxx](https://github.com/ROCm/libhipcxx), set `LIBHIPCXX_INCLUDE=<clone>\include`, and enable the build flags (`BUILD_3DGUT=1 BUILD_3DGS=1 ...`).

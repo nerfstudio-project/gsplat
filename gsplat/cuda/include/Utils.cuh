@@ -21,13 +21,28 @@
 #include "Common.h"
 
 #include <cooperative_groups.h>
+#if defined(USE_ROCM)
+// HIP's cooperative_groups has no <cooperative_groups/reduce.h> and no
+// cg::reduce; warpSum/warpMax below provide a shfl_down tile reduction instead.
+// libcu++ (<cuda/std/*>) is not shipped with ROCm, so use the host std headers
+// (numeric_limits/type_traits are constexpr and device-usable under HIP).
+#include <limits>
+#include <type_traits>
+#else
 #include <cooperative_groups/reduce.h>
 #include <cuda/std/limits>
 #include <cuda/std/type_traits>
+#endif
 
 namespace gsplat {
 
 namespace cg = cooperative_groups;
+
+#if defined(USE_ROCM)
+namespace gstd = std;
+#else
+namespace gstd = cuda::std;
+#endif
 
 // Check whether a floating-point value is effectively zero, using the
 // machine epsilon for the given type.
@@ -35,10 +50,10 @@ template <typename T>
 __host__ __device__ constexpr bool is_near_zero(T x)
 {
     static_assert(
-        cuda::std::is_floating_point_v<T>,
+        gstd::is_floating_point_v<T>,
         "is_near_zero requires a floating-point type"
     );
-    return abs(x) < cuda::std::numeric_limits<T>::epsilon();
+    return abs(x) < gstd::numeric_limits<T>::epsilon();
 }
 
 ///////////////////////////////
@@ -115,34 +130,125 @@ inline __device__ void covarW2C_VJP(
 // Reduce
 ///////////////////////////////
 
+// HIP's cooperative_groups provides no cg::reduce, so implement an all-reduce
+// over the warp tile with a butterfly shfl_xor. The tile shuffle is restricted
+// to the tile's own lanes by HIP (member-mask / numThreads), so a
+// tiled_partition<32> reduces correctly within each 32-lane group on wave64
+// (gfx90a) exactly as on a 32-lane NVIDIA warp. CUDA keeps cg::reduce.
+#if defined(USE_ROCM)
+// HIP's cooperative_groups has no cg::labeled_partition (used by the packed /
+// fused projection backward to coalesce per-gaussian/per-camera gradient atomics
+// so each distinct label does ONE atomicAdd instead of one per lane). Rebuild it
+// from match_any: LabeledGroup holds the 64-bit mask of same-label lanes; its
+// reduction sums only those lanes and only the lowest such lane (thread_rank==0)
+// issues the atomic. This matches the CUDA atomic count -- important because
+// v_viewmats/v_R/v_t are summed over many gaussians and a per-lane atomic fan-out
+// adds enough float accumulation-order noise to exceed the tests' tight gradient
+// tolerances. LABELED_PARTITION dispatches here on HIP, cg::labeled_partition on
+// CUDA, leaving the call sites unchanged.
+struct LabeledGroup {
+    unsigned long long mask;
+    uint32_t lane;
+    __device__ uint32_t size() const { return __popcll(mask); }
+    __device__ uint32_t thread_rank() const {
+        return __popcll(mask & ((1ull << lane) - 1));
+    }
+    template <class T> __device__ T all_reduce_sum(T val) const {
+        T acc = T(0);
+        unsigned long long m = mask;
+        while (m) {
+            int src = __ffsll((long long)m) - 1;
+            acc += __shfl(val, src, 32);
+            m &= m - 1;
+        }
+        return acc;
+    }
+    template <class T> __device__ T all_reduce_max(T val) const {
+        T acc = val;
+        unsigned long long m = mask;
+        while (m) {
+            int src = __ffsll((long long)m) - 1;
+            acc = max(acc, __shfl(val, src, 32));
+            m &= m - 1;
+        }
+        return acc;
+    }
+};
+template <class WarpT, class LabelT>
+inline __device__ LabeledGroup labeled_partition_compat(WarpT &warp, LabelT label) {
+    LabeledGroup g;
+    g.mask = warp.match_any(label);
+    g.lane = warp.thread_rank();
+    return g;
+}
+#define LABELED_PARTITION(warp, label) labeled_partition_compat(warp, label)
+#else
+#define LABELED_PARTITION(warp, label) cg::labeled_partition(warp, label)
+#endif
+
+template <class T, class WarpT> inline __device__ T warpReduceSum(T val, WarpT &warp) {
+#if defined(USE_ROCM)
+#pragma unroll
+    for (uint32_t offset = warp.size() / 2; offset > 0; offset >>= 1) {
+        val += warp.shfl_xor(val, offset);
+    }
+    return val;
+#else
+    return cg::reduce(warp, val, cg::plus<T>());
+#endif
+}
+
+template <class T, class WarpT> inline __device__ T warpReduceMax(T val, WarpT &warp) {
+#if defined(USE_ROCM)
+#pragma unroll
+    for (uint32_t offset = warp.size() / 2; offset > 0; offset >>= 1) {
+        val = max(val, warp.shfl_xor(val, offset));
+    }
+    return val;
+#else
+    return cg::reduce(warp, val, cg::greater<T>());
+#endif
+}
+
+#if defined(USE_ROCM)
+// Route warpReduce over a LabeledGroup through the masked same-label reduction
+// (the butterfly above only works on a full power-of-two tile).
+template <class T> inline __device__ T warpReduceSum(T val, LabeledGroup &g) {
+    return g.all_reduce_sum(val);
+}
+template <class T> inline __device__ T warpReduceMax(T val, LabeledGroup &g) {
+    return g.all_reduce_max(val);
+}
+#endif
+
 template <uint32_t DIM, class WarpT>
 inline __device__ void warpSum(float *val, WarpT &warp) {
 #pragma unroll
     for (uint32_t i = 0; i < DIM; i++) {
-        val[i] = cg::reduce(warp, val[i], cg::plus<float>());
+        val[i] = warpReduceSum(val[i], warp);
     }
 }
 
 template <class WarpT> inline __device__ void warpSum(float &val, WarpT &warp) {
-    val = cg::reduce(warp, val, cg::plus<float>());
+    val = warpReduceSum(val, warp);
 }
 
 template <class WarpT> inline __device__ void warpSum(vec4 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
-    val.z = cg::reduce(warp, val.z, cg::plus<float>());
-    val.w = cg::reduce(warp, val.w, cg::plus<float>());
+    val.x = warpReduceSum(val.x, warp);
+    val.y = warpReduceSum(val.y, warp);
+    val.z = warpReduceSum(val.z, warp);
+    val.w = warpReduceSum(val.w, warp);
 }
 
 template <class WarpT> inline __device__ void warpSum(vec3 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
-    val.z = cg::reduce(warp, val.z, cg::plus<float>());
+    val.x = warpReduceSum(val.x, warp);
+    val.y = warpReduceSum(val.y, warp);
+    val.z = warpReduceSum(val.z, warp);
 }
 
 template <class WarpT> inline __device__ void warpSum(vec2 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
+    val.x = warpReduceSum(val.x, warp);
+    val.y = warpReduceSum(val.y, warp);
 }
 
 template <class WarpT> inline __device__ void warpSum(mat4 &val, WarpT &warp) {
@@ -164,7 +270,7 @@ template <class WarpT> inline __device__ void warpSum(mat2 &val, WarpT &warp) {
 }
 
 template <class WarpT> inline __device__ void warpMax(float &val, WarpT &warp) {
-    val = cg::reduce(warp, val, cg::greater<float>());
+    val = warpReduceMax(val, warp);
 }
 
 ///////////////////////////////

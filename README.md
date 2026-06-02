@@ -56,6 +56,16 @@ pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
 
 To build gsplat from source on Windows, please check [this instruction](docs/INSTALL_WIN.md).
 
+### AMD GPUs (ROCm)
+
+gsplat also builds and runs on AMD GPUs through ROCm/HIP; PyTorch's hipify translates the CUDA sources at build time. With a ROCm build of [PyTorch](https://pytorch.org/get-started/locally/) installed, build from source:
+
+```bash
+PYTORCH_ROCM_ARCH=gfx90a pip install -e . --no-build-isolation
+```
+
+Set `PYTORCH_ROCM_ARCH` to your GPU architecture (e.g. `gfx90a`, `gfx1100`). The core 3DGS/2DGS rasterization is validated on AMD Linux (gfx90a, gfx1100) and Windows (gfx1151); for the 3DGUT path on ROCm and for Windows specifics, see [docs/3dgut.md](docs/3dgut.md) and [docs/INSTALL_WIN.md](docs/INSTALL_WIN.md).
+
 ## Evaluation
 
 This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
