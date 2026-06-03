@@ -30,9 +30,11 @@ import torch
 from torch import Tensor
 
 from .types import (
+    FISHEYE_MAX_FORWARD_POLY_TERMS,
     FTHETA_MAX_POLYNOMIAL_TERMS,
     CameraProjection,
     FThetaProjection,
+    OpenCVFisheyeProjection,
     script_class_name,
 )
 
@@ -90,11 +92,39 @@ def _validate_ftheta_projection(projection: FThetaProjection) -> None:
         )
 
 
+def _validate_fisheye_projection(projection: OpenCVFisheyeProjection) -> None:
+    """Raise ``ValueError`` if ``projection`` violates a load-bearing invariant.
+
+    Cheap shape and scalar-range checks (including ``max_angle`` and
+    ``min_2d_norm``) are enforced by the C++ constructor; this function adds the
+    value-level checks that every intrinsic component tensor
+    (``principal_point``, ``focal_length``, ``forward_poly``,
+    ``approx_backward_factor``) is finite and that both focal lengths are
+    strictly positive. The equidistant forward polynomial carries no
+    through-origin constraint (its coefficients multiply ``theta`` rather than
+    forming an additive term).
+    """
+    pp = _to_cpu_floats(projection.principal_point, "principal_point", 2)
+    _check_finite(pp, "principal_point")
+    focal = _to_cpu_floats(projection.focal_length, "focal_length", 2)
+    _check_finite(focal, "focal_length")
+    for i, v in enumerate(focal):
+        if v <= 0.0:
+            raise ValueError(f"focal_length[{i}] must be > 0; got {v!r}")
+    fw = _to_cpu_floats(
+        projection.forward_poly, "forward_poly", FISHEYE_MAX_FORWARD_POLY_TERMS
+    )
+    _check_finite(fw, "forward_poly")
+    ab = _to_cpu_floats(projection.approx_backward_factor, "approx_backward_factor", 1)
+    _check_finite(ab, "approx_backward_factor")
+
+
 _ProjectionValidator = Callable[[CameraProjection], None]
 
 _PROJECTION_VALIDATORS: dict[str, _ProjectionValidator | None] = {
     "OpenCVPinholeProjection": None,
     "FThetaProjection": _validate_ftheta_projection,
+    "OpenCVFisheyeProjection": _validate_fisheye_projection,
 }
 
 

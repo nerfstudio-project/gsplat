@@ -23,6 +23,11 @@ are no-external. Field name mapping when consumed by gsplat F-Theta tests:
 `linear_cde` → `A` (as `[c, d, e, 1]` flat 2x2), `reference_poly: "2"` →
 `ReferencePolynomial.FORWARD` (use angle_to_pixeldist directly in forward).
 
+`test_fisheye_camera_params.json` contains OpenCV fisheye camera intrinsics
+used by model-level real-camera tests. The `intrinsics.forward_poly` field maps
+to `OpenCVFisheyeProjection.forward_poly`; `max_angle_rad` maps to the
+projection `max_angle`.
+
 ## Spinning-LiDAR test data
 
 LiDAR fixtures here are **sensor-parameter JSONs** — the real calibration

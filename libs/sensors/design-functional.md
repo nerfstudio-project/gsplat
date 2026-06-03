@@ -149,7 +149,8 @@ C++ launch (see `design-kernels.md`).
 TorchScript custom-class handles (`torch::class_<>`) registered by the C++
 extension and surfaced through `kernels/cameras/types.py` and
 `kernels/lidars/types.py` as `OpenCVPinholeProjection`, `FThetaProjection`,
-`NoExternalDistortion`, `BivariateWindshieldDistortion`, and
+`OpenCVFisheyeProjection`, `NoExternalDistortion`,
+`BivariateWindshieldDistortion`, and
 `RowOffsetStructuredSpinningLidarProjection`. The functional layer never
 inspects their internals; it just passes them through.
 
@@ -177,10 +178,10 @@ output `device`.
 ## Naming and API Semantics
 
 The public op names describe sensor operations (what they do), not backend
-dispatch (which type they dispatch to). There is no `_opencv_pinhole_no_external`
-suffix at this layer. New camera models land additional `(projection,
-external_distortion)` pairs in the kernel dispatch table without changing any
-public name in `functional/`.
+dispatch (which type they dispatch to). There is no projection/distortion suffix
+at this layer; OpenCV pinhole, FTheta, and OpenCV fisheye all use the same
+public names and select their backend through `(projection,
+external_distortion)` pairs in the kernel dispatch table.
 
 The conventional verbs in this API:
 

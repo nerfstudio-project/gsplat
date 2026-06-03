@@ -22,7 +22,10 @@ Provides: ``sensor_device``, ``test_camera_params``, ``real_camera_record``,
 ``ftheta_projection_forward_ref``, ``ftheta_projection_backward_ref``,
 ``ftheta_model``, ``ftheta_model_with_windshield``, ``real_ftheta_camera_record``,
 ``real_ftheta_projection``, ``real_ftheta_camera_record_with_windshield``,
-``real_ftheta_windshield_distortion``, ``real_ftheta_projection_with_windshield``.
+``real_ftheta_windshield_distortion``, ``real_ftheta_projection_with_windshield``,
+``fisheye_projection``, ``real_fisheye_camera_record``, ``real_fisheye_projection``,
+``real_fisheye_camera_record_with_windshield``,
+``real_fisheye_projection_with_windshield``, ``real_fisheye_windshield_distortion``.
 
 Session-scoped CUDA fixtures (``sensor_device``, ``real_camera_projection``) skip
 automatically when no GPU is available.  ``_seed_test_rng`` and
@@ -41,6 +44,7 @@ import torch
 TEST_DATA_DIR = Path(__file__).resolve().parent / "test_data"
 TEST_CAMERA_PARAMS_PATH = TEST_DATA_DIR / "test_pinhole_camera_params.json"
 TEST_FTHETA_CAMERA_PARAMS_PATH = TEST_DATA_DIR / "test_ftheta_camera_params.json"
+TEST_FISHEYE_CAMERA_PARAMS_PATH = TEST_DATA_DIR / "test_fisheye_camera_params.json"
 
 
 def _load_json_or_none(path: Path) -> dict | None:
@@ -60,6 +64,12 @@ TEST_FTHETA_CAMERA_PARAMS = _load_json_or_none(TEST_FTHETA_CAMERA_PARAMS_PATH)
 TEST_FTHETA_CAMERA_IDS = (
     tuple(sorted(TEST_FTHETA_CAMERA_PARAMS))
     if TEST_FTHETA_CAMERA_PARAMS is not None
+    else (None,)
+)
+TEST_FISHEYE_CAMERA_PARAMS = _load_json_or_none(TEST_FISHEYE_CAMERA_PARAMS_PATH)
+TEST_FISHEYE_CAMERA_IDS = (
+    tuple(sorted(TEST_FISHEYE_CAMERA_PARAMS))
+    if TEST_FISHEYE_CAMERA_PARAMS is not None
     else (None,)
 )
 
@@ -340,6 +350,33 @@ def _make_ftheta_projection(device: torch.device, reference_polynomial: int):
 def ftheta_projection(request, sensor_device: torch.device):
     """Linear-polynomial F-Theta projection. Parametrized over reference_polynomial."""
     return _make_ftheta_projection(sensor_device, request.param)
+
+
+def _make_fisheye_projection(device: torch.device, k1: float = 0.0):
+    """Synthetic mild OpenCV-fisheye intrinsics for unit tests.
+
+    With ``forward_poly`` zeroed the equidistant map reduces to ``delta = theta``,
+    so the Newton inversion is exact and the round-trip is smooth for gradcheck.
+    A nonzero ``k1`` exercises the odd-power polynomial adjoints.
+    """
+    from gsplat_sensors.kernels.cameras import OpenCVFisheyeProjection
+
+    return OpenCVFisheyeProjection(
+        principal_point=torch.tensor([50.0, 40.0], device=device),
+        focal_length=torch.tensor([100.0, 100.0], device=device),
+        forward_poly=torch.tensor([k1, 0.0, 0.0, 0.0], device=device),
+        approx_backward_factor=torch.tensor([1.0], device=device),
+        resolution=(100, 80),
+        newton_iterations=10,
+        max_angle=1.8,
+        min_2d_norm=1e-6,
+    )
+
+
+@pytest.fixture
+def fisheye_projection(sensor_device: torch.device):
+    """Mild equidistant OpenCV-fisheye projection (identity distortion)."""
+    return _make_fisheye_projection(sensor_device)
 
 
 @pytest.fixture
@@ -646,3 +683,197 @@ def lidar_dynamic_pose(sensor_device: torch.device):
         rotation=torch.tensor([1.0, 0.0, 0.0, 0.0], device=sensor_device),
     )
     return DynamicPose(start, end)
+
+
+# ===========================================================================
+# OpenCV-fisheye fixtures
+# ===========================================================================
+
+
+def _build_real_fisheye_projection(record: dict, device: torch.device):
+    """Construct an ``OpenCVFisheyeProjection`` from a real-camera intrinsics record."""
+    from gsplat_sensors.kernels.cameras import OpenCVFisheyeProjection
+
+    intrinsics = record["intrinsics"]
+    return OpenCVFisheyeProjection(
+        principal_point=torch.tensor(
+            intrinsics["principal_point"], device=device, dtype=torch.float32
+        ),
+        focal_length=torch.tensor(
+            intrinsics["focal_length"], device=device, dtype=torch.float32
+        ),
+        forward_poly=torch.tensor(
+            intrinsics["forward_poly"], device=device, dtype=torch.float32
+        ),
+        approx_backward_factor=torch.tensor([1.0], device=device, dtype=torch.float32),
+        resolution=tuple(record["resolution"]),
+        newton_iterations=10,
+        max_angle=float(intrinsics["max_angle_rad"]),
+        min_2d_norm=1e-6,
+    )
+
+
+@pytest.fixture(
+    scope="session",
+    params=TEST_FISHEYE_CAMERA_IDS,
+    ids=lambda key: key.split("@", 1)[0] if key is not None else "no-data",
+)
+def real_fisheye_camera_record(request):
+    """Yield one raw OpenCV-fisheye camera record dict per camera ID in the test JSON file."""
+    if request.param is None or TEST_FISHEYE_CAMERA_PARAMS is None:
+        pytest.skip("test_fisheye_camera_params.json not available")
+    return TEST_FISHEYE_CAMERA_PARAMS[request.param]
+
+
+@pytest.fixture(scope="session")
+def real_fisheye_projection(real_fisheye_camera_record, sensor_device: torch.device):
+    """Build an OpenCVFisheyeProjection from a real_fisheye_camera_record on the session CUDA device."""
+    return _build_real_fisheye_projection(real_fisheye_camera_record, sensor_device)
+
+
+@pytest.fixture(scope="session")
+def reference_opencv_fisheye_camera():
+    """Expose the ``ReferenceOpenCVFisheyeCamera`` oracle class to tests."""
+    return ReferenceOpenCVFisheyeCamera
+
+
+# Filter the fisheye records to those carrying a bivariate-windshield
+# external_distortion. ``or [None]`` keeps the parametrize list non-empty so
+# the fixture still reports a single id and skips cleanly when absent.
+_TEST_FISHEYE_WINDSHIELD_IDS = [
+    key
+    for key in TEST_FISHEYE_CAMERA_IDS
+    if key is not None
+    and TEST_FISHEYE_CAMERA_PARAMS is not None
+    and (TEST_FISHEYE_CAMERA_PARAMS[key].get("external_distortion") or {}).get("type")
+    == "bivariate-windshield"
+] or [None]
+
+
+@pytest.fixture(
+    scope="module",
+    params=_TEST_FISHEYE_WINDSHIELD_IDS,
+    ids=lambda key: key.split("@", 1)[0] if key is not None else "no-windshield-data",
+)
+def real_fisheye_camera_record_with_windshield(request):
+    """Yield one raw fisheye camera record dict that carries a bivariate-windshield external_distortion."""
+    if request.param is None or TEST_FISHEYE_CAMERA_PARAMS is None:
+        pytest.skip("no bivariate-windshield record in test_fisheye_camera_params.json")
+    return TEST_FISHEYE_CAMERA_PARAMS[request.param]
+
+
+@pytest.fixture(scope="module")
+def real_fisheye_projection_with_windshield(
+    real_fisheye_camera_record_with_windshield, sensor_device: torch.device
+):
+    """Build an OpenCVFisheyeProjection from a windshield-carrying fisheye record."""
+    return _build_real_fisheye_projection(
+        real_fisheye_camera_record_with_windshield, sensor_device
+    )
+
+
+@pytest.fixture(scope="module")
+def real_fisheye_windshield_distortion(
+    real_fisheye_camera_record_with_windshield, sensor_device: torch.device
+):
+    """BivariateWindshieldDistortion built via ``from_components`` from the fisheye JSON.
+
+    Mirrors ``real_ftheta_windshield_distortion``: the windshield ``reference_poly``
+    JSON field uses FORWARD=1 / BACKWARD=2, so it is resolved through
+    ``_JSON_WINDSHIELD_REF_POLY_TO_GSPLAT`` before reaching ``from_components``.
+    """
+    from gsplat_sensors.kernels.cameras import from_components
+
+    ext = real_fisheye_camera_record_with_windshield["external_distortion"]
+    if ext.get("type") != "bivariate-windshield":
+        raise ValueError(
+            f"expected bivariate-windshield external_distortion; got {ext.get('type')!r}"
+        )
+    h_poly = torch.tensor(
+        ext["horizontal_poly"], device=sensor_device, dtype=torch.float32
+    )
+    v_poly = torch.tensor(
+        ext["vertical_poly"], device=sensor_device, dtype=torch.float32
+    )
+    h_poly_inv = torch.tensor(
+        ext["horizontal_poly_inverse"], device=sensor_device, dtype=torch.float32
+    )
+    v_poly_inv = torch.tensor(
+        ext["vertical_poly_inverse"], device=sensor_device, dtype=torch.float32
+    )
+    return from_components(
+        h_poly,
+        v_poly,
+        h_poly_inv,
+        v_poly_inv,
+        _JSON_WINDSHIELD_REF_POLY_TO_GSPLAT[ext["reference_poly"]],
+    )
+
+
+class ReferenceOpenCVFisheyeCamera:
+    """Reference implementation of OpenCV Fisheye camera model."""
+
+    def __init__(
+        self,
+        focal_length,
+        principal_point,
+        radial_coeffs,
+        max_angle: float,
+        resolution,
+        dtype=None,
+    ):
+        import numpy as np
+
+        if dtype is None:
+            dtype = np.float32
+        self.focal_length = focal_length.astype(dtype)
+        self.principal_point = principal_point.astype(dtype)
+        self.radial_coeffs = radial_coeffs.astype(dtype)  # [k1, k2, k3, k4]
+        self.max_angle = max_angle
+        self.resolution = resolution
+        self.dtype = dtype
+
+    def camera_ray_to_image_point_opencv(self, ray):
+        """Project ray using OpenCV's fisheye model.
+
+        This uses OpenCV's cv2.fisheye.projectPoints for reference.
+        """
+        import cv2
+        import numpy as np
+
+        ray = np.array(ray, dtype=np.float64)
+
+        if ray[2] <= 0:
+            return np.array([0.0, 0.0], dtype=self.dtype), False
+
+        rvec = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+        tvec = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+
+        K = np.array(
+            [
+                [self.focal_length[0], 0, self.principal_point[0]],
+                [0, self.focal_length[1], self.principal_point[1]],
+                [0, 0, 1],
+            ],
+            dtype=np.float64,
+        )
+        d = self.radial_coeffs.astype(np.float64)
+
+        try:
+            p, _ = cv2.fisheye.projectPoints(
+                ray.reshape(1, 1, 3), rvec, tvec, K, d, None, 0.0
+            )
+            image_point = p.reshape(2)
+
+            ray_norm = ray / np.linalg.norm(ray)
+            theta = np.arccos(np.clip(ray_norm[2], -1, 1))
+
+            valid = (
+                theta <= self.max_angle
+                and 0 <= image_point[0] < self.resolution[0]
+                and 0 <= image_point[1] < self.resolution[1]
+            )
+
+            return image_point.astype(self.dtype), valid
+        except cv2.error:
+            return np.array([0.0, 0.0], dtype=self.dtype), False

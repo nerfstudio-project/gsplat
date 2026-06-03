@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "ruff"]
+dev = ["pytest", "black", "ruff", "opencv-python-headless"]
 
 [tool.setuptools]
 packages = [
@@ -53,4 +53,6 @@ gsplat_sensors = [
     "kernels/cuda/csrc/*.cu",
     "kernels/cuda/csrc/*.cuh",
     "kernels/cuda/csrc/*.h",
+    "test_data/*.json",
+    "test_data/*.md",
 ]
