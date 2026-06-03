@@ -91,10 +91,10 @@ std::unique_ptr<InferenceRenderState> create_gaussian_render_inference_scene_sta
         "sh_compression_mode requires SH degree 3 (K==16); got K=",
         state->sh_coeffs_per_channel);
     if (state->sh_coeffs_per_channel == 16 && sh_compression_mode != 0) {
-        auto sh_float = scene.colors_packed.contiguous().to(at::kFloat);
+        auto sh_coeffs = scene.colors_packed.contiguous();
         auto opacities_float = scene.qso_packed.contiguous().narrow(1, 7, 1).squeeze(1).to(at::kFloat);
         auto compressed = higs::launch_sh_compress(
-            sh_float, opacities_float, static_cast<SHCompressionMode>(sh_compression_mode));
+            sh_coeffs, opacities_float, static_cast<SHCompressionMode>(sh_compression_mode));
         state->shCompressed = compressed.packed;
         state->shDecodeParams = std::make_unique<higs::SHDecodeParams>(compressed.decode_params);
         torch::cuda::synchronize();

@@ -147,8 +147,11 @@ def test_av_evaluate_checkpoint_uses_saved_scene_path(monkeypatch, tmp_path) -> 
         del device
         return eval_scene
 
-    def fake_evaluate(passed_splats, loaded_scene, test_frame_ids, W, H, **_kwargs):
-        seen["splats"] = passed_splats
+    def fake_evaluate(
+        stage, passed_scene, loaded_scene, test_frame_ids, W, H, **_kwargs
+    ):
+        del stage
+        seen["splats"] = passed_scene.splats
         seen["test_frame_ids"] = test_frame_ids
         assert loaded_scene is eval_scene
         assert (W, H) == (1, 1)
