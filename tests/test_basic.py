@@ -5717,3 +5717,49 @@ def test_fully_fused_projection_2dgs_packed_empty(C):
     # Backward over the empty projection must not divide by zero in the launcher.
     (means2d.sum() + depths.sum() + ray_transforms.sum() + normals.sum()).backward()
     assert means.grad.shape == means.shape
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+@pytest.mark.parametrize("tile_width,tile_height", [(2, 2), (4, 4), (8, 4)])
+def test_isect_offset_power_of_two_tiles(tile_width: int, tile_height: int):
+    # n_tiles = tile_width*tile_height is a power of two here, the case where the
+    # packed (image, tile) id field width disagrees between bits_for_count
+    # (bit_width(n-1)) and the old floor(log2)+1 (off by one bit). A pack/unpack
+    # mismatch corrupts the decoded tile ids and the offset buffer, so the CUDA
+    # packing, the CUDA offset decode, and the Python reference must all agree
+    # at these counts.
+    from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
+    from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
+
+    torch.manual_seed(42)
+    # C >= 3 so the image id occupies bits above the tile field: a wrong
+    # tile_n_bits in the offset decode then mis-splits image vs tile bits. With
+    # C <= 2 the off-by-one bit folds back into the flat (image*n_tiles+tile)
+    # index losslessly and would hide the bug.
+    C, N = 4, 800
+    tile_size = 16
+    width = tile_width * tile_size
+    height = tile_height * tile_size
+    I = C
+    n_tiles = tile_width * tile_height
+    assert n_tiles & (n_tiles - 1) == 0, "n_tiles must be a power of two for this test"
+
+    means2d = torch.randn(C, N, 2, device=device) * width
+    radii = torch.randint(0, tile_size, (C, N, 2), device=device, dtype=torch.int32)
+    depths = torch.rand(C, N, device=device)
+
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+
+    _tiles_per_gauss, _isect_ids, _gauss_ids = _isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    _isect_offsets = _isect_offset_encode(_isect_ids, I, tile_width, tile_height)
+
+    torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
+    torch.testing.assert_close(isect_ids, _isect_ids)
+    torch.testing.assert_close(flatten_ids, _gauss_ids)
+    torch.testing.assert_close(isect_offsets, _isect_offsets)

@@ -25,6 +25,7 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <cub/cub.cuh>
 
+#include "MathUtils.h"
 #include "Common.h"
 #include "Intersect.h"
 #include "Utils.cuh"
@@ -328,15 +329,17 @@ void launch_intersect_tile_kernel(
     }
 
     uint32_t n_tiles = tile_width * tile_height;
-    // the number of bits needed to encode the image id and tile id
-    // Note: std::bit_width requires C++20
-    // uint32_t tile_n_bits = std::bit_width(n_tiles);
-    // uint32_t image_n_bits = std::bit_width(I);
-    uint32_t image_n_bits = (uint32_t)floor(log2(I)) + 1;
-    uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+    // the number of bits needed to encode the image id and tile id; must match
+    // the packing in intersect_tile so the (image, tile) id unpacks correctly.
+    const uint32_t image_n_bits = bits_for_count(I);
+    const uint32_t tile_n_bits = bits_for_count(n_tiles);
     // the first 32 bits are used for the image id and tile id altogether, so
     // check if we have enough bits for them.
-    assert(image_n_bits + tile_n_bits <= 32);
+    TORCH_CHECK(
+        image_n_bits + tile_n_bits <= 32,
+        "intersect_tile: (image, tile) id packing needs ",
+        image_n_bits + tile_n_bits,
+        " bits but only 32 are available (I=", I, ", n_tiles=", n_tiles, ").");
 
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
@@ -413,8 +416,6 @@ __global__ void intersect_offset_kernel(
     if (idx >= n_isects)
         return;
 
-    uint32_t image_n_bits = (uint32_t)floor(log2f(float(I))) + 1;
-
     int64_t isect_id_curr = isect_ids[idx] >> 32;
     int64_t iid_curr = isect_id_curr >> (tile_n_bits);
     int64_t tid_curr = isect_id_curr & ((1 << tile_n_bits) - 1);
@@ -467,7 +468,9 @@ void launch_intersect_offset_kernel(
     }
 
     uint32_t n_tiles = tile_width * tile_height;
-    uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+    // Must match the packing in launch_intersect_tile_kernel so the (image,
+    // tile) id unpacks with the same field width it was packed with.
+    const uint32_t tile_n_bits = bits_for_count(n_tiles);
     intersect_offset_kernel<<<
         grid,
         threads,
