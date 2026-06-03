@@ -22,16 +22,18 @@
 
 namespace higs {
 
-// Sort gaussian IDs by depth key within each macro-tile segment.
-// Only sorted values (gaussian IDs) are guaranteed in the output;
-// key buffers are used as working space and their final contents
-// are undefined.
-void launch_mt_segmented_sort(int64_t n_macro_isects,
-                              int32_t n_macro_tiles,
-                              const at::Tensor in_mt_gauss_offsets,
-                              at::Tensor inout_mt_depth_keys,
-                              at::Tensor inout_mt_gauss_ids,
-                              at::Tensor out_mt_depth_keys_sorted,
-                              at::Tensor out_mt_gauss_ids_sorted);
+// Sort gaussian IDs by depth key within each macro-tile segment. The inout_*
+// and tmp_* buffers are used as ping-pong working space; their final contents
+// are otherwise undefined. RETURNS the tensor (a zero-copy handle aliasing
+// either inout_mt_gauss_ids or tmp_mt_gauss_ids) that holds the sorted gaussian
+// IDs. The returned tensor is always defined; for n_macro_isects <= 0 it is
+// inout_mt_gauss_ids unchanged. No data is copied.
+at::Tensor launch_mt_segmented_sort(int64_t n_macro_isects,
+                                    int32_t n_macro_tiles,
+                                    const at::Tensor in_mt_gauss_offsets,
+                                    at::Tensor inout_mt_depth_keys,
+                                    at::Tensor inout_mt_gauss_ids,
+                                    at::Tensor tmp_mt_depth_keys,
+                                    at::Tensor tmp_mt_gauss_ids);
 
 } // namespace higs

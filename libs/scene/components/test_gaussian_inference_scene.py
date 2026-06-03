@@ -130,8 +130,6 @@ def _pack_scene_python(
     if sh_deg >= 0 and K_sh == 16:
         if sh_compression == "none":
             colors_packed = colors.half()
-        elif sh_compression == "32b":
-            colors_packed = colors.contiguous().view(N, 48)
         else:
             colors_packed = colors.half().view(N, 48)
     elif sh_deg >= 0 and K_sh > 0:
@@ -941,7 +939,7 @@ def test_classmethod_parity_sh3():
     "sh_compression,expected_mode,expected_dtype,expected_shape",
     [
         ("none", SHCompressionMode.NONE, torch.float16, (40, 16, 3)),
-        ("32b", SHCompressionMode.PACKED_32B, torch.float32, (40, 48)),
+        ("32b", SHCompressionMode.PACKED_32B, torch.float16, (40, 48)),
         ("16b", SHCompressionMode.PACKED_16B, torch.float16, (40, 48)),
     ],
 )
@@ -977,8 +975,6 @@ def test_sh3_compression_metadata_layout_and_values(
 
     if sh_compression == "none":
         expected = colors.half()
-    elif sh_compression == "32b":
-        expected = colors.contiguous().view(40, 48)
     else:
         expected = colors.half().view(40, 48)
     torch.testing.assert_close(scene.colors_packed, expected, atol=0, rtol=0)

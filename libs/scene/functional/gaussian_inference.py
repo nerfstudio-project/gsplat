@@ -61,9 +61,8 @@ def pack_gaussian_inference_scene(
                              for SH mode (``sh_degree >= 0``).
         sh_degree:           ``-1`` for RGB (no SH); ``0``–``3`` for SH coefficients.
         sh_compression_mode: SH compression mode enum. ``NONE`` preserves
-                             raw SH3 layout in fp16, ``PACKED_32B`` flattens
-                             SH3 coefficients into float32 lanes, and
-                             ``PACKED_16B`` flattens them into fp16 lanes.
+                             raw SH3 layout in fp16; ``PACKED_32B`` and
+                             ``PACKED_16B`` flatten SH3 coefficients into fp16 lanes.
 
     Returns:
         A 3-tuple ``(means_planar, qso_packed, colors_packed)``:
@@ -72,8 +71,7 @@ def pack_gaussian_inference_scene(
         - ``qso_packed``: ``[N, 8]`` float16.
         - ``colors_packed``: ``[N, 4]`` float16 for RGB; ``[N, K, 3]`` float32
           for SH0–2; ``[N, 16, 3]`` float16 for SH3 ``NONE``;
-          ``[N, 48]`` float32 for SH3 ``PACKED_32B``; ``[N, 48]``
-          float16 for SH3 ``PACKED_16B``.
+          ``[N, 48]`` float16 for SH3 ``PACKED_32B`` and ``PACKED_16B``.
 
     Raises:
         TypeError: if any tensor has the wrong Python type or dtype.

@@ -27,23 +27,23 @@
 
 namespace higs {
 
-void launch_mt_segmented_sort(int64_t n_macro_isects,
-                              int32_t n_macro_tiles,
-                              const at::Tensor in_mt_gauss_offsets,
-                              at::Tensor inout_mt_depth_keys,
-                              at::Tensor inout_mt_gauss_ids,
-                              at::Tensor out_mt_depth_keys_sorted,
-                              at::Tensor out_mt_gauss_ids_sorted)
+at::Tensor launch_mt_segmented_sort(int64_t n_macro_isects,
+                                    int32_t n_macro_tiles,
+                                    const at::Tensor in_mt_gauss_offsets,
+                                    at::Tensor inout_mt_depth_keys,
+                                    at::Tensor inout_mt_gauss_ids,
+                                    at::Tensor tmp_mt_depth_keys,
+                                    at::Tensor tmp_mt_gauss_ids)
 {
     if (n_macro_isects <= 0)
     {
-        return;
+        return inout_mt_gauss_ids;
     }
 
     int32_t *d_keys_in       = inout_mt_depth_keys.data_ptr<int32_t>();
-    int32_t *d_keys_out      = out_mt_depth_keys_sorted.data_ptr<int32_t>();
+    int32_t *d_keys_out      = tmp_mt_depth_keys.data_ptr<int32_t>();
     int32_t *d_vals_in       = inout_mt_gauss_ids.data_ptr<int32_t>();
-    int32_t *d_vals_out      = out_mt_gauss_ids_sorted.data_ptr<int32_t>();
+    int32_t *d_vals_out      = tmp_mt_gauss_ids.data_ptr<int32_t>();
     const int32_t *d_offsets = in_mt_gauss_offsets.data_ptr<int32_t>();
     cudaStream_t stream      = at::cuda::getCurrentCUDAStream();
 
@@ -59,18 +59,10 @@ void launch_mt_segmented_sort(int64_t n_macro_isects,
 
     int result_buf = SegmentedSortAsync(state, d_offsets, d_keys, d_values, stream);
 
-    if (result_buf == 0)
-    {
-        // copy_ instead of set_ to avoid aliasing the input and output
-        // tensors — high-water-mark reuse across frames would otherwise
-        // cause the sort's ping-pong buffers to overlap on the next frame.
-        // Narrow to n_macro_isects since the buffers may have different
-        // high-water-mark capacities.
-        out_mt_depth_keys_sorted.narrow(0, 0, n_macro_isects).copy_(
-            inout_mt_depth_keys.narrow(0, 0, n_macro_isects));
-        out_mt_gauss_ids_sorted.narrow(0, 0, n_macro_isects).copy_(
-            inout_mt_gauss_ids.narrow(0, 0, n_macro_isects));
-    }
+    // result_buf is the index of the buffer holding the sorted data: 0 = inout_*
+    // (input), 1 = tmp_* (scratch). Return that buffer's gaussian-ids tensor as a
+    // zero-copy handle so the caller reads the right one without any copy/alias.
+    return result_buf == 0 ? inout_mt_gauss_ids : tmp_mt_gauss_ids;
 }
 
 } // namespace higs

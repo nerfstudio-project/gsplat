@@ -200,7 +200,7 @@ def test_colors_rgb_dtype_and_shape():
     "sh_compression_mode,expected_dtype,expected_shape",
     [
         (SHCompressionMode.NONE, torch.float16, (N, 16, 3)),
-        (SHCompressionMode.PACKED_32B, torch.float32, (N, 48)),
+        (SHCompressionMode.PACKED_32B, torch.float16, (N, 48)),
         (SHCompressionMode.PACKED_16B, torch.float16, (N, 48)),
     ],
 )
@@ -231,8 +231,6 @@ def test_colors_sh3_mode_values(sh_compression_mode):
 
     if sh_compression_mode is SHCompressionMode.NONE:
         expected = inp["colors"].to(torch.float16)
-    elif sh_compression_mode is SHCompressionMode.PACKED_32B:
-        expected = inp["colors"].contiguous().view(N, 48)
     else:
         expected = inp["colors"].to(torch.float16).view(N, 48)
     torch.testing.assert_close(colors_packed, expected, atol=0, rtol=0)

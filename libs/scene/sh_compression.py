@@ -27,8 +27,8 @@ class SHCompressionMode(IntEnum):
     """
 
     NONE = 0  # [N, 16, 3] float16 — raw coefficients
-    PACKED_32B = 1  # [N, 48] float32 — flattened
-    PACKED_16B = 2  # [N, 48] float16 — flattened + quantized to fp16
+    PACKED_32B = 1  # [N, 48] float16 — flattened staging for 32B codec
+    PACKED_16B = 2  # [N, 48] float16 — flattened staging for 16B codec
 
 
 SH_COMPRESSION_MAP = {

@@ -116,8 +116,7 @@ def pack_gaussian_inference_scene(
                         scale cols 4-6, opacity col 7
         colors_packed:  [N, 4] float16 for RGB; [N, K, 3] float32 for SH0-2;
                         [N, 16, 3] float16 for SH3 NONE;
-                        [N, 48] float32 for SH3 PACKED_32B;
-                        [N, 48] float16 for SH3 PACKED_16B
+                        [N, 48] float16 for SH3 PACKED_32B and PACKED_16B
     """
     # --- scalar validation -----------------------------------------------
     if not isinstance(sh_degree, int):

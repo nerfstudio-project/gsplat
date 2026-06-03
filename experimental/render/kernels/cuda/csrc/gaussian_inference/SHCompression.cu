@@ -133,7 +133,7 @@ at::Tensor launch_sh_encode(const at::Tensor &coeffs, const SHEncodeParams &enco
     return packed;
 }
 
-// Full compression pipeline: fp32 coefficients → compressed + scales.
+// Full compression pipeline: fp16/fp32 coefficients -> compressed + scales.
 // Computes per-basis-per-channel p99.99 scales in YCoCg space (excluding low-opacity
 // gaussians from scale computation), encodes all gaussians, and returns the packed
 // bitstream + decoder scale structure.

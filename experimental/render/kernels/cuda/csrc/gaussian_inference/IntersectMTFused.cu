@@ -214,17 +214,15 @@ void IntersectMTFused::execute(const at::Tensor &means2d, const at::Tensor &dept
 
     if (m_nMacroIsects > 0)
     {
+        // High-water-mark allocation: all four sort ping-pong buffers grow
+        // together, sharing m_mtIsectCapacity.
         if (m_nMacroIsects > m_mtIsectCapacity)
         {
             m_mtDepthKeys     = at::empty({m_nMacroIsects}, opts_i32);
             m_mtGaussIds      = at::empty({m_nMacroIsects}, opts_i32);
+            m_mtTmpDepthKeys  = at::empty({m_nMacroIsects}, opts_i32);
+            m_mtTmpGaussIds   = at::empty({m_nMacroIsects}, opts_i32);
             m_mtIsectCapacity = m_nMacroIsects;
-        }
-        if (m_nMacroIsects > m_mtSortedCapacity)
-        {
-            m_mtDepthKeysSorted = at::empty({m_nMacroIsects}, opts_i32);
-            m_mtGaussIdsSorted  = at::empty({m_nMacroIsects}, opts_i32);
-            m_mtSortedCapacity  = m_nMacroIsects;
         }
 
         // Stage 4: Macro-tile fill
@@ -235,9 +233,10 @@ void IntersectMTFused::execute(const at::Tensor &means2d, const at::Tensor &dept
             m_mtDepthKeys.data_ptr<int32_t>(), m_mtGaussIds.data_ptr<int32_t>(), m_mtChunkMetaWords.data_ptr<int32_t>(),
             m_mtChunkTileCarry.data_ptr<int32_t>(), m_numMtTiles);
 
-        // Stage 5: Macro-tile segmented sort
-        launch_mt_segmented_sort(m_nMacroIsects, m_nMacroTiles, m_mtGaussOffsets, m_mtDepthKeys, m_mtGaussIds,
-                                 m_mtDepthKeysSorted, m_mtGaussIdsSorted);
+        // Stage 5: Macro-tile segmented sort. The sort returns the buffer that
+        // actually holds the sorted gaussian IDs; rasterize() reads it.
+        m_mtGaussIdsSorted = launch_mt_segmented_sort(m_nMacroIsects, m_nMacroTiles, m_mtGaussOffsets, m_mtDepthKeys,
+                                                      m_mtGaussIds, m_mtTmpDepthKeys, m_mtTmpGaussIds);
         m_numRasterBatches = m_mtBatchOffsets[-1].item<int32_t>();
     }
     else

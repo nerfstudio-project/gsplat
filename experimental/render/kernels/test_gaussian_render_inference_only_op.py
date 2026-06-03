@@ -68,8 +68,6 @@ def _pack_scene(
     if sh_deg >= 0 and K_sh == 16:
         if sh_compression == "none":
             colors_packed = colors.half()
-        elif sh_compression == "32b":
-            colors_packed = colors.contiguous().view(N, 48)
         else:
             colors_packed = colors.half().view(N, 48)
     elif sh_deg >= 0 and K_sh > 0:
