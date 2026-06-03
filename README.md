@@ -63,6 +63,8 @@ This repo comes with a standalone script that reproduces the official Gaussian S
 ```bash
 cd examples
 pip install -r requirements.txt
+# install the scene/stage helper libraries the example trainers import
+python -m pip install -e ../libs/scene -e ../libs/stage
 # download mipnerf_360 benchmark data
 python datasets/download_dataset.py
 # run batch evaluation
@@ -72,7 +74,8 @@ bash benchmarks/basic.sh
 ## Examples
 
 We provide a set of examples to get you started! Below you can find the details about
-the examples (requires installing some extrra dependencies via `pip install -r examples/requirements.txt --no-build-isolation`)
+the examples (requires installing some extra dependencies via `pip install -r examples/requirements.txt --no-build-isolation`, plus the scene/stage helper
+libraries the trainers import via `python -m pip install -e libs/scene -e libs/stage`)
 
 - [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
 - [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
