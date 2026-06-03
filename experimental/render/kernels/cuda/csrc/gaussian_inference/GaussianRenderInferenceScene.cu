@@ -250,10 +250,8 @@ at::Tensor render_gaussian_inference_scene(
             compression, decode_params,
             state.visible, state.means2d, state.depths, state.conics, state.colors, {});
 
-    } else if (state.sh_coeffs_per_channel > 0) {
-        // ---- Uncompressed SH — fused projection + SH for any degree ----
-        // The fused kernel handles all SH degrees; only compressed mode
-        // is restricted to degree 3.
+    } else if (state.sh_coeffs_per_channel == 16) {
+        // ---- Uncompressed SH3 — fused projection + SH fast path ----
         higs::launch_projection_sh_fused_kernel(
             means, {}, qso_packed, viewmat_4d, K_4d,
             static_cast<uint32_t>(width), static_cast<uint32_t>(height),
@@ -263,6 +261,20 @@ at::Tensor render_gaussian_inference_scene(
             static_cast<int32_t>(sh_degree), colors_packed, SH_ACTIVATION_SCALE, SH_ACTIVATION_SHIFT,
             SHCompressionMode::NONE, nullptr,
             state.visible, state.means2d, state.depths, state.conics, state.colors, {});
+
+    } else if (state.sh_coeffs_per_channel > 0) {
+        // ---- Generic lower-degree SH (K != 16): projection first, then float32 SH ----
+        higs::launch_projection_fwd_kernel(
+            means, {}, qso_packed, viewmat_4d, K_4d,
+            static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+            static_cast<float>(eps2d), static_cast<float>(near_plane),
+            static_cast<float>(far_plane), static_cast<float>(radius_clip),
+            gsplat::CameraModelType::PINHOLE,
+            state.visible, state.means2d, state.depths, state.conics, {});
+
+        higs::launch_spherical_harmonics_viewmat_fwd_kernel(
+            static_cast<int32_t>(sh_degree), means, viewmat, colors_packed, state.visible,
+            SH_ACTIVATION_SCALE, SH_ACTIVATION_SHIFT, state.colors);
 
     } else {
         // ---- Pre-activated RGB: projection only + copy colors ----

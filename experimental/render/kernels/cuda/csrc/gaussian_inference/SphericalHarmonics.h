@@ -39,4 +39,16 @@ void launch_spherical_harmonics_fwd_kernel(
     // compressed-SH path: mode != NONE activates on-the-fly decode (requires degree 3, K=16).
     SHCompressionMode mode = SHCompressionMode::NONE, const SHDecodeParams *decode_params = nullptr);
 
+void launch_spherical_harmonics_viewmat_fwd_kernel(
+    // inputs
+    int32_t degrees_to_use,
+    const at::Tensor means,   // [3, N] float — gaussian centers (planar)
+    const at::Tensor viewmat, // [4, 4] float row-major world-to-camera transform
+    const at::Tensor coeffs,  // [N, K, 3] float
+    const at::optional<at::Tensor> masks,
+    float bias, float min_value,
+    // outputs
+    at::Tensor colors // [N, 4] half {R,G,B,0}
+);
+
 } // namespace higs
