@@ -726,3 +726,41 @@ def test_rasterize_to_pixels_2dgs_densify_gradient():
     torch.testing.assert_close(
         v_densify[mask], expected[mask], rtol=2e-2, atol=1e-3 * scale
     )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_fully_fused_projection_packed_2dgs_empty():
+    # Packed 2DGS projection computed the batch count as numel/(N*3) before the
+    # empty-input guard; with N==0 that divisor is zero (host-side integer
+    # division by zero). An empty gaussian set must be a clean no-op returning
+    # empty packed tensors.
+    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+
+    W, H = 64, 64
+    means = torch.zeros(0, 3, device=device)
+    quats = torch.zeros(0, 4, device=device)
+    scales = torch.ones(0, 3, device=device)
+    viewmats = torch.eye(4, device=device)[None]
+    Ks = torch.tensor(
+        [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+        device=device,
+    )[None]
+
+    (
+        batch_ids,
+        camera_ids,
+        gaussian_ids,
+        indptr,
+        radii,
+        means2d,
+        depths,
+        ray_transforms,
+        normals,
+    ) = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, W, H, packed=True
+    )
+
+    assert gaussian_ids.numel() == 0
+    assert means2d.shape[0] == 0
+    assert int(indptr[-1].item()) == 0

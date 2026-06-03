@@ -714,7 +714,7 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
 ) {
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t C = viewmats.size(-3);       // number of cameras
-    uint32_t B = means.numel() / (N * 3); // number of batches
+    uint32_t B = (N == 0) ? 0 : means.numel() / (N * 3); // number of batches
     uint32_t nnz = batch_ids.size(0);
 
     dim3 threads(256);
