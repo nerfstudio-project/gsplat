@@ -1400,7 +1400,13 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     TORCH_CHECK(!packed, "packed mode not supported for 3DGUT forward rasterization");
 
     const uint32_t N = packed ? 0u : static_cast<uint32_t>(means.size(-2));
-    const uint32_t B = static_cast<uint32_t>(means.numel() / (N * 3));
+    // Number of batches: product of the leading dims. Computed this way rather
+    // than means.numel()/(N*3) because:
+    // - the division is undefined for an empty gaussian set (N == 0)
+    // - the leading-dim product matches how the calling op sizes its outputs,
+    //   so an empty input renders a clean background image instead of crashing
+    const uint32_t B = static_cast<uint32_t>(
+        c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)));
     const uint32_t C = static_cast<uint32_t>(viewmats0.size(-3));
     const uint32_t I = B * C;
     const uint32_t tile_height = static_cast<uint32_t>(tile_offsets.size(-2));

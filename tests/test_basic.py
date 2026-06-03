@@ -5768,3 +5768,99 @@ def test_isect_offset_power_of_two_tiles(tile_width: int, tile_height: int):
     torch.testing.assert_close(isect_ids, _isect_ids)
     torch.testing.assert_close(flatten_ids, _gauss_ids)
     torch.testing.assert_close(isect_offsets, _isect_offsets)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterize_to_indices_in_range_empty():
+    # rasterize_to_indices_3dgs computed the image count as numel/(2*N) before
+    # any emptiness guard; with zero gaussians (N == 0) the divisor is zero -- a
+    # host-side integer division by zero. An empty gaussian set must be a clean
+    # no-op returning empty index tensors.
+    from gsplat.cuda._wrapper import rasterize_to_indices_in_range
+
+    C = 1
+    W = H = 16
+    tile_size = 16
+    means2d = torch.zeros(C, 0, 2, device=device)
+    conics = torch.zeros(C, 0, 3, device=device)
+    opacities = torch.zeros(C, 0, device=device)
+    transmittances = torch.ones(C, H, W, device=device)
+    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int32, device=device)
+    flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
+
+    gauss_ids, pixel_ids, image_ids = rasterize_to_indices_in_range(
+        0,
+        2**30,
+        transmittances,
+        means2d,
+        conics,
+        opacities,
+        W,
+        H,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+    )
+    assert gauss_ids.numel() == 0
+    assert pixel_ids.numel() == 0
+    assert image_ids.numel() == 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterize_to_pixels_eval3d_empty():
+    # The world-space rasterizer computed the batch count as numel/(N*3) before
+    # any emptiness guard; with zero gaussians (N == 0) the divisor is zero -- a
+    # host-side integer division by zero. An empty gaussian set must be a clean
+    # no-op rather than crashing.
+    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+
+    C = 1
+    W = H = 16
+    tile_size = 16
+    channels = 3
+    means = torch.zeros(0, 3, device=device)
+    quats = torch.zeros(0, 4, device=device)
+    scales = torch.ones(0, 3, device=device)
+    colors = torch.zeros(C, 0, channels, device=device)
+    opacities = torch.zeros(C, 0, device=device)
+    viewmats = torch.eye(4, device=device)[None]
+    Ks = torch.tensor(
+        [[[float(W), 0.0, W / 2.0], [0.0, float(H), H / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int32, device=device)
+    flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
+
+    # Must not crash (pre-fix: host-side division by zero on the empty input),
+    # and every output must hold its empty/safe-default value instead of
+    # uninitialized at::empty memory.
+    (
+        render_colors,
+        render_alphas,
+        last_ids,
+        sample_counts,
+        render_normals,
+    ) = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities,
+        viewmats,
+        Ks,
+        W,
+        H,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_sample_counts=True,
+        return_normals=True,
+    )
+    assert torch.isfinite(render_colors).all()
+    torch.testing.assert_close(render_colors, torch.zeros_like(render_colors))
+    torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
+    torch.testing.assert_close(render_normals, torch.zeros_like(render_normals))
+    torch.testing.assert_close(last_ids, torch.full_like(last_ids, -1))
+    torch.testing.assert_close(sample_counts, torch.zeros_like(sample_counts))

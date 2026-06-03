@@ -512,7 +512,13 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
     TORCH_CHECK(!packed, "packed mode not supported for 3DGUT forward rasterization");
 
     const uint32_t N = packed ? 0 : means.size(-2);   // number of gaussians
-    const uint32_t B = means.numel() / (N * 3);       // number of batches
+    // Number of batches: product of the leading dims. Computed this way rather
+    // than means.numel()/(N*3) because:
+    // - the division is undefined for an empty gaussian set (N == 0)
+    // - the leading-dim product matches how the calling op sizes its outputs,
+    //   so an empty input renders a clean background image instead of crashing
+    const uint32_t B = static_cast<uint32_t>(
+        c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)));
     const uint32_t C = viewmats0.size(-3);            // number of cameras
     const uint32_t I = B * C;                         // number of images
     const uint32_t grid_h = isect_offsets.size(-2);
