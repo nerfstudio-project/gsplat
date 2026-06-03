@@ -63,11 +63,12 @@ private:
     at::Tensor m_mtChunkTileCarry;                  // [n_chunk_tiles*n_mt_tiles*MT_META_TILE] int32 chunk-tile carries
     at::Tensor m_mtDepthKeys;                       // [n_mt_isects] int32 — depth as bit-reinterpreted int32
     at::Tensor m_mtGaussIds;                        // [n_mt_isects] int32 — gaussian indices
-    at::Tensor m_mtDepthKeysSorted;                 // [n_mt_isects] int32 — sorted depth keys
-    at::Tensor m_mtGaussIdsSorted;                  // [n_mt_isects] int32 — gaussian IDs sorted by depth per macro-tile
+    at::Tensor m_mtTmpDepthKeys;                    // [n_mt_isects] int32 — scratch double-buffer for the sort
+    at::Tensor m_mtTmpGaussIds;                     // [n_mt_isects] int32 — scratch double-buffer for the sort
+    at::Tensor m_mtGaussIdsSorted;                  // sorted gaussian IDs — zero-copy handle returned by the sort
+                                                    // (aliases m_mtGaussIds or m_mtTmpGaussIds; not separately allocated)
     at::Tensor m_mtBatchOffsets;                    // [n_mt+1] int32 — gaussian batch start indices per macro-tile
-    int64_t m_mtIsectCapacity    = 0;               // high-water-mark for m_mtDepthKeys/m_mtGaussIds allocation
-    int64_t m_mtSortedCapacity   = 0;               // high-water-mark for m_mtDepthKeysSorted/m_mtGaussIdsSorted
+    int64_t m_mtIsectCapacity    = 0;               // high-water-mark for the four sort ping-pong buffers
     int64_t m_nMacroIsects       = 0;               // total macro-tile intersections (from offsets readback)
     int32_t m_macroTileCols      = 0;               // macro-tile grid width
     int32_t m_nMacroTiles        = 0;               // total macro-tiles (cols × rows)
