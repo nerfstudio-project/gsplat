@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import math
 from typing import Tuple, Union, Literal
 from ._lidar import SpinningDirection, relative_sensor_angles
+from ._torch_impl import _bits_for_count
 from ._wrapper import RowOffsetStructuredSpinningLidarModelParametersExt
 import struct
 
@@ -333,10 +334,10 @@ def _isect_tiles_lidar(
     isect_ids_hi = torch.empty(n_isects, dtype=torch.int32, device="cpu")
     flatten_ids = torch.empty(n_isects, dtype=torch.int32, device="cpu")
 
-    image_n_bits = I.bit_length()
-    tile_n_bits = (
+    image_n_bits = _bits_for_count(I)
+    tile_n_bits = _bits_for_count(
         lidar.tiling.n_bins_elevation * lidar.tiling.n_bins_azimuth
-    ).bit_length()
+    )
     assert image_n_bits + tile_n_bits <= 32, "Too many tiles"
 
     depths = depths.reshape(-1)

@@ -30,6 +30,7 @@
 #include "Ops.h"
 #include "Cameras.cuh"
 #include "Lidars.cuh"
+#include "MathUtils.h"
 
 namespace gsplat {
 
@@ -417,15 +418,18 @@ void launch_intersect_tile_lidar_kernel(
     }
 
     uint32_t n_tiles = lidar->n_bins_azimuth*lidar->n_bins_elevation;
-    // the number of bits needed to encode the image id and tile id
-    // Note: std::bit_width requires C++20
-    // uint32_t tile_n_bits = std::bit_width(n_tiles);
-    // uint32_t image_n_bits = std::bit_width(I);
-    uint32_t image_n_bits = I == 0 ? 0 : ((uint32_t)floor(log2(I)) + 1);
-    uint32_t tile_n_bits = n_tiles == 0 ? 0 : ((uint32_t)floor(log2(n_tiles)) + 1);
+    // Number of bits to encode the image id and tile id; must match the sort
+    // side (intersect_tile_lidar in Intersect.cpp) so the (image, tile) id
+    // round-trips through the radix sort with the same field widths.
+    const uint32_t image_n_bits = bits_for_count(I);
+    const uint32_t tile_n_bits = bits_for_count(n_tiles);
     // the first 32 bits are used for the image id and tile id altogether, so
     // check if we have enough bits for them.
-    assert(image_n_bits + tile_n_bits <= 32);
+    TORCH_CHECK(
+        image_n_bits + tile_n_bits <= 32,
+        "intersect_tile_lidar: (image, tile) id packing needs ",
+        image_n_bits + tile_n_bits,
+        " bits but only 32 are available (I=", I, ", n_tiles=", n_tiles, ").");
 
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
