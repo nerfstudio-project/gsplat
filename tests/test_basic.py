@@ -5617,3 +5617,108 @@ def test_isect_tiles_lidar_packed_segmented_rejected():
             image_ids=image_ids,
             gaussian_ids=gaussian_ids,
         )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("C", [1, 3])
+def test_fully_fused_projection_packed_empty(C):
+    # Packed EWA-3DGS projection computed the batch count as numel/(N*3) before
+    # the empty-input guard; with N==0 that divisor is zero (host-side integer
+    # division by zero) in BOTH the forward and backward launchers. An empty
+    # gaussian set must be a clean no-op (empty packed tensors) through fwd+bwd.
+    # C > 1 also pins the indptr shape contract: a length-1 indptr would pass a
+    # bare indptr[-1] check yet drop the per-camera rows the CSR API promises.
+    from gsplat.cuda._wrapper import fully_fused_projection
+
+    W, H = 64, 64
+    means = torch.zeros(0, 3, device=device, requires_grad=True)
+    quats = torch.zeros(0, 4, device=device, requires_grad=True)
+    scales = torch.ones(0, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device)[None].expand(C, 4, 4).contiguous()
+    Ks = (
+        torch.tensor(
+            [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        )[None]
+        .expand(C, 3, 3)
+        .contiguous()
+    )
+
+    (
+        batch_ids,
+        camera_ids,
+        gaussian_ids,
+        indptr,
+        radii,
+        means2d,
+        depths,
+        conics,
+        compensations,
+    ) = fully_fused_projection(
+        means, None, quats, scales, viewmats, Ks, W, H, packed=True
+    )
+
+    assert gaussian_ids.numel() == 0
+    assert means2d.shape[0] == 0
+    assert radii.shape[0] == 0
+    # B == 1 for means.shape == (0, 3), so indptr has B * C + 1 == C + 1 zero
+    # entries -- one row per camera plus the trailing total.
+    assert indptr.shape == (C + 1,)
+    assert bool((indptr == 0).all())
+
+    # Backward over the empty projection must not divide by zero in the launcher.
+    (means2d.sum() + depths.sum() + conics.sum()).backward()
+    assert means.grad.shape == means.shape
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support isn't built in")
+@pytest.mark.parametrize("C", [1, 3])
+def test_fully_fused_projection_2dgs_packed_empty(C):
+    # Same empty-input batch-count division-by-zero as the EWA packed projection,
+    # in the 2DGS packed launcher's forward and backward. An empty gaussian set
+    # must be a clean no-op (empty packed tensors) through fwd+bwd.
+    # C > 1 also pins the indptr shape contract: a length-1 indptr would pass a
+    # bare indptr[-1] check yet drop the per-camera rows the CSR API promises.
+    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+
+    W, H = 64, 64
+    means = torch.zeros(0, 3, device=device, requires_grad=True)
+    quats = torch.zeros(0, 4, device=device, requires_grad=True)
+    scales = torch.ones(0, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device)[None].expand(C, 4, 4).contiguous()
+    Ks = (
+        torch.tensor(
+            [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        )[None]
+        .expand(C, 3, 3)
+        .contiguous()
+    )
+
+    (
+        batch_ids,
+        camera_ids,
+        gaussian_ids,
+        indptr,
+        radii,
+        means2d,
+        depths,
+        ray_transforms,
+        normals,
+    ) = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, W, H, packed=True
+    )
+
+    assert gaussian_ids.numel() == 0
+    assert means2d.shape[0] == 0
+    assert radii.shape[0] == 0
+    # B == 1 for means.shape == (0, 3), so indptr has B * C + 1 == C + 1 zero
+    # entries -- one row per camera plus the trailing total.
+    assert indptr.shape == (C + 1,)
+    assert bool((indptr == 0).all())
+
+    # Backward over the empty projection must not divide by zero in the launcher.
+    (means2d.sum() + depths.sum() + ray_transforms.sum() + normals.sum()).backward()
+    assert means.grad.shape == means.shape
