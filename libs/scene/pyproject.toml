@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gsplat-scene"
+# Required by setuptools/PEP 621 for editable installs; libs/scene is not
+# independently versioned or released outside this monorepo.
+version = "0.0.0"
+description = "Scene abstractions for gsplat Gaussian splat containers"
+requires-python = ">=3.8"
+dependencies = [
+    "torch",
+]
+
+[tool.setuptools]
+packages = [
+    "gsplat_scene",
+    "gsplat_scene.components",
+    "gsplat_scene.kernels",
+    "gsplat_scene.kernels.cuda",
+    "gsplat_scene.functional",
+]
+package-dir = { "gsplat_scene" = "." }
+
+[tool.setuptools.package-data]
+gsplat_scene = [
+    "kernels/cuda/ext.cpp",
+    "kernels/cuda/csrc/*",
+]
