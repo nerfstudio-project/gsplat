@@ -108,7 +108,7 @@ setup(
         "numpy",
         "jaxtyping",
         "rich>=12",
-        "torch",
+        "torch>=2.0",
         "typing_extensions; python_version<'3.8'",
         # gsplat-scene / gsplat-stage live under libs/scene and libs/stage and
         # are installed via ``libs/install.sh scene && libs/install.sh stage``;
@@ -119,6 +119,16 @@ setup(
         "lidar": [
             "scipy",
         ],
+        # examples / tutorial dependencies. The dynamic-surgical trainer and
+        # the EndoNeRF parser/dataset import these at module top, but they
+        # are not needed to use the core gsplat library — install with
+        # `pip install gsplat[examples]`.
+        "examples": [
+            "Pillow",
+            "tqdm",
+            "tyro",
+            "imageio>=2.37.2",
+        ],
         # dev dependencies. Install them by `pip install gsplat[dev]`
         "dev": [
             "black[jupyter]==22.3.0",
@@ -127,6 +137,11 @@ setup(
             "pytest==7.1.3",
             "pytest-env==0.8.1",
             "pytest-xdist==2.5.0",
+            # Tests for examples/datasets/endonerf.py and the dynamic-surgical
+            # trainer import Pillow + tqdm at module top — without these the
+            # test collection ImportErrors on a fresh `[dev]` install.
+            "Pillow",
+            "tqdm",
             "typeguard>=2.13.3",
             "pyyaml>=6.0.1",
             "build",

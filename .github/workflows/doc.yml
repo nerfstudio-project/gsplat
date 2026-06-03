@@ -50,9 +50,12 @@ jobs:
         if: github.event_name == 'push'
 
       - name: Sphinx build
-        # fail on warnings: "-W --keep-going"
+        # Fail on warnings (e.g. "document isn't included in any toctree" if
+        # docs/source/index.rst is ever truncated or a new page is added
+        # without wiring it in). `--keep-going` collects every warning before
+        # exiting so a single failure doesn't hide the rest.
         run: |
-          sphinx-build docs/source _build
+          sphinx-build -W --keep-going docs/source _build
 
       # Deploy to version-dependent subdirectory.
       - name: Deploy to GitHub Pages
