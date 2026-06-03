@@ -805,7 +805,15 @@ def rasterization(
             )
         _validate_nccl_process_group()
 
-    assert global_z_order or with_ut, "global_z_order can be false only if with_ut=True"
+    if camera_model == "lidar":
+        assert not global_z_order, (
+            "global_z_order must be False for camera_model='lidar'. "
+            "Lidar cameras use spherical coordinates where Euclidean-distance "
+            "depth ordering (global_z_order=False) is physically correct. "
+            "Pass global_z_order=False explicitly when using lidar."
+        )
+    else:
+        assert global_z_order or with_ut, "global_z_order=False is only supported with with_ut=True"
     assert (camera_model == "lidar") == (
         lidar_coeffs is not None
     ), "Lidar coefficients must be given if and only if camera model is lidar"
@@ -927,8 +935,6 @@ def rasterization(
         # Use provided UT parameters or create default
         if ut_params is None:
             ut_params = UnscentedTransformParameters()
-        projection_global_z_order = False if camera_model == "lidar" else global_z_order
-
         proj_results = fully_fused_projection_with_ut(
             means=means,
             quats=quats,
@@ -953,7 +959,7 @@ def rasterization(
             external_distortion_coeffs=external_distortion_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
-            global_z_order=projection_global_z_order,
+            global_z_order=global_z_order,
         )
 
     else:
@@ -1623,6 +1629,7 @@ def _rasterization(
     with_eval3d: bool = False,
     with_ut: bool = False,
     camera_model: CameraModel = "pinhole",
+    global_z_order: bool = True,
     lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     extra_signals: Optional[
         Tensor
@@ -1701,7 +1708,6 @@ def _rasterization(
             assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
     if with_ut:
-        projection_global_z_order = False if camera_model == "lidar" else True
         radii, means2d, depths, conics, compensations = _fully_fused_projection_with_ut(
             means=means,
             quats=quats,
@@ -1717,7 +1723,7 @@ def _rasterization(
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
             lidar_coeffs=lidar_coeffs,
-            global_z_order=projection_global_z_order,
+            global_z_order=global_z_order,
         )
     else:
         if rays is not None:

@@ -12,11 +12,25 @@
 #define GSPLAT_ENFORCE_LD128_LD64_PTX 0
 #endif
 
+// Debug-only alignment guards. Active only in CUDA device code with NDEBUG unset.
+#if defined(__CUDA_ARCH__) && !defined(NDEBUG)
+#   define GSPLAT_CHECK_ALIGN16(ptr) \
+        assert(((reinterpret_cast<uintptr_t>(ptr)) & 15u) == 0 \
+            && "HalfVectorLoads: ptr must be 16-byte aligned for LD128")
+#   define GSPLAT_CHECK_ALIGN8(ptr) \
+        assert(((reinterpret_cast<uintptr_t>(ptr)) & 7u) == 0 \
+            && "HalfVectorLoads: ptr must be 8-byte aligned for LD64")
+#else
+#   define GSPLAT_CHECK_ALIGN16(ptr) ((void)0)
+#   define GSPLAT_CHECK_ALIGN8(ptr)  ((void)0)
+#endif
+
 namespace gsplat {
 
 // Load 8 halfs at ptr into out[0..7] as float using a single 128-bit load (LD128).
 // ptr must be 16-byte aligned for correct behavior.
 __device__ __forceinline__ void load_8_halves_ld128(const __half* ptr, float out[8]) {
+    GSPLAT_CHECK_ALIGN16(ptr);
 #if GSPLAT_ENFORCE_LD128_LD64_PTX
     uint32_t r0, r1, r2, r3;
     asm volatile("ld.global.nc.v4.u32 {%0, %1, %2, %3}, [%4];"
@@ -47,6 +61,7 @@ __device__ __forceinline__ void load_8_halves_ld128(const __half* ptr, float out
 // Load 4 halfs at ptr into out[0..3] as float using a single 64-bit load (LD64).
 // ptr must be 8-byte aligned.
 __device__ __forceinline__ void load_4_halves_ld64(const __half* ptr, float out[4]) {
+    GSPLAT_CHECK_ALIGN8(ptr);
 #if GSPLAT_ENFORCE_LD128_LD64_PTX
     uint32_t r0, r1;
     asm volatile("ld.global.nc.v2.u32 {%0, %1}, [%2];"
@@ -68,6 +83,7 @@ __device__ __forceinline__ void load_4_halves_ld64(const __half* ptr, float out[
 
 // Same as above but keep values in half (saves registers; use for fp16 load->accumulate->write).
 __device__ __forceinline__ void load_8_halves_ld128_to_half(const __half* ptr, __half out[8]) {
+    GSPLAT_CHECK_ALIGN16(ptr);
 #if GSPLAT_ENFORCE_LD128_LD64_PTX
     uint32_t r0, r1, r2, r3;
     asm volatile("ld.global.nc.v4.u32 {%0, %1, %2, %3}, [%4];"
@@ -96,6 +112,7 @@ __device__ __forceinline__ void load_8_halves_ld128_to_half(const __half* ptr, _
 }
 
 __device__ __forceinline__ void load_4_halves_ld64_to_half(const __half* ptr, __half out[4]) {
+    GSPLAT_CHECK_ALIGN8(ptr);
 #if GSPLAT_ENFORCE_LD128_LD64_PTX
     uint32_t r0, r1;
     asm volatile("ld.global.nc.v2.u32 {%0, %1}, [%2];"
@@ -117,6 +134,7 @@ __device__ __forceinline__ void load_4_halves_ld64_to_half(const __half* ptr, __
 
 // Load 8 halfs (LD128) into 4 x __half2 (2 halfs per __half2). Uses one 128-bit load.
 __device__ __forceinline__ void load_8_halves_ld128_to_half2(const __half* ptr, __half2 out[4]) {
+    GSPLAT_CHECK_ALIGN16(ptr);
 #if GSPLAT_ENFORCE_LD128_LD64_PTX
     uint32_t r0, r1, r2, r3;
     asm volatile("ld.global.nc.v4.u32 {%0, %1, %2, %3}, [%4];"
@@ -138,6 +156,7 @@ __device__ __forceinline__ void load_8_halves_ld128_to_half2(const __half* ptr, 
 
 // Load 4 halfs (LD64) into 2 x __half2. Uses one 64-bit load.
 __device__ __forceinline__ void load_4_halves_ld64_to_half2(const __half* ptr, __half2 out[2]) {
+    GSPLAT_CHECK_ALIGN8(ptr);
 #if GSPLAT_ENFORCE_LD128_LD64_PTX
     uint32_t r0, r1;
     asm volatile("ld.global.nc.v2.u32 {%0, %1}, [%2];"

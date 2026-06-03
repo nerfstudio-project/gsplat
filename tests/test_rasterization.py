@@ -449,6 +449,7 @@ def test_rasterization(
             with_eval3d=with_eval3d,
             with_ut=with_ut,
             camera_model=camera_model,
+            global_z_order=(camera_model != "lidar"),
             lidar_coeffs=sensor_model.lidar,
             extra_signals=extra_signals,
             extra_signals_sh_degree=gaussians.extra_signals_sh_degree,

@@ -256,6 +256,7 @@ def _rasterize_nht_lidar(
         nht_params=NHTParams(),
         with_eval3d=True,
         with_ut=True,
+        global_z_order=False,
         packed=False,
         sh_degree=None,
         render_mode=render_mode,

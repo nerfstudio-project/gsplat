@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Any, Optional, Tuple
 
 import torch
@@ -45,6 +46,12 @@ def _require_tcnn() -> Any:
 
 # FullyFusedMLP supports a limited output width; above this we use a torch Linear readout.
 TCNN_FULLY_FUSED_MAX_OUTPUT_DIM: int = 128
+
+# Per-call batch-size cap when invoking a tcnn module.
+# Large single calls may exceed the FullyFusedMLP compile-time batch cap and abort;
+# many small calls cause tcnn's cuMemMap arena to fragment.  A single call under
+# this threshold is both faster and more stable.
+DEFAULT_TCNN_FORWARD_CHUNK: int = 12_000_000
 
 
 class HarmonicFeatures:
@@ -257,8 +264,32 @@ class DeferredShaderModule(torch.nn.Module):
             return self.sh_scale if self.view_encoding_type == "sh" else 1.0
         return 1.0
 
+    def _run_backbone(self, mlp_inputs: Tensor) -> Tensor:
+        """Run the tcnn backbone, chunking only when batch exceeds DEFAULT_TCNN_FORWARD_CHUNK."""
+        n = mlp_inputs.shape[0]
+        chunk = getattr(self, "tcnn_forward_chunk", None)
+        if chunk is None:
+            env_chunk = os.environ.get("GSPLAT_TCNN_FORWARD_CHUNK")
+            chunk = int(env_chunk) if env_chunk else DEFAULT_TCNN_FORWARD_CHUNK
+        if n <= chunk:
+            return self.backbone(mlp_inputs).float()
+
+        from torch.utils.checkpoint import checkpoint
+
+        def _fwd(x: Tensor) -> Tensor:
+            return self.backbone(x).float()
+
+        outs = []
+        for start in range(0, n, chunk):
+            sl = mlp_inputs[start : start + chunk]
+            if sl.requires_grad:
+                outs.append(checkpoint(_fwd, sl, use_reentrant=False))
+            else:
+                outs.append(_fwd(sl))
+        return torch.cat(outs, dim=0)
+
     def _decode(self, mlp_inputs: Tensor, C: int, H: int, W: int):
-        h = self.backbone(mlp_inputs).float()
+        h = self._run_backbone(mlp_inputs)
         if self._architecture in ("rgb_only_sigmoid", "rgb_only_raw"):
             return h.view(C, H, W, 3), None
         if self._architecture == "split_rgb_aux_linear":

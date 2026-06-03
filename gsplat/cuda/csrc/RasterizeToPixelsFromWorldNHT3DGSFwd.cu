@@ -160,6 +160,9 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
         inside = (i < image_height && j < image_width);
     }
 
+    static_assert(CDIM >= 4 && CDIM % VERTEX_PER_PRIM == 0,
+        "NHT rasterizer requires CDIM to be a positive multiple of VERTEX_PER_PRIM (4). "
+        "Each tetrahedral vertex holds CDIM/4 features.");
     constexpr uint32_t OUT_CDIM = CDIM / VERTEX_PER_PRIM;
     constexpr uint32_t FEAT_OUT = OUT_CDIM * ENCF;
     constexpr uint32_t PIXEL_STRIDE = FEAT_OUT + 3;  // features + ray_dirs
@@ -312,7 +315,6 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
     // updated when the corresponding output is requested).
     float depth_out = 0.f;
     vec3  normal_out = {0.f, 0.f, 0.f};
-#define ACC_ADD(idx, val, vis) do { acc_add_float(pix_out[idx], val, vis); } while(0)
 
     for (uint32_t b = 0; b < num_batches; ++b) {
         if (__syncthreads_count(done) >= block_size) break;
@@ -433,8 +435,8 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
                             for (uint32_t freq = 0; freq < NUM_ENCODING_FREQUENCIES; ++freq) {
                                 float s, c;
                                 harmonic_encoding_fwd(acc[ii], freq, s, c);
-                                ACC_ADD(FREQ_IDX(k + ii, 2 * freq),     s, vis);
-                                ACC_ADD(FREQ_IDX(k + ii, 2 * freq + 1), c, vis);
+                                acc_add_float(pix_out[FREQ_IDX(k + ii, 2 * freq)],     s, vis);
+                                acc_add_float(pix_out[FREQ_IDX(k + ii, 2 * freq + 1)], c, vis);
                             }
                         }
                     }
@@ -455,8 +457,8 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
                             for (uint32_t freq = 0; freq < NUM_ENCODING_FREQUENCIES; ++freq) {
                                 float s, c;
                                 harmonic_encoding_fwd(acc[ii], freq, s, c);
-                                ACC_ADD(FREQ_IDX(k + ii, 2 * freq),     s, vis);
-                                ACC_ADD(FREQ_IDX(k + ii, 2 * freq + 1), c, vis);
+                                acc_add_float(pix_out[FREQ_IDX(k + ii, 2 * freq)],     s, vis);
+                                acc_add_float(pix_out[FREQ_IDX(k + ii, 2 * freq + 1)], c, vis);
                             }
                         }
                     }
@@ -471,8 +473,8 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
                         for (uint32_t freq = 0; freq < NUM_ENCODING_FREQUENCIES; ++freq) {
                             float s, c;
                             harmonic_encoding_fwd(bv, freq, s, c);
-                            ACC_ADD(FREQ_IDX(k, 2 * freq),     s, vis);
-                            ACC_ADD(FREQ_IDX(k, 2 * freq + 1), c, vis);
+                            acc_add_float(pix_out[FREQ_IDX(k, 2 * freq)],     s, vis);
+                            acc_add_float(pix_out[FREQ_IDX(k, 2 * freq + 1)], c, vis);
                         }
                     }
                 }
@@ -482,7 +484,6 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fwd_kernel(
             T = next_T;
         }
     }
-#undef ACC_ADD
 
     if (inside) {
         render_alphas[pix_id] = 1.0f - T;
