@@ -241,7 +241,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
 
     auto opt = means2d.options();
     uint32_t N = means2d.size(-2); // number of gaussians
-    uint32_t I = means2d.numel() / (2 * N); // number of images
+    uint32_t I = (N == 0) ? 0 : means2d.numel() / (2 * N); // number of images
 
     uint32_t n_isects = flatten_ids.size(0);
 
@@ -558,7 +558,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 
     auto opt = means2d.options();
     uint32_t N = means2d.size(-2); // number of gaussians
-    uint32_t I = means2d.numel() / (2 * N); // number of images
+    uint32_t I = (N == 0) ? 0 : means2d.numel() / (2 * N); // number of images
 
     uint32_t n_isects = flatten_ids.size(0);
 
