@@ -43,9 +43,9 @@ struct FOVDevice
 {
     FOVDevice() = default;
 
-    FOVDevice(const c10::intrusive_ptr<FOV> &fov)
-        : start{fov->start}
-        , span{fov->span}
+    FOVDevice(const FOV &fov)
+        : start{fov.start}
+        , span{fov.span}
     {
     }
 
