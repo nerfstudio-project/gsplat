@@ -700,10 +700,8 @@ __INS__(4, at::Half) __INS__(8, at::Half) __INS__(12, at::Half)
 __INS__(16, at::Half) __INS__(20, at::Half) __INS__(24, at::Half)
 __INS__(28, at::Half) __INS__(32, at::Half) __INS__(36, at::Half)
 __INS__(40, at::Half) __INS__(44, at::Half) __INS__(48, at::Half)
-__INS__(49, at::Half) __INS__(64, at::Half) __INS__(65, at::Half)
-__INS__(80, at::Half) __INS__(96, at::Half) __INS__(128, at::Half)
-__INS__(129, at::Half) __INS__(256, at::Half) __INS__(257, at::Half)
-__INS__(512, at::Half) __INS__(513, at::Half)
+__INS__(64, at::Half) __INS__(80, at::Half) __INS__(96, at::Half)
+__INS__(128, at::Half) __INS__(256, at::Half)
 #undef __INS__
 
 } // namespace gsplat
