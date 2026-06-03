@@ -23,8 +23,10 @@ import pytest
 import torch
 
 from gsplat_sensors.kernels.cameras import (
+    FISHEYE_MAX_FORWARD_POLY_TERMS,
     FTHETA_MAX_POLYNOMIAL_TERMS,
     FThetaProjection,
+    OpenCVFisheyeProjection,
     validate_camera_projection,
 )
 from gsplat_sensors.kernels.cameras.ops import (
@@ -77,10 +79,32 @@ def _build_projection(components: dict) -> FThetaProjection:
     )
 
 
+def _build_fisheye_projection(
+    sensor_device: torch.device, focal_length: tuple[float, float] = (100.0, 100.0)
+) -> OpenCVFisheyeProjection:
+    return OpenCVFisheyeProjection(
+        principal_point=torch.tensor([50.0, 40.0], device=sensor_device),
+        focal_length=torch.tensor(focal_length, device=sensor_device),
+        forward_poly=torch.zeros(FISHEYE_MAX_FORWARD_POLY_TERMS, device=sensor_device),
+        approx_backward_factor=torch.tensor([1.0], device=sensor_device),
+        resolution=(100, 80),
+        newton_iterations=10,
+        max_angle=1.8,
+        min_2d_norm=1e-6,
+    )
+
+
 def test_cpp_max_polynomial_terms_is_python_source_of_truth():
     assert (
         FTHETA_MAX_POLYNOMIAL_TERMS
         == torch.classes.gsplat_sensors.FThetaProjection.get_max_polynomial_terms()
+    )
+
+
+def test_cpp_fisheye_forward_poly_terms_is_python_source_of_truth():
+    assert (
+        FISHEYE_MAX_FORWARD_POLY_TERMS
+        == torch.classes.gsplat_sensors.OpenCVFisheyeProjection.get_max_forward_poly_terms()
     )
 
 
@@ -89,6 +113,11 @@ def test_validate_camera_projection_accepts_valid_ftheta_components(sensor_devic
     components = _make_valid_ftheta_components(sensor_device)
     projection = _build_projection(components)
     validate_camera_projection(projection)
+
+
+def test_validate_camera_projection_accepts_valid_fisheye_components(sensor_device):
+    """Verify that a well-formed OpenCV fisheye projection passes validation."""
+    validate_camera_projection(_build_fisheye_projection(sensor_device))
 
 
 def test_validate_camera_projection_noops_for_pinhole(ideal_projection):
@@ -120,6 +149,16 @@ def test_validate_camera_projection_rejects_non_finite_ftheta_component_value(
     components[field][index] = bad_value
     projection = _build_projection(components)
     with pytest.raises(ValueError, match=f"{field}\\["):
+        validate_camera_projection(projection)
+
+
+@pytest.mark.parametrize("focal_length", [(0.0, 100.0), (100.0, -1.0)])
+def test_validate_camera_projection_rejects_non_positive_fisheye_focal_length(
+    sensor_device, focal_length
+):
+    """Verify that invalid fisheye focal lengths are rejected before CUDA division."""
+    projection = _build_fisheye_projection(sensor_device, focal_length)
+    with pytest.raises(ValueError, match=r"focal_length\[[01]\] must be > 0"):
         validate_camera_projection(projection)
 
 

@@ -35,6 +35,7 @@ from .types import (
     ExternalDistortion,
     FThetaProjection,
     NoExternalDistortion,
+    OpenCVFisheyeProjection,
     OpenCVPinholeProjection,
     REGISTERED_CAMERA_PROJECTION_NAMES,
     REGISTERED_DISTORTION_NAMES,
@@ -290,6 +291,71 @@ def _projection_on_device_ftheta(
     return projected, tensors
 
 
+def _projection_tensors_fisheye(
+    projection: OpenCVFisheyeProjection,
+    device: torch.device,
+    dtype: torch.dtype,
+    allow_device_transfer: bool,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Extract and transfer the four fisheye intrinsic tensors to the target device.
+
+    Args:
+        projection: OpenCV fisheye projection parameters.
+        device: Target CUDA device.
+        dtype: Target floating-point dtype.
+        allow_device_transfer: Passed through to ``_to_dev``; see its docstring.
+
+    Returns:
+        Four-tuple of (principal_point, focal_length, forward_poly,
+        approx_backward_factor) on the target device.
+    """
+    return (
+        _to_dev(projection.principal_point, device, dtype, allow_device_transfer),
+        _to_dev(projection.focal_length, device, dtype, allow_device_transfer),
+        _to_dev(projection.forward_poly, device, dtype, allow_device_transfer),
+        _to_dev(
+            projection.approx_backward_factor, device, dtype, allow_device_transfer
+        ),
+    )
+
+
+def _projection_on_device_fisheye(
+    projection: OpenCVFisheyeProjection,
+    device: torch.device,
+    dtype: torch.dtype,
+    allow_device_transfer: bool,
+    resolution: tuple[int, int] | None = None,
+) -> tuple[OpenCVFisheyeProjection, tuple[Tensor, Tensor, Tensor, Tensor]]:
+    """Build a device-local OpenCVFisheyeProjection and return its component tensors.
+
+    Args:
+        projection: OpenCV fisheye projection parameters whose tensors may be on CPU.
+        device: Target CUDA device.
+        dtype: Target floating-point dtype.
+        allow_device_transfer: Passed through to ``_to_dev``; see its docstring.
+        resolution: If provided, overrides ``projection.resolution`` on the returned
+            struct (useful when resolution is passed as a kernel argument separately).
+
+    Returns:
+        Tuple of (projection_on_device, (principal_point, focal_length,
+        forward_poly, approx_backward_factor)).
+    """
+    tensors = _projection_tensors_fisheye(
+        projection, device, dtype, allow_device_transfer
+    )
+    projected = OpenCVFisheyeProjection(
+        principal_point=tensors[0],
+        focal_length=tensors[1],
+        forward_poly=tensors[2],
+        approx_backward_factor=tensors[3],
+        resolution=projection.resolution if resolution is None else resolution,
+        newton_iterations=int(projection.newton_iterations),
+        max_angle=float(projection.max_angle),
+        min_2d_norm=float(projection.min_2d_norm),
+    )
+    return projected, tensors
+
+
 def _projection_on_device_any(
     projection: CameraProjection,
     device: torch.device,
@@ -303,11 +369,13 @@ def _projection_on_device_any(
     a tuple of component tensors in the order the autograd Function forwards
     expect (pinhole: 5-tuple ``focal_length, principal_point, radial_coeffs,
     tangential_coeffs, thin_prism_coeffs``; FTheta: 4-tuple
-    ``principal_point, fw_poly, bw_poly, A``).
+    ``principal_point, fw_poly, bw_poly, A``; fisheye: 4-tuple
+    ``principal_point, focal_length, forward_poly, approx_backward_factor``).
     """
     dispatch = {
         "OpenCVPinholeProjection": _projection_on_device,
         "FThetaProjection": _projection_on_device_ftheta,
+        "OpenCVFisheyeProjection": _projection_on_device_fisheye,
     }
     class_name = script_class_name(projection)
     try:
@@ -2898,6 +2966,1135 @@ class _ImagePointsToWorldRaysShutterPoseFThetaBivariateWindshield(
         )
 
 
+# =============================================================================
+# OpenCV-fisheye autograd Function classes (6 ops x 2 distortion variants).
+# Intrinsics are the 4-tuple (principal_point, focal_length, forward_poly,
+# approx_backward_factor). approx_backward_factor receives no gradient: it is
+# threaded as a positional arg, del'd in forward, and always returns None.
+# There is no A/Ainv matrix, so no grad-A consolidation.
+# =============================================================================
+
+
+class _CameraRaysToImagePointsFisheye(torch.autograd.Function):
+    """Autograd Function wrapping ``camera_rays_to_image_points_opencv_fisheye_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        camera_rays: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        del principal_point, focal_length, forward_poly, approx_backward_factor
+        (
+            image_points,
+            valid_flags,
+            scratch,
+        ) = torch.ops.gsplat_sensors.camera_rays_to_image_points_opencv_fisheye_no_external(
+            projection, external_distortion, camera_rays
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(camera_rays, scratch)
+        ctx.mark_non_differentiable(valid_flags)
+        return image_points, valid_flags
+
+    @staticmethod
+    def backward(
+        ctx, grad_image_points: Tensor | None, grad_valid_flags: Tensor | None
+    ):
+        del grad_valid_flags
+        camera_rays, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((camera_rays.shape[0], 2), camera_rays)
+        grads = torch.ops.gsplat_sensors.camera_rays_to_image_points_opencv_fisheye_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            camera_rays,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[5],
+        )
+        grad_camera_rays, grad_pp, grad_focal, grad_fw = grads
+        return (
+            grad_camera_rays if ctx.needs_input_grad[0] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[3] else None,
+            grad_focal if ctx.needs_input_grad[4] else None,
+            grad_fw if ctx.needs_input_grad[5] else None,
+            None,
+        )
+
+
+class _ImagePointsToCameraRaysFisheye(torch.autograd.Function):
+    """Autograd Function wrapping ``image_points_to_camera_rays_opencv_fisheye_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+    ) -> Tensor:
+        del principal_point, focal_length, forward_poly, approx_backward_factor
+        (
+            camera_rays,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_camera_rays_opencv_fisheye_no_external(
+            projection, external_distortion, image_points
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, scratch)
+        return camera_rays
+
+    @staticmethod
+    def backward(ctx, grad_camera_rays: Tensor | None):
+        image_points, scratch = ctx.saved_tensors
+        if grad_camera_rays is None:
+            grad_camera_rays = _zero_like((image_points.shape[0], 3), image_points)
+        grads = torch.ops.gsplat_sensors.image_points_to_camera_rays_opencv_fisheye_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            grad_camera_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[5],
+        )
+        grad_image_points, grad_pp, grad_focal, grad_fw = grads
+        return (
+            grad_image_points if ctx.needs_input_grad[0] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[3] else None,
+            grad_focal if ctx.needs_input_grad[4] else None,
+            grad_fw if ctx.needs_input_grad[5] else None,
+            None,
+        )
+
+
+class _CameraRaysToImagePointsFisheyeBivariateWindshield(torch.autograd.Function):
+    """Autograd Function wrapping ``camera_rays_to_image_points_opencv_fisheye_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        camera_rays: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        del distortion_coeffs, principal_point, focal_length
+        del forward_poly, approx_backward_factor
+        (
+            image_points,
+            valid_flags,
+            scratch,
+        ) = torch.ops.gsplat_sensors.camera_rays_to_image_points_opencv_fisheye_bivariate_windshield(
+            projection, external_distortion, camera_rays
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(camera_rays, scratch)
+        ctx.mark_non_differentiable(valid_flags)
+        return image_points, valid_flags
+
+    @staticmethod
+    def backward(
+        ctx, grad_image_points: Tensor | None, grad_valid_flags: Tensor | None
+    ):
+        del grad_valid_flags
+        camera_rays, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((camera_rays.shape[0], 2), camera_rays)
+        grads = torch.ops.gsplat_sensors.camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            camera_rays,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[5],
+            ctx.needs_input_grad[6],
+            ctx.needs_input_grad[3],
+        )
+        grad_camera_rays, grad_pp, grad_focal, grad_fw, grad_distortion = grads
+        return (
+            grad_camera_rays if ctx.needs_input_grad[0] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[3] else None,
+            grad_pp if ctx.needs_input_grad[4] else None,
+            grad_focal if ctx.needs_input_grad[5] else None,
+            grad_fw if ctx.needs_input_grad[6] else None,
+            None,
+        )
+
+
+class _ImagePointsToCameraRaysFisheyeBivariateWindshield(torch.autograd.Function):
+    """Autograd Function wrapping ``image_points_to_camera_rays_opencv_fisheye_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+    ) -> Tensor:
+        del distortion_coeffs, principal_point, focal_length
+        del forward_poly, approx_backward_factor
+        (
+            camera_rays,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_camera_rays_opencv_fisheye_bivariate_windshield(
+            projection, external_distortion, image_points
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, scratch)
+        return camera_rays
+
+    @staticmethod
+    def backward(ctx, grad_camera_rays: Tensor | None):
+        image_points, scratch = ctx.saved_tensors
+        if grad_camera_rays is None:
+            grad_camera_rays = _zero_like((image_points.shape[0], 3), image_points)
+        grads = torch.ops.gsplat_sensors.image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            grad_camera_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[5],
+            ctx.needs_input_grad[6],
+            ctx.needs_input_grad[3],
+        )
+        grad_image_points, grad_pp, grad_focal, grad_fw, grad_distortion = grads
+        return (
+            grad_image_points if ctx.needs_input_grad[0] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[3] else None,
+            grad_pp if ctx.needs_input_grad[4] else None,
+            grad_focal if ctx.needs_input_grad[5] else None,
+            grad_fw if ctx.needs_input_grad[6] else None,
+            None,
+        )
+
+
+class _ProjectWorldPointsMeanPoseFisheye(torch.autograd.Function):
+    """Autograd Function wrapping ``project_world_points_mean_pose_opencv_fisheye_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        world_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        del principal_point, focal_length, forward_poly, approx_backward_factor
+        (
+            image_points,
+            valid_flags,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_opencv_fisheye_no_external(
+            projection,
+            external_distortion,
+            world_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(world_points, start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(valid_flags, timestamps_us)
+        return image_points, valid_flags, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_image_points: Tensor | None,
+        grad_valid_flags: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_valid_flags, grad_timestamps_us, grad_pose_t, grad_pose_r
+        world_points, start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((world_points.shape[0], 2), world_points)
+        grads = torch.ops.gsplat_sensors.project_world_points_mean_pose_opencv_fisheye_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            world_points,
+            start_rotation,
+            end_rotation,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[7],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+        )
+        (
+            grad_world,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_focal,
+            grad_fw,
+        ) = grads
+        return (
+            grad_world if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[7] else None,
+            grad_focal if ctx.needs_input_grad[8] else None,
+            grad_fw if ctx.needs_input_grad[9] else None,
+            None,
+            None,
+            None,
+        )
+
+
+class _ProjectWorldPointsMeanPoseFisheyeBivariateWindshield(torch.autograd.Function):
+    """Autograd Function wrapping ``project_world_points_mean_pose_opencv_fisheye_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        world_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        del distortion_coeffs, principal_point, focal_length
+        del forward_poly, approx_backward_factor
+        (
+            image_points,
+            valid_flags,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_opencv_fisheye_bivariate_windshield(
+            projection,
+            external_distortion,
+            world_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(world_points, start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(valid_flags, timestamps_us)
+        return image_points, valid_flags, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_image_points: Tensor | None,
+        grad_valid_flags: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_valid_flags, grad_timestamps_us, grad_pose_t, grad_pose_r
+        world_points, start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((world_points.shape[0], 2), world_points)
+        grads = torch.ops.gsplat_sensors.project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            world_points,
+            start_rotation,
+            end_rotation,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            ctx.needs_input_grad[10],
+            ctx.needs_input_grad[7],
+        )
+        (
+            grad_world,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_focal,
+            grad_fw,
+            grad_distortion,
+        ) = grads
+        return (
+            grad_world if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[7] else None,
+            grad_pp if ctx.needs_input_grad[8] else None,
+            grad_focal if ctx.needs_input_grad[9] else None,
+            grad_fw if ctx.needs_input_grad[10] else None,
+            None,
+            None,
+            None,
+        )
+
+
+class _ImagePointsToWorldRaysStaticPoseFisheye(torch.autograd.Function):
+    """Autograd Function wrapping ``image_points_to_world_rays_static_pose_opencv_fisheye_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        translations: Tensor,
+        rotations: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+        timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        del principal_point, focal_length, forward_poly, approx_backward_factor
+        (
+            world_rays,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_world_rays_static_pose_opencv_fisheye_no_external(
+            projection,
+            external_distortion,
+            image_points,
+            translations,
+            rotations,
+            int(timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, translations, rotations, scratch)
+        ctx.mark_non_differentiable(timestamps_us)
+        return world_rays, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_world_rays: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_timestamps_us, grad_pose_t, grad_pose_r
+        image_points, translations, rotations, scratch = ctx.saved_tensors
+        if grad_world_rays is None:
+            grad_world_rays = _zero_like((image_points.shape[0], 6), image_points)
+        grads = torch.ops.gsplat_sensors.image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            translations,
+            rotations,
+            grad_world_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[5],
+            ctx.needs_input_grad[6],
+            ctx.needs_input_grad[7],
+        )
+        grad_pts, grad_t, grad_r, grad_pp, grad_focal, grad_fw = grads
+        return (
+            grad_pts if ctx.needs_input_grad[0] else None,
+            grad_t if ctx.needs_input_grad[1] else None,
+            grad_r if ctx.needs_input_grad[2] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[5] else None,
+            grad_focal if ctx.needs_input_grad[6] else None,
+            grad_fw if ctx.needs_input_grad[7] else None,
+            None,
+            None,
+        )
+
+
+class _ImagePointsToWorldRaysStaticPoseFisheyeBivariateWindshield(
+    torch.autograd.Function
+):
+    """Autograd Function wrapping ``image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        translations: Tensor,
+        rotations: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+        timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        del distortion_coeffs, principal_point, focal_length
+        del forward_poly, approx_backward_factor
+        (
+            world_rays,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield(
+            projection,
+            external_distortion,
+            image_points,
+            translations,
+            rotations,
+            int(timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, translations, rotations, scratch)
+        ctx.mark_non_differentiable(timestamps_us)
+        return world_rays, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_world_rays: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_timestamps_us, grad_pose_t, grad_pose_r
+        image_points, translations, rotations, scratch = ctx.saved_tensors
+        if grad_world_rays is None:
+            grad_world_rays = _zero_like((image_points.shape[0], 6), image_points)
+        grads = torch.ops.gsplat_sensors.image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            translations,
+            rotations,
+            grad_world_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[6],
+            ctx.needs_input_grad[7],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[5],
+        )
+        (
+            grad_pts,
+            grad_t,
+            grad_r,
+            grad_pp,
+            grad_focal,
+            grad_fw,
+            grad_distortion,
+        ) = grads
+        return (
+            grad_pts if ctx.needs_input_grad[0] else None,
+            grad_t if ctx.needs_input_grad[1] else None,
+            grad_r if ctx.needs_input_grad[2] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[5] else None,
+            grad_pp if ctx.needs_input_grad[6] else None,
+            grad_focal if ctx.needs_input_grad[7] else None,
+            grad_fw if ctx.needs_input_grad[8] else None,
+            None,
+            None,
+        )
+
+
+class _ProjectWorldPointsShutterPoseFisheye(torch.autograd.Function):
+    """Autograd Function wrapping ``project_world_points_shutter_pose_opencv_fisheye_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        world_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+        width: int,
+        height: int,
+        shutter_type: int,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+        max_iterations: int,
+        stop_mean_error_px: float,
+        stop_delta_mean_error_px: float,
+        initial_relative_time: float,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        del principal_point, focal_length, forward_poly, approx_backward_factor
+        (
+            image_points,
+            valid_flags,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_opencv_fisheye_no_external(
+            projection,
+            external_distortion,
+            world_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(width),
+            int(height),
+            int(shutter_type),
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+            int(max_iterations),
+            float(stop_mean_error_px),
+            float(stop_delta_mean_error_px),
+            float(initial_relative_time),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(valid_flags, timestamps_us)
+        return image_points, valid_flags, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_image_points: Tensor | None,
+        grad_valid_flags: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_valid_flags, grad_timestamps_us, grad_pose_t, grad_pose_r
+        start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((scratch.shape[0], 2), scratch)
+        grads = torch.ops.gsplat_sensors.project_world_points_shutter_pose_opencv_fisheye_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            start_rotation,
+            end_rotation,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[7],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+        )
+        (
+            grad_world,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_focal,
+            grad_fw,
+        ) = grads
+        return (
+            grad_world if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[7] else None,
+            grad_focal if ctx.needs_input_grad[8] else None,
+            grad_fw if ctx.needs_input_grad[9] else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _ProjectWorldPointsShutterPoseFisheyeBivariateWindshield(torch.autograd.Function):
+    """Autograd Function wrapping ``project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        world_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+        width: int,
+        height: int,
+        shutter_type: int,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+        max_iterations: int,
+        stop_mean_error_px: float,
+        stop_delta_mean_error_px: float,
+        initial_relative_time: float,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        del distortion_coeffs, principal_point, focal_length
+        del forward_poly, approx_backward_factor
+        (
+            image_points,
+            valid_flags,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield(
+            projection,
+            external_distortion,
+            world_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(width),
+            int(height),
+            int(shutter_type),
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+            int(max_iterations),
+            float(stop_mean_error_px),
+            float(stop_delta_mean_error_px),
+            float(initial_relative_time),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(valid_flags, timestamps_us)
+        return image_points, valid_flags, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_image_points: Tensor | None,
+        grad_valid_flags: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_valid_flags, grad_timestamps_us, grad_pose_t, grad_pose_r
+        start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_image_points is None:
+            grad_image_points = _zero_like((scratch.shape[0], 2), scratch)
+        grads = torch.ops.gsplat_sensors.project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            start_rotation,
+            end_rotation,
+            grad_image_points.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            ctx.needs_input_grad[10],
+            ctx.needs_input_grad[7],
+        )
+        (
+            grad_world,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_focal,
+            grad_fw,
+            grad_distortion,
+        ) = grads
+        return (
+            grad_world if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[7] else None,
+            grad_pp if ctx.needs_input_grad[8] else None,
+            grad_focal if ctx.needs_input_grad[9] else None,
+            grad_fw if ctx.needs_input_grad[10] else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _ImagePointsToWorldRaysShutterPoseFisheye(torch.autograd.Function):
+    """Autograd Function wrapping ``image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: NoExternalDistortion,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+        width: int,
+        height: int,
+        shutter_type: int,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        del principal_point, focal_length, forward_poly, approx_backward_factor
+        (
+            world_rays,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external(
+            projection,
+            external_distortion,
+            image_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(width),
+            int(height),
+            int(shutter_type),
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(timestamps_us)
+        return world_rays, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_world_rays: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_timestamps_us, grad_pose_t, grad_pose_r
+        image_points, start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_world_rays is None:
+            grad_world_rays = _zero_like((image_points.shape[0], 6), image_points)
+        grads = torch.ops.gsplat_sensors.image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            start_rotation,
+            end_rotation,
+            grad_world_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[7],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+        )
+        (
+            grad_points,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_focal,
+            grad_fw,
+        ) = grads
+        return (
+            grad_points if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_pp if ctx.needs_input_grad[7] else None,
+            grad_focal if ctx.needs_input_grad[8] else None,
+            grad_fw if ctx.needs_input_grad[9] else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _ImagePointsToWorldRaysShutterPoseFisheyeBivariateWindshield(
+    torch.autograd.Function
+):
+    """Autograd Function wrapping ``image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield`` CUDA forward + backward kernels."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        image_points: Tensor,
+        start_translation: Tensor,
+        start_rotation: Tensor,
+        end_translation: Tensor,
+        end_rotation: Tensor,
+        projection: OpenCVFisheyeProjection,
+        external_distortion: BivariateWindshieldDistortion,
+        distortion_coeffs: Tensor,
+        principal_point: Tensor,
+        focal_length: Tensor,
+        forward_poly: Tensor,
+        approx_backward_factor: Tensor,
+        width: int,
+        height: int,
+        shutter_type: int,
+        start_timestamp_us: int,
+        end_timestamp_us: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        del distortion_coeffs, principal_point, focal_length
+        del forward_poly, approx_backward_factor
+        (
+            world_rays,
+            timestamps_us,
+            pose_t,
+            pose_r,
+            scratch,
+        ) = torch.ops.gsplat_sensors.image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield(
+            projection,
+            external_distortion,
+            image_points,
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            int(width),
+            int(height),
+            int(shutter_type),
+            int(start_timestamp_us),
+            int(end_timestamp_us),
+        )
+        ctx.projection = projection
+        ctx.external_distortion = external_distortion
+        ctx.save_for_backward(image_points, start_rotation, end_rotation, scratch)
+        ctx.mark_non_differentiable(timestamps_us)
+        return world_rays, timestamps_us, pose_t, pose_r
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_world_rays: Tensor | None,
+        grad_timestamps_us: Tensor | None,
+        grad_pose_t: Tensor | None,
+        grad_pose_r: Tensor | None,
+    ):
+        del grad_timestamps_us, grad_pose_t, grad_pose_r
+        image_points, start_rotation, end_rotation, scratch = ctx.saved_tensors
+        if grad_world_rays is None:
+            grad_world_rays = _zero_like((image_points.shape[0], 6), image_points)
+        grads = torch.ops.gsplat_sensors.image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward(
+            ctx.projection,
+            ctx.external_distortion,
+            image_points,
+            start_rotation,
+            end_rotation,
+            grad_world_rays.contiguous(),
+            scratch,
+            ctx.needs_input_grad[0],
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[3],
+            ctx.needs_input_grad[2],
+            ctx.needs_input_grad[4],
+            ctx.needs_input_grad[8],
+            ctx.needs_input_grad[9],
+            ctx.needs_input_grad[10],
+            ctx.needs_input_grad[7],
+        )
+        (
+            grad_points,
+            grad_start_t,
+            grad_end_t,
+            grad_start_r,
+            grad_end_r,
+            grad_pp,
+            grad_focal,
+            grad_fw,
+            grad_distortion,
+        ) = grads
+        return (
+            grad_points if ctx.needs_input_grad[0] else None,
+            grad_start_t if ctx.needs_input_grad[1] else None,
+            grad_start_r if ctx.needs_input_grad[2] else None,
+            grad_end_t if ctx.needs_input_grad[3] else None,
+            grad_end_r if ctx.needs_input_grad[4] else None,
+            None,
+            None,
+            grad_distortion if ctx.needs_input_grad[7] else None,
+            grad_pp if ctx.needs_input_grad[8] else None,
+            grad_focal if ctx.needs_input_grad[9] else None,
+            grad_fw if ctx.needs_input_grad[10] else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+# op_name -> (no_external_fn, bivariate_fn)
+_FISHEYE_OP_TABLE = {
+    "camera_rays_to_image_points": (
+        _CameraRaysToImagePointsFisheye,
+        _CameraRaysToImagePointsFisheyeBivariateWindshield,
+    ),
+    "image_points_to_camera_rays": (
+        _ImagePointsToCameraRaysFisheye,
+        _ImagePointsToCameraRaysFisheyeBivariateWindshield,
+    ),
+    "project_world_points_mean_pose": (
+        _ProjectWorldPointsMeanPoseFisheye,
+        _ProjectWorldPointsMeanPoseFisheyeBivariateWindshield,
+    ),
+    "image_points_to_world_rays_static_pose": (
+        _ImagePointsToWorldRaysStaticPoseFisheye,
+        _ImagePointsToWorldRaysStaticPoseFisheyeBivariateWindshield,
+    ),
+    "project_world_points_shutter_pose": (
+        _ProjectWorldPointsShutterPoseFisheye,
+        _ProjectWorldPointsShutterPoseFisheyeBivariateWindshield,
+    ),
+    "image_points_to_world_rays_shutter_pose": (
+        _ImagePointsToWorldRaysShutterPoseFisheye,
+        _ImagePointsToWorldRaysShutterPoseFisheyeBivariateWindshield,
+    ),
+}
+
+
 # op_name -> (no_external_fn, bivariate_fn)
 _FTHETA_OP_TABLE = {
     "camera_rays_to_image_points": (
@@ -2947,6 +4144,8 @@ def _select_op(
         no_external, bivariate = pinhole_no_external, pinhole_bivariate
     elif projection_class == "FThetaProjection":
         no_external, bivariate = _FTHETA_OP_TABLE[op_name]
+    elif projection_class == "OpenCVFisheyeProjection":
+        no_external, bivariate = _FISHEYE_OP_TABLE[op_name]
     else:
         raise TypeError(f"Unknown camera projection class: {projection_class}")
     return _select_camera_op(
@@ -2972,7 +4171,7 @@ def camera_rays_to_image_points(
 
     Args:
         camera_rays: (N, 3) normalized ray directions in camera frame.
-        projection: OpenCV pinhole projection parameters.
+        projection: Registered camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion).
         allow_device_transfer: If False (default), raises if any tensor needs a
@@ -3020,7 +4219,7 @@ def image_points_to_camera_rays(
 
     Args:
         image_points: (N, 2) pixel coordinates.
-        projection: OpenCV pinhole projection parameters.
+        projection: Registered camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion).
         allow_device_transfer: If False (default), raises if any tensor needs a
@@ -3324,7 +4523,7 @@ def project_world_points_mean_pose(
 
     Args:
         world_points: (N, 3) world coordinates.
-        projection: OpenCV pinhole projection parameters.
+        projection: Registered camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion).
         dynamic_pose: Time-varying dynamic pose whose midpoint is used for projection.
@@ -3419,7 +4618,7 @@ def project_world_points_shutter_pose(
 
     Args:
         world_points: (N, 3) world coordinates.
-        projection: OpenCV pinhole projection parameters.
+        projection: Registered camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion).
         resolution: (width, height) in pixels.
@@ -3525,7 +4724,7 @@ def image_points_to_world_rays_static_pose(
 
     Args:
         image_points: (N, 2) pixel coordinates.
-        projection: OpenCV pinhole projection parameters.
+        projection: Registered camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion).
         pose: Static camera pose (translation + rotation).
@@ -3605,7 +4804,7 @@ def _image_points_to_world_rays_shutter_pose_impl(
 
     Args:
         pts: (N, 2) pixel coordinates already on the target device.
-        projection: OpenCV pinhole projection parameters.
+        projection: Registered camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion).
         resolution: (width, height) in pixels.
@@ -3696,7 +4895,7 @@ def image_points_to_world_rays_shutter_pose(
 
     Args:
         image_points: (N, 2) pixel coordinates.
-        projection: OpenCV pinhole projection parameters.
+        projection: Registered camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion).
         resolution: (width, height) in pixels.
@@ -3762,7 +4961,7 @@ def pixel_grid_to_world_rays_shutter_pose(
     and BivariateWindshieldDistortion variants.
 
     Args:
-        projection: OpenCV pinhole projection parameters.
+        projection: Registered camera projection parameters.
         external_distortion: External distortion parameters (NoExternalDistortion or
             BivariateWindshieldDistortion).
         resolution: (width, height) in pixels.

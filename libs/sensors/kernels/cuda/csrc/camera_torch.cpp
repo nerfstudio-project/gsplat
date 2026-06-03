@@ -65,6 +65,10 @@ void check_cuda_float_contiguous(const at::Tensor& tensor, const char* name) {
     TORCH_CHECK(tensor.is_contiguous(), name, " must be contiguous");
 }
 
+void check_tensor_device(const at::Tensor& tensor, const at::Device& device, const char* name) {
+    TORCH_CHECK(tensor.device() == device, name, " device must match inputs");
+}
+
 void check_matrix(const at::Tensor& tensor, int64_t cols, const char* name) {
     TORCH_CHECK(tensor.dim() == 2 && tensor.size(1) == cols, name, " must be (N, ", cols, ")");
 }
@@ -1974,6 +1978,134 @@ void check_ftheta_projection(const c10::intrusive_ptr<FThetaProjection>& project
     // gsplat_sensors.kernels.cameras.validate_camera_projection.
 }
 
+// =============================================================================
+// OpenCVFisheyeProjection — class definition, validators, and transform helper
+// =============================================================================
+
+OpenCVFisheyeProjection::OpenCVFisheyeProjection(
+    at::Tensor principal_point_,
+    at::Tensor focal_length_,
+    at::Tensor forward_poly_,
+    at::Tensor approx_backward_factor_,
+    std::array<int64_t, 2> resolution_,
+    int64_t newton_iterations_,
+    double max_angle_,
+    double min_2d_norm_)
+    : principal_point(std::move(principal_point_)),
+      focal_length(std::move(focal_length_)),
+      forward_poly(std::move(forward_poly_)),
+      approx_backward_factor(std::move(approx_backward_factor_)),
+      resolution(resolution_),
+      newton_iterations(newton_iterations_),
+      max_angle(max_angle_),
+      min_2d_norm(min_2d_norm_) {}
+
+OpenCVFisheyeProjection_KernelParameters OpenCVFisheyeProjection::to_kernel_params() const {
+    OpenCVFisheyeProjection_KernelParameters params{};
+    params.principal_point = principal_point.const_data_ptr<float>();
+    params.focal_length = focal_length.const_data_ptr<float>();
+    params.forward_poly = forward_poly.const_data_ptr<float>();
+    params.approx_backward_factor = approx_backward_factor.const_data_ptr<float>();
+    params.width = resolution[0];
+    params.height = resolution[1];
+    params.newton_iterations = newton_iterations;
+    params.max_angle = static_cast<float>(max_angle);
+    params.min_2d_norm = static_cast<float>(min_2d_norm);
+    return params;
+}
+
+c10::intrusive_ptr<OpenCVFisheyeProjection> OpenCVFisheyeProjection::transform(
+    std::tuple<double, double> scale,
+    std::tuple<double, double> offset,
+    std::tuple<int64_t, int64_t> new_resolution) const {
+    auto opts = principal_point.options();
+    double scale_u = std::get<0>(scale);
+    double scale_v = std::get<1>(scale);
+
+    auto scale_t = at::tensor({scale_u, scale_v}, at::kDouble).to(opts);
+    auto offset_t =
+        at::tensor({std::get<0>(offset), std::get<1>(offset)}, at::kDouble).to(opts);
+    auto half_t = at::tensor({0.5, 0.5}, at::kDouble).to(opts);
+    auto new_principal_point =
+        (principal_point + half_t) * scale_t - half_t - offset_t;
+
+    auto new_focal_length = focal_length * scale_t;
+
+    // approx_backward_factor is the Newton initial-guess factor derived from the
+    // intrinsics: ab = max_angle / max(width/(2*fx), height/(2*fy)). It is not an
+    // independent intrinsic, so recompute it from the new focal rather than
+    // scaling the stored value.
+    int64_t new_w = std::get<0>(new_resolution);
+    int64_t new_h = std::get<1>(new_resolution);
+    auto res_t = at::tensor(
+                     {static_cast<double>(new_w), static_cast<double>(new_h)},
+                     at::kDouble)
+                     .to(opts);
+    auto dist = res_t / 2.0 / new_focal_length;
+    auto new_ab = (at::full({1}, max_angle, opts) / at::max(dist)).reshape({1});
+
+    auto ptr = c10::make_intrusive<OpenCVFisheyeProjection>(
+        new_principal_point,
+        new_focal_length,
+        forward_poly.clone(),
+        new_ab,
+        std::array<int64_t, 2>{new_w, new_h},
+        newton_iterations,
+        max_angle,
+        min_2d_norm);
+    gsplat_sensors::check_opencv_fisheye_projection(ptr);
+    return ptr;
+}
+
+void check_opencv_fisheye_projection(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection) {
+    TORCH_CHECK(projection != nullptr, "projection must be OpenCVFisheyeProjection");
+    check_component_shape(projection->principal_point, {2}, "principal_point");
+    check_component_shape(projection->focal_length, {2}, "focal_length");
+    check_component_shape(
+        projection->forward_poly, {kFisheyeForwardPolyTerms}, "forward_poly");
+    check_component_shape(
+        projection->approx_backward_factor, {1}, "approx_backward_factor");
+    // The loader admits fp32-only intrinsics; reject any other dtype up front so
+    // a stray fp64 surface never reaches the kernel's const_data_ptr<float>().
+    // (The FTheta/pinhole validators instead let const_data_ptr<float>() throw;
+    // fisheye validates explicitly to surface the error at construction.)
+    TORCH_CHECK(
+        projection->principal_point.scalar_type() == at::kFloat,
+        "principal_point must be float32");
+    TORCH_CHECK(
+        projection->focal_length.scalar_type() == at::kFloat,
+        "focal_length must be float32");
+    TORCH_CHECK(
+        projection->forward_poly.scalar_type() == at::kFloat,
+        "forward_poly must be float32");
+    TORCH_CHECK(
+        projection->approx_backward_factor.scalar_type() == at::kFloat,
+        "approx_backward_factor must be float32");
+    TORCH_CHECK(
+        projection->resolution[0] >= 0 && projection->resolution[1] >= 0,
+        "resolution must be non-negative");
+    TORCH_CHECK(
+        projection->newton_iterations >= 0
+            && projection->newton_iterations <= kFisheyeMaxNewtonIterations,
+        "newton_iterations must be in [0, ", kFisheyeMaxNewtonIterations, "]");
+    // max_angle in [0, pi]: theta = atan2(...) is bounded by pi, so anything
+    // larger has no geometric meaning. NaN and -inf are rejected by the lower
+    // bound (NaN >= 0.0 is false in IEEE-754); +inf is rejected by the upper
+    // bound, so the pair implies finiteness without an extra isfinite check.
+    TORCH_CHECK(
+        projection->max_angle >= 0.0 && projection->max_angle <= std::numbers::pi_v<double>,
+        "max_angle must be in [0, pi]");
+    // Strict positivity AND finiteness: the device path compares
+    // delta < min_2d_norm, so a serialized +inf would short-circuit every ray.
+    TORCH_CHECK(projection->min_2d_norm > 0.0, "min_2d_norm must be strictly positive");
+    TORCH_CHECK(
+        std::isfinite(projection->min_2d_norm), "min_2d_norm must be finite");
+    // A nonzero-focal invariant would require reading tensor entries (a
+    // CUDA->host sync); the loader does not require it, so it is not enforced
+    // here.
+}
+
 namespace {
 
 void check_ftheta_projection_for_device(
@@ -2041,6 +2173,71 @@ FThetaIntrinsicGradOutputs make_ftheta_intrinsic_grad_outputs(
         maybe_intrinsic_grad(need_A_grad, {4}, projection->A),
         maybe_intrinsic_grad(need_Ainv_grad, {4}, projection->A),
     };
+}
+
+// ---------------------------------------------------------------------------
+// OpenCV-fisheye host-wrapper helpers (mirror the ftheta helpers above). The
+// differentiable surface is principal_point, focal_length and forward_poly;
+// approx_backward_factor receives no gradient so it has no slot.
+// ---------------------------------------------------------------------------
+
+void check_opencv_fisheye_projection_for_device(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const at::Device& device) {
+    check_opencv_fisheye_projection(projection);
+    check_cuda_float_contiguous(projection->principal_point, "principal_point");
+    check_cuda_float_contiguous(projection->focal_length, "focal_length");
+    check_cuda_float_contiguous(projection->forward_poly, "forward_poly");
+    check_cuda_float_contiguous(
+        projection->approx_backward_factor, "approx_backward_factor");
+    TORCH_CHECK(
+        projection->principal_point.device() == device,
+        "principal_point device must match inputs");
+    TORCH_CHECK(
+        projection->focal_length.device() == device,
+        "focal_length device must match inputs");
+    TORCH_CHECK(
+        projection->forward_poly.device() == device,
+        "forward_poly device must match inputs");
+    TORCH_CHECK(
+        projection->approx_backward_factor.device() == device,
+        "approx_backward_factor device must match inputs");
+}
+
+bool needs_opencv_fisheye_projection_grad(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection) {
+    return projection->principal_point.requires_grad()
+        || projection->focal_length.requires_grad()
+        || projection->forward_poly.requires_grad();
+}
+
+struct OpenCVFisheyeIntrinsicGradOutputs {
+    at::Tensor principal_point;
+    at::Tensor focal_length;
+    at::Tensor forward_poly;
+};
+
+OpenCVFisheyeIntrinsicGradOutputs make_opencv_fisheye_intrinsic_grad_outputs(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad) {
+    return {
+        maybe_intrinsic_grad(need_principal_point_grad, {2}, projection->principal_point),
+        maybe_intrinsic_grad(need_focal_length_grad, {2}, projection->focal_length),
+        maybe_intrinsic_grad(
+            need_forward_poly_grad, {kFisheyeForwardPolyTerms}, projection->forward_poly),
+    };
+}
+
+OpenCVFisheyeProjection_KernelParameters opencv_fisheye_kernel_params_with_resolution(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    int64_t width,
+    int64_t height) {
+    auto params = projection->to_kernel_params();
+    params.width = width;
+    params.height = height;
+    return params;
 }
 
 } // namespace
@@ -3601,6 +3798,1511 @@ image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward(
         current_stream(pts));
     return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
             intr.principal_point, intr.fw_poly, intr.bw_poly, intr.A, intr.Ainv, grad_distortion};
+}
+
+// ===========================================================================
+// OpenCV-fisheye no_external host wrappers (D1/D2/D3/D5). Outputs and scratch
+// are allocated fp32 at the per-op strides (D1=8, D2=8, D3=14, D5=8); the
+// backward TORCH_CHECKs the scratch size before reading it.
+// ===========================================================================
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_opencv_fisheye_no_external(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& camera_rays) {
+    check_optional_distortion(external_distortion);
+    const auto& rays = camera_rays;
+    check_matrix(rays, 3, "camera_rays");
+    check_cuda_float_contiguous(rays, "camera_rays");
+    check_opencv_fisheye_projection_for_device(projection, rays.device());
+    auto guard = c10::cuda::CUDAGuard(rays.device());
+
+    auto image_points = at::empty({rays.size(0), 2}, rays.options());
+    auto valid_flags = at::empty({rays.size(0)}, rays.options().dtype(at::kBool));
+    const bool save_scratch =
+        rays.requires_grad() || needs_opencv_fisheye_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(rays.size(0), 8, rays)
+        : empty_scratch(rays.options());
+    camera_rays_to_image_points_opencv_fisheye_no_external_forward_launch(
+        rays.size(0),
+        projection->to_kernel_params(),
+        rays.data_ptr<float>(),
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(rays));
+    return {image_points, valid_flags, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_opencv_fisheye_no_external_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& camera_rays,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_camera_ray_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& rays = camera_rays;
+    const auto& grad = grad_image_points;
+    check_matrix(rays, 3, "camera_rays");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(grad.size(0) == rays.size(0), "grad_image_points batch must match camera_rays");
+    check_cuda_float_contiguous(rays, "camera_rays");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= rays.size(0) * 8,
+        "scratch too small for camera_rays_to_image_points_opencv_fisheye_no_external backward");
+    check_tensor_device(grad, rays.device(), "grad_image_points");
+    check_tensor_device(scratch, rays.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, rays.device());
+    auto guard = c10::cuda::CUDAGuard(rays.device());
+
+    auto grad_rays = need_camera_ray_grad ? at::empty_like(rays) : empty_scratch(rays.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    camera_rays_to_image_points_opencv_fisheye_no_external_backward_launch(
+        rays.size(0),
+        projection->to_kernel_params(),
+        rays.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_camera_ray_grad ? grad_rays.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        scratch.data_ptr<float>(),
+        current_stream(rays));
+    return {grad_rays, intr.principal_point, intr.focal_length, intr.forward_poly};
+}
+
+std::tuple<at::Tensor, at::Tensor>
+image_points_to_camera_rays_opencv_fisheye_no_external(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    check_matrix(pts, 2, "image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto camera_rays = at::empty({pts.size(0), 3}, pts.options());
+    const bool save_scratch =
+        pts.requires_grad() || needs_opencv_fisheye_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 8, pts)
+        : empty_scratch(pts.options());
+    image_points_to_camera_rays_opencv_fisheye_no_external_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        camera_rays.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {camera_rays, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_camera_rays_opencv_fisheye_no_external_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& grad_camera_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    const auto& grad = grad_camera_rays;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(grad, 3, "grad_camera_rays");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_camera_rays batch must match image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(grad, "grad_camera_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 8,
+        "scratch too small for image_points_to_camera_rays_opencv_fisheye_no_external backward");
+    check_tensor_device(grad, pts.device(), "grad_camera_rays");
+    check_tensor_device(scratch, pts.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    image_points_to_camera_rays_opencv_fisheye_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, intr.principal_point, intr.focal_length, intr.forward_poly};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_opencv_fisheye_no_external(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = world_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match world_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match world_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match world_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match world_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto image_points = at::empty({pts.size(0), 2}, pts.options());
+    auto valid_flags = at::empty({pts.size(0)}, pts.options().dtype(at::kBool));
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_opencv_fisheye_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 14, pts)
+        : empty_scratch(pts.options());
+    const auto mean_timestamp_us = static_cast<int64_t>(
+        static_cast<double>(start_timestamp_us)
+        + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us));
+    project_world_points_mean_pose_opencv_fisheye_no_external_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        mean_timestamp_us,
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {image_points, valid_flags, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_opencv_fisheye_no_external_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = world_points;
+    const auto& grad = grad_image_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_image_points batch must match world_points");
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 14,
+        "scratch too small for project_world_points_mean_pose_opencv_fisheye_no_external backward");
+    check_tensor_device(start_rotation, pts.device(), "start_rotation");
+    check_tensor_device(end_rotation, pts.device(), "end_rotation");
+    check_tensor_device(grad, pts.device(), "grad_image_points");
+    check_tensor_device(scratch, pts.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_world_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    project_world_points_mean_pose_opencv_fisheye_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_world_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.focal_length, intr.forward_poly};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_opencv_fisheye_no_external(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translations,
+    const at::Tensor& rotations,
+    int64_t timestamp_us) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    const auto& trans = translations;
+    const auto& rots = rotations;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(trans, 3, "translations");
+    check_matrix(rots, 4, "rotations");
+    TORCH_CHECK(
+        trans.size(0) == 1 && rots.size(0) == 1,
+        "static pose requires exactly one control pose");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(trans, "translations");
+    check_cuda_float_contiguous(rots, "rotations");
+    TORCH_CHECK(
+        trans.device() == pts.device() && rots.device() == pts.device(),
+        "pose tensors device must match image_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto world_rays = at::empty({pts.size(0), 6}, pts.options());
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad() || trans.requires_grad()
+        || rots.requires_grad() || needs_opencv_fisheye_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 8, pts)
+        : empty_scratch(pts.options());
+    image_points_to_world_rays_static_pose_opencv_fisheye_no_external_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        trans.data_ptr<float>(),
+        rots.data_ptr<float>(),
+        timestamp_us,
+        world_rays.data_ptr<float>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {world_rays, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translations,
+    const at::Tensor& rotations,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_translation_grad,
+    bool need_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    const auto& trans = translations;
+    const auto& rots = rotations;
+    const auto& grad = grad_world_rays;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(trans, 3, "translations");
+    check_matrix(rots, 4, "rotations");
+    check_matrix(grad, 6, "grad_world_rays");
+    TORCH_CHECK(
+        trans.size(0) == 1 && rots.size(0) == 1,
+        "static pose requires exactly one control pose");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_world_rays batch must match image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(trans, "translations");
+    check_cuda_float_contiguous(rots, "rotations");
+    check_cuda_float_contiguous(grad, "grad_world_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    check_tensor_device(trans, pts.device(), "translations");
+    check_tensor_device(rots, pts.device(), "rotations");
+    check_tensor_device(grad, pts.device(), "grad_world_rays");
+    check_tensor_device(scratch, pts.device(), "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 8,
+        "scratch too small for image_points_to_world_rays_static_pose_opencv_fisheye_no_external backward");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_trans = need_translation_grad ? at::zeros_like(trans) : empty_scratch(pts.options());
+    auto grad_rot = need_rotation_grad ? at::zeros_like(rots) : empty_scratch(pts.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        trans.data_ptr<float>(),
+        rots.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_translation_grad ? grad_trans.data_ptr<float>() : nullptr,
+        need_rotation_grad ? grad_rot.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_trans, grad_rot,
+            intr.principal_point, intr.focal_length, intr.forward_poly};
+}
+
+// ===========================================================================
+// OpenCV-fisheye bivariate-windshield host wrappers (D1/D2/D3/D5). Scratch
+// strides are D1=8, D2=12, D3=14, D5=12. The backward adds a
+// grad_distortion_coeffs output for the 21 active bivariate-coeff slots.
+// ===========================================================================
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_opencv_fisheye_bivariate_windshield(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& camera_rays) {
+    const auto& rays = camera_rays;
+    check_matrix(rays, 3, "camera_rays");
+    check_cuda_float_contiguous(rays, "camera_rays");
+    check_opencv_fisheye_projection_for_device(projection, rays.device());
+    check_bivariate_windshield_for_device(external_distortion, rays.device());
+    auto guard = c10::cuda::CUDAGuard(rays.device());
+
+    auto image_points = at::empty({rays.size(0), 2}, rays.options());
+    auto valid_flags = at::empty({rays.size(0)}, rays.options().dtype(at::kBool));
+    const bool save_scratch = rays.requires_grad()
+        || needs_opencv_fisheye_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(rays.size(0), 8, rays)
+        : empty_scratch(rays.options());
+    camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_forward_launch(
+        rays.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        rays.data_ptr<float>(),
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(rays));
+    return {image_points, valid_flags, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& camera_rays,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_camera_ray_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& rays = camera_rays;
+    const auto& grad = grad_image_points;
+    check_matrix(rays, 3, "camera_rays");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(grad.size(0) == rays.size(0), "grad_image_points batch must match camera_rays");
+    check_cuda_float_contiguous(rays, "camera_rays");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= rays.size(0) * 8,
+        "scratch too small for camera_rays_to_image_points_opencv_fisheye_bivariate_windshield backward");
+    check_tensor_device(grad, rays.device(), "grad_image_points");
+    check_tensor_device(scratch, rays.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, rays.device());
+    check_bivariate_windshield_for_device(external_distortion, rays.device());
+    auto guard = c10::cuda::CUDAGuard(rays.device());
+
+    auto grad_rays = need_camera_ray_grad ? at::empty_like(rays) : empty_scratch(rays.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward_launch(
+        rays.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        rays.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_camera_ray_grad ? grad_rays.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(rays));
+    return {grad_rays, intr.principal_point, intr.focal_length, intr.forward_poly, grad_distortion};
+}
+
+std::tuple<at::Tensor, at::Tensor>
+image_points_to_camera_rays_opencv_fisheye_bivariate_windshield(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points) {
+    const auto& pts = image_points;
+    check_matrix(pts, 2, "image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto camera_rays = at::empty({pts.size(0), 3}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || needs_opencv_fisheye_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 12, pts)
+        : empty_scratch(pts.options());
+    image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        camera_rays.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {camera_rays, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& grad_camera_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = image_points;
+    const auto& grad = grad_camera_rays;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(grad, 3, "grad_camera_rays");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_camera_rays batch must match image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(grad, "grad_camera_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 12,
+        "scratch too small for image_points_to_camera_rays_opencv_fisheye_bivariate_windshield backward");
+    check_tensor_device(grad, pts.device(), "grad_camera_rays");
+    check_tensor_device(scratch, pts.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, intr.principal_point, intr.focal_length, intr.forward_poly, grad_distortion};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_opencv_fisheye_bivariate_windshield(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us) {
+    const auto& pts = world_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match world_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match world_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match world_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match world_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto image_points = at::empty({pts.size(0), 2}, pts.options());
+    auto valid_flags = at::empty({pts.size(0)}, pts.options().dtype(at::kBool));
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_opencv_fisheye_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 14, pts)
+        : empty_scratch(pts.options());
+    const auto mean_timestamp_us = static_cast<int64_t>(
+        static_cast<double>(start_timestamp_us)
+        + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us));
+    project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        mean_timestamp_us,
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {image_points, valid_flags, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = world_points;
+    const auto& grad = grad_image_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 2, "grad_image_points");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_image_points batch must match world_points");
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 14,
+        "scratch too small for project_world_points_mean_pose_opencv_fisheye_bivariate_windshield backward");
+    check_tensor_device(start_rotation, pts.device(), "start_rotation");
+    check_tensor_device(end_rotation, pts.device(), "end_rotation");
+    check_tensor_device(grad, pts.device(), "grad_image_points");
+    check_tensor_device(scratch, pts.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_world_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_world_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.focal_length, intr.forward_poly, grad_distortion};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translations,
+    const at::Tensor& rotations,
+    int64_t timestamp_us) {
+    const auto& pts = image_points;
+    const auto& trans = translations;
+    const auto& rots = rotations;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(trans, 3, "translations");
+    check_matrix(rots, 4, "rotations");
+    TORCH_CHECK(
+        trans.size(0) == 1 && rots.size(0) == 1,
+        "static pose requires exactly one control pose");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(trans, "translations");
+    check_cuda_float_contiguous(rots, "rotations");
+    TORCH_CHECK(
+        trans.device() == pts.device() && rots.device() == pts.device(),
+        "pose tensors device must match image_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto world_rays = at::empty({pts.size(0), 6}, pts.options());
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad() || trans.requires_grad()
+        || rots.requires_grad() || needs_opencv_fisheye_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 12, pts)
+        : empty_scratch(pts.options());
+    image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_forward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        trans.data_ptr<float>(),
+        rots.data_ptr<float>(),
+        timestamp_us,
+        world_rays.data_ptr<float>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {world_rays, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& translations,
+    const at::Tensor& rotations,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_translation_grad,
+    bool need_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = image_points;
+    const auto& trans = translations;
+    const auto& rots = rotations;
+    const auto& grad = grad_world_rays;
+    check_matrix(pts, 2, "image_points");
+    check_matrix(trans, 3, "translations");
+    check_matrix(rots, 4, "rotations");
+    check_matrix(grad, 6, "grad_world_rays");
+    TORCH_CHECK(
+        trans.size(0) == 1 && rots.size(0) == 1,
+        "static pose requires exactly one control pose");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_world_rays batch must match image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(trans, "translations");
+    check_cuda_float_contiguous(rots, "rotations");
+    check_cuda_float_contiguous(grad, "grad_world_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 12,
+        "scratch too small for image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield backward");
+    check_tensor_device(trans, pts.device(), "translations");
+    check_tensor_device(rots, pts.device(), "rotations");
+    check_tensor_device(grad, pts.device(), "grad_world_rays");
+    check_tensor_device(scratch, pts.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_trans = need_translation_grad ? at::zeros_like(trans) : empty_scratch(pts.options());
+    auto grad_rot = need_rotation_grad ? at::zeros_like(rots) : empty_scratch(pts.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        trans.data_ptr<float>(),
+        rots.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_translation_grad ? grad_trans.data_ptr<float>() : nullptr,
+        need_rotation_grad ? grad_rot.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_trans, grad_rot,
+            intr.principal_point, intr.focal_length, intr.forward_poly, grad_distortion};
+}
+
+// =============================================================================
+// OpenCV-fisheye shutter-pose host wrappers (D4/D6, both distortions).
+//   D4 projects world points under a rolling shutter (alpha-convergence loop in
+//   the forward, ONE differentiable step in the backward). D6 lifts a
+//   backprojected ray into world space at a single shutter alpha. Backward
+//   guards mirror the matching forward (shape/contiguity/device/scratch budget),
+//   re-validating shutter_type-independent inputs since autograd may substitute
+//   tensors. D4 scratch stride 16 (both distortions); D6 stride 12 (no_external)
+//   / 16 (bivariate).
+// =============================================================================
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_opencv_fisheye_no_external(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    double stop_mean_error_px,
+    double stop_delta_mean_error_px,
+    double initial_relative_time) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = world_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    TORCH_CHECK(
+        width > 0 && height > 0,
+        "resolution dimensions must be positive for shutter-pose ops");
+    check_shutter_type(shutter_type);
+    check_max_iterations(max_iterations);
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match world_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match world_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match world_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match world_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto image_points = at::empty({pts.size(0), 2}, pts.options());
+    auto valid_flags = at::empty({pts.size(0)}, pts.options().dtype(at::kBool));
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_opencv_fisheye_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 16, pts)
+        : empty_scratch(pts.options());
+    project_world_points_shutter_pose_opencv_fisheye_no_external_forward_launch(
+        pts.size(0),
+        opencv_fisheye_kernel_params_with_resolution(projection, width, height),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        max_iterations,
+        static_cast<float>(stop_mean_error_px),
+        static_cast<float>(stop_delta_mean_error_px),
+        static_cast<float>(initial_relative_time),
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {image_points, valid_flags, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_opencv_fisheye_no_external_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& grad = grad_image_points;
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 2, "grad_image_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= grad.size(0) * 16,
+        "scratch too small for project_world_points_shutter_pose_opencv_fisheye_no_external backward");
+    check_tensor_device(start_rotation, grad.device(), "start_rotation");
+    check_tensor_device(end_rotation, grad.device(), "end_rotation");
+    check_tensor_device(scratch, grad.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, grad.device());
+    auto guard = c10::cuda::CUDAGuard(grad.device());
+
+    auto grad_pts = need_world_point_grad ? at::empty({grad.size(0), 3}, grad.options()) : empty_scratch(grad.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, grad.options()) : empty_scratch(grad.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, grad.options()) : empty_scratch(grad.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, grad.options()) : empty_scratch(grad.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, grad.options()) : empty_scratch(grad.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    project_world_points_shutter_pose_opencv_fisheye_no_external_backward_launch(
+        grad.size(0),
+        projection->to_kernel_params(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_world_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        scratch.data_ptr<float>(),
+        current_stream(grad));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.focal_length, intr.forward_poly};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& world_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    double stop_mean_error_px,
+    double stop_delta_mean_error_px,
+    double initial_relative_time) {
+    const auto& pts = world_points;
+    check_matrix(pts, 3, "world_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    TORCH_CHECK(
+        width > 0 && height > 0,
+        "resolution dimensions must be positive for shutter-pose ops");
+    check_shutter_type(shutter_type);
+    check_max_iterations(max_iterations);
+    check_cuda_float_contiguous(pts, "world_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match world_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match world_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match world_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match world_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto image_points = at::empty({pts.size(0), 2}, pts.options());
+    auto valid_flags = at::empty({pts.size(0)}, pts.options().dtype(at::kBool));
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_opencv_fisheye_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 16, pts)
+        : empty_scratch(pts.options());
+    project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_forward_launch(
+        pts.size(0),
+        opencv_fisheye_kernel_params_with_resolution(projection, width, height),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        max_iterations,
+        static_cast<float>(stop_mean_error_px),
+        static_cast<float>(stop_delta_mean_error_px),
+        static_cast<float>(initial_relative_time),
+        image_points.data_ptr<float>(),
+        valid_flags.data_ptr<bool>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {image_points, valid_flags, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_image_points,
+    const at::Tensor& scratch,
+    bool need_world_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& grad = grad_image_points;
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 2, "grad_image_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_image_points");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= grad.size(0) * 16,
+        "scratch too small for project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield backward");
+    check_tensor_device(start_rotation, grad.device(), "start_rotation");
+    check_tensor_device(end_rotation, grad.device(), "end_rotation");
+    check_tensor_device(scratch, grad.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, grad.device());
+    check_bivariate_windshield_for_device(external_distortion, grad.device());
+    auto guard = c10::cuda::CUDAGuard(grad.device());
+
+    auto grad_pts = need_world_point_grad ? at::empty({grad.size(0), 3}, grad.options()) : empty_scratch(grad.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, grad.options()) : empty_scratch(grad.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, grad.options()) : empty_scratch(grad.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, grad.options()) : empty_scratch(grad.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, grad.options()) : empty_scratch(grad.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward_launch(
+        grad.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_world_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(grad));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.focal_length, intr.forward_poly, grad_distortion};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    check_matrix(pts, 2, "image_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    TORCH_CHECK(
+        width > 0 && height > 0,
+        "resolution dimensions must be positive for shutter-pose ops");
+    check_shutter_type(shutter_type);
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match image_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match image_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match image_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match image_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto world_rays = at::empty({pts.size(0), 6}, pts.options());
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_opencv_fisheye_projection_grad(projection);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 12, pts)
+        : empty_scratch(pts.options());
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_forward_launch(
+        pts.size(0),
+        opencv_fisheye_kernel_params_with_resolution(projection, width, height),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        world_rays.data_ptr<float>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {world_rays, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad) {
+    check_optional_distortion(external_distortion);
+    const auto& pts = image_points;
+    const auto& grad = grad_world_rays;
+    check_matrix(pts, 2, "image_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 6, "grad_world_rays");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_world_rays batch must match image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_world_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 12,
+        "scratch too small for image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external backward");
+    check_tensor_device(start_rotation, pts.device(), "start_rotation");
+    check_tensor_device(end_rotation, pts.device(), "end_rotation");
+    check_tensor_device(grad, pts.device(), "grad_world_rays");
+    check_tensor_device(scratch, pts.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.focal_length, intr.forward_poly};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_translation,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_translation,
+    const at::Tensor& end_rotation,
+    int64_t width,
+    int64_t height,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us) {
+    const auto& pts = image_points;
+    check_matrix(pts, 2, "image_points");
+    check_component_vector(start_translation, 3, "start_translation");
+    check_component_vector(end_translation, 3, "end_translation");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    TORCH_CHECK(
+        width > 0 && height > 0,
+        "resolution dimensions must be positive for shutter-pose ops");
+    check_shutter_type(shutter_type);
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(start_translation, "start_translation");
+    check_cuda_float_contiguous(end_translation, "end_translation");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    TORCH_CHECK(
+        start_translation.device() == pts.device(),
+        "start_translation device must match image_points");
+    TORCH_CHECK(
+        end_translation.device() == pts.device(),
+        "end_translation device must match image_points");
+    TORCH_CHECK(
+        start_rotation.device() == pts.device(),
+        "start_rotation device must match image_points");
+    TORCH_CHECK(
+        end_rotation.device() == pts.device(),
+        "end_rotation device must match image_points");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto world_rays = at::empty({pts.size(0), 6}, pts.options());
+    auto timestamps = at::empty({pts.size(0)}, pts.options().dtype(at::kLong));
+    auto pose_t = at::empty({pts.size(0), 3}, pts.options());
+    auto pose_r = at::empty({pts.size(0), 4}, pts.options());
+    const bool save_scratch = pts.requires_grad()
+        || start_translation.requires_grad() || end_translation.requires_grad()
+        || start_rotation.requires_grad() || end_rotation.requires_grad()
+        || needs_opencv_fisheye_projection_grad(projection)
+        || needs_external_distortion_grad(external_distortion);
+    auto scratch = save_scratch
+        ? scratch_shape(pts.size(0), 16, pts)
+        : empty_scratch(pts.options());
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_forward_launch(
+        pts.size(0),
+        opencv_fisheye_kernel_params_with_resolution(projection, width, height),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_translation.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_translation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        world_rays.data_ptr<float>(),
+        timestamps.data_ptr<int64_t>(),
+        pose_t.data_ptr<float>(),
+        pose_r.data_ptr<float>(),
+        save_scratch ? scratch.data_ptr<float>() : nullptr,
+        current_stream(pts));
+    return {world_rays, timestamps, pose_t, pose_r, scratch};
+}
+
+std::tuple<
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+    at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
+    const at::Tensor& image_points,
+    const at::Tensor& start_rotation,
+    const at::Tensor& end_rotation,
+    const at::Tensor& grad_world_rays,
+    const at::Tensor& scratch,
+    bool need_image_point_grad,
+    bool need_start_translation_grad,
+    bool need_end_translation_grad,
+    bool need_start_rotation_grad,
+    bool need_end_rotation_grad,
+    bool need_principal_point_grad,
+    bool need_focal_length_grad,
+    bool need_forward_poly_grad,
+    bool need_distortion_coeffs_grad) {
+    const auto& pts = image_points;
+    const auto& grad = grad_world_rays;
+    check_matrix(pts, 2, "image_points");
+    check_component_vector(start_rotation, 4, "start_rotation");
+    check_component_vector(end_rotation, 4, "end_rotation");
+    check_matrix(grad, 6, "grad_world_rays");
+    TORCH_CHECK(grad.size(0) == pts.size(0), "grad_world_rays batch must match image_points");
+    check_cuda_float_contiguous(pts, "image_points");
+    check_cuda_float_contiguous(start_rotation, "start_rotation");
+    check_cuda_float_contiguous(end_rotation, "end_rotation");
+    check_cuda_float_contiguous(grad, "grad_world_rays");
+    check_cuda_float_contiguous(scratch, "scratch");
+    TORCH_CHECK(
+        scratch.numel() >= pts.size(0) * 16,
+        "scratch too small for image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield backward");
+    check_tensor_device(start_rotation, pts.device(), "start_rotation");
+    check_tensor_device(end_rotation, pts.device(), "end_rotation");
+    check_tensor_device(grad, pts.device(), "grad_world_rays");
+    check_tensor_device(scratch, pts.device(), "scratch");
+    check_opencv_fisheye_projection_for_device(projection, pts.device());
+    check_bivariate_windshield_for_device(external_distortion, pts.device());
+    auto guard = c10::cuda::CUDAGuard(pts.device());
+
+    auto grad_pts = need_image_point_grad ? at::empty_like(pts) : empty_scratch(pts.options());
+    auto grad_start_t = need_start_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_t = need_end_translation_grad ? at::zeros({3}, pts.options()) : empty_scratch(pts.options());
+    auto grad_start_r = need_start_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto grad_end_r = need_end_rotation_grad ? at::zeros({4}, pts.options()) : empty_scratch(pts.options());
+    auto intr = make_opencv_fisheye_intrinsic_grad_outputs(
+        projection,
+        need_principal_point_grad,
+        need_focal_length_grad,
+        need_forward_poly_grad);
+    auto grad_distortion = make_distortion_grad_output(external_distortion, need_distortion_coeffs_grad);
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward_launch(
+        pts.size(0),
+        projection->to_kernel_params(),
+        external_distortion->to_kernel_params(),
+        pts.data_ptr<float>(),
+        start_rotation.data_ptr<float>(),
+        end_rotation.data_ptr<float>(),
+        grad.data_ptr<float>(),
+        need_image_point_grad ? grad_pts.data_ptr<float>() : nullptr,
+        need_start_translation_grad ? grad_start_t.data_ptr<float>() : nullptr,
+        need_end_translation_grad ? grad_end_t.data_ptr<float>() : nullptr,
+        need_start_rotation_grad ? grad_start_r.data_ptr<float>() : nullptr,
+        need_end_rotation_grad ? grad_end_r.data_ptr<float>() : nullptr,
+        maybe_data_ptr(intr.principal_point, need_principal_point_grad),
+        maybe_data_ptr(intr.focal_length, need_focal_length_grad),
+        maybe_data_ptr(intr.forward_poly, need_forward_poly_grad),
+        need_distortion_coeffs_grad ? grad_distortion.data_ptr<float>() : nullptr,
+        scratch.data_ptr<float>(),
+        current_stream(pts));
+    return {grad_pts, grad_start_t, grad_end_t, grad_start_r, grad_end_r,
+            intr.principal_point, intr.focal_length, intr.forward_poly, grad_distortion};
 }
 
 } // namespace gsplat_sensors

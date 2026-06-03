@@ -34,10 +34,11 @@ package. Detailed per-layer designs live in `design-functional.md`,
 
 ## Scope
 
-The package currently implements camera projection and a structured
-spinning-LiDAR slice:
+The package currently implements a camera slice with three projection models
+and a structured spinning-LiDAR slice:
 
-- Camera projections: `OpenCVPinholeProjection` and `FThetaProjection`.
+- Camera projections: `OpenCVPinholeProjection`, `FThetaProjection`, and
+  `OpenCVFisheyeProjection`.
 - External distortion: `NoExternalDistortion` (explicit, never `None`) and
   `BivariateWindshieldDistortion`.
 - Shutter modes: `GLOBAL`, `ROLLING_TOP_TO_BOTTOM`, `ROLLING_LEFT_TO_RIGHT`,
@@ -113,6 +114,12 @@ libs/sensors/
         camera_kernel.cuh
         camera_kernel.cu
         camera_kernel_backward.cu
+        ftheta_kernel.cuh
+        ftheta_kernel.cu
+        ftheta_kernel_backward.cu
+        fisheye_kernel.cuh
+        fisheye_kernel.cu
+        fisheye_kernel_backward.cu
         camera_torch.h
         camera_torch.cpp
         external_distortion_params.h
@@ -243,12 +250,13 @@ constraints live in each per-layer doc.
   Torch-only `*_torch.h` / `.cpp`. Only the bridge POD and `shutter_type.h`
   are shared between the two halves.
 - Sensor parameter types (`OpenCVPinholeProjection`, `FThetaProjection`,
-  `BivariateWindshieldDistortion`, `NoExternalDistortion`, and
-  `RowOffsetStructuredSpinningLidarProjection`) are defined in C++ and exposed
-  to Python via `torch::class_<>` registration with named keyword
-  constructors. Python does not own sensor parameter data layouts.
-- `OpenCVPinholeProjection` carries a `.transform(...)` method bound on the
-  C++ class, so SE(3) re-framing of a projection is a method on the
+  `OpenCVFisheyeProjection`, `BivariateWindshieldDistortion`,
+  `NoExternalDistortion`, and `RowOffsetStructuredSpinningLidarProjection`)
+  are defined in C++ and exposed to Python via `torch::class_<>` registration
+  with named keyword constructors. Python does not own sensor parameter data
+  layouts.
+- Camera projection types carry `.transform(...)` methods bound on the C++
+  class, so image-domain re-framing of a projection is a method on the
   parameter object rather than a free function.
 - Runtime dispatch happens in Python via explicit `dict` tables. Camera ops
   use `(projection_type, distortion_type)` keys and

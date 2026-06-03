@@ -25,8 +25,10 @@ The models layer currently covers:
 
 - `Frame` base class and the `FrameId = str` type alias.
 - `ImageFrame` and `ImageFrameGroup` (`dict[FrameId, ImageFrame]`).
-- A single concrete `CameraModel` wrapping an `OpenCVPinholeProjection`
-  together with `NoExternalDistortion` or `BivariateWindshieldDistortion`.
+- A single concrete `CameraModel` wrapping any registered camera projection
+  (`OpenCVPinholeProjection`, `FThetaProjection`, or
+  `OpenCVFisheyeProjection`) together with `NoExternalDistortion` or
+  `BivariateWindshieldDistortion`.
 - A single concrete `LidarModel` wrapping
   `RowOffsetStructuredSpinningLidarProjection`.
 - `LidarFrame` and `LidarFrameSet` for dense range-image or sparse LiDAR
@@ -34,10 +36,10 @@ The models layer currently covers:
 - Helpers in `models/common/utils.py` for resolution scaling, validity
   filtering, SE(3) matrix construction, and quaternion-order swizzles.
 - Re-exports of the return dataclasses, the kernel-level parameter handles
-  needed to construct a model (`OpenCVPinholeProjection`, the distortion
+  needed to construct a model (registered projection types, the distortion
   types, `ReferencePolynomial`, `ShutterType`, `from_components`,
-  `CameraProjection`, `ExternalDistortion`), and the pose dataclasses
-  (`Pose`, `DynamicPose`, `Trajectory`).
+  `CameraProjection`, `ExternalDistortion`), and the pose dataclasses (`Pose`,
+  `DynamicPose`, `Trajectory`).
 
 Not covered today: any rendering-facing aggregator that bundles `viewmats` /
 `viewmats_rs`, and a `forward()` implementation on `LidarModel` or
@@ -54,6 +56,7 @@ libs/sensors/models/
     image_frame.py              # ImageFrame, ImageFrameGroup
     test_camera_model.py
     test_camera_model_opencv_pinhole.py
+    test_fisheye.py
   common/
     __init__.py
     frame.py                    # Frame base, FrameId
@@ -100,13 +103,13 @@ not implemented.
 ## CameraModel
 
 `CameraModel` (`models/cameras/camera_model.py`) is a concrete `nn.Module`. A
-single class covers all currently supported camera projection types; new
-projection families are added by extending the dispatch helpers
-`_move_projection` / `_move_external_distortion` used by the custom `_apply`
-override, not by subclassing.
+single class covers all currently supported projection types (OpenCV pinhole,
+FTheta, and OpenCV fisheye); new projection families are added by extending
+the dispatch helpers `_move_projection` / `_move_external_distortion` used by
+the custom `_apply` override, not by subclassing.
 
-The constructor takes a non-`None` `projection` (any registered TorchScript
-camera projection), a non-`None` `external_distortion`
+The constructor takes a non-`None` `projection` (any TorchScript projection,
+registered in `kernels/cameras/types.py`), a non-`None` `external_distortion`
 (`NoExternalDistortion` or `BivariateWindshieldDistortion`), a `resolution`
 of `(width, height)`, and a `shutter_type`. `None` for either parameter
 raises `TypeError`. The projection is held privately as `_projection` and
@@ -177,12 +180,14 @@ callers use the explicit projection methods.
 new_resolution=None)` returns a new `CameraModel` whose projection has been
 rescaled and shifted. The Python method composes `compute_scaled_resolution(...)`
 with `self._projection.transform(...)`; the latter is the C++-side `transform`
-method registered on `OpenCVPinholeProjection`. For OpenCV pinhole the rule is
+method registered on each projection type. For OpenCV pinhole the rule is
 `new_focal_length = focal_length * scale`,
 `new_principal_point = principal_point * scale - offset`, and the distortion
 coefficients (radial, tangential, thin-prism) are cloned unchanged (they live
-in normalized image coordinates). `external_distortion` and `shutter_type`
-are preserved on the new model; the original is not mutated.
+in normalized image coordinates). FTheta and OpenCV fisheye preserve their
+radial polynomial coefficients while rescaling image-domain intrinsics.
+`external_distortion` and `shutter_type` are preserved on the new model; the
+original is not mutated.
 
 ## `return_jacobians` on `camera_rays_to_image_points`
 
@@ -245,6 +250,9 @@ Tests live next to the modules they exercise:
   with `image_points_to_camera_rays`, static- and shutter-pose world-point
   projection, `image_points_relative_frame_times` across shutter types, and
   the `transform` contract.
+- `models/cameras/test_fisheye.py` — OpenCV fisheye model integration,
+  transform / device / serialization contracts, real-camera fixtures, and cv2
+  oracle checks.
 - `models/common/test_frame.py` — `Frame` base properties.
 - `models/common/test_utils.py` — `compute_scaled_resolution` and
   quaternion-order helpers.
