@@ -52,15 +52,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     int64_t image_height,
     int64_t tile_size,
     // intersections
-    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor &flatten_ids   // [n_isects]
+    const at::Tensor &isect_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids    // [n_isects]
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(conics);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
-    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(isect_offsets);
     CHECK_INPUT(flatten_ids);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
@@ -70,7 +70,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     }
 
     auto opt = means2d.options();
-    at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
+    at::DimVector image_dims(isect_offsets.sizes().slice(0, isect_offsets.dim() - 2));
     uint32_t channels = colors.size(-1);
 
     at::DimVector renders_dims(image_dims);
@@ -85,35 +85,22 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     last_ids_dims.append({image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
-#define __LAUNCH_KERNEL__(N)                                                   \
-    case N:                                                                    \
-        launch_rasterize_to_pixels_3dgs_fwd_kernel<N>(                         \
-            means2d,                                                           \
-            conics,                                                            \
-            colors,                                                            \
-            opacities,                                                         \
-            backgrounds,                                                       \
-            masks,                                                             \
-            image_width,                                                       \
-            image_height,                                                      \
-            tile_size,                                                         \
-            tile_offsets,                                                      \
-            flatten_ids,                                                       \
-            renders,                                                           \
-            alphas,                                                            \
-            last_ids                                                           \
-        );                                                                     \
-        break;
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    switch (channels) {
-        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
-    default:
-        AT_ERROR("Unsupported number of channels: ", channels);
-    }
-#undef __LAUNCH_KERNEL__
+    launch_rasterize_to_pixels_3dgs_fwd_kernel(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        renders,
+        alphas,
+        last_ids
+    );
 
     return std::make_tuple(renders, alphas, last_ids);
 }

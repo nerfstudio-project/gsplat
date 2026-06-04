@@ -873,6 +873,10 @@ def rasterize_to_pixels(
         - **Rendered colors**. [..., image_height, image_width, channels]
         - **Rendered alphas**. [..., image_height, image_width, 1]
     """
+    assert tile_size in (
+        4,
+        16,
+    ), f"Only tile_size in {{4, 16}} is supported for 3DGS rasterization, got {tile_size}"
 
     image_dims = means2d.shape[:-2]
     channels = colors.shape[-1]
