@@ -308,6 +308,7 @@ def rasterization(
     extra_signals_sh_degree: Optional[
         int
     ] = None,  # Currently only None or 3 is accepted.
+    depth_mode: Literal["expected", "median"] = "expected",
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -492,6 +493,15 @@ def rasterization(
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
+        depth_mode: How to compute the depth channel when the selected `render_mode`
+            includes depth. `"expected"` (default) uses alpha-compositing (for "D"/"RGB+D")
+            or alpha-normalized compositing (for "ED"/"RGB+ED"), matching the historical
+            behavior. `"median"` instead returns the depth of the Gaussian whose
+            contribution causes the accumulated transmittance to drop below 0.5, falling
+            back to the last contributing Gaussian's depth if the threshold is never
+            crossed (0 if no Gaussian hits the pixel). Median depth is forward-only
+            (non-differentiable) and is currently only supported for the classic 3DGS
+            path (`with_eval3d=False` and non-hit-distance render modes).
 
     Returns:
         A tuple:
@@ -544,6 +554,27 @@ def rasterization(
         raise ValueError(
             f"sh_degree must be None when colors is None, got sh_degree={sh_degree}."
         )
+
+    if depth_mode not in ("expected", "median"):
+        raise ValueError(
+            f"depth_mode must be 'expected' or 'median', got '{depth_mode}'."
+        )
+    if depth_mode == "median":
+        if not render_mode_has_depth_channel(render_mode):
+            raise ValueError(
+                f"depth_mode='median' requires a depth render_mode, got '{render_mode}'."
+            )
+        if with_eval3d:
+            raise NotImplementedError(
+                "depth_mode='median' is only supported for the classic 3DGS path "
+                "(with_eval3d=False)."
+            )
+        if render_mode_has_hit_distance(render_mode):
+            raise NotImplementedError(
+                "depth_mode='median' is not supported with hit-distance render modes "
+                f"(got '{render_mode}'). Use a Gaussian-depth mode "
+                "('D', 'ED', 'RGB+D', 'RGB+ED')."
+            )
 
     external_distortion_coeffs = cast(
         Optional[BivariateWindshieldModelParameters], external_distortion_coeffs
@@ -1108,6 +1139,12 @@ def rasterization(
         }
     )
 
+    # Median depth is computed only when explicitly requested. It is always
+    # derived from the last channel of the chunk that contains the depth
+    # channel, which by construction is the final chunk.
+    render_median: Optional[Tensor] = None
+    want_median = depth_mode == "median"
+
     # print("rank", world_rank, "Before rasterize_to_pixels")
     if proj_features.shape[-1] > channel_chunk:
         # slice into chunks
@@ -1167,7 +1204,11 @@ def rasterization(
                         "Rays input is only supported with with_eval3d=True"
                     )
 
-                render_colors_, render_alphas_ = rasterize_to_pixels(
+                # Only request median from the last chunk (the one that
+                # contains the depth channel as its final entry).
+                is_last_chunk = i == n_chunks - 1
+                chunk_want_median = want_median and is_last_chunk
+                rtp_out = rasterize_to_pixels(
                     means2d,
                     conics,
                     features_chunk,
@@ -1180,7 +1221,12 @@ def rasterization(
                     backgrounds=backgrounds_chunk,
                     packed=packed,
                     absgrad=absgrad,
+                    return_median=chunk_want_median,
                 )
+                if chunk_want_median:
+                    render_colors_, render_alphas_, render_median = rtp_out
+                else:
+                    render_colors_, render_alphas_ = rtp_out
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
         render_colors = torch.cat(render_colors, dim=-1)
@@ -1224,7 +1270,7 @@ def rasterization(
         else:
             if rays is not None:
                 raise ValueError("Rays input is only supported with with_eval3d=True")
-            render_colors, render_alphas = rasterize_to_pixels(
+            rtp_out = rasterize_to_pixels(
                 means2d,
                 conics,
                 proj_features,
@@ -1237,7 +1283,12 @@ def rasterization(
                 backgrounds=backgrounds,
                 packed=packed,
                 absgrad=absgrad,
+                return_median=want_median,
             )
+            if want_median:
+                render_colors, render_alphas, render_median = rtp_out
+            else:
+                render_colors, render_alphas = rtp_out
 
     if extra_signals is not None:
         # Extract the extra signals (per ray) from render_colors
@@ -1245,18 +1296,24 @@ def rasterization(
         meta["render_extra_signals"] = render_colors[..., D : D + E]
         # Leave only colors (and possibly depth)
         if render_mode_has_depth_channel(render_mode):
-            render_depth = render_colors[..., -1:]
-
-            # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
-            if render_mode_has_expected_depth(render_mode):
-                render_depth = render_depth / render_alphas.clamp(min=1e-10)
+            if depth_mode == "median":
+                assert render_median is not None
+                render_depth = render_median
+            else:
+                render_depth = render_colors[..., -1:]
+                # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
+                if render_mode_has_expected_depth(render_mode):
+                    render_depth = render_depth / render_alphas.clamp(min=1e-10)
 
             render_colors = torch.cat([render_colors[..., 0:D], render_depth], dim=-1)
         else:
             render_colors = render_colors[..., 0:D]
     else:
-        # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
-        if render_mode_has_expected_depth(render_mode):
+        if depth_mode == "median":
+            assert render_median is not None
+            # Replace the accumulated depth (last channel) with the median depth.
+            render_colors = torch.cat([render_colors[..., :-1], render_median], dim=-1)
+        elif render_mode_has_expected_depth(render_mode):
             # normalize the accumulated depth to get the expected depth
             render_colors = torch.cat(
                 [
