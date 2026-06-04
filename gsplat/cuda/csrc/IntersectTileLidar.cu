@@ -455,14 +455,14 @@ void launch_intersect_tile_lidar_kernel(
                     nnz,
                     *lidar,
                     image_ids.has_value()
-                        ? image_ids.value().data_ptr<int64_t>()
+                        ? image_ids.value().const_data_ptr<int64_t>()
                         : nullptr,
                     gaussian_ids.has_value()
-                        ? gaussian_ids.value().data_ptr<int64_t>()
+                        ? gaussian_ids.value().const_data_ptr<int64_t>()
                         : nullptr,
-                    means2d.data_ptr<scalar_t>(),
-                    radii.data_ptr<int32_t>(),
-                    depths.data_ptr<scalar_t>(),
+                    means2d.const_data_ptr<scalar_t>(),
+                    radii.const_data_ptr<int32_t>(),
+                    depths.const_data_ptr<scalar_t>(),
                     cum_tiles_per_gauss.has_value()
                         ? cum_tiles_per_gauss.value().data_ptr<int64_t>()
                         : nullptr,
