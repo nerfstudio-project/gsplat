@@ -14,6 +14,7 @@
 #include <torch/torch.h>
 
 #include "Config.h"
+#include "ExternalDistortion.h"
 #include "Ops.h"
 #include "PrimingChainEncoding.h"
 #include "PrimingChainEncoding.cuh"
@@ -838,4 +839,65 @@ TEST_P(InvalidRayStateTest, SkipsBatchStateForInvalidRays)
     EXPECT_EQ(
         compose_c_stop_i32.max().cpu().item<int32_t>(),
         static_cast<int32_t>(gsplat::COMPOSE_C_STOP_INVALID_RAY));
+}
+
+// The external-distortion contiguity checks live at the launcher deref site
+// rather than the op layer. A non-contiguous polynomial must therefore be
+// rejected by the from-world launcher itself -- this pins that the deref-site
+// consolidation cannot silently drop the guard in a future refactor.
+TEST_P(FwdBatchStateTest, NonContiguousExternalDistortionPolyThrows)
+{
+    Eval3DScene &scene = this->scene();
+
+    const torch::TensorOptions options = torch::TensorOptions()
+                                             .device(torch::kCUDA)
+                                             .dtype(torch::kFloat32);
+    // transpose yields a non-contiguous view without copying the storage.
+    at::Tensor non_contiguous_poly =
+        torch::zeros({2, 6}, options).transpose(0, 1);
+    ASSERT_FALSE(non_contiguous_poly.is_contiguous());
+    at::Tensor contiguous_poly = torch::zeros({6, 2}, options);
+
+    auto external_distortion_params =
+        c10::make_intrusive<gsplat::extdist::BivariateWindshieldModelParameters>();
+    external_distortion_params->horizontal_poly = non_contiguous_poly;
+    external_distortion_params->vertical_poly = contiguous_poly;
+    external_distortion_params->horizontal_poly_inverse = contiguous_poly;
+    external_distortion_params->vertical_poly_inverse = contiguous_poly;
+
+    EXPECT_THROW(
+        gsplat::rasterize_to_pixels_from_world_3dgs_fwd(
+            scene.means,
+            scene.quats,
+            scene.scales,
+            scene.colors,
+            scene.opacities_bc,
+            c10::nullopt, // backgrounds
+            c10::nullopt, // masks
+            scene.width,
+            scene.height,
+            scene.tile_size,
+            scene.viewmats,
+            c10::nullopt, // viewmats1
+            scene.Ks,
+            gsplat::PINHOLE,
+            scene.ut_params,
+            ShutterType::GLOBAL,
+            c10::nullopt, // rays
+            c10::nullopt, // radial_coeffs
+            c10::nullopt, // tangential_coeffs
+            c10::nullopt, // thin_prism_coeffs
+            scene.ftheta_coeffs,
+            c10::nullopt, // lidar_coeffs
+            external_distortion_params,
+            scene.isect_offsets,
+            scene.flatten_ids,
+            false, // use_hit_distance
+            gsplat::RendererConfig::MIXED_BATCH,
+            false, // fwd_only
+            false, // return_last_ids
+            c10::nullopt, // sample_counts
+            c10::nullopt, // normals
+            false), // unsafe_masked_tile_outputs
+        c10::Error);
 }

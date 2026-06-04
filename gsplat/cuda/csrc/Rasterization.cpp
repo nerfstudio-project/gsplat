@@ -693,15 +693,6 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
         CHECK_INPUT(masks.value());
     }
 
-    if (external_distortion_params.has_value()) {
-        const auto& params = external_distortion_params.value();
-        TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
-        CHECK_CONTIGUOUS(params->horizontal_poly);
-        CHECK_CONTIGUOUS(params->vertical_poly);
-        CHECK_CONTIGUOUS(params->horizontal_poly_inverse);
-        CHECK_CONTIGUOUS(params->vertical_poly_inverse);
-    }
-
     if (sample_counts.has_value()) {
         CHECK_INPUT(sample_counts.value());
     }
@@ -1300,15 +1291,6 @@ public:
         }
         if (v_render_normals.has_value()) {
             CHECK_INPUT(v_render_normals.value());
-        }
-
-        if (external_distortion_params.has_value()) {
-            const auto& params = external_distortion_params.value();
-            TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
-            CHECK_CONTIGUOUS(params->horizontal_poly);
-            CHECK_CONTIGUOUS(params->vertical_poly);
-            CHECK_CONTIGUOUS(params->horizontal_poly_inverse);
-            CHECK_CONTIGUOUS(params->vertical_poly_inverse);
         }
 
         at::Tensor v_means = at::zeros_like(means);

@@ -526,12 +526,17 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
     const uint32_t n_isects = flatten_ids.size(0);
 
     TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
-    TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
-    FThetaCameraDistortionDeviceParams ftheta_device_coeffs(*ftheta_coeffs);
+    FThetaCameraDistortionDeviceParams ftheta_device_coeffs(
+        gsplat::checked_deref(ftheta_coeffs, "ftheta_coeffs"));
     cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
     if (external_distortion_params.has_value()) {
-        TORCH_CHECK(external_distortion_params.value(), "external_distortion_params intrusive_ptr is null");
-        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(*external_distortion_params.value());
+        const auto& params = gsplat::checked_deref(
+            external_distortion_params.value(), "external_distortion_params");
+        CHECK_CONTIGUOUS(params.horizontal_poly);
+        CHECK_CONTIGUOUS(params.vertical_poly);
+        CHECK_CONTIGUOUS(params.horizontal_poly_inverse);
+        CHECK_CONTIGUOUS(params.vertical_poly_inverse);
+        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(params);
     }
 
     cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs = cuda::std::nullopt;
