@@ -101,6 +101,9 @@ RUN --mount=type=tmpfs,target=/tmp \
         "pytest==7.1.3"
         "pytest-env==0.8.1"
         "pytest-xdist==2.5.0"
+        # endonerf / dynamic-surgical test collection imports these at module top
+        "Pillow==12.1.1"
+        "tqdm==4.67.3"
         "typeguard==4.5.1"
         "pyyaml==6.0.1"
         "build==1.3.0"
