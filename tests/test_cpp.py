@@ -264,12 +264,16 @@ extern "C" const char *gsplat_cpp_tests_jit_object_digest() {{
 
 
 def _gtest_sources() -> list[str]:
-    """Return vendored GoogleTest sources used by the standalone test binary."""
+    """Return vendored GoogleTest + GoogleMock sources for the test binary."""
     # Build GoogleTest from source inside the same JIT target. That avoids a
     # separate CMake/configure step and lets PyTorch/Ninja use one compiler mode.
+    # gmock-all.cc is compiled in too so tests can use GoogleMock matchers (e.g.
+    # ThrowsMessage); gtest_main provides main() and is sufficient for matchers.
     gtest_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googletest")
+    gmock_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googlemock")
     sources = [
         os.path.join(gtest_root, "src", "gtest-all.cc"),
+        os.path.join(gmock_root, "src", "gmock-all.cc"),
         os.path.join(gtest_root, "src", "gtest_main.cc"),
     ]
     if not all(os.path.exists(source) for source in sources):
@@ -293,12 +297,15 @@ def _include_paths(build_params) -> list[str]:
     # Include both the repository root and csrc directories so tests can include
     # public gsplat CUDA headers without mirroring extension-relative paths.
     gtest_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googletest")
+    gmock_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googlemock")
     return [
         REPO_ROOT,
         os.path.join(REPO_ROOT, "gsplat", "cuda"),
         os.path.join(REPO_ROOT, "gsplat", "cuda", "csrc"),
         os.path.join(gtest_root, "include"),
         gtest_root,
+        os.path.join(gmock_root, "include"),
+        gmock_root,
     ] + build_params.extra_include_paths
 
 
