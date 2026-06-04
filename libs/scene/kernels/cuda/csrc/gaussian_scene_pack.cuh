@@ -45,8 +45,7 @@ namespace scene {
  *                              scale cols 4-6, opacity col 7
  *   colors_packed        [N, 4] fp16 for RGB; [N, K, 3] fp32 for SH0-2;
  *                        [N, 16, 3] fp16 for SH3 mode 0;
- *                        [N, 48] fp32 for SH3 mode 1;
- *                        [N, 48] fp16 for SH3 mode 2
+ *                        [N, 48] fp16 for SH3 modes 1 and 2
  */
 std::tuple<at::Tensor, at::Tensor, at::Tensor> pack_gaussian_inference_scene_cuda(
     const at::Tensor &means,

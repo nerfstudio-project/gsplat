@@ -131,6 +131,40 @@ __global__ void spherical_harmonics_fwd_kernel(const int N, const int K, const i
     colors[elem_id * 4 + c] = __float2half(val);
 }
 
+__global__ void spherical_harmonics_viewmat_fwd_kernel(const int N, const int K, const int degrees_to_use,
+                                                       const float *__restrict__ means,   // [3, N] planar
+                                                       const float *__restrict__ viewmat, // [4, 4] row-major
+                                                       const float *__restrict__ coeffs,  // [N, K, 3]
+                                                       const uint32_t *__restrict__ masks,
+                                                       float bias, float min_value,
+                                                       __half *__restrict__ colors)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N * 3)
+    {
+        return;
+    }
+    const int elem_id = idx / 3;
+    const int c       = idx % 3;
+    if (masks != nullptr && !(masks[elem_id >> 5] & (1u << (elem_id & 0x1fu))))
+    {
+        return;
+    }
+
+    float3 dir_n{};
+    if (degrees_to_use > 0)
+    {
+        const float cam_x = -(viewmat[0] * viewmat[3] + viewmat[4] * viewmat[7] + viewmat[8] * viewmat[11]);
+        const float cam_y = -(viewmat[1] * viewmat[3] + viewmat[5] * viewmat[7] + viewmat[9] * viewmat[11]);
+        const float cam_z = -(viewmat[2] * viewmat[3] + viewmat[6] * viewmat[7] + viewmat[10] * viewmat[11]);
+        dir_n = GetViewDir(means, N, elem_id, cam_x, cam_y, cam_z);
+    }
+
+    float val;
+    EvaluteSHCoeffs(degrees_to_use, c, dir_n, coeffs + elem_id * K * 3, bias, min_value, val);
+    colors[elem_id * 4 + c] = __float2half(val);
+}
+
 // Unified K=16 SH forward kernel for raw (float/half) and compressed (32B/16B) inputs.
 // Uses compile-time SHInputMode to select the coefficient loading path; all other logic
 // (compaction, SH evaluation, output packing) is shared.
@@ -275,6 +309,37 @@ void launch_spherical_harmonics_fwd_kernel(
                                                                      cam_z, coeffs.data_ptr<float>(), masks_ptr, bias,
                                                                      min_value, colors_ptr);
     }
+}
+
+void launch_spherical_harmonics_viewmat_fwd_kernel(
+    // inputs
+    int32_t degrees_to_use,
+    const at::Tensor means, const at::Tensor viewmat, const at::Tensor coeffs, const at::optional<at::Tensor> masks,
+    const float bias, const float min_value,
+    // outputs
+    at::Tensor colors)
+{
+    const int N = means.numel() / 3;
+
+    if (N == 0)
+    {
+        return;
+    }
+
+    TORCH_CHECK(coeffs.scalar_type() == at::kFloat,
+                "spherical_harmonics_viewmat_fwd_kernel only supports float coeffs, got ", coeffs.scalar_type());
+
+    const int K = static_cast<int>(coeffs.size(-2));
+    const int32_t n_elements = N * 3;
+    const dim3 threads(256);
+    const dim3 grid((n_elements + threads.x - 1) / threads.x);
+
+    const uint32_t *masks_ptr =
+        masks.has_value() ? reinterpret_cast<const uint32_t *>(masks.value().data_ptr<int32_t>()) : nullptr;
+
+    spherical_harmonics_viewmat_fwd_kernel<<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
+        N, K, degrees_to_use, means.data_ptr<float>(), viewmat.data_ptr<float>(), coeffs.data_ptr<float>(), masks_ptr,
+        bias, min_value, reinterpret_cast<__half *>(colors.data_ptr<at::Half>()));
 }
 
 } // namespace higs

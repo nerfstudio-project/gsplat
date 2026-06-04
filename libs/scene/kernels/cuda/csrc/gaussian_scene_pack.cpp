@@ -128,20 +128,16 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> pack_gaussian_inference_scene_cud
     qso_packed.narrow(1, 7, 1).copy_(opacities.unsqueeze(1).to(at::kHalf));
 
     // Pack colors based on SH degree and compression mode.
-    int64_t K_sh = (sh_degree >= 0 && colors.dim() == 3) ? colors.size(1) : 0;
     at::Tensor colors_packed;
-    if (sh_degree >= 0 && K_sh == 16) {
+    if (sh_degree == 3) {
         if (sh_compression == ShCompressionMode::None) {
             // SH3 "none": preserve the raw SH layout in fp16 lanes.
             colors_packed = colors.clamp(-fp16_max, fp16_max).to(at::kHalf);
-        } else if (sh_compression == ShCompressionMode::Packed32B) {
-            // SH3 "32b": pack into contiguous 32-bit coefficient lanes.
-            colors_packed = colors.contiguous().view({N, 48});
         } else {
-            // SH3 "16b": pack into contiguous fp16 coefficient lanes.
+            // SH3 compressed modes: stage contiguous fp16 coefficient lanes.
             colors_packed = colors.clamp(-fp16_max, fp16_max).to(at::kHalf).view({N, 48});
         }
-    } else if (sh_degree >= 0 && K_sh > 0) {
+    } else if (sh_degree >= 0) {
         // Lower-degree SH (0-2): keep float32
         colors_packed = colors.contiguous();
     } else {

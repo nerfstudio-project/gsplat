@@ -208,7 +208,7 @@ class GaussianInferenceScene(Scene):
             expected_dtype = torch.float16
         elif sh_degree == 3 and sh_compression_mode is SHCompressionMode.PACKED_32B:
             expected_shape = (n_local, 48)
-            expected_dtype = torch.float32
+            expected_dtype = torch.float16
         elif sh_degree == 3 and sh_compression_mode is SHCompressionMode.PACKED_16B:
             expected_shape = (n_local, 48)
             expected_dtype = torch.float16
