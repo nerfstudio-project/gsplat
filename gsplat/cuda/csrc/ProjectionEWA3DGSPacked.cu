@@ -324,7 +324,16 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     uint32_t blocks_per_row = (ncols + N_THREADS_PACKED - 1) / N_THREADS_PACKED;
 
     dim3 threads(N_THREADS_PACKED);
-    // limit on the number of blocks: [2**31 - 1, 65535, 65535]
+    // Each block-row maps one B*C batch-camera onto grid.y, so a larger B*C
+    // would silently issue an invalid launch -- reject it with a clear error.
+    TORCH_CHECK(
+        nrows <= kMaxCudaGridDimY,
+        "packed projection: B*C = ",
+        nrows,
+        " exceeds the CUDA grid.y limit of ",
+        kMaxCudaGridDimY,
+        " batch-camera rows per launch"
+    );
     dim3 grid(blocks_per_row, nrows, 1);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 

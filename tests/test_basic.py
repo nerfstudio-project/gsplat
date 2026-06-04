@@ -5720,6 +5720,36 @@ def test_fully_fused_projection_2dgs_packed_empty(C):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_fully_fused_projection_packed_grid_y_limit():
+    # The packed forward launcher maps B*C onto grid.y, which CUDA caps at
+    # 65535. A larger B*C must raise a clear error instead of issuing an invalid
+    # kernel launch. Here B=1 and C=65536 (one camera over the cap).
+    from gsplat.cuda._wrapper import fully_fused_projection
+
+    W, H = 32, 32
+    N, C = 1, 65536
+    means = torch.randn(N, 3, device=device)
+    means[:, 2] += 5.0
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.rand(N, 3, device=device) * 0.1
+    viewmats = torch.eye(4, device=device).expand(C, 4, 4).contiguous()
+    Ks = (
+        torch.tensor(
+            [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        )
+        .expand(C, 3, 3)
+        .contiguous()
+    )
+
+    with pytest.raises(RuntimeError, match=r"exceeds the CUDA grid\.y limit"):
+        fully_fused_projection(
+            means, None, quats, scales, viewmats, Ks, W, H, packed=True
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 @pytest.mark.parametrize("tile_width,tile_height", [(2, 2), (4, 4), (8, 4)])
 def test_isect_offset_power_of_two_tiles(tile_width: int, tile_height: int):
