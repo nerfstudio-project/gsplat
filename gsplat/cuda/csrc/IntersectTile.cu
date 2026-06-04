@@ -23,6 +23,12 @@
 // for CUB_WRAPPER
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <cub/cub.cuh>
+#if defined(USE_ROCM)
+// hipify maps <cub/cub.cuh> to <hipcub/hipcub.hpp> but leaves cub:: namespace
+// references unrenamed; alias cub to hipcub so cub::DoubleBuffer / DeviceRadixSort
+// resolve.
+namespace cub = hipcub;
+#endif
 
 #include "Common.h"
 #include "Intersect.h"

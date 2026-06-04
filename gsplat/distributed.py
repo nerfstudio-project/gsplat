@@ -18,8 +18,18 @@ from typing import Any, Callable, List, Optional, Union
 
 import torch
 import torch.distributed as dist
-import torch.distributed.nn.functional as distF
 from torch import Tensor
+
+# torch.distributed is not available in every build (e.g. the Windows ROCm
+# wheels ship without a c10d backend), and importing torch.distributed.nn
+# eagerly fails there ("cannot import name 'group'"). The collective helpers in
+# this module are only used for multi-GPU training, so defer that import and
+# leave distF unset on single-process builds. Unchanged where distributed is
+# available (Linux/CUDA): the import binds exactly as before.
+if dist.is_available():
+    import torch.distributed.nn.functional as distF
+else:
+    distF = None
 
 
 def all_gather_int32(

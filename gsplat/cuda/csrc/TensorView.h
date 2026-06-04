@@ -106,8 +106,11 @@ public:
         , m_sizes(sizes)
         , m_strides(strides)
     {
-        // Get expected sizes from SHAPE pack (integral values or -1 for dynamic dimensions)
-        constexpr auto expected = std::array{
+        // Get expected sizes from SHAPE pack (integral values or -1 for dynamic dimensions).
+        // Spell out std::array<int64_t, ndims> rather than relying on CTAD: clang/HIP
+        // treats the std::array deduction guide as __host__-only, which is illegal in
+        // this __host__ __device__ constructor.
+        constexpr auto expected = std::array<int64_t, ndims>{
             ([]() constexpr {
                 using DimType = decltype(SHAPE);
                 if constexpr (std::is_integral_v<DimType>)
@@ -122,7 +125,11 @@ public:
         {
             if (expected[i] != -1)
             {
-#ifdef __CUDA_ARCH__
+// __CUDA_ARCH__ is undefined during HIP device compilation (HIP uses
+// __HIP_DEVICE_COMPILE__); without this the HIP device pass takes the host
+// branch and pulls TORCH_CHECK_INDEX / std::array / throw (host-only) into a
+// __host__ __device__ function.
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
                 assert(sizes[i] == expected[i]);
 #else
                 TORCH_CHECK_INDEX(sizes[i] == expected[i],

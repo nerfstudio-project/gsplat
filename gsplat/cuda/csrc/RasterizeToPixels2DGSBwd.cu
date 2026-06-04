@@ -262,8 +262,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     // find the maximum final gaussian ids in the thread warp.
     // this gives the last gaussian id that have intersected with any pixels in
     // the warp
-    const int32_t warp_bin_final =
-        cg::reduce(warp, bin_final, cg::greater<int>());
+    const int32_t warp_bin_final = warpReduceMax(bin_final, warp);
 
     /**
      * =======================================================
@@ -769,7 +768,9 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_2dgs_bwd_kernel<CDIM, float>,
+            // HIP's hipFuncSetAttribute takes const void*; cast the kernel
+            // (portable: CUDA's cudaFuncSetAttribute also accepts const void*).
+            (const void *)rasterize_to_pixels_2dgs_bwd_kernel<CDIM, float>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {

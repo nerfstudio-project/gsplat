@@ -275,7 +275,9 @@ void launch_rasterize_to_indices_2dgs_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_indices_2dgs_kernel<float>,
+            // HIP's hipFuncSetAttribute takes const void*; cast the kernel
+            // (portable: CUDA's cudaFuncSetAttribute also accepts const void*).
+            (const void *)rasterize_to_indices_2dgs_kernel<float>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {

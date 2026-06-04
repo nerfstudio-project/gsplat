@@ -23,6 +23,21 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/glm.hpp>
 
+// torch's hipify rewrites std::min/std::max to the global ::min/::max (the CUDA
+// device spelling). On the HIP device pass those are builtins, but on the HIP
+// host pass (plain g++, no hip_runtime) global ::min/::max do not exist, so
+// host TUs including these headers fail to compile. Provide host-only global
+// forwards to std::min/std::max for the host pass; the device pass keeps the
+// HIP builtins, and CUDA is unaffected (USE_ROCM undefined there).
+#if defined(USE_ROCM) && !defined(__HIP_DEVICE_COMPILE__)
+template <typename T> inline const T &min(const T &a, const T &b) {
+    return std::min(a, b);
+}
+template <typename T> inline const T &max(const T &a, const T &b) {
+    return std::max(a, b);
+}
+#endif
+
 namespace gsplat {
 
 //

@@ -31,6 +31,45 @@ URL = "https://github.com/nerfstudio-project/gsplat"
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 
 
+def _patch_hipify_ignore_glm():
+    """Keep the bundled third_party/glm out of torch's hipify on ROCm.
+
+    torch's hipify (via CUDAExtension) walks every .hpp under the build dir and
+    the extension include dirs into its file set, then content-rewrites any GLM
+    header a source pulls in -- which drops GLM's .inl files (hipify only copies
+    .hpp/.h) and mangles GLM's __CUDACC__/__HIP__ compiler detection, breaking
+    the build. GLM 1.0.2 already detects __HIP__ and compiles verbatim under the
+    -x hip pass, so the fix is simply to leave it untouched: add the glm dir to
+    hipify's ``ignores`` and drop it from ``header_include_dirs``. The source
+    keeps including <glm/...> via -I, resolved against the pristine bundled tree.
+    """
+    import torch
+
+    if not torch.version.hip:
+        return
+    from torch.utils.hipify import hipify_python
+
+    glm_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "gsplat", "cuda", "csrc", "third_party", "glm",
+    )
+    glm_patterns = [os.path.join(glm_dir, "*"), glm_dir + "*"]
+    orig_hipify = hipify_python.hipify
+
+    def hipify_no_glm(*args, **kwargs):
+        kwargs["ignores"] = list(kwargs.get("ignores", ())) + glm_patterns
+        kwargs["header_include_dirs"] = [
+            d for d in kwargs.get("header_include_dirs", [])
+            if os.path.abspath(d) != os.path.abspath(glm_dir)
+        ]
+        return orig_hipify(*args, **kwargs)
+
+    hipify_python.hipify = hipify_no_glm
+
+
+_patch_hipify_ignore_glm()
+
+
 def get_ext():
     from torch.utils.cpp_extension import BuildExtension
 
@@ -71,6 +110,16 @@ def get_extensions():
         },
         extra_link_args=params.extra_ldflags,
     )
+
+    import torch
+
+    # The experimental inference renderer (experimental/render) is a separate,
+    # NVIDIA-tuned extension (inline PTX asm, half2 intrinsics like __hmax2 /
+    # __hlt2_mask, cub/block internals, 32-bit warp masks) that is not part of the
+    # core differentiable rasterizer and is not imported by the gsplat API. It is
+    # not yet ported to HIP, so skip it on ROCm and build only gsplat.csrc.
+    if torch.version.hip:
+        return [gsplat_ext]
 
     # --- experimental Inference render extension ---
     inference_build = _load_build_module(
