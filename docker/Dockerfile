@@ -3,6 +3,13 @@
 # Fix the base image to avoid spurious rebuilds
 ARG BASE_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d39279f2cf664fbb9b5d5f21de104b79745ea29bf2cb
 
+# Bumped on every image release (mirrors IMAGE_TAG in config.yaml). Used to
+# bake the venv at /var/cache/venv-${IMAGE_VERSION} so a per-version cache
+# volume mounted at the same sub-path is auto-populated by Docker on first
+# use, and old version's venvs coexist instead of forcing --reset-cache on
+# image bumps.
+ARG IMAGE_VERSION
+
 # Downloads and installs ccache for build acceleration --------------------------------
 FROM alpine:3.19.1 as ccache
 # We need a fairly recent ccache recent ccache with proper nvcc support.
@@ -16,6 +23,7 @@ EOS
 
 # Base layer with Python, apt configuration, and virtual environment setup ------------
 FROM ${BASE_IMAGE} as python
+ARG IMAGE_VERSION
 SHELL ["/bin/bash", "-ex", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -52,7 +60,14 @@ ENV PYTHON_VENV_PATH=/usr/local/venv
 ENV PATH="$PYTHON_VENV_PATH/bin:$PATH"
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    python3 -m venv "$PYTHON_VENV_PATH"
+    # Bake the venv at /var/cache/venv-${IMAGE_VERSION}. At runtime the caller
+    # mounts a per-version volume at the same sub-path; Docker auto-populates
+    # a fresh volume from the image's content here, so editable pip installs
+    # survive --rm and image bumps coexist (each tag gets its own volume).
+    # The symlink is created first because python's venv module refuses to
+    # initialize into a symlinked path, so we point it at the real target.
+    ln -s /var/cache/venv-${IMAGE_VERSION} "$PYTHON_VENV_PATH"
+    python3 -m venv /var/cache/venv-${IMAGE_VERSION}
 EOS
 
 # Installs all GSplat dependencies (including dev dependencies) -----------
@@ -93,6 +108,18 @@ EOS
 # Test/dev dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
+    # Resolve the cupy variant matching this image's CUDA toolkit. setup.py
+    # detects the local CUDA major and exposes the wheel name (cupy-cuda12x,
+    # cupy-cuda13x, ...) via get_extras_require(); we read it and pin our
+    # version on top so the Dockerfile and source stay in sync when the base
+    # image's CUDA major changes.
+    cupy_pkg=$(cd /opt/dep-check && python3 -c '
+import setup
+pkgs = [d for d in setup.get_extras_require()["dev"] if d.startswith("cupy")]
+assert len(pkgs) == 1, f"expected one cupy entry in dev extras, got {pkgs}"
+print(pkgs[0])
+')
+
     # Dev/test deps
     packages=(
         "black[jupyter]==22.3.0"
@@ -101,11 +128,14 @@ RUN --mount=type=tmpfs,target=/tmp \
         "pytest==7.1.3"
         "pytest-env==0.8.1"
         "pytest-xdist==2.5.0"
+        # endonerf / dynamic-surgical test collection imports these at module top
+        "Pillow==12.1.1"
+        "tqdm==4.67.3"
         "typeguard==4.5.1"
         "pyyaml==6.0.1"
         "build==1.3.0"
         "twine==1.6.0"
-        "cupy==13.6.0"
+        "${cupy_pkg}==13.6.0"
         "nerfacc==0.5.3"
         "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
         "imageio[ffmpeg]==2.37.2"
@@ -114,7 +144,12 @@ RUN --mount=type=tmpfs,target=/tmp \
 
     check_gsplat_deps.sh -f /opt/dep-check/setup.py:dev -- "${packages[@]}"
 
-    # Tests need cupy, let install faster (and smaller) by targeting a specific compute and rely on CUDA JIT.
+    # Tests need cupy. The prebuilt cupy-cudaXXx wheel installs without
+    # compiling against the local toolkit and relies on CUDA JIT at runtime.
+    # The CUPY_* env vars below are no-ops on the wheel path, but kept so
+    # that if _detect_cupy_requirement() ever falls back to the source
+    # `cupy` (no nvcc detected), the source build is still parallelized
+    # and targeted to a single compute capability.
     CUPY_NUM_BUILD_JOBS=$(nproc) \
     CUPY_NUM_NVCC_THREADS=$(nproc) \
     CUPY_NVCC_GENERATE_CODE=arch=compute_80,code=compute_80 \
@@ -197,8 +232,13 @@ EOS
 # and all gsplat dependencies into an image.
 
 FROM python as main
+ARG IMAGE_VERSION
 
-COPY --link --from=gsplat-deps "$PYTHON_VENV_PATH/" "$PYTHON_VENV_PATH/"
+# Copy the populated venv via its real path. With --link, copying onto
+# $PYTHON_VENV_PATH/ (the symlink created in the python stage) would shadow
+# the symlink with a fresh dir layer, so we copy to the versioned path and
+# leave the inherited symlink intact.
+COPY --link --from=gsplat-deps /var/cache/venv-${IMAGE_VERSION}/ /var/cache/venv-${IMAGE_VERSION}/
 COPY --link --from=gsplat-deps /opt/dep-check/ /opt/dep-check/
 COPY --link --from=ccache ccache /usr/local/bin/ccache
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
@@ -239,6 +279,12 @@ RUN <<EOS
     # shared persistent cache (ccache, CUDA JIT, pip).  Acceptable in a
     # local dev-only image; do NOT use in production/shared environments.
     chmod 777 /var/cache
+
+    # Same justification: any host UID mapped into the container needs to
+    # install editable packages (e.g. gsplat-geometry) into the venv at
+    # runtime. Make every file and directory in the venv writable by
+    # anyone. Dev-only image — do NOT use in production/shared environments.
+    chmod -R a+w "$PYTHON_VENV_PATH"
 
     ccache --max-size=20G
 
@@ -282,7 +328,13 @@ RUN <<EOS
     done
 EOS
 
-COPY --link cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
+# Plain COPY (no --link) so the destination resolves through the
+# /usr/local/cuda symlink (which the base image points at the actual
+# versioned CUDA install dir) and the wrapper lands at the real bin
+# directory next to the renamed nvcc-real. With --link the COPY layer
+# creates a fresh /usr/local/cuda/ directory that shadows the symlink,
+# leaving nvcc-real unreachable at runtime.
+COPY cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
 COPY --chmod=755 entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bash", "--login"]
