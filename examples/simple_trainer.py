@@ -59,8 +59,16 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization, RasterizeMode
-from gsplat_scene import GaussianScene
-from gsplat_stage import Stage
+
+try:
+    from gsplat_scene import GaussianScene
+    from gsplat_stage import Stage
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(
+        f"{e.name} is not installed. The example trainers require the local "
+        "scene/stage helper libraries. Install them with:\n"
+        "    python -m pip install -e libs/scene -e libs/stage"
+    ) from e
 from gsplat.cuda._wrapper import CameraModel
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
