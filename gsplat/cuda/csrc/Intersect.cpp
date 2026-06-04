@@ -113,15 +113,16 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             c10::nullopt, // isect_ids
             c10::nullopt  // flatten_ids
         );
-        cum_tiles_per_gauss = at::cumsum(tiles_per_gauss.view({-1}), 0);
+        // Explicit int64 to match the kernel's int64 read of cum_tiles_per_gauss.
+        cum_tiles_per_gauss = at::cumsum(tiles_per_gauss.view({-1}), 0, at::kLong);
         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
         if (segmented) {
             // offsets in the isect_ids and flatten_ids
             offsets = at::cumsum(
-                at::sum(tiles_per_gauss, -1).view({-1}), 0
+                at::sum(tiles_per_gauss, -1).view({-1}), 0, at::kLong
             );
             offsets = at::cat(
-                {at::tensor({0}, opt.dtype(at::kInt)),
+                {at::tensor({0}, opt.dtype(at::kLong)),
                 offsets}
             );
         }
@@ -269,10 +270,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
         {
             // offsets in the isect_ids and flatten_ids
             offsets = at::cumsum(
-                at::sum(tiles_per_gauss, -1).view({-1}), 0
+                at::sum(tiles_per_gauss, -1).view({-1}), 0, at::kLong
             );
             offsets = at::cat(
-                {at::tensor({0}, opt.dtype(at::kInt)),
+                {at::tensor({0}, opt.dtype(at::kLong)),
                 offsets}
             );
         }
