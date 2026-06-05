@@ -794,20 +794,35 @@ def test_fully_fused_projection_ut(
     # ASSERTIONS: Compare outputs with appropriate tolerances
     # ========================================================================
 
-    # Radii: Integer values, allow small differences due to ceil() rounding
-    # With require_all_valid=True, early-exit can cause larger FP32 differences
-    # Rolling shutter uses iterative refinement (10 iterations) which accumulates
-    # numerical differences through the opacity-aware radius computation pipeline
+    # Radii: ceil()'d integer pixel extents.
+    # - GLOBAL shutter: inputs are smooth, so only ceil() rounding differs and a
+    #   tight per-element check (atol=2) holds.
+    # - ROLLING shutter: the iterative refinement amplifies FP32 differences, and
+    #   a sub-pixel difference at a ceil() step tips a boundary Gaussian's extent
+    #   by a whole integer.  Mirror the means2d/conics rolling-shutter checks: a
+    #   tight bulk per-element bound (atol=10) with a small fail-rate cap so
+    #   systematic bias still fails, plus an outlier guard so a single large
+    #   radius error cannot hide inside the fail-rate budget.
     if rolling_shutter == RollingShutterType.GLOBAL:
-        radii_atol = 2.0  # Only ceil() differences for global shutter
-    else:
-        radii_atol = (
-            10.0  # Rolling shutter: iterative refinement amplifies FP32 differences
+        torch.testing.assert_close(
+            radii_cuda[sel].float(), radii_torch[sel].float(), rtol=0, atol=2.0
         )
-
-    torch.testing.assert_close(
-        radii_cuda[sel].float(), radii_torch[sel].float(), rtol=0, atol=radii_atol
-    )
+    else:
+        _diff_r = (radii_cuda[sel].float() - radii_torch[sel].float()).abs()
+        _fail_r = _diff_r > 10.0
+        _fr_r = _fail_r.float().mean().item()
+        # Bulk bound atol=10; worst observed 1/783256 (~0.00013%) tipping over on
+        # L40S (NVRTC).  Cap at 0.01% for GPU/codegen margin.
+        assert _fr_r <= 1e-4, (
+            f"UT radii (rolling): fail-rate {_fr_r:.4%} > cap 0.01% "
+            f"(atol=10, {int(_fail_r.sum().item())}/{_fail_r.numel()})"
+        )
+        # Outlier guard: admitted outliers stay within a few ceil()-steps.
+        _outlier_r = _diff_r > 32.0
+        assert not _outlier_r.any(), (
+            f"UT radii (rolling): {int(_outlier_r.sum().item())} elements exceed "
+            f"outlier bound (atol=32); worst diff {_diff_r.max().item():.1f}"
+        )
 
     # means2d: split by shutter mode.  GLOBAL is smooth in inputs and admits
     # a tight per-element check.  ROLLING does a 10-iter refinement whose
@@ -968,7 +983,8 @@ def test_fully_fused_projection_ut(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_isect(test_data, batch_dims: Tuple[int, ...]):
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_isect(test_data, dtype: torch.dtype, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
 
@@ -979,10 +995,16 @@ def test_isect(test_data, batch_dims: Tuple[int, ...]):
     I = B * C
     width, height = 40, 60
 
+    # Cover float64 as well as float32: intersect_tile_kernel is instantiated
+    # for scalar_t=double (dispatch keys on means2d), and its 32-bit depth sort
+    # key must narrow to float32 to stay a monotonic ordering -- a bare 32-bit
+    # reinterpret of a double reads only half its bits and scrambles the
+    # within-tile front-to-back order. The Python reference narrows the key to
+    # float32, so the float64 CUDA path must agree with it.
     test_data = {
-        "means2d": torch.randn(C, N, 2, device=device) * width,
+        "means2d": torch.randn(C, N, 2, device=device, dtype=dtype) * width,
         "radii": torch.randint(0, width, (C, N, 2), device=device, dtype=torch.int32),
-        "depths": torch.rand(C, N, device=device),
+        "depths": torch.rand(C, N, device=device, dtype=dtype),
     }
     test_data = expand(test_data, batch_dims)
     means2d = test_data["means2d"]
@@ -5437,3 +5459,448 @@ def test_backward_high_opacity_no_nan(tile_size):
         assert torch.isfinite(
             param.grad
         ).all(), f"NaN/Inf in {name}.grad (max={param.grad.abs().max().item():.2e})"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
+    # A masked-out tile takes the forward rasterizer's early-return branch,
+    # which must initialize ALL of its pixel outputs (the binding allocates
+    # them with at::empty, leaving render_alphas / last_ids uninitialized
+    # otherwise). The low-level fwd op exposes last_ids directly. Stale
+    # allocator contents could coincidentally match these defaults, so this
+    # only reliably catches a missing store when uninitialized memory differs
+    # from the default.
+    from gsplat.cuda._wrapper import _make_lazy_cuda_func
+
+    tile_size = 16
+    width = height = tile_size  # single tile
+    channels = 3
+    N = 1
+
+    means2d = torch.tensor([[[width / 2.0, height / 2.0]]], device=device)  # [1, 1, 2]
+    conics = torch.tensor([[[1.0, 0.0, 1.0]]], device=device)  # [1, 1, 3]
+    colors = torch.ones((1, N, channels), device=device)
+    opacities = torch.ones((1, N), device=device)
+    backgrounds = torch.zeros((1, channels), device=device)
+    masks = torch.zeros((1, 1, 1), dtype=torch.bool, device=device)  # tile masked off
+    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
+
+    render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+        "rasterize_to_pixels_3dgs_fwd"
+    )(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        backgrounds,
+        masks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+    )
+
+    torch.testing.assert_close(
+        render_colors, backgrounds.reshape(1, 1, 1, channels).expand_as(render_colors)
+    )
+    torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
+    torch.testing.assert_close(last_ids, torch.zeros_like(last_ids))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+def test_isect_tiles_lidar_double_depth():
+    # intersect_tile_lidar_kernel narrows the depth sort key to float32. With
+    # float64 depths a bare 32-bit slice of the double is its low mantissa bits
+    # (non-monotonic), scrambling the within-tile front-to-back order. The
+    # double path is reachable from Python (no dtype cast in the wrapper or
+    # binding), so the float64 result must match the float32 result tile-for-tile.
+    from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
+    from gsplat.cuda._wrapper import isect_tiles_lidar
+    from tests.test_cameras import parse_lidar_camera
+
+    torch.manual_seed(42)
+
+    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+        "pandar128", (), 0, 0, device=device
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
+
+    C, N = 3, 1000
+    means2d = (
+        torch.randn(C, N, 2, device=device)
+        * torch.tensor([2 * math.pi, math.pi], device=device)
+    ) * ANGLE_TO_PIXEL_SCALING_FACTOR
+    radii = torch.ceil(
+        torch.randn(C, N, 2, device=device).abs().clamp(max=1)
+        * torch.tensor([math.pi, lidar.fov_vert_rad.span / 2], device=device)
+        * ANGLE_TO_PIXEL_SCALING_FACTOR
+    ).to(torch.int32)
+    depths = torch.rand(C, N, device=device)
+
+    tpg32, iid32, fid32 = isect_tiles_lidar(lidar, means2d, radii, depths, sort=True)
+    # Same values, double dtype -> exercises the scalar_t=double instantiation.
+    tpg64, iid64, fid64 = isect_tiles_lidar(
+        lidar, means2d.double(), radii, depths.double(), sort=True
+    )
+
+    torch.testing.assert_close(tpg64, tpg32)
+    torch.testing.assert_close(iid64, iid32)
+    torch.testing.assert_close(fid64, fid32)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+def test_isect_tiles_packed_segmented_rejected():
+    # In packed mode tiles_per_gauss is 1-D [nnz], so the per-image segment
+    # offsets collapse to a single [0, total] buffer; a segmented radix sort
+    # over n_images segments would read past it. The op must reject the
+    # combination rather than corrupt the sort.
+    from gsplat.cuda._wrapper import isect_tiles
+
+    torch.manual_seed(42)
+    nnz = 8
+    means2d = torch.randn(nnz, 2, device=device) * 40
+    radii = torch.randint(1, 10, (nnz, 2), device=device, dtype=torch.int32)
+    depths = torch.rand(nnz, device=device)
+    image_ids = torch.zeros(nnz, dtype=torch.int32, device=device)
+    gaussian_ids = torch.arange(nnz, dtype=torch.int32, device=device)
+
+    with pytest.raises(
+        RuntimeError, match="segmented sort is not supported for packed inputs"
+    ):
+        isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size=16,
+            tile_width=4,
+            tile_height=4,
+            sort=True,
+            segmented=True,
+            packed=True,
+            n_images=1,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+def test_isect_tiles_lidar_packed_segmented_rejected():
+    # Lidar sibling of the camera packed+segmented guard.
+    from gsplat.cuda._wrapper import isect_tiles_lidar
+    from tests.test_cameras import parse_lidar_camera
+
+    torch.manual_seed(42)
+    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+        "pandar128", (), 0, 0, device=device
+    )
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
+
+    nnz = 8
+    means2d = torch.randn(nnz, 2, device=device)
+    radii = torch.randint(1, 10, (nnz, 2), device=device, dtype=torch.int32)
+    depths = torch.rand(nnz, device=device)
+    image_ids = torch.zeros(nnz, dtype=torch.int32, device=device)
+    gaussian_ids = torch.arange(nnz, dtype=torch.int32, device=device)
+
+    with pytest.raises(
+        RuntimeError, match="segmented sort is not supported for packed inputs"
+    ):
+        isect_tiles_lidar(
+            lidar,
+            means2d,
+            radii,
+            depths,
+            sort=True,
+            segmented=True,
+            packed=True,
+            n_images=1,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("C", [1, 3])
+def test_fully_fused_projection_packed_empty(C):
+    # Packed EWA-3DGS projection computed the batch count as numel/(N*3) before
+    # the empty-input guard; with N==0 that divisor is zero (host-side integer
+    # division by zero) in BOTH the forward and backward launchers. An empty
+    # gaussian set must be a clean no-op (empty packed tensors) through fwd+bwd.
+    # C > 1 also pins the indptr shape contract: a length-1 indptr would pass a
+    # bare indptr[-1] check yet drop the per-camera rows the CSR API promises.
+    from gsplat.cuda._wrapper import fully_fused_projection
+
+    W, H = 64, 64
+    means = torch.zeros(0, 3, device=device, requires_grad=True)
+    quats = torch.zeros(0, 4, device=device, requires_grad=True)
+    scales = torch.ones(0, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device)[None].expand(C, 4, 4).contiguous()
+    Ks = (
+        torch.tensor(
+            [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        )[None]
+        .expand(C, 3, 3)
+        .contiguous()
+    )
+
+    (
+        batch_ids,
+        camera_ids,
+        gaussian_ids,
+        indptr,
+        radii,
+        means2d,
+        depths,
+        conics,
+        compensations,
+    ) = fully_fused_projection(
+        means, None, quats, scales, viewmats, Ks, W, H, packed=True
+    )
+
+    assert gaussian_ids.numel() == 0
+    assert means2d.shape[0] == 0
+    assert radii.shape[0] == 0
+    # B == 1 for means.shape == (0, 3), so indptr has B * C + 1 == C + 1 zero
+    # entries -- one row per camera plus the trailing total.
+    assert indptr.shape == (C + 1,)
+    assert bool((indptr == 0).all())
+
+    # Backward over the empty projection must not divide by zero in the launcher.
+    (means2d.sum() + depths.sum() + conics.sum()).backward()
+    assert means.grad.shape == means.shape
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support isn't built in")
+@pytest.mark.parametrize("C", [1, 3])
+def test_fully_fused_projection_2dgs_packed_empty(C):
+    # Same empty-input batch-count division-by-zero as the EWA packed projection,
+    # in the 2DGS packed launcher's forward and backward. An empty gaussian set
+    # must be a clean no-op (empty packed tensors) through fwd+bwd.
+    # C > 1 also pins the indptr shape contract: a length-1 indptr would pass a
+    # bare indptr[-1] check yet drop the per-camera rows the CSR API promises.
+    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+
+    W, H = 64, 64
+    means = torch.zeros(0, 3, device=device, requires_grad=True)
+    quats = torch.zeros(0, 4, device=device, requires_grad=True)
+    scales = torch.ones(0, 3, device=device, requires_grad=True)
+    viewmats = torch.eye(4, device=device)[None].expand(C, 4, 4).contiguous()
+    Ks = (
+        torch.tensor(
+            [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        )[None]
+        .expand(C, 3, 3)
+        .contiguous()
+    )
+
+    (
+        batch_ids,
+        camera_ids,
+        gaussian_ids,
+        indptr,
+        radii,
+        means2d,
+        depths,
+        ray_transforms,
+        normals,
+    ) = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, W, H, packed=True
+    )
+
+    assert gaussian_ids.numel() == 0
+    assert means2d.shape[0] == 0
+    assert radii.shape[0] == 0
+    # B == 1 for means.shape == (0, 3), so indptr has B * C + 1 == C + 1 zero
+    # entries -- one row per camera plus the trailing total.
+    assert indptr.shape == (C + 1,)
+    assert bool((indptr == 0).all())
+
+    # Backward over the empty projection must not divide by zero in the launcher.
+    (means2d.sum() + depths.sum() + ray_transforms.sum() + normals.sum()).backward()
+    assert means.grad.shape == means.shape
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_fully_fused_projection_packed_grid_y_limit():
+    # The packed forward launcher maps B*C onto grid.y, which CUDA caps at
+    # 65535. A larger B*C must raise a clear error instead of issuing an invalid
+    # kernel launch. Here B=1 and C=65536 (one camera over the cap).
+    from gsplat.cuda._wrapper import fully_fused_projection
+
+    W, H = 32, 32
+    N, C = 1, 65536
+    means = torch.randn(N, 3, device=device)
+    means[:, 2] += 5.0
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.rand(N, 3, device=device) * 0.1
+    viewmats = torch.eye(4, device=device).expand(C, 4, 4).contiguous()
+    Ks = (
+        torch.tensor(
+            [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        )
+        .expand(C, 3, 3)
+        .contiguous()
+    )
+
+    with pytest.raises(RuntimeError, match=r"exceeds the CUDA grid\.y limit"):
+        fully_fused_projection(
+            means, None, quats, scales, viewmats, Ks, W, H, packed=True
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
+@pytest.mark.parametrize("tile_width,tile_height", [(2, 2), (4, 4), (8, 4)])
+def test_isect_offset_power_of_two_tiles(tile_width: int, tile_height: int):
+    # n_tiles = tile_width*tile_height is a power of two here, the case where the
+    # packed (image, tile) id field width disagrees between bits_for_count
+    # (bit_width(n-1)) and the old floor(log2)+1 (off by one bit). A pack/unpack
+    # mismatch corrupts the decoded tile ids and the offset buffer, so the CUDA
+    # packing, the CUDA offset decode, and the Python reference must all agree
+    # at these counts.
+    from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
+    from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
+
+    torch.manual_seed(42)
+    # C >= 3 so the image id occupies bits above the tile field: a wrong
+    # tile_n_bits in the offset decode then mis-splits image vs tile bits. With
+    # C <= 2 the off-by-one bit folds back into the flat (image*n_tiles+tile)
+    # index losslessly and would hide the bug.
+    C, N = 4, 800
+    tile_size = 16
+    width = tile_width * tile_size
+    height = tile_height * tile_size
+    I = C
+    n_tiles = tile_width * tile_height
+    assert n_tiles & (n_tiles - 1) == 0, "n_tiles must be a power of two for this test"
+
+    means2d = torch.randn(C, N, 2, device=device) * width
+    radii = torch.randint(0, tile_size, (C, N, 2), device=device, dtype=torch.int32)
+    depths = torch.rand(C, N, device=device)
+
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+
+    _tiles_per_gauss, _isect_ids, _gauss_ids = _isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    _isect_offsets = _isect_offset_encode(_isect_ids, I, tile_width, tile_height)
+
+    torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
+    torch.testing.assert_close(isect_ids, _isect_ids)
+    torch.testing.assert_close(flatten_ids, _gauss_ids)
+    torch.testing.assert_close(isect_offsets, _isect_offsets)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterize_to_indices_in_range_empty():
+    # rasterize_to_indices_3dgs computed the image count as numel/(2*N) before
+    # any emptiness guard; with zero gaussians (N == 0) the divisor is zero -- a
+    # host-side integer division by zero. An empty gaussian set must be a clean
+    # no-op returning empty index tensors.
+    from gsplat.cuda._wrapper import rasterize_to_indices_in_range
+
+    C = 1
+    W = H = 16
+    tile_size = 16
+    means2d = torch.zeros(C, 0, 2, device=device)
+    conics = torch.zeros(C, 0, 3, device=device)
+    opacities = torch.zeros(C, 0, device=device)
+    transmittances = torch.ones(C, H, W, device=device)
+    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int32, device=device)
+    flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
+
+    gauss_ids, pixel_ids, image_ids = rasterize_to_indices_in_range(
+        0,
+        2**30,
+        transmittances,
+        means2d,
+        conics,
+        opacities,
+        W,
+        H,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+    )
+    assert gauss_ids.numel() == 0
+    assert pixel_ids.numel() == 0
+    assert image_ids.numel() == 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterize_to_pixels_eval3d_empty():
+    # The world-space rasterizer computed the batch count as numel/(N*3) before
+    # any emptiness guard; with zero gaussians (N == 0) the divisor is zero -- a
+    # host-side integer division by zero. An empty gaussian set must be a clean
+    # no-op rather than crashing.
+    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+
+    C = 1
+    W = H = 16
+    tile_size = 16
+    channels = 3
+    means = torch.zeros(0, 3, device=device)
+    quats = torch.zeros(0, 4, device=device)
+    scales = torch.ones(0, 3, device=device)
+    colors = torch.zeros(C, 0, channels, device=device)
+    opacities = torch.zeros(C, 0, device=device)
+    viewmats = torch.eye(4, device=device)[None]
+    Ks = torch.tensor(
+        [[[float(W), 0.0, W / 2.0], [0.0, float(H), H / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+    isect_offsets = torch.zeros(C, 1, 1, dtype=torch.int32, device=device)
+    flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
+
+    # Must not crash (pre-fix: host-side division by zero on the empty input),
+    # and every output must hold its empty/safe-default value instead of
+    # uninitialized at::empty memory.
+    (
+        render_colors,
+        render_alphas,
+        last_ids,
+        sample_counts,
+        render_normals,
+    ) = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities,
+        viewmats,
+        Ks,
+        W,
+        H,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_sample_counts=True,
+        return_normals=True,
+    )
+    assert torch.isfinite(render_colors).all()
+    torch.testing.assert_close(render_colors, torch.zeros_like(render_colors))
+    torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
+    torch.testing.assert_close(render_normals, torch.zeros_like(render_normals))
+    torch.testing.assert_close(last_ids, torch.full_like(last_ids, -1))
+    torch.testing.assert_close(sample_counts, torch.zeros_like(sample_counts))

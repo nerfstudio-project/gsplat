@@ -24,6 +24,7 @@
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
 
+#include "MathUtils.h"
 #include "Common.h"    // where all the macros are defined
 #include "Config.h"
 #include "Intersect.h" // where the launch function is declared
@@ -65,16 +66,26 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
         CHECK_INPUT(gaussian_ids.value());
     }
 
+    // packed-mode `offsets` (below) reduce a 1-D [nnz] tiles_per_gauss and
+    // collapse to a single [0, total] segment, so a per-image segmented sort
+    // would index past the 2-entry offsets buffer. Reject until packed offsets
+    // are built per image.
+    TORCH_CHECK(
+        !(packed && segmented),
+        "segmented sort is not supported for packed inputs"
+    );
+
     uint32_t n_tiles = tile_width * tile_height;
     // the number of bits needed to encode the image id and tile id
-    // Note: std::bit_width requires C++20
-    // uint32_t tile_n_bits = std::bit_width(n_tiles);
-    // uint32_t image_n_bits = std::bit_width(I);
-    uint32_t image_n_bits = (uint32_t)floor(log2(I)) + 1;
-    uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+    const uint32_t image_n_bits = bits_for_count(I);
+    const uint32_t tile_n_bits = bits_for_count(n_tiles);
     // the first 32 bits are used for the image id and tile id altogether, so
     // check if we have enough bits for them.
-    assert(image_n_bits + tile_n_bits <= 32);
+    TORCH_CHECK(
+        image_n_bits + tile_n_bits <= 32,
+        "intersect_tile: (image, tile) id packing needs ",
+        image_n_bits + tile_n_bits,
+        " bits but only 32 are available (I=", I, ", n_tiles=", n_tiles, ").");
 
     // first pass: compute number of tiles per gaussian
     // TODO: This first pass can be avoided, see todo comment in intersect_tile_lidar_kernel.
@@ -102,15 +113,16 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             c10::nullopt, // isect_ids
             c10::nullopt  // flatten_ids
         );
-        cum_tiles_per_gauss = at::cumsum(tiles_per_gauss.view({-1}), 0);
+        // Explicit int64 to match the kernel's int64 read of cum_tiles_per_gauss.
+        cum_tiles_per_gauss = at::cumsum(tiles_per_gauss.view({-1}), 0, at::kLong);
         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
         if (segmented) {
             // offsets in the isect_ids and flatten_ids
             offsets = at::cumsum(
-                at::sum(tiles_per_gauss, -1).view({-1}), 0
+                at::sum(tiles_per_gauss, -1).view({-1}), 0, at::kLong
             );
             offsets = at::cat(
-                {at::tensor({0}, opt.dtype(at::kInt)),
+                {at::tensor({0}, opt.dtype(at::kLong)),
                 offsets}
             );
         }
@@ -208,16 +220,26 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
         CHECK_INPUT(gaussian_ids.value());
     }
 
+    // packed-mode `offsets` (below) reduce a 1-D [nnz] tiles_per_gauss and
+    // collapse to a single [0, total] segment, so a per-image segmented sort
+    // would index past the 2-entry offsets buffer. Reject until packed offsets
+    // are built per image.
+    TORCH_CHECK(
+        !(packed && segmented),
+        "segmented sort is not supported for packed inputs"
+    );
+
     uint32_t n_tiles = lidar->n_bins_azimuth*lidar->n_bins_elevation;
     // the number of bits needed to encode the image id and tile id
-    // Note: std::bit_width requires C++20
-    // uint32_t tile_n_bits = std::bit_width(n_tiles);
-    // uint32_t image_n_bits = std::bit_width(I);
-    uint32_t image_n_bits = (uint32_t)floor(log2(I)) + 1;
-    uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+    const uint32_t image_n_bits = bits_for_count(I);
+    const uint32_t tile_n_bits = bits_for_count(n_tiles);
     // the first 32 bits are used for the image id and tile id altogether, so
     // check if we have enough bits for them.
-    assert(image_n_bits + tile_n_bits <= 32);
+    TORCH_CHECK(
+        image_n_bits + tile_n_bits <= 32,
+        "intersect_tile_lidar: (image, tile) id packing needs ",
+        image_n_bits + tile_n_bits,
+        " bits but only 32 are available (I=", I, ", n_tiles=", n_tiles, ").");
 
     // first pass: compute number of tiles per gaussian
     // TODO: This first pass can be avoided, see todo comment in intersect_tile_lidar_kernel.
@@ -248,10 +270,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
         {
             // offsets in the isect_ids and flatten_ids
             offsets = at::cumsum(
-                at::sum(tiles_per_gauss, -1).view({-1}), 0
+                at::sum(tiles_per_gauss, -1).view({-1}), 0, at::kLong
             );
             offsets = at::cat(
-                {at::tensor({0}, opt.dtype(at::kInt)),
+                {at::tensor({0}, opt.dtype(at::kLong)),
                 offsets}
             );
         }

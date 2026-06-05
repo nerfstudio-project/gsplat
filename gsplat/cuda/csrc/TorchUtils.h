@@ -7,6 +7,7 @@
 
 #include <ATen/core/grad_mode.h>
 #include <ATen/core/Tensor.h>
+#include <c10/util/intrusive_ptr.h>
 #include <type_traits>
 
 namespace gsplat {
@@ -125,6 +126,30 @@ template <class PointerT, class ScalarT>
 inline PointerT *data_ptr_as_or_null(bool enabled, const at::Tensor &tensor)
 {
     return enabled ? data_ptr_as<PointerT, ScalarT>(tensor) : nullptr;
+}
+
+/** Dereference a required intrusive_ptr, or raise a clear error if unset.
+ *
+ * `name` is woven into the error message so a missing field reports itself
+ * by name instead of crashing on a null dereference.
+ */
+template <class T>
+inline const T &checked_deref(const c10::intrusive_ptr<T> &ptr, const char *name)
+{
+    TORCH_CHECK(ptr, name, " must be set");
+    return *ptr;
+}
+
+/** Dereference a required `at::optional<intrusive_ptr>`, or raise a clear error
+ * if the optional is empty or the pointer it holds is null. Both failure modes
+ * report through the same `name`, so the deref site needs no separate presence
+ * check on the optional.
+ */
+template <class T>
+inline const T &checked_deref(const at::optional<c10::intrusive_ptr<T>> &opt, const char *name)
+{
+    TORCH_CHECK(opt.has_value(), name, " must be set");
+    return checked_deref(*opt, name);
 }
 
 } // namespace gsplat

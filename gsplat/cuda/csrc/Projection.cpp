@@ -346,7 +346,7 @@ projection_ewa_3dgs_packed_fwd(
 
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t C = viewmats.size(-3);       // number of cameras
-    uint32_t B = means.numel() / (N * 3); // number of batches
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)); // number of batches
     auto opt = means.options();
 
     uint32_t nrows = B * C;
@@ -745,7 +745,7 @@ projection_2dgs_packed_fwd(
     CHECK_INPUT(Ks);
 
     uint32_t N = means.size(-2);          // number of gaussians
-    uint32_t B = means.numel() / (N * 3); // number of batches
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)); // number of batches
     uint32_t C = viewmats.size(-3);       // number of cameras
     auto opt = means.options();
 

@@ -39,6 +39,17 @@ from ._wrapper import CameraModel, RollingShutterType
 from ._constants import MAX_ALPHA, MIN_COMPENSATION
 
 
+def _bits_for_count(count: int) -> int:
+    """Bits to index ``count`` items as 0..count-1 (0 when count <= 1).
+
+    Mirrors ``gsplat::bits_for_count`` (MathUtils.h) so the (image, tile) id is
+    packed/unpacked with the same field widths as the CUDA kernels. ``count -
+    1`` matters for power-of-two counts: ``int.bit_length()`` over-counts them
+    (8 -> 4 bits instead of 3).
+    """
+    return (count - 1).bit_length() if count > 1 else 0
+
+
 def _persp_proj(
     means: Tensor,  # [..., C, N, 3]
     covars: Tensor,  # [..., C, N, 3, 3]
@@ -389,8 +400,8 @@ def _isect_tiles(
     flatten_ids = torch.empty(n_isects, dtype=torch.int32, device=device)
 
     cum_tiles_per_gauss = torch.cumsum(tiles_per_gauss.flatten(), dim=0)
-    image_n_bits = I.bit_length()
-    tile_n_bits = (tile_width * tile_height).bit_length()
+    image_n_bits = _bits_for_count(I)
+    tile_n_bits = _bits_for_count(tile_width * tile_height)
     assert image_n_bits + tile_n_bits + 32 <= 64
 
     def binary(num):
@@ -450,7 +461,7 @@ def _isect_offset_encode(
         This is a minimal implementation of the fully fused version, which has more
         arguments. Not all arguments are supported.
     """
-    tile_n_bits = (tile_width * tile_height).bit_length()
+    tile_n_bits = _bits_for_count(tile_width * tile_height)
     tile_counts = torch.zeros(
         (I, tile_height, tile_width), dtype=torch.int64, device=isect_ids.device
     )

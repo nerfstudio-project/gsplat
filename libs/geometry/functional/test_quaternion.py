@@ -596,7 +596,11 @@ class TestQuaternionOperations(unittest.TestCase):
         )
         q2_seed = torch.randn(n, 4, device="cuda", dtype=torch.float32)
         proj = (q2_seed * q1_data).sum(dim=-1, keepdim=True) * q1_data
-        q2_data = torch.nn.functional.normalize(q2_seed - proj, dim=-1)
+        q2_orthogonal = torch.nn.functional.normalize(q2_seed - proj, dim=-1)
+        # Bias q2 toward q1 so dot(q1, q2) is safely positive, keeping the pair
+        # off the slerp shortest-path sign-flip boundary (dot == 0) where the
+        # gradient is ill-conditioned and the CUDA / reference branches diverge.
+        q2_data = torch.nn.functional.normalize(0.3 * q1_data + q2_orthogonal, dim=-1)
         q1 = q1_data.requires_grad_()
         q2 = q2_data.requires_grad_()
         t = (
