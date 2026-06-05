@@ -4,8 +4,8 @@
 torch==2.9.1
 nvidia-ncore==18.6.0
 
-# pycolmap for data parsing
-git+https://github.com/brandonyzhao/pycolmap@a2a5671b0f6ab641957dd4c5a78cabcf220c28ee
+# Official COLMAP Python bindings for data parsing
+pycolmap>=3.10.0
 # (optional) nerfacc for torch version rasterization
 # git+https://github.com/nerfstudio-project/nerfacc
 
