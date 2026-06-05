@@ -24,18 +24,21 @@
 #include <ATen/Functions.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
+#include <ATen/cuda/cub.h>
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
+#include <cstdint>
 #include <cuda/std/optional>
 
 #include "Common.h"
 #include "ExternalDistortion.cuh"
-#include "RasterizeChunkCSR.h"
+#include "RasterizeCSR.cuh"
 #include "RasterizeToPixelsFromWorld3DGS.h"
 #include "RasterizeToPixelsFromWorld3DGS.cuh"
 #include "Utils.cuh"
 #include "Cameras.cuh"
 #include "Lidars.cuh"
+#include "TorchUtils.h"
 #include "Dispatch.h"
 
 namespace gsplat {
@@ -58,39 +61,40 @@ constexpr uint32_t cdim_smem_stride() {
 }
 
 // ---------------------------------------------------------------------------
-// Single-kernel chunk-parallel backward pass.
+// Single-kernel batch-parallel backward pass.
 //
-// fwd persists per-chunk cumulative state into `fwd_chunk_state` at every
-// CHUNK_BATCHES boundary; bwd derives the per-chunk starting accumulators
-// from that state via a single CDIM dot + vec3 dot per thread in its
-// preamble, then runs the per-gaussian gradient walk. See
-// `RasterizeChunkCSR.h` for the tensor layout and boundary formula.
+// fwd persists per-batch cumulative state into `fwd_batch_state` at every
+// batch boundary; bwd derives the per-batch starting accumulators via a
+// single CDIM dot + vec3 dot per thread in
+// its preamble, then runs the per-gaussian gradient walk. See
+// `RasterizeCSR.cuh` for the tensor layout and boundary formula.
 //
 // Math (derived from the bwd recurrence in the hot loop below):
-//   T_start_c          = fwd_chunk_state[slot=c, pix, T_OFFSET]
-//                      = T_fwd at fwd-batch num_batches-1-c*CHUNK_BATCHES
+//   T_start_c          = fwd_batch_state[slot=c, T_OFFSET, pix]
+//                      = T_fwd at fwd-batch c (depth-walk index from front)
 //   render_accum_dot_c = dot(v_render_c,
 //                            pix_out_final - pix_out_fwd_at_boundary_c)
 //   normal_accum_dot_c = dot(v_render_n,
 //                            normal_out_final - normal_out_fwd_at_boundary_c)
-//   where `_final` is the c=0 slot (terminal fwd state) — the CSR-slot
-//   semantics are documented in `RasterizeChunkCSR.h`.
+//   where `_final` is the c=num_batches-1 slot (terminal fwd state,
+//   deepest batch) — the CSR-slot semantics are documented in
+//   `RasterizeCSR.cuh`.
 //
-// Grid: 1D {total_chunks, 1, 1}. Chunks are independent — no sequential
+// Grid: 1D {total_batches, 1, 1}. Batches are independent — no sequential
 // dependency — exposing ample work to the GPU scheduler and eliminating the
 // tail latency on tiles with many Gaussians.
 // ---------------------------------------------------------------------------
 
-// Device kernel that computes per-tile chunk counts. This was previously
+// Device kernel that computes per-tile batch counts. This was previously
 // file-scoped to this TU; it is now reachable by the fwd persist path via
-// the `compute_chunk_csr` host helper below. Kept `static` because only
+// the `compute_batch_csr` host helper below. Kept `static` because only
 // this TU launches it directly.
-static __global__ void compute_chunks_per_tile_kernel(
+static __global__ void compute_batches_per_tile_kernel(
     const int32_t *__restrict__ tile_offsets,
     const uint32_t num_tiles,
     const uint32_t n_isects,
-    const uint32_t pixels_per_tile,
-    int32_t *__restrict__ chunks_per_tile
+    const int32_t pixels_per_tile,
+    int32_t *__restrict__ batches_per_tile
 ) {
     const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= num_tiles) {
@@ -102,88 +106,157 @@ static __global__ void compute_chunks_per_tile_kernel(
         : static_cast<int32_t>(n_isects);
     const int32_t range = end - start;
     if (range <= 0) {
-        chunks_per_tile[t] = 0;
+        batches_per_tile[t] = 0;
         return;
     }
-    const uint32_t num_batches =
-        (static_cast<uint32_t>(range) + pixels_per_tile - 1) / pixels_per_tile;
-    const uint32_t num_chunks =
-        (num_batches + CHUNK_BATCHES - 1) / CHUNK_BATCHES;
-    chunks_per_tile[t] = static_cast<int32_t>(num_chunks);
+    assert(pixels_per_tile > 0);
+    const int32_t num_batches =
+        (range + pixels_per_tile - 1) / pixels_per_tile;
+    batches_per_tile[t] = num_batches;
 }
 
-// Host helper: see declaration in `RasterizeChunkCSR.h`. Launches the
+// Host helper: see declaration in `RasterizeCSR.cuh`. Launches the
 // device kernel above, builds the [num_tiles+1] CSR offsets via cumsum+cat,
-// then reads back `total_chunks` with a blocking `.item<int32_t>()`. Shared
+// then reads back `total_batches` with a blocking `.item<int32_t>()`. Shared
 // by fwd (persist buffer sizing) and bwd (gradient-kernel grid sizing).
-std::tuple<at::Tensor, at::Tensor, int64_t> compute_chunk_csr(
+std::tuple<at::Tensor, at::Tensor, int64_t> compute_batch_csr(
     const at::Tensor &tile_offsets,
     int64_t n_isects,
     uint32_t num_tiles,
-    uint32_t pixels_per_tile,
+    int32_t pixels_per_tile,
     at::TensorOptions dummy_options
 ) {
     auto int_opts = dummy_options.dtype(at::kInt);
-    auto chunks_per_tile_t =
+    auto batches_per_tile_t =
         at::empty({static_cast<int64_t>(num_tiles)}, int_opts);
     if (num_tiles > 0) {
         const uint32_t threads_per_block = 256;
         const uint32_t blocks =
             (num_tiles + threads_per_block - 1) / threads_per_block;
-        compute_chunks_per_tile_kernel
+        compute_batches_per_tile_kernel
             <<<blocks, threads_per_block, 0,
                at::cuda::getCurrentCUDAStream()>>>(
                 tile_offsets.const_data_ptr<int32_t>(),
                 num_tiles,
                 static_cast<uint32_t>(n_isects),
                 pixels_per_tile,
-                chunks_per_tile_t.data_ptr<int32_t>());
+                batches_per_tile_t.data_ptr<int32_t>());
     }
-    // chunk_offsets[0..num_tiles]: exclusive prefix sum with a trailing sum.
-    auto chunk_offsets_tail = at::cumsum(chunks_per_tile_t, 0, at::kInt);
-    auto chunk_offsets_t = at::cat(
-        {at::zeros({1}, int_opts), chunk_offsets_tail});
-    const int64_t total_chunks = num_tiles == 0
+    // batch_offsets[0..num_tiles]: exclusive prefix sum with a trailing sum.
+    auto batch_offsets_tail = at::cumsum(batches_per_tile_t, 0, at::kInt);
+    auto batch_offsets_t = at::cat(
+        {at::zeros({1}, int_opts), batch_offsets_tail});
+    const int64_t total_batches = num_tiles == 0
         ? int64_t{0}
         : static_cast<int64_t>(
-              chunk_offsets_t[static_cast<int64_t>(num_tiles)]
+              batch_offsets_t[static_cast<int64_t>(num_tiles)]
                   .item<int32_t>());
-    return std::make_tuple(chunks_per_tile_t, chunk_offsets_t, total_chunks);
+    return std::make_tuple(batches_per_tile_t, batch_offsets_t, total_batches);
 }
 
-// --- Helpers for CSR-packed chunk state ---
-//
-// Each tile contributes `chunks_per_tile[t]` chunk-slots to the flat
-// fwd_chunk_state buffer, with `chunk_offsets[t]` giving the starting slot
-// of tile t. `chunk_offsets[num_tiles]` is the total number of chunk-slots
-// and equals the CTA count for the gradient kernel. The flat layout
-// avoids the per-tile padding (`num_tiles × max_chunks`) that would
-// otherwise create a dense-scene OOM vector driven by the worst tile.
-//
-// `CHUNK_BATCHES` and `compute_chunks_per_tile_kernel` live in
-// `RasterizeChunkCSR.h` so fwd and bwd can share a single source of truth.
-
-// Binary-search helper: given ascending `chunk_offsets[num_tiles + 1]`, find
-// tile t such that chunk_offsets[t] <= bid < chunk_offsets[t + 1]. Called
-// once per CTA; O(log num_tiles) ≈ 14 global-mem reads on a 10K-tile scene
-// and the reads hit L2 after the first CTA in the launch wave.
-__device__ __forceinline__ uint32_t find_tile_for_block(
-    const int32_t *__restrict__ chunk_offsets,
-    uint32_t num_tiles,
-    uint32_t bid
+static __global__ void emit_round_major_pairs_kernel(
+    const int32_t *__restrict__ batches_per_tile,
+    const int32_t *__restrict__ batch_offsets,
+    int64_t *__restrict__ sort_keys,
+    int32_t *__restrict__ sort_values,
+    const uint32_t num_tiles,
+    const uint32_t bit_width_tile
 ) {
-    uint32_t lo = 0;
-    uint32_t hi = num_tiles;
-    while (lo < hi) {
-        const uint32_t mid = (lo + hi) >> 1;
-        if (static_cast<uint32_t>(chunk_offsets[mid + 1]) <= bid) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
+    const uint32_t tile = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tile >= num_tiles) {
+        return;
     }
-    return lo;
+
+    const int32_t count = batches_per_tile[tile];
+    const int32_t base = batch_offsets[tile];
+    for (int32_t batch = 0; batch < count; ++batch) {
+        const int32_t slot = base + batch;
+        const uint64_t key =
+            (static_cast<uint64_t>(static_cast<uint32_t>(batch))
+             << bit_width_tile) |
+            static_cast<uint64_t>(tile);
+        sort_keys[slot] = static_cast<int64_t>(key);
+        sort_values[slot] = slot;
+    }
 }
+
+namespace {
+
+uint32_t ceil_log2_u64(uint64_t x) {
+    if (x <= 1) {
+        return 0;
+    }
+    return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
+}
+
+} // namespace
+
+at::Tensor compute_bid_to_slot(
+    const at::Tensor &batches_per_tile,
+    const at::Tensor &batch_offsets,
+    int64_t total_batches,
+    at::TensorOptions dummy_options
+) {
+    auto int_opts = dummy_options.dtype(at::kInt);
+    at::Tensor bid_to_slot =
+        at::empty({static_cast<int64_t>(total_batches)}, int_opts);
+
+    const uint32_t num_tiles =
+        static_cast<uint32_t>(batches_per_tile.size(0));
+    if (total_batches == 0 || num_tiles == 0) {
+        return bid_to_slot;
+    }
+
+    const uint32_t bit_width_tile =
+        ceil_log2_u64(static_cast<uint64_t>(num_tiles) + 1u);
+    const uint32_t bit_width_round =
+        ceil_log2_u64(static_cast<uint64_t>(total_batches) + 1u);
+    const uint32_t total_bits = bit_width_tile + bit_width_round;
+
+    auto long_opts = dummy_options.dtype(at::kLong);
+    at::Tensor sort_keys =
+        at::empty({static_cast<int64_t>(total_batches)}, long_opts);
+    at::Tensor sorted_keys =
+        at::empty({static_cast<int64_t>(total_batches)}, long_opts);
+    at::Tensor sort_values =
+        at::empty({static_cast<int64_t>(total_batches)}, int_opts);
+
+    const uint32_t threads_per_block = 256;
+    const uint32_t blocks =
+        (num_tiles + threads_per_block - 1) / threads_per_block;
+    auto stream = at::cuda::getCurrentCUDAStream();
+    emit_round_major_pairs_kernel<<<blocks, threads_per_block, 0, stream>>>(
+        batches_per_tile.const_data_ptr<int32_t>(),
+        batch_offsets.const_data_ptr<int32_t>(),
+        sort_keys.data_ptr<int64_t>(),
+        sort_values.data_ptr<int32_t>(),
+        num_tiles,
+        bit_width_tile);
+
+    // Sort by `(batch_round, tile)` while carrying the original tile-major
+    // slot as the value. The sorted values are the launch-index to slot
+    // permutation; no extra scatter is needed.
+    at::cuda::cub::radix_sort_pairs<int64_t, int32_t>(
+        sort_keys.const_data_ptr<int64_t>(),
+        sorted_keys.data_ptr<int64_t>(),
+        sort_values.const_data_ptr<int32_t>(),
+        bid_to_slot.data_ptr<int32_t>(),
+        total_batches,
+        /*descending=*/false,
+        /*begin_bit=*/0,
+        /*end_bit=*/static_cast<int64_t>(total_bits == 0 ? 1u : total_bits));
+
+    return bid_to_slot;
+}
+
+// --- Helpers for CSR-packed batch state ---
+//
+// Each tile contributes `batches_per_tile[t]` batch-slots to the flat
+// fwd_batch_state buffer, with `batch_offsets[t]` giving the starting slot
+// of tile t. `batch_offsets[num_tiles]` is the total number of batch-slots
+// and equals the CTA count for the gradient kernel. The flat layout
+// avoids the per-tile padding (`num_tiles x max_batches`) that would
+// otherwise create a dense-scene OOM vector driven by the worst tile.
 
 // Ray-generation helper (shared with the fwd kernel) lives in
 // `RasterizeToPixelsFromWorld3DGS.cuh` as `compute_world_ray`.
@@ -191,15 +264,20 @@ __device__ __forceinline__ uint32_t find_tile_for_block(
 // Pixel-coordinate resolution helper (shared with the fwd kernel) lives in
 // `RasterizeToPixelsFromWorld3DGS.cuh` as `compute_pixel_coords`.
 
-// Gradient pass. Per-CTA: (1) chunk_id decoded from grid x via binary
-// search on chunk_offsets, (2) initial state materialised from the
-// fwd-persisted `fwd_chunk_state` tensor via one CDIM dot + one vec3 dot
-// per thread, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
-// accumulated via atomicAdd (multiple chunks per pixel).
+// Gradient pass. Per-CTA: (1) batch_id decoded from grid x via binary
+// search on batch_offsets, (2) initial state materialised from the
+// fwd-persisted `fwd_batch_state` tensor via one CDIM dot + one vec3 dot
+// per thread, (3) one front-aligned depth batch is walked, (4) v_rays is accumulated
+// via atomicAdd because multiple batches contribute per pixel.
 //
-// Grid: 1D {total_chunks, 1, 1}; each CTA's (tile_linear, chunk_id) is decoded
-// via a binary search on chunk_offsets in the preamble.
-template <uint32_t CDIM, typename scalar_t>
+// Grid: 1D {total_batches, 1, 1}; each CTA's (tile_linear, batch_id) is decoded
+// via a binary search on batch_offsets in the preamble.
+template <
+    uint32_t CDIM,
+    bool ReturnNormals,
+    bool UseHitDistance,
+    typename scalar_t
+>
 __global__ void rasterize_gradient_bwd_kernel(
     const uint32_t B,
     const uint32_t C,
@@ -234,7 +312,6 @@ __global__ void rasterize_gradient_bwd_kernel(
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const bool use_hit_distance,
     // fwd outputs
     const scalar_t
         *__restrict__ render_alphas,      // [B, C, image_height, image_width, 1]
@@ -253,50 +330,65 @@ __global__ void rasterize_gradient_bwd_kernel(
     scalar_t *__restrict__ v_colors,   // [B, C, N, CDIM] or [nnz, CDIM]
     scalar_t *__restrict__ v_opacities, // [B, C, N] or [nnz]
     scalar_t *__restrict__ v_rays,     // [B, C, image_height, image_width, 6]
-    // Fwd-persisted per-chunk cumulative state (CSR-packed; see
-    // `RasterizeChunkCSR.h`). Layout per slot: [T, pix_out[CDIM],
-    // normal_out[3]]. Slot c=0 is the terminal fwd state (used as
-    // `_final` reference); slot c=chunk_id is this CTA's boundary.
-    const scalar_t *__restrict__ fwd_chunk_state, // [total_chunks, pixels_per_tile, 1+CDIM+3]
-    const int32_t *__restrict__ chunk_offsets     // [num_tiles + 1]
+    // Fwd-persisted per-batch cumulative state (CSR-packed; see
+    // `RasterizeCSR.cuh`). Within a slot, state elements are ordered as
+    // [T, pix_out[CDIM], optional normal_out[3]] and pixels are fastest-varying. Slot
+    // c=num_batches-1 is the terminal fwd state for MixedBatch and for
+    // non-saturating ParallelBatch pixels. Saturating ParallelBatch pixels use
+    // the c_stop slot as the terminal reference after batch-replay overwrites
+    // it with post-saturation state; batch CTAs with batch_id > c_stop skip
+    // the pixel because it never reached those gaussians.
+    const scalar_t *__restrict__ fwd_batch_state, // [total_batches, state_dim, pixels_per_tile]
+    const int32_t *__restrict__ batch_offsets,    // [num_tiles + 1]
+    const uint16_t *__restrict__ compose_c_stop   // [num_tiles, pixels_per_tile] or null
 )
 {
-    // ---- Preamble: CSR chunk decode, pixel map, ray gen, fwd-state load ----
-    // The chunk-start accumulators are derived from `fwd_chunk_state` further
+    // ---- Preamble: CSR batch decode, pixel map, ray gen, fwd-state load ----
+    // The batch-start accumulators are derived from `fwd_batch_state` further
     // down via one CDIM dot + one vec3 dot per thread.
     auto block = cg::this_thread_block();
     const uint32_t num_tiles_total = (B * C) * tile_height * tile_width;
-    const uint32_t bid = block.group_index().x;
-    const uint32_t tile_linear =
-        find_tile_for_block(chunk_offsets, num_tiles_total, bid);
-    const uint32_t chunk_id =
-        bid - static_cast<uint32_t>(chunk_offsets[tile_linear]);
-    const uint32_t iid = tile_linear / (tile_height * tile_width);
-    const uint32_t tile_id = tile_linear - iid * (tile_height * tile_width);
-    const uint32_t tile_row = tile_id / tile_width;
-    const uint32_t tile_col = tile_id - tile_row * tile_width;
+    const int32_t bid = static_cast<int32_t>(block.group_index().x);
+    const int32_t tile_linear = static_cast<int32_t>(
+        find_tile_for_block(
+            batch_offsets, num_tiles_total, static_cast<uint32_t>(bid)));
+    const int32_t batch_id = bid - batch_offsets[tile_linear];
+    const int32_t tile_width_count = static_cast<int32_t>(tile_width);
+    const int32_t tile_height_count = static_cast<int32_t>(tile_height);
+    assert(tile_width_count > 0 && tile_height_count > 0);
+    assert(tile_height_count <= INT32_MAX / tile_width_count);
+    const int32_t tiles_per_image = tile_height_count * tile_width_count;
+    const int32_t image_index = tile_linear / tiles_per_image;
+    const int32_t tile_id = tile_linear - image_index * tiles_per_image;
+    const int32_t tile_row = tile_id / tile_width_count;
+    const int32_t tile_col = tile_id - tile_row * tile_width_count;
     const uint32_t tr = block.thread_rank();
     const uint32_t block_size = block.size();
 
-    tile_offsets += iid * tile_height * tile_width;
-    render_alphas += iid * image_height * image_width;
-    last_ids += iid * image_height * image_width;
-    v_render_colors += iid * image_height * image_width * CDIM;
-    v_render_alphas += iid * image_height * image_width;
-    if (v_render_normals != nullptr) {
-        v_render_normals += iid * image_height * image_width * 3;
+    const int32_t image_width_px = static_cast<int32_t>(image_width);
+    const int32_t image_height_px = static_cast<int32_t>(image_height);
+    assert(image_width_px > 0 && image_height_px > 0);
+    assert(image_height_px <= INT32_MAX / image_width_px);
+    const int32_t image_area = image_height_px * image_width_px;
+    tile_offsets += image_index * tiles_per_image;
+    render_alphas += image_index * image_area;
+    last_ids += image_index * image_area;
+    v_render_colors += image_index * image_area * CDIM;
+    v_render_alphas += image_index * image_area;
+    if constexpr (ReturnNormals) {
+        v_render_normals += image_index * image_area * 3;
     }
     if (backgrounds != nullptr) {
-        backgrounds += iid * CDIM;
+        backgrounds += image_index * CDIM;
     }
     if (masks != nullptr) {
-        masks += iid * tile_height * tile_width;
+        masks += image_index * tiles_per_image;
     }
     if(rays != nullptr) {
-        rays += iid*image_height*image_width*6;
+        rays += image_index * image_area * 6;
     }
     if (v_rays != nullptr) {
-        v_rays += iid*image_height*image_width*6;
+        v_rays += image_index * image_area * 6;
     }
 
     // when the mask is provided, do nothing and return if
@@ -307,17 +399,20 @@ __global__ void rasterize_gradient_bwd_kernel(
 
     const int32_t range_start = tile_offsets[tile_id];
     const int32_t range_end =
-        (iid == B * C - 1) && (tile_id == tile_width * tile_height - 1)
+        (image_index == static_cast<int32_t>(B * C) - 1) &&
+            (tile_id == tiles_per_image - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    const uint32_t num_batches =
-        (range_end - range_start + block_size - 1) / block_size;
-    const uint32_t pixels_per_tile = tile_size * tile_size;
-    // Grid sized to total_chunks (CSR); every launched block has a valid slot.
+    const int32_t pixels_per_tile = tile_size * tile_size;
+    // Grid sized to total_batches (CSR); every launched block has a valid slot.
 
     // Pixel mapping (camera vs lidar) — shared helper.
     const PixelCoords pc = compute_pixel_coords(
-        camera_model_type, tile_id, tile_row, tile_col, tile_size,
+        camera_model_type,
+        static_cast<uint32_t>(tile_id),
+        static_cast<uint32_t>(tile_row),
+        static_cast<uint32_t>(tile_col),
+        tile_size,
         threadIdx.y, threadIdx.x, tr,
         image_width, image_height, lidar_device_coeffs);
     const uint32_t i = pc.row;
@@ -328,10 +423,10 @@ __global__ void rasterize_gradient_bwd_kernel(
     // Ray generation — shared with the fwd kernel via compute_world_ray
     // in RasterizeToPixelsFromWorld3DGS.cuh.
     auto rs_params = RollingShutterParameters(
-        viewmats0 + iid * 16,
-        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16);
+        viewmats0 + image_index * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + image_index * 16);
     WorldRay ray = compute_world_ray<scalar_t>(
-        iid, j, i, pix_id, inside, rs_params,
+        static_cast<uint32_t>(image_index), j, i, pix_id, inside, rs_params,
         rays, Ks,
         image_width, image_height,
         camera_model_type, rs_type,
@@ -340,13 +435,38 @@ __global__ void rasterize_gradient_bwd_kernel(
         external_distortion_device_params);
     const vec3 ray_d = ray.ray_dir;
     const vec3 ray_o = ray.ray_org;
-    const bool pixel_valid = inside && ray.valid_flag;
+    const bool pix_valid_raw = inside && ray.valid_flag;
+    const bool has_compose_stop = compose_c_stop != nullptr;
+    const int32_t thread_rank = static_cast<int32_t>(tr);
+    assert(tile_linear <=
+           (INT32_MAX - thread_rank) / pixels_per_tile);
+    const int32_t compose_idx =
+        tile_linear * pixels_per_tile + thread_rank;
+    const int32_t c_stop =
+        (has_compose_stop && inside)
+            ? decode_compose_c_stop(compose_c_stop[compose_idx])
+            : decode_compose_c_stop(COMPOSE_C_STOP_NONE);
+    assert(
+        !has_compose_stop || !inside || ray.valid_flag ||
+        c_stop == decode_compose_c_stop(COMPOSE_C_STOP_INVALID_RAY));
+    const bool sat_flag = c_stop >= 0;
+    const bool pixel_valid =
+        pix_valid_raw &&
+        !(sat_flag && batch_id > c_stop);
     const int32_t bin_final = pixel_valid ? last_ids[pix_id] : 0;
+
+    // No lane in this CTA can contribute a gradient when every pixel is
+    // invalid, out of tile, or already past its c_stop batch. This sync also
+    // serves as the pre-cooperative-load CTA sync below.
+    const bool any_pixel_valid = __syncthreads_or(pixel_valid);
+    if (!any_pixel_valid) {
+        return;
+    }
 
     const float T_final = pixel_valid ? 1.0f - render_alphas[pix_id] : 1.0f;
 
     // ---- Per-pixel gradients (same as original kernel) ----
-    // These are loaded BEFORE the chunk-state materialisation below so the
+    // These are loaded BEFORE the batch-state materialisation below so the
     // CDIM / vec3 dots can be fused in the same arithmetic region without
     // a second pass over v_render_c / v_render_n.
     float v_render_c[CDIM];
@@ -357,71 +477,86 @@ __global__ void rasterize_gradient_bwd_kernel(
     const float v_render_a = pixel_valid ? v_render_alphas[pix_id] : 0.f;
 
     vec3 v_render_n = vec3(0.f);
-    if (v_render_normals != nullptr && pixel_valid) {
-        v_render_n.x = v_render_normals[pix_id * 3 + 0];
-        v_render_n.y = v_render_normals[pix_id * 3 + 1];
-        v_render_n.z = v_render_normals[pix_id * 3 + 2];
+    if constexpr (ReturnNormals) {
+        if (pixel_valid) {
+            v_render_n.x = v_render_normals[pix_id * 3 + 0];
+            v_render_n.y = v_render_normals[pix_id * 3 + 1];
+            v_render_n.z = v_render_normals[pix_id * 3 + 2];
+        }
     }
 
-    // ---- Materialise chunk-start state from `fwd_chunk_state` ----------------
-    // The monolithic bwd recurrence satisfies, at the start of bwd chunk c:
-    //   T_start_c          = T_fwd at fwd-batch num_batches-1-c*CHUNK_BATCHES
+    // ---- Materialise batch-start state from `fwd_batch_state` ----------------
+    // The monolithic bwd recurrence satisfies, at the start of bwd batch c:
+    //   T_start_c          = T_fwd at fwd-batch c (depth-walk index from front)
     //   render_accum_dot_c = dot(v_render_c, pix_out_final - pix_out_boundary_c)
     //   normal_accum_dot_c = dot(v_render_n, normal_out_final - normal_out_boundary_c)
-    // where slot c=0 IS the terminal fwd state (see `RasterizeChunkCSR.h`).
+    // where slot c=num_batches-1 IS the terminal fwd state (deepest batch;
+    // see `RasterizeCSR.cuh`).
     //
-    // CSR slot layout: `[T, pix_out[CDIM], normal_out[3]]` per pixel-per-slot.
-    //   - This CTA's boundary slot: `bid` (=chunk_offsets[tile]+chunk_id).
-    //   - The terminal slot for this tile: `chunk_offsets[tile_linear]` (c=0).
+    // CSR slot layout: `[slot, state_element, pix]`, with state elements
+    // ordered as `[T, pix_out[CDIM], optional normal_out[3]]`.
+    //   - This CTA's boundary slot: `bid` (=batch_offsets[tile]+batch_id).
+    //   - The terminal slot for this tile: `batch_offsets[tile_linear+1]-1`
+    //     (c=num_batches-1, deepest batch).
     //
-    // int64 offset arithmetic: `total_chunks * pixels_per_tile * STATE_DIM` can
-    // exceed 2^31 on dense scenes at CDIM=24+ (≈18M intersections). The fwd
-    // persist path already uses int64; bwd matches.
-    constexpr uint32_t STATE_DIM = 1 + CDIM + 3;
-    constexpr uint32_t PIX_OFFSET = 1;
-    constexpr uint32_t NORMAL_OFFSET = 1 + CDIM;
-    const int64_t terminal_slot =
-        static_cast<int64_t>(chunk_offsets[tile_linear]);
-    const int64_t ppt64 = static_cast<int64_t>(pixels_per_tile);
-    const int64_t sd64 = static_cast<int64_t>(STATE_DIM);
-    const int64_t tr64 = static_cast<int64_t>(tr);
-    const int64_t terminal_base =
-        terminal_slot * ppt64 * sd64 + tr64 * sd64;
-    const int64_t boundary_base =
-        static_cast<int64_t>(bid) * ppt64 * sd64 + tr64 * sd64;
+    // Slot IDs are int32 CSR offsets. Keep logical offsets signed and narrow
+    // until the final pointer add inside FwdBatchSlotView.
+    const int32_t terminal_slot = batch_offsets[tile_linear + 1] - 1;
+    const FwdBatchSlotView<CDIM, ReturnNormals, const scalar_t>
+        boundary_slot_view(
+            fwd_batch_state,
+            bid,
+            pixels_per_tile,
+            thread_rank);
 
-    // T starts at the persisted fwd cumulative transmittance at this chunk's
-    // boundary — no further scaling needed (see math in file header).
-    float T = fwd_chunk_state[boundary_base + 0];
+    const int32_t final_slot = (sat_flag && pixel_valid)
+        ? batch_offsets[tile_linear] + c_stop
+        : terminal_slot;
+    const FwdBatchSlotView<CDIM, ReturnNormals, const scalar_t>
+        final_slot_view(
+            fwd_batch_state,
+            final_slot,
+            pixels_per_tile,
+            thread_rank);
+    const bool final_matches_boundary = pixel_valid &&
+        (final_slot == bid);
+
+    // T starts from the fwd state after this batch. For the saturating
+    // boundary, batch-replay has already overwritten the c_stop slot with the
+    // post-replay state that backward needs here.
+    float T = 1.0f;
+    if (pixel_valid) {
+        T = boundary_slot_view.T();
+    }
 
     // render_accum_dot = dot(v_render_c, pix_out_final - pix_out_boundary)
     // Streaming per-k load keeps the register footprint scalar (one `delta`
     // in flight at a time) rather than materialising pix_out_boundary[CDIM]
     // as live registers — critical for the kernel's already-tight register budget.
     float render_accum_dot = 0.f;
+    if (pixel_valid && !final_matches_boundary) {
 #pragma unroll
-    for (uint32_t k = 0; k < CDIM; ++k) {
-        const float pix_final_k = fwd_chunk_state[terminal_base + PIX_OFFSET + k];
-        const float pix_boundary_k = fwd_chunk_state[boundary_base + PIX_OFFSET + k];
-        const float delta_k = pix_final_k - pix_boundary_k;
-        render_accum_dot += delta_k * v_render_c[k];
+        for (uint32_t k = 0; k < CDIM; ++k) {
+            const float pix_final_k = final_slot_view.feature(k);
+            const float pix_boundary_k = boundary_slot_view.feature(k);
+            const float delta_k = pix_final_k - pix_boundary_k;
+            render_accum_dot += delta_k * v_render_c[k];
+        }
     }
 
     // normal_accum_dot = dot(v_render_n, normal_final - normal_boundary).
-    // fwd always zero-fills the normal slot when `return_normals` is false,
-    // so reading unconditionally is safe. Guarded by the nullptr check to
-    // skip three loads + three muls when normals are disabled.
+    // Guarded by the constexpr flag so the normal-slot loads compile away when
+    // normals are disabled.
     float normal_accum_dot = 0.f;
-    if (v_render_normals != nullptr) {
-        const float nx_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 0];
-        const float ny_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 1];
-        const float nz_final = fwd_chunk_state[terminal_base + NORMAL_OFFSET + 2];
-        const float nx_boundary = fwd_chunk_state[boundary_base + NORMAL_OFFSET + 0];
-        const float ny_boundary = fwd_chunk_state[boundary_base + NORMAL_OFFSET + 1];
-        const float nz_boundary = fwd_chunk_state[boundary_base + NORMAL_OFFSET + 2];
-        normal_accum_dot = (nx_final - nx_boundary) * v_render_n.x
-                         + (ny_final - ny_boundary) * v_render_n.y
-                         + (nz_final - nz_boundary) * v_render_n.z;
+    if constexpr (ReturnNormals) {
+        if (pixel_valid && !final_matches_boundary) {
+            const vec3 normal_final = final_slot_view.normal();
+            const vec3 normal_boundary = boundary_slot_view.normal();
+            const vec3 normal_delta = normal_final - normal_boundary;
+            normal_accum_dot = normal_delta.x * v_render_n.x
+                             + normal_delta.y * v_render_n.y
+                             + normal_delta.z * v_render_n.z;
+        }
     }
     float background_render_dot = 0.f;
     if (pixel_valid && backgrounds != nullptr) {
@@ -449,18 +584,20 @@ __global__ void rasterize_gradient_bwd_kernel(
     const int32_t warp_bin_final =
         cg::reduce(warp, bin_final, cg::greater<int>());
 
-    // ---- Batch loop: same as original kernel, chunk-limited ----
-    const uint32_t b_start = chunk_id * CHUNK_BATCHES;
-    const uint32_t b_end = min(b_start + CHUNK_BATCHES, num_batches);
-
-    for (uint32_t b = b_start; b < b_end; ++b) {
-        block.sync();
-        const int32_t batch_end = range_end - 1 - block_size * b;
-        const int32_t batch_size =
-            min(static_cast<int32_t>(block_size), batch_end + 1 - range_start);
+    // ---- Batch walk: this CTA owns one front-aligned depth batch ----
+    {
+        const int32_t batch_start =
+            range_start + static_cast<int32_t>(block_size) *
+                batch_id;
+        const int32_t batch_end = min(
+            range_end - 1,
+            batch_start + static_cast<int32_t>(block_size) - 1);
+        const int32_t batch_size = batch_end + 1 - batch_start;
         const int32_t idx = batch_end - static_cast<int32_t>(tr);
 
-        if (idx >= range_start) {
+        // Threads with tr >= batch_size would otherwise alias into the
+        // previous front-side batch for the partial deepest batch.
+        if (idx >= batch_start) {
             // TODO: only support 1 camera for now so it is ok to abuse the index.
             int32_t isect_id = flatten_ids[idx]; // flatten index in [B * C * N] or [nnz]
             int32_t isect_bid = isect_id / (C * N);   // intersection batch index
@@ -575,7 +712,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                         valid = false;
                     }
 
-                    if (use_hit_distance) {
+                    if constexpr (UseHitDistance) {
                         grds = scale * (grd_n * hit_t);
                         hit_distance = glm::length(grds);
                     }
@@ -600,23 +737,21 @@ __global__ void rasterize_gradient_bwd_kernel(
                 T *= ra;
                 // Per-Gaussian color VJP: v_rgb_local[k] = fac * v_render_c[k].
                 //
-                // Last-channel special case when `use_hit_distance` is on:
+                // Last-channel special case when UseHitDistance is on:
                 // - fwd substitutes per-pixel hit_distance for colors[g,CDIM-1]
                 //   in pix_out, so colors[..., CDIM-1] is structurally absent
                 //   from the rendered output.
                 // - Therefore d(loss)/d(colors[..., CDIM-1]) = 0.
-                // - Zero v_rgb_local[CDIM-1] so the warp-reduced atomic add
-                //   leaves v_colors[..., CDIM-1] at 0.
+                // - Stop the loop one channel short so the zero-initialized
+                //   v_rgb_local[CDIM-1] stays 0.
                 // - The hit_distance VJP below pulls the depth-channel
                 //   gradient straight from v_render_c[CDIM-1], not from this
                 //   slot.
                 const float fac = alpha * T;
+                constexpr uint32_t kRgbWriteCount = UseHitDistance ? CDIM - 1u : CDIM;
 #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
+                for (uint32_t k = 0; k < kRgbWriteCount; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
-                }
-                if (use_hit_distance) {
-                    v_rgb_local[CDIM - 1] = 0.f;
                 }
 
                 // Precompute normal if needed. Used by:
@@ -628,7 +763,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 // R[2] / the dot / the flip.
                 bool flipped = false;
                 vec3 unnormalized_flipped = vec3(0.f);
-                if (v_render_normals != nullptr) {
+                if constexpr (ReturnNormals) {
                     // Recompute normal from forward pass
                     // normal = R * (0, 0, 1) = R[:, 2] (third column)
                     const vec3 unnormalized_normal = R[2];
@@ -645,10 +780,10 @@ __global__ void rasterize_gradient_bwd_kernel(
                 float rgb_render_dot = 0.f;
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    // For the last channel with use_hit_distance, use the per-pixel
+                    // For the last channel with UseHitDistance, use the per-pixel
                     // hit_distance instead of per-Gaussian rgbs_batch (which is
                     // shared memory and would race across pixels in the tile).
-                    const float rgb_k = (use_hit_distance && k == CDIM - 1)
+                    const float rgb_k = (UseHitDistance && k == CDIM - 1)
                         ? hit_distance
                         : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                     rgb_render_dot += rgb_k * v_render_c[k];
@@ -658,7 +793,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 // Gaussian's normal vector — used in the product-rule term for
                 // v_alpha below.
                 float normal_render_dot = 0.f;
-                if (v_render_normals != nullptr) {
+                if constexpr (ReturnNormals) {
                     normal_render_dot = glm::dot(normal, v_render_n);
                 }
                 
@@ -667,16 +802,16 @@ __global__ void rasterize_gradient_bwd_kernel(
                               + T_final * ra * v_alpha_ind_coeff;
                 // Forward: render_normals += normal * vis (where vis = alpha * T)
                 // So v_alpha_normals = dot(normal * T - normal_accum * ra, v_render_n)
-                if (v_render_normals != nullptr) {
+                if constexpr (ReturnNormals) {
                     v_alpha += normal_render_dot * T - normal_accum_dot * ra;
                 }
 
                 // Add contribution from hit distance (if enabled)
                 vec3 v_grd_n_hit = vec3(0.f);
                 vec3 v_gro_hit = vec3(0.f);
-                if (use_hit_distance) {
+                if constexpr (UseHitDistance) {
                     // Depth-channel gradient for the hit_distance VJP.
-                    // v_rgb_local[CDIM-1] was zeroed above (fwd replaces
+                    // v_rgb_local[CDIM-1] was left at 0 above (fwd replaces
                     // that color channel with hit_distance, so the color
                     // VJP must be 0). Compute v_depth directly from
                     // v_render_c instead of reading the zeroed slot.
@@ -731,7 +866,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                     
                     // Compute normal gradient contribution (if computing normals)
                     // Note: normal was precomputed above for v_alpha contribution
-                    if (v_render_normals != nullptr) {
+                    if constexpr (ReturnNormals) {
                         // Compute gradient contribution
                         // Forward: render_normals += normal * fac (where fac = alpha * T)
                         const vec3 v_normal_local = v_render_n * fac;
@@ -755,7 +890,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 render_accum_dot += rgb_render_dot * fac;
                 
                 // Accumulate normal contribution (for product rule in next iterations).
-                if (v_render_normals != nullptr) {
+                if constexpr (ReturnNormals) {
                     normal_accum_dot += normal_render_dot * fac;
                 }
             }
@@ -796,7 +931,7 @@ __global__ void rasterize_gradient_bwd_kernel(
         }
     }
 
-    // v_rays: atomicAdd since multiple chunks contribute per pixel.
+    // v_rays: atomicAdd since multiple batches contribute per pixel.
     if (v_rays != nullptr && pixel_valid) {
         float *vr = (float *)(v_rays) + 6 * pix_id;
         gpuAtomicAdd(vr + 0, v_ray_o.x);
@@ -808,7 +943,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     }
 }
 
-void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
     const at::Tensor quats,     // [..., N, 4]
@@ -847,15 +982,18 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
     const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
-    // CSR chunk structure precomputed by the forward pass
-    const at::Tensor chunks_per_tile,  // [num_tiles] int32
-    const at::Tensor chunk_offsets,    // [num_tiles + 1] int32
-    const int64_t total_chunks,        // scalar, equals chunk_offsets[num_tiles]
-    // Per-chunk cumulative state persisted by the fwd kernel at every
-    // CHUNK_BATCHES boundary. The bwd kernel reads it directly and derives
-    // the per-chunk starting accumulators in its preamble — no separate
-    // state-scan or prefix-scan pass needed.
-    const at::Tensor fwd_chunk_state,  // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
+    // CSR batch structure precomputed by the forward pass
+    const at::Tensor batches_per_tile,  // [num_tiles] int32
+    const at::Tensor batch_offsets,    // [num_tiles + 1] int32
+    const int64_t total_batches,        // scalar, equals batch_offsets[num_tiles]
+    // Per-batch cumulative state persisted by the fwd kernel at every
+    // batch boundary. The bwd kernel reads it directly and
+    // derives the per-batch starting accumulators in its preamble — no
+    // separate state-scan or prefix-scan pass needed.
+    const at::Tensor fwd_batch_state,  // [total_batches, state_dim, pixels_per_tile] fp32
+    // ParallelBatch-only saturation handoff. MixedBatch passes an undefined
+    // tensor and uses the terminal fwd_batch_state slot as before.
+    const at::Tensor compose_c_stop,    // [num_tiles, pixels_per_tile] uint16
     // outputs
     at::Tensor v_means,      // [..., N, 3]
     at::Tensor v_quats,      // [..., N, 4]
@@ -866,7 +1004,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 ) {
     bool packed = opacities.dim() == 1;
     TORCH_CHECK(!packed, "packed opacities are not supported in the 3DGS world-space backward");
-    (void)chunks_per_tile;  // only used for the shape check below
+    (void)batches_per_tile;  // only used for the shape check below
 
     uint32_t N = packed ? 0 : means.size(-2);   // number of gaussians
     uint32_t B = means.numel() / (N * 3);       // number of batches
@@ -908,125 +1046,130 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         ". To add support, rebuild gsplat with this channel count included "
         "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h).");
 
-    const uint32_t pixels_per_tile = tile_size * tile_size;
+    const int32_t pixels_per_tile = tile_size * tile_size;
     const uint32_t num_tiles = I * tile_height * tile_width;
 
-    // CSR chunk structure was computed in the forward pass (shared kernel
-    // `compute_chunks_per_tile_kernel` lives in `RasterizeChunkCSR.h`) and
-    // is threaded through `save_for_backward`. We consume the precomputed
-    // tensors directly, avoiding the kernel launch + cumsum + blocking
-    // `.item<int32_t>()` readback that used to live here on every bwd.
-    TORCH_CHECK(chunks_per_tile.numel() == static_cast<int64_t>(num_tiles),
-                "chunks_per_tile has wrong size");
-    TORCH_CHECK(chunk_offsets.numel() == static_cast<int64_t>(num_tiles) + 1,
-                "chunk_offsets has wrong size");
+    // CSR batch structure was computed in the forward pass by compute_batch_csr,
+    // declared in RasterizeCSR.cuh and implemented in this TU with
+    // compute_batches_per_tile_kernel, then threaded through save_for_backward.
+    // We consume the precomputed tensors directly, avoiding the kernel launch +
+    // cumsum + blocking `.item<int32_t>()` readback that used to live here on
+    // every bwd.
+    TORCH_CHECK(batches_per_tile.numel() == static_cast<int64_t>(num_tiles),
+                "batches_per_tile has wrong size");
+    TORCH_CHECK(batch_offsets.numel() == static_cast<int64_t>(num_tiles) + 1,
+                "batch_offsets has wrong size");
 
-    auto launch_kernel = [&]<typename ChannelsT>() {
+    const bool return_normals = v_render_normals.has_value();
+    auto launch_kernel = [&]<typename ChannelsT,
+                            typename ReturnNormalsT,
+                            typename UseHitDistanceT>() {
         constexpr uint32_t CDIM = ChannelsT::value;
-
+        constexpr bool ReturnNormals = static_cast<bool>(ReturnNormalsT::value);
+        constexpr bool UseHitDistance = static_cast<bool>(UseHitDistanceT::value);
         int64_t shmem_size =
             tile_size * tile_size *
             (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) + sizeof(float) * cdim_smem_stride<CDIM>());
 
         // Shape parity check for the fwd-persisted state. fwd allocates with
-        // shape `[total_chunks, pixels_per_tile, 1 + CDIM + 3]` and fills all
-        // boundaries (including early-exit tiles) with terminal state, so the
-        // bwd kernel can read every slot. Check each dim — matching numel
-        // alone would accept a transposed tensor with the same total element
-        // count but wrong stride, silently corrupting bwd's reads.
+        // shape `[total_batches, state_dim, pixels_per_tile]` and fills every
+        // boundary slot; early-exit padding fills only the remaining slots with
+        // terminal state, so bwd can read every slot. Check each dim — matching
+        // numel alone would accept a transposed tensor with the same total
+        // element count but wrong stride, silently corrupting bwd's reads.
         const int64_t state_dim =
-            /*T*/ 1 + static_cast<int64_t>(CDIM) + /*normal*/ 3;
-        TORCH_CHECK(fwd_chunk_state.dim() == 3,
-                    "fwd_chunk_state must be 3-D (got ",
-                    fwd_chunk_state.dim(), "-D)");
-        TORCH_CHECK(fwd_chunk_state.size(0) == total_chunks &&
-                        fwd_chunk_state.size(1) == static_cast<int64_t>(pixels_per_tile) &&
-                        fwd_chunk_state.size(2) == state_dim,
-                    "fwd_chunk_state has wrong shape (got [",
-                    fwd_chunk_state.size(0), ", ", fwd_chunk_state.size(1),
-                    ", ", fwd_chunk_state.size(2), "], expected [",
-                    total_chunks, ", ", pixels_per_tile, ", ", state_dim, "])");
+            FWD_BATCH_STATE_PIX_OFFSET + CDIM +
+            (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0);
+        TORCH_CHECK(fwd_batch_state.dim() == 3,
+                    "fwd_batch_state must be 3-D (got ",
+                    fwd_batch_state.dim(), "-D)");
+        TORCH_CHECK(fwd_batch_state.size(0) == total_batches &&
+                        fwd_batch_state.size(1) == state_dim &&
+                        fwd_batch_state.size(2) == pixels_per_tile,
+                    "fwd_batch_state has wrong shape (got [",
+                    fwd_batch_state.size(0), ", ", fwd_batch_state.size(1),
+                    ", ", fwd_batch_state.size(2), "], expected [",
+                    total_batches, ", ", state_dim, ", ", pixels_per_tile, "])");
+        TORCH_CHECK(
+            fwd_batch_state.numel() <= INT32_MAX,
+            "ParallelBatch fwd_batch_state exceeds signed 32-bit device "
+            "offset range (",
+            fwd_batch_state.numel(),
+            " elements)");
+        const bool use_compose_stop = compose_c_stop.defined();
+        if (use_compose_stop) {
+            TORCH_CHECK(compose_c_stop.dim() == 2,
+                        "compose_c_stop must be 2-D");
+            TORCH_CHECK(
+                compose_c_stop.scalar_type() == at::kUInt16,
+                "compose_c_stop must be uint16");
+            TORCH_CHECK(
+                compose_c_stop.size(0) == static_cast<int64_t>(num_tiles) &&
+                    compose_c_stop.size(1) == pixels_per_tile,
+                "compose_c_stop has wrong shape");
+            TORCH_CHECK(
+                compose_c_stop.numel() <= INT32_MAX,
+                "ParallelBatch compose_c_stop exceeds signed 32-bit device "
+                "range");
+        }
 
-        // Common kernel argument block.
-        const auto *means_ptr = reinterpret_cast<const vec3 *>(means.const_data_ptr<float>());
-        const auto *quats_ptr = reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>());
-        const auto *scales_ptr = reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>());
-        const auto *colors_ptr = colors.const_data_ptr<float>();
-        const auto *opacities_ptr = opacities.const_data_ptr<float>();
-        const auto *backgrounds_ptr = backgrounds.has_value()
-            ? backgrounds.value().const_data_ptr<float>() : nullptr;
-        const auto *masks_ptr = masks.has_value()
-            ? masks.value().const_data_ptr<bool>() : nullptr;
-        const auto *viewmats0_ptr = viewmats0.const_data_ptr<float>();
-        const auto *viewmats1_ptr = viewmats1.has_value()
-            ? viewmats1.value().const_data_ptr<float>() : nullptr;
-        const auto *Ks_ptr = Ks.const_data_ptr<float>();
-        const auto *rays_ptr = rays.has_value()
-            ? rays.value().const_data_ptr<float>() : nullptr;
-        const auto *radial_ptr = radial_coeffs.has_value()
-            ? radial_coeffs.value().const_data_ptr<float>() : nullptr;
-        const auto *tangential_ptr = tangential_coeffs.has_value()
-            ? tangential_coeffs.value().const_data_ptr<float>() : nullptr;
-        const auto *thin_prism_ptr = thin_prism_coeffs.has_value()
-            ? thin_prism_coeffs.value().const_data_ptr<float>() : nullptr;
-        const auto *tile_off_gpu = tile_offsets.const_data_ptr<int32_t>();
-        const auto *flatten_ptr = flatten_ids.const_data_ptr<int32_t>();
-        const auto *render_alphas_ptr = render_alphas.const_data_ptr<float>();
-        const auto *last_ids_ptr = last_ids.const_data_ptr<int32_t>();
-        const auto *v_render_c_ptr = v_render_colors.const_data_ptr<float>();
-        const auto *v_render_a_ptr = v_render_alphas.const_data_ptr<float>();
-        const auto *v_render_n_ptr = v_render_normals.has_value()
-            ? v_render_normals.value().const_data_ptr<float>() : nullptr;
-        auto *v_means_ptr = reinterpret_cast<vec3 *>(v_means.data_ptr<float>());
-        auto *v_quats_ptr = reinterpret_cast<vec4 *>(v_quats.data_ptr<float>());
-        auto *v_scales_ptr = reinterpret_cast<vec3 *>(v_scales.data_ptr<float>());
-        auto *v_colors_ptr = v_colors.data_ptr<float>();
-        auto *v_opacities_ptr = v_opacities.data_ptr<float>();
-        auto *v_rays_ptr = v_rays.has_value()
-            ? v_rays.value().data_ptr<float>() : nullptr;
-        const auto *fwd_chunk_state_ptr =
-            fwd_chunk_state.const_data_ptr<float>();
-
-        const auto *chunk_offsets_ptr = chunk_offsets.const_data_ptr<int32_t>();
-
-        // ---- Gradient kernel: 1D grid over CSR chunk-slots ----
-        // The preamble loads per-chunk boundary and terminal state from
-        // `fwd_chunk_state` and materialises the starting accumulators via
+        // ---- Gradient kernel: 1D grid over CSR batch-slots ----
+        // The preamble loads per-batch boundary and terminal state from
+        // `fwd_batch_state` and materialises the starting accumulators via
         // one CDIM dot + one vec3 dot per thread, at the cost of one extra
-        // CSR slot read per chunk (the terminal slot).
-        dim3 grad_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
+        // CSR slot read per batch (the terminal slot).
+        dim3 grad_grid = {static_cast<uint32_t>(total_batches), 1, 1};
         if (cudaFuncSetAttribute(
-                rasterize_gradient_bwd_kernel<CDIM, float>,
+                rasterize_gradient_bwd_kernel<CDIM, ReturnNormals, UseHitDistance, float>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
                 shmem_size) != cudaSuccess) {
             AT_ERROR("Failed to set shmem for gradient kernel (",
                      shmem_size, " bytes).");
         }
-        rasterize_gradient_bwd_kernel<CDIM, float>
+        rasterize_gradient_bwd_kernel<CDIM, ReturnNormals, UseHitDistance, float>
             <<<grad_grid, threads, shmem_size,
                at::cuda::getCurrentCUDAStream()>>>(
                 B, C, N, n_isects,
-                means_ptr, quats_ptr, scales_ptr,
-                colors_ptr, opacities_ptr, backgrounds_ptr,
-                masks_ptr,
+                data_ptr_as<const vec3, float>(means),
+                data_ptr_as<const vec4, float>(quats),
+                data_ptr_as<const vec3, float>(scales),
+                colors.const_data_ptr<float>(),
+                opacities.const_data_ptr<float>(),
+                data_ptr_or_null<const float>(backgrounds),
+                data_ptr_or_null<const bool>(masks),
                 image_width, image_height, tile_size,
                 tile_width, tile_height,
-                viewmats0_ptr, viewmats1_ptr, Ks_ptr,
-                camera_model,
-                rs_type,
-                rays_ptr,
-                radial_ptr, tangential_ptr, thin_prism_ptr,
-                ftheta_device_coeffs, lidar_device_coeffs,
-                external_distortion_device_params,
-                tile_off_gpu, flatten_ptr,
-                use_hit_distance,
-                render_alphas_ptr, last_ids_ptr,
-                v_render_c_ptr, v_render_a_ptr, v_render_n_ptr,
-                v_means_ptr, v_quats_ptr, v_scales_ptr,
-                v_colors_ptr, v_opacities_ptr, v_rays_ptr,
-                fwd_chunk_state_ptr, chunk_offsets_ptr);
+                viewmats0.const_data_ptr<float>(),
+                data_ptr_or_null<const float>(viewmats1),
+                Ks.const_data_ptr<float>(),
+                camera_model, rs_type,
+                data_ptr_or_null<const float>(rays),
+                data_ptr_or_null<const float>(radial_coeffs),
+                data_ptr_or_null<const float>(tangential_coeffs),
+                data_ptr_or_null<const float>(thin_prism_coeffs),
+                ftheta_device_coeffs, lidar_device_coeffs, external_distortion_device_params,
+                tile_offsets.const_data_ptr<int32_t>(),
+                flatten_ids.const_data_ptr<int32_t>(),
+                render_alphas.const_data_ptr<float>(),
+                last_ids.const_data_ptr<int32_t>(),
+                v_render_colors.const_data_ptr<float>(),
+                v_render_alphas.const_data_ptr<float>(),
+                data_ptr_or_null<const float>(v_render_normals),
+                data_ptr_as<vec3, float>(v_means),
+                data_ptr_as<vec4, float>(v_quats),
+                data_ptr_as<vec3, float>(v_scales),
+                v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>(),
+                data_ptr_or_null<float>(v_rays),
+                fwd_batch_state.const_data_ptr<float>(),
+                batch_offsets.const_data_ptr<int32_t>(),
+                data_ptr_or_null<const uint16_t>(use_compose_stop, compose_c_stop));
     };
-    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    const bool dispatched = dispatch::dispatch(
+        SupportedChannels{channels},
+        dispatch::IntParam<0, 1>{return_normals ? 1 : 0},
+        dispatch::IntParam<0, 1>{use_hit_distance ? 1 : 0},
+        std::move(launch_kernel));
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 

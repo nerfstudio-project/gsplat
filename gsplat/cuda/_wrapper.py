@@ -106,6 +106,35 @@ def _make_lazy_cuda_obj(name: str) -> Any:
     return obj
 
 
+def renderer_config_mixed_batch() -> Any:
+    """Return the CUDA enum value for the MixedBatch renderer config."""
+    return _make_lazy_cuda_obj("RendererConfig.MIXED_BATCH")
+
+
+def renderer_config_parallel_batch() -> Any:
+    """Return the CUDA enum value for the ParallelBatch renderer config."""
+    return _make_lazy_cuda_obj("RendererConfig.PARALLEL_BATCH")
+
+
+def _renderer_config_to_cuda(renderer_config: Any) -> Any:
+    if renderer_config is None:
+        return renderer_config_mixed_batch()
+
+    # RendererConfig lives in gsplat.rendering, which imports this module.
+    # Import lazily here so the public low-level wrapper accepts the same
+    # config objects as gsplat.rasterization without creating an import cycle.
+    from gsplat.rendering import (  # pylint: disable=import-outside-toplevel
+        RendererConfig,
+        _renderer_config_type,
+    )
+
+    if isinstance(renderer_config, RendererConfig):
+        # Delegate the config -> CUDA enum mapping to the single source of
+        # truth in gsplat.rendering (which raises for unknown subtypes).
+        return _renderer_config_type(renderer_config)
+    return renderer_config
+
+
 class RollingShutterType(IntEnum):
     ROLLING_TOP_TO_BOTTOM = 0
     ROLLING_LEFT_TO_RIGHT = 1
@@ -964,6 +993,7 @@ def rasterize_to_pixels_eval3d(
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     use_hit_distance: bool = False,
     return_normals: bool = False,
+    renderer_config: Any = None,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -974,6 +1004,12 @@ def rasterize_to_pixels_eval3d(
     ``colors.shape[-1]`` must be one of the channel counts compiled into
     ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA
     kernel raises ``ValueError``.
+
+    Args:
+        renderer_config: Eval3d renderer selector. ``None`` uses the default
+            ``RendererConfig_MixedBatch`` policy. Pass public
+            ``RendererConfig_MixedBatch`` / ``RendererConfig_ParallelBatch``
+            instances, or the already-translated low-level CUDA config value.
 
     Returns:
         A tuple:
@@ -1010,9 +1046,11 @@ def rasterize_to_pixels_eval3d(
         external_distortion_coeffs=external_distortion_coeffs,
         rolling_shutter=rolling_shutter,
         viewmats_rs=viewmats_rs,
+        return_last_ids=False,
         return_sample_counts=False,
         use_hit_distance=use_hit_distance,
         return_normals=return_normals,
+        renderer_config=renderer_config,
     )
     return colors, alphas
 
@@ -1049,23 +1087,29 @@ def rasterize_to_pixels_eval3d_extra(
     return_sample_counts: bool = False,
     use_hit_distance: bool = False,
     return_normals: bool = False,
+    renderer_config: Any = None,
+    return_last_ids: bool = True,
     unsafe_masked_tile_outputs: bool = False,
-) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
+) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
-    Similar to `rasterize_to_pixels_eval3d()`, but returns turns the last gaussian id
-    accumulated in a pixel, and optionally the number of accumulated samples per pixel.
+    Similar to `rasterize_to_pixels_eval3d()`, but can return the last gaussian id
+    accumulated in a pixel and optionally the number of accumulated samples per pixel.
 
     ``colors.shape[-1]`` must be one of the channel counts compiled into
     ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA
     kernel raises ``ValueError``.
 
     Args:
-        return_last_ids: If True, also return last flatten_idx per pixel. Default: False.
+        return_last_ids: If True, also return last flatten_idx per pixel. Default: True.
         return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.
         return_normals: If True, compute and return accumulated normals per pixel.
             Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
             transformed by rotation, flipped if facing away from ray). Default: False.
+        renderer_config: Eval3d renderer selector. ``None`` uses the default
+            ``RendererConfig_MixedBatch`` policy. Pass public
+            ``RendererConfig_MixedBatch`` / ``RendererConfig_ParallelBatch``
+            instances, or the already-translated low-level CUDA config value.
         unsafe_masked_tile_outputs: If True, outputs for masked tiles are left undefined
             and must not be read by the caller. Default False writes per-pixel safe
             values for masked tiles: render_colors = backgrounds (or 0.0 when no
@@ -1077,12 +1121,13 @@ def rasterize_to_pixels_eval3d_extra(
 
         - **Rendered colors**. [..., C, image_height, image_width, channels]
         - **Rendered alphas**. [..., C, image_height, image_width, 1]
-        - **Last flatten_idx**. [..., C, image_height, image_width]
+        - **Last flatten_idx** (optional). [..., C, image_height, image_width]. If return_last_ids=True.
         - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.
         - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.
     """
     if ut_params is None:
         ut_params = UnscentedTransformParameters()
+    renderer_config = _renderer_config_to_cuda(renderer_config)
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
@@ -1204,11 +1249,11 @@ def rasterize_to_pixels_eval3d_extra(
         external_distortion_coeffs,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
-        # Forward is always collecting the last_ids for the backward pass,
-        # no need to tell it to do it.
         return_sample_counts,  # Pass flag to forward
         use_hit_distance,
         return_normals,  # Pass return_normals flag to forward
+        renderer_config,
+        return_last_ids,
         unsafe_masked_tile_outputs,
     )
 

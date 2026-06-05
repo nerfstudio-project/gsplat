@@ -22,6 +22,7 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
+import inspect
 from itertools import product, chain
 from types import SimpleNamespace
 from typing import Optional, Tuple
@@ -33,6 +34,9 @@ import torch
 from tests.test_cameras import parse_lidar_camera
 from gsplat.rendering import (
     RenderMode,
+    RendererConfig,
+    RendererConfig_MixedBatch,
+    RendererConfig_ParallelBatch,
     render_mode_has_color,
     render_mode_has_depth_channel,
     render_mode_has_hit_distance,
@@ -40,6 +44,119 @@ from gsplat.rendering import (
 from gsplat.cuda._constants import ALPHA_THRESHOLD
 
 device = torch.device("cuda:0")
+
+_RENDER_EXECUTION = "render"
+_TRAINING_EXECUTION = "training"
+
+
+def _append_renderer_execution(params, renderer_execution_cases):
+    for base_params in params:
+        for renderer_config, execution_mode in renderer_execution_cases:
+            yield (*base_params, renderer_config, execution_mode)
+
+
+_MIXED_BATCH_RENDER_CASES = ((RendererConfig_MixedBatch(), _RENDER_EXECUTION),)
+
+_EVAL3D_RENDERER_CASES = (
+    (RendererConfig_MixedBatch(), _RENDER_EXECUTION),
+    (RendererConfig_MixedBatch(), _TRAINING_EXECUTION),
+    (RendererConfig_ParallelBatch(), _RENDER_EXECUTION),
+    (RendererConfig_ParallelBatch(), _TRAINING_EXECUTION),
+)
+
+
+def _minimal_rasterization_args():
+    return dict(
+        means=torch.zeros((1, 3), dtype=torch.float32),
+        quats=torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32),
+        scales=torch.ones((1, 3), dtype=torch.float32) * 0.01,
+        opacities=torch.ones((1,), dtype=torch.float32),
+        colors=torch.zeros((1, 3), dtype=torch.float32),
+        viewmats=torch.eye(4, dtype=torch.float32).unsqueeze(0),
+        Ks=torch.eye(3, dtype=torch.float32).unsqueeze(0),
+        width=1,
+        height=1,
+    )
+
+
+def test_renderer_config_base_public_api():
+    assert gsplat.RendererConfig is RendererConfig
+    with pytest.raises(TypeError, match="RendererConfig_MixedBatch"):
+        RendererConfig()
+
+
+@pytest.mark.parametrize(
+    "config_type",
+    [
+        RendererConfig_MixedBatch,
+        RendererConfig_ParallelBatch,
+    ],
+    ids=[
+        "mixed_batch",
+        "parallel_batch",
+    ],
+)
+def test_renderer_config_public_api(config_type):
+    assert getattr(gsplat, config_type.__name__) is config_type
+    assert issubclass(config_type, RendererConfig)
+
+
+def test_rasterization_default_renderer_config():
+    renderer_config = inspect.signature(gsplat.rasterization).parameters[
+        "renderer_config"
+    ]
+    assert renderer_config.default is None
+
+
+class RendererConfig_Future(RendererConfig):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("renderer_config", "error_type", "match"),
+    [
+        pytest.param(object(), TypeError, "renderer_config", id="object"),
+        pytest.param(
+            RendererConfig_Future(),
+            NotImplementedError,
+            "RendererConfig_Future",
+            id="unsupported_subclass",
+        ),
+    ],
+)
+def test_rasterization_rejects_invalid_renderer_config(
+    renderer_config, error_type, match
+):
+    with pytest.raises(error_type, match=match):
+        gsplat.rasterization(
+            **_minimal_rasterization_args(),
+            renderer_config=renderer_config,
+        )
+
+
+def test_rasterization_rejects_parallel_renderer_config_without_eval3d():
+    with pytest.raises(ValueError, match="with_eval3d=True"):
+        gsplat.rasterization(
+            **_minimal_rasterization_args(),
+            renderer_config=RendererConfig_ParallelBatch(),
+        )
+
+
+def _rasterization_param_id(value):
+    if type(value) is RendererConfig_MixedBatch:
+        return "mixed_batch"
+    if type(value) is RendererConfig_ParallelBatch:
+        return "parallel_batch"
+    if value in (_RENDER_EXECUTION, _TRAINING_EXECUTION):
+        return value
+    return None
+
+
+def _execution_tensor(tensor: Optional[torch.Tensor], execution_mode: str):
+    if tensor is None or execution_mode == _RENDER_EXECUTION:
+        return tensor
+    assert execution_mode == _TRAINING_EXECUTION
+    return tensor.detach().clone().requires_grad_(tensor.is_floating_point())
 
 
 @pytest.fixture
@@ -137,7 +254,7 @@ def gaussians(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
-    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed,C,N",
+    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed,C,N,renderer_config,execution_mode",
     [
         pytest.param(
             *params,
@@ -170,75 +287,88 @@ def gaussians(
         for params in
         # Standard tests: all combinations with with_eval3d=False
         chain(
-            product(
-                [True, False],  # per_view_color
-                [None, 3],  # sh_degree
-                ["RGB", "RGB+D", "D"],  # render_mode
-                [True, False],  # packed
-                [(), (2,), (1, 2)],  # batch_dims
-                [False],  # with_eval3d
-                [False],  # with_ut
-                ["pinhole"],  # camera_model
-                [None],  # extra_signals_info
-                [False],  # distributed
-                [3],  # C (number of cameras)
-                [10_000],  # N (number of gaussians)
+            _append_renderer_execution(
+                product(
+                    [True, False],  # per_view_color
+                    [None, 3],  # sh_degree
+                    ["RGB", "RGB+D", "D"],  # render_mode
+                    [True, False],  # packed
+                    [(), (2,), (1, 2)],  # batch_dims
+                    [False],  # with_eval3d
+                    [False],  # with_ut
+                    ["pinhole"],  # camera_model
+                    [None],  # extra_signals_info
+                    [False],  # distributed
+                    [3],  # C (number of cameras)
+                    [10_000],  # N (number of gaussians)
+                ),
+                _MIXED_BATCH_RENDER_CASES,
             ),
             # 3DGUT
-            product(
-                [True, False],  # per_view_color
-                [None, 3],  # sh_degree
-                ["RGB"],  # render_mode (only RGB)
-                [False],  # packed (must be False)
-                [(), (2,)],  # batch_dims (reduced subset)
-                [True],  # with_eval3d
-                [True],  # with_ut
-                ["pinhole", "lidar"],  # camera_model
-                [
-                    None,
-                    (None, 20),
-                    (3, 3),
-                ],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
-                [False],  # distributed
-                [3],  # C (number of cameras)
-                [10_000],  # N (number of gaussians)
+            _append_renderer_execution(
+                product(
+                    [True, False],  # per_view_color
+                    [None, 3],  # sh_degree
+                    ["RGB"],  # render_mode (only RGB)
+                    [False],  # packed (must be False)
+                    [(), (2,)],  # batch_dims (reduced subset)
+                    [True],  # with_eval3d
+                    [True],  # with_ut
+                    ["pinhole", "lidar"],  # camera_model
+                    [
+                        None,
+                        (None, 20),
+                        (3, 3),
+                    ],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
+                    [False],  # distributed
+                    [3],  # C (number of cameras)
+                    [10_000],  # N (number of gaussians)
+                ),
+                _EVAL3D_RENDERER_CASES,
             ),
             # 3DGUT hit-distance modes: exercises `use_hit_distance` with the
             # extra-signals plumbing. Channel counts produced (e.g. 24 = 3 RGB
             # + 20 extra + 1 depth) must be present in `GSPLAT_NUM_CHANNELS` —
             # see `pytest.ini` `NUM_CHANNELS`.
-            product(
-                [False],  # per_view_color
-                [None],  # sh_degree
-                ["RGB-d", "d"],  # render_mode
-                [False],  # packed (must be False)
-                [()],  # batch_dims
-                [True],  # with_eval3d
-                [True],  # with_ut
-                ["pinhole"],  # camera_model
-                [None, (None, 20)],  # extra_signals_info
-                [False],  # distributed
-                [3],  # C (number of cameras)
-                [10_000],  # N (number of gaussians)
+            _append_renderer_execution(
+                product(
+                    [False],  # per_view_color
+                    [None],  # sh_degree
+                    ["RGB-d", "d"],  # render_mode
+                    [False],  # packed (must be False)
+                    [()],  # batch_dims
+                    [True],  # with_eval3d
+                    [True],  # with_ut
+                    ["pinhole"],  # camera_model
+                    [None, (None, 20)],  # extra_signals_info
+                    [False],  # distributed
+                    [3],  # C (number of cameras)
+                    [10_000],  # N (number of gaussians)
+                ),
+                _EVAL3D_RENDERER_CASES,
             ),
             # Distributed rendering (single-rank): exercises the all-gather /
             # scatter code path.  Constraints: batch_dims=(), no per_view_color.
-            product(
-                [False],  # per_view_color (distributed forbids per-view)
-                [None, 3],  # sh_degree
-                ["RGB", "RGB+D", "D"],  # render_mode
-                [True, False],  # packed
-                [()],  # batch_dims (distributed requires ())
-                [False],  # with_eval3d
-                [False],  # with_ut
-                ["pinhole"],  # camera_model
-                [None],  # extra_signals_info
-                [True],  # distributed
-                [3],  # C (number of cameras)
-                [10_000],  # N (number of gaussians)
+            _append_renderer_execution(
+                product(
+                    [False],  # per_view_color (distributed forbids per-view)
+                    [None, 3],  # sh_degree
+                    ["RGB", "RGB+D", "D"],  # render_mode
+                    [True, False],  # packed
+                    [()],  # batch_dims (distributed requires ())
+                    [False],  # with_eval3d
+                    [False],  # with_ut
+                    ["pinhole"],  # camera_model
+                    [None],  # extra_signals_info
+                    [True],  # distributed
+                    [3],  # C (number of cameras)
+                    [10_000],  # N (number of gaussians)
+                ),
+                _MIXED_BATCH_RENDER_CASES,
             ),
         )
     ],
+    ids=_rasterization_param_id,
 )
 def test_rasterization(
     per_view_color: bool,
@@ -253,6 +383,8 @@ def test_rasterization(
     distributed: bool,
     C: int,
     N: int,
+    renderer_config: RendererConfig,
+    execution_mode: str,
     sensor_model: SimpleNamespace,
     gaussians: SimpleNamespace,
     dist_init,
@@ -263,27 +395,64 @@ def test_rasterization(
 
     torch.manual_seed(42)
 
-    renders, alphas, meta = rasterization(
-        means=gaussians.means,
-        quats=gaussians.quats,
-        scales=gaussians.scales,
-        opacities=gaussians.opacities,
-        colors=gaussians.colors,
-        viewmats=sensor_model.viewmats,
-        Ks=sensor_model.Ks,
-        width=sensor_model.width,
-        height=sensor_model.height,
-        sh_degree=sh_degree,
-        render_mode=render_mode,
-        packed=packed,
-        with_eval3d=with_eval3d,
-        with_ut=with_ut,
-        camera_model=camera_model,
-        lidar_coeffs=sensor_model.lidar,
-        extra_signals=gaussians.extra_signals,
-        extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
-        distributed=distributed,
+    means = _execution_tensor(gaussians.means, execution_mode)
+    quats = _execution_tensor(gaussians.quats, execution_mode)
+    scales = _execution_tensor(gaussians.scales, execution_mode)
+    opacities = _execution_tensor(gaussians.opacities, execution_mode)
+    colors = _execution_tensor(gaussians.colors, execution_mode)
+    extra_signals = _execution_tensor(gaussians.extra_signals, execution_mode)
+
+    execution_context = (
+        torch.enable_grad()
+        if execution_mode == _TRAINING_EXECUTION
+        else torch.no_grad()
     )
+    with execution_context:
+        renders, alphas, meta = rasterization(
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,
+            colors=colors,
+            viewmats=sensor_model.viewmats,
+            Ks=sensor_model.Ks,
+            width=sensor_model.width,
+            height=sensor_model.height,
+            sh_degree=sh_degree,
+            render_mode=render_mode,
+            packed=packed,
+            with_eval3d=with_eval3d,
+            with_ut=with_ut,
+            camera_model=camera_model,
+            lidar_coeffs=sensor_model.lidar,
+            extra_signals=extra_signals,
+            extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
+            distributed=distributed,
+            renderer_config=renderer_config,
+        )
+
+    assert renders.requires_grad == (execution_mode == _TRAINING_EXECUTION)
+
+    with torch.no_grad():
+        _renders, _alphas, _meta = _rasterization(
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,
+            colors=colors,
+            viewmats=sensor_model.viewmats,
+            Ks=sensor_model.Ks,
+            width=sensor_model.width,
+            height=sensor_model.height,
+            sh_degree=sh_degree,
+            render_mode=render_mode,
+            with_eval3d=with_eval3d,
+            with_ut=with_ut,
+            camera_model=camera_model,
+            lidar_coeffs=sensor_model.lidar,
+            extra_signals=extra_signals,
+            extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
+        )
 
     expected_channels = 0
     if render_mode_has_color(render_mode):
@@ -298,28 +467,21 @@ def test_rasterization(
         expected_channels,
     )
 
-    _renders, _alphas, _meta = _rasterization(
-        means=gaussians.means,
-        quats=gaussians.quats,
-        scales=gaussians.scales,
-        opacities=gaussians.opacities,
-        colors=gaussians.colors,
-        viewmats=sensor_model.viewmats,
-        Ks=sensor_model.Ks,
-        width=sensor_model.width,
-        height=sensor_model.height,
-        sh_degree=sh_degree,
-        render_mode=render_mode,
-        with_eval3d=with_eval3d,
-        with_ut=with_ut,
-        camera_model=camera_model,
-        lidar_coeffs=sensor_model.lidar,
-        extra_signals=gaussians.extra_signals,
-        extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
-    )
-
     rtol = 1e-4
     atol = 1e-4
+    if (
+        execution_mode == _RENDER_EXECUTION
+        and with_eval3d
+        and type(renderer_config) is RendererConfig_ParallelBatch
+    ):
+        # Render execution intentionally runs under no_grad, so public
+        # ParallelBatch dispatch uses its fwd-only path. That path skips exact
+        # batch-replay and finalizes terminal batches from batch-scan
+        # summaries; the priming chain stores transmittance as a rounded fp16
+        # upper bound, so pixels near the saturation boundary can differ
+        # slightly from the exact-metadata reference.
+        rtol = 3e-4
+        atol = 3e-4
 
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
     if gaussians.extra_signals is not None:
@@ -347,3 +509,80 @@ def test_rasterization(
             )
     else:
         torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
+
+    if execution_mode == _TRAINING_EXECUTION:
+        loss = renders.sum() + alphas.sum()
+        if "render_extra_signals" in meta:
+            loss = loss + meta["render_extra_signals"].sum()
+        loss.backward()
+
+        grad_inputs = (
+            ("means", means),
+            ("quats", quats),
+            ("scales", scales),
+            ("opacities", opacities),
+            ("colors", colors),
+            ("extra_signals", extra_signals),
+        )
+        for name, tensor in grad_inputs:
+            if tensor is None:
+                continue
+            assert tensor.grad is not None, f"{name} should receive gradients"
+            assert torch.isfinite(tensor.grad).all()
+
+        # ParallelBatch shares the batch-parallel backward with MixedBatch but
+        # feeds it ParallelBatch-only saved state (the round-major CSR slot map
+        # and compose_c_stop). Finite, non-None grads alone would not catch a
+        # systematically-wrong gradient from mis-indexing that state, so compare
+        # the ParallelBatch grads against a MixedBatch reference run on
+        # identical inputs.
+        if type(renderer_config) is RendererConfig_ParallelBatch:
+            ref_inputs = {
+                name: (
+                    None
+                    if tensor is None
+                    else tensor.detach().clone().requires_grad_(tensor.requires_grad)
+                )
+                for name, tensor in grad_inputs
+            }
+            with torch.enable_grad():
+                ref_renders, ref_alphas, ref_meta = rasterization(
+                    means=ref_inputs["means"],
+                    quats=ref_inputs["quats"],
+                    scales=ref_inputs["scales"],
+                    opacities=ref_inputs["opacities"],
+                    colors=ref_inputs["colors"],
+                    viewmats=sensor_model.viewmats,
+                    Ks=sensor_model.Ks,
+                    width=sensor_model.width,
+                    height=sensor_model.height,
+                    sh_degree=sh_degree,
+                    render_mode=render_mode,
+                    packed=packed,
+                    with_eval3d=with_eval3d,
+                    with_ut=with_ut,
+                    camera_model=camera_model,
+                    lidar_coeffs=sensor_model.lidar,
+                    extra_signals=ref_inputs["extra_signals"],
+                    extra_signals_sh_degree=gaussians.extra_signals_sh_degree,
+                    distributed=distributed,
+                    renderer_config=RendererConfig_MixedBatch(),
+                )
+            ref_loss = ref_renders.sum() + ref_alphas.sum()
+            if "render_extra_signals" in ref_meta:
+                ref_loss = ref_loss + ref_meta["render_extra_signals"].sum()
+            ref_loss.backward()
+
+            for name, tensor in grad_inputs:
+                if tensor is None:
+                    continue
+                torch.testing.assert_close(
+                    tensor.grad,
+                    ref_inputs[name].grad,
+                    rtol=1e-3,
+                    atol=1e-3,
+                    msg=lambda formatted, n=name: (
+                        f"ParallelBatch {n} grad diverges from the MixedBatch "
+                        f"reference:\n{formatted}"
+                    ),
+                )

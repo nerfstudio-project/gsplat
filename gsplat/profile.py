@@ -719,8 +719,8 @@ def _expected_kernel_families(
                 [
                     "IntersectOffset",
                     "IntersectSort",
-                    "RasterizeToPixelsFromWorld3DGSFwd/Bwd",
-                    "ComputeChunksPerTile",
+                    "RasterizeToPixelsFromWorld3DGS{Serial,Parallel}BatchFwd/Bwd",
+                    "ComputeBatchesPerTile",
                 ]
             )
         else:
@@ -791,6 +791,35 @@ def _clear_replay_grads(inputs: dict[str, Any]) -> None:
             and inputs[k].grad is not None
         ):
             inputs[k].grad = None
+
+
+def _parse_renderer_config_override(value: Any) -> Any:
+    """Translate a replay ``renderer_config`` override into a config object.
+
+    ``--set`` intentionally parses values as plain data so generic replay
+    overrides stay simple and shell-friendly. ``renderer_config`` is the one
+    top-level rasterization argument whose useful values are Python objects, so
+    this helper recognizes the public config names and instantiates the
+    matching public config class lazily.
+    """
+
+    if not isinstance(value, str):
+        return value
+
+    normalized = value.strip().lower()
+    factories = {
+        "mixedbatch": "RendererConfig_MixedBatch",
+        "parallelbatch": "RendererConfig_ParallelBatch",
+    }
+    if normalized not in factories:
+        allowed = "mixedbatch, parallelbatch"
+        raise ValueError(
+            f"renderer_config override must be one of: {allowed}; got {value!r}"
+        )
+
+    from gsplat import rendering
+
+    return getattr(rendering, factories[normalized])()
 
 
 # --- Input capture registry ---
@@ -1188,7 +1217,8 @@ def main() -> None:
             "Override a top-level selected-operator replay argument. Values are "
             "parsed as JSON/Python literals when possible, with unquoted "
             "strings left as strings. May be passed multiple times, e.g. "
-            "--set tile_size=8 --set packed=False."
+            "--set tile_size=8 --set packed=False. The renderer_config "
+            "override accepts mixedbatch or parallelbatch."
         ),
     )
     args = parser.parse_args()
@@ -1290,6 +1320,11 @@ def main() -> None:
                 f"unknown {replay_name} argument {name!r}; "
                 f"expected one of {', '.join(replay_params)}"
             )
+        if name == "renderer_config":
+            try:
+                value = _parse_renderer_config_override(value)
+            except ValueError as exc:
+                parser.error(str(exc))
         replay_inputs[name] = value
         print(
             f"[gsplat.profile] override {name}={value!r} " f"({type(value).__name__})"
