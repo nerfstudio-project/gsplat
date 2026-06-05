@@ -316,6 +316,18 @@ def _cflags(build_params) -> list[str]:
     return [flag for flag in build_params.extra_cflags if flag != "-Werror"]
 
 
+def _cuda_cflags(build_params) -> list[str]:
+    """Return CUDA compile flags compatible with both gsplat and test sources."""
+    # Mirror _cflags for nvcc. gsplat's CUDA flags carry the C++ standard, the
+    # gsplat -D defines, and diagnostic suppressions; without them a test .cu
+    # falls back to PyTorch's default nvcc standard (one behind the rest of the
+    # build) and misses gsplat's macros. Drop only the -Werror policy so it never
+    # applies to test-only CUDA TUs -- nvcc spells it `-Xcompiler=-Werror` and
+    # `--Werror all-warnings`.
+    werror = {"-Xcompiler=-Werror", "--Werror", "all-warnings"}
+    return [flag for flag in build_params.extra_cuda_cflags if flag not in werror]
+
+
 def _python_link_flags() -> list[str]:
     """Return Python/torch_python link flags needed by reused pybind objects."""
     # gsplat's reusable objects intentionally come from the Python extension
@@ -395,6 +407,7 @@ def build_cpp_tests() -> str:
                 name=CPP_TEST_TARGET,
                 sources=_gtest_sources() + _test_sources() + [stamp_source],
                 extra_cflags=_cflags(build_params),
+                extra_cuda_cflags=_cuda_cflags(build_params),
                 extra_include_paths=_include_paths(build_params),
                 extra_ldflags=_ldflags(build_params, core_objects),
                 build_directory=build_dir,
