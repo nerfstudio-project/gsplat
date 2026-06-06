@@ -336,7 +336,23 @@ _2DGS_RENDER_MODE_MAP = {
 
 _2DGS_DISTORTION_RENDER_MODE = "RGB+ED"
 _2DGS_DISTORTION_RENDER_MODES = {"D", "ED", "RGB+D", "RGB+ED"}
-_2DGS_COLOR_DEPTH_RENDER_MODES = {"RGB+D", "RGB+ED"}
+
+# Render modes that route a color block through the rasterizer, and those that
+# append a depth channel onto the feature tensor. Mirror the predicates in
+# gsplat.rendering (render_mode_has_color / render_mode_has_depth_channel),
+# kept local so the channel-count math stays importable without the CUDA
+# package (gsplat.rendering pulls in the compiled wrappers).
+_COLOR_RENDER_MODES = {"RGB", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"}
+_DEPTH_CHANNEL_RENDER_MODES = {
+    "d",
+    "Ed",
+    "D",
+    "ED",
+    "RGB-d",
+    "RGB-Ed",
+    "RGB+D",
+    "RGB+ED",
+}
 
 _PROFILE_LOSS_ALIASES = {
     "gaussian": "gaussian_fused",
@@ -643,19 +659,14 @@ def _validate_profile_loss_overrides(
 def _normalize_2dgs_replay_inputs(replay_inputs: dict[str, Any]) -> list[str]:
     """Apply final 2DGS tensor-shape conversions after mode/override setup."""
     notes: list[str] = []
-    render_mode = replay_inputs.get("render_mode", "RGB")
     sh_degree = replay_inputs.get("sh_degree")
 
-    # The 2DGS RGB+depth path concatenates `colors` with projected depths.
-    # With unpacked projection, depths are shaped [..., C, N, 1], so a plain
-    # [..., N, D] color tensor must be expanded to [..., C, N, D] once before
-    # the measured loop. Keep the converted tensor as a leaf so repeated
+    # rasterize_to_pixels_2dgs requires per-camera colors [..., C, N, D]. The SH
+    # path produces that shape during SH evaluation, but post-activation colors
+    # (sh_degree=None) arrive scene-shaped [..., N, D], so expand them once
+    # before the measured loop. Keep the converted tensor as a leaf so repeated
     # backward iterations can clear `.grad` through `_clear_replay_grads()`.
-    if (
-        render_mode in _2DGS_COLOR_DEPTH_RENDER_MODES
-        and sh_degree is None
-        and not replay_inputs.get("packed", False)
-    ):
+    if sh_degree is None and not replay_inputs.get("packed", False):
         means = replay_inputs["means"]
         viewmats = replay_inputs["viewmats"]
         colors = replay_inputs["colors"]
@@ -672,8 +683,100 @@ def _normalize_2dgs_replay_inputs(replay_inputs: dict[str, Any]) -> list[str]:
             )
             notes.append(
                 "expanded colors from scene-shaped [..., N, D] to "
-                "camera-shaped [..., C, N, D] for 2DGS RGB+depth replay"
+                "camera-shaped [..., C, N, D] for 2DGS replay"
             )
+
+    return notes
+
+
+def _resize_color_last_dim(tensor: torch.Tensor, target: int) -> torch.Tensor:
+    """Resize ``tensor``'s last dim to ``target`` and return a fresh grad leaf.
+
+    Slices when ``target`` is below the current width, tiles-and-truncates when
+    above it. The result is detached/cloned and carries the source's
+    ``requires_grad`` so repeated backward iterations can clear ``.grad``
+    through ``_clear_replay_grads()`` (mirroring ``_normalize_2dgs_replay_inputs``).
+    """
+    cur = tensor.shape[-1]
+    if target <= cur:
+        resized = tensor[..., :target]
+    else:
+        reps = (target + cur - 1) // cur
+        resized = tensor.repeat(*([1] * (tensor.dim() - 1)), reps)[..., :target]
+    return resized.detach().clone().requires_grad_(tensor.requires_grad)
+
+
+def _apply_channel_override(replay_inputs: dict[str, Any], channels: int) -> list[str]:
+    """Resize the templated channel count (CDIM) of a replay to ``channels``.
+
+    The rasterizer templates on the *concatenated* feature width
+    ``colors.shape[-1] + extra_signals.shape[-1] (+1 for a depth channel)``, so
+    this drives that effective count to ``channels`` for any captured scene.
+    Color SH is dropped (``sh_degree -> None``, DC band kept as the base) so the
+    color block's last dim can be sliced/tiled freely; the extra-signals and
+    background-blend paths are preserved and resized to keep the post-concat
+    width equal to ``channels``. Channel *values* are irrelevant for kernel
+    timing: only the count drives the template / register / shared-memory
+    footprint, and geometry plus opacities (the alpha early-out) are untouched.
+    """
+    if channels < 1:
+        raise ValueError(f"--channels must be >= 1, got {channels}")
+    colors = replay_inputs.get("colors")
+    if colors is None:
+        raise ValueError("--channels requires `colors` in the replay inputs")
+
+    render_mode = replay_inputs.get("render_mode", "RGB")
+    has_depth_channel = render_mode in _DEPTH_CHANNEL_RENDER_MODES
+    has_color = render_mode in _COLOR_RENDER_MODES
+    if has_depth_channel and not has_color:
+        raise ValueError(
+            f"--channels needs a color-bearing render_mode; {render_mode!r} "
+            "renders depth only, so `colors` never reaches the channel template"
+        )
+    # rasterization() appends one depth channel onto the color tensor for
+    # color+depth modes (RGB+D / RGB+ED / RGB-d / RGB-Ed); pure color adds none.
+    depth_extra = 1 if has_depth_channel else 0
+
+    notes: list[str] = []
+    sh_degree = replay_inputs.get("sh_degree")
+    if sh_degree is not None:
+        bands = (sh_degree + 1) ** 2
+        if colors.dim() < 3 or colors.shape[-2] < bands:
+            raise ValueError(
+                f"--channels expects SH colors [N, K, D] with K >= {bands} when "
+                f"sh_degree={sh_degree}, got shape {tuple(colors.shape)}"
+            )
+        colors = colors[..., 0, :]  # [N, K, D] -> DC band [N, D]
+        replay_inputs["sh_degree"] = None
+        notes.append("dropped color SH and took the DC band as the color base")
+
+    cur = colors.shape[-1]
+    if cur < 1:
+        raise ValueError(
+            f"--channels needs a non-empty source color channel dim, got {cur}"
+        )
+
+    extra_signals = replay_inputs.get("extra_signals")
+    e = extra_signals.shape[-1] if extra_signals is not None else 0
+    color_target = channels - e - depth_extra
+    if color_target < 1:
+        raise ValueError(
+            f"--channels={channels} leaves no room for colors after reserving "
+            f"{e} extra-signal + {depth_extra} depth channel(s); "
+            f"needs >= {e + depth_extra + 1}"
+        )
+
+    replay_inputs["colors"] = _resize_color_last_dim(colors, color_target)
+    notes.append(f"resized color channels {cur} -> {color_target}")
+    if extra_signals is not None:
+        notes.append(f"kept {e} extra-signal channel(s); effective CDIM = {channels}")
+
+    backgrounds = replay_inputs.get("backgrounds")
+    if backgrounds is not None:
+        bg_cur = backgrounds.shape[-1]
+        bg_target = channels - depth_extra
+        replay_inputs["backgrounds"] = _resize_color_last_dim(backgrounds, bg_target)
+        notes.append(f"resized background channels {bg_cur} -> {bg_target}")
 
     return notes
 
@@ -1221,6 +1324,21 @@ def main() -> None:
             "override accepts mixedbatch or parallelbatch."
         ),
     )
+    parser.add_argument(
+        "--channels",
+        type=int,
+        default=None,
+        metavar="C",
+        help=(
+            "Resize the replay's templated channel count (CDIM) to C before "
+            "profiling, so one captured scene can drive any compiled channel "
+            "count. The color block is sliced/tiled and color SH is dropped; "
+            "extra_signals and backgrounds are preserved and resized so the "
+            "post-concat width equals C. Errors on depth-only render modes. C "
+            "must be one of the channel counts compiled into the build (set via "
+            "the NUM_CHANNELS build env var)."
+        ),
+    )
     args = parser.parse_args()
     if args.ensure_rays and args.no_rays:
         parser.error("--ensure-rays and --no-rays are mutually exclusive")
@@ -1329,6 +1447,15 @@ def main() -> None:
         print(
             f"[gsplat.profile] override {name}={value!r} " f"({type(value).__name__})"
         )
+
+    if args.channels is not None:
+        try:
+            channel_notes = _apply_channel_override(replay_inputs, args.channels)
+        except ValueError as exc:
+            parser.error(str(exc))
+        workload_notes.extend(channel_notes)
+        for note in channel_notes:
+            print(f"[gsplat.profile] --channels: {note}")
 
     try:
         _validate_profile_loss_overrides(profile_losses, replay_name, replay_inputs)
