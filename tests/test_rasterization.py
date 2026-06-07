@@ -689,3 +689,17 @@ def test_rasterization_distributed_rejects_unsupported_configs(
 
     with pytest.raises(ValueError, match=match):
         gsplat.rasterization(**kwargs, distributed=True)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterization_external_distortion_requires_ut():
+    kwargs = _make_distributed_validation_scene()
+    # The validation fires on `external_distortion_coeffs is not None` before
+    # any CUDA call, so any sentinel object suffices here.
+    kwargs["external_distortion_coeffs"] = object()
+    with pytest.raises(
+        (ValueError, AssertionError),
+        match="with_ut=True",
+    ):
+        gsplat.rasterization(**kwargs, with_ut=False)
