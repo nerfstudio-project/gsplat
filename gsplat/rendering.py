@@ -24,7 +24,7 @@ import torch.distributed
 import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
-from ._helper import assert_shape
+from ._helper import ensure_shape
 from .trace import trace_function, trace_pop, trace_push, trace_range
 from .profile import capture_inputs
 
@@ -750,7 +750,7 @@ def rasterization(
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     if rays is not None:
-        assert_shape("rays", rays, batch_dims + (C, H, W, 6))
+        rays = ensure_shape("rays", rays, batch_dims + (C, H, W, 6))
 
     if distributed:
         # Distributed rasterization supports only classic 3DGS pinhole; the other

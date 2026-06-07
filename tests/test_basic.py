@@ -5216,6 +5216,83 @@ def test_rasterization_explicit_tile_size_overrides_auto_3dgut(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterization_eval3d_accepts_broadcastable_rays_shape():
+    torch.manual_seed(30)
+    n_gaussians = 4
+    width = 48
+    height = 40
+
+    means = torch.zeros(n_gaussians, 3, device=device)
+    means[:, 2] = 5.0
+    means[:, 0] = torch.linspace(-0.5, 0.5, n_gaussians, device=device)
+    quats = (
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+        .expand(n_gaussians, 4)
+        .contiguous()
+    )
+    scales = torch.full((n_gaussians, 3), 0.2, device=device)
+    opacities = torch.full((n_gaussians,), 0.5, device=device)
+    colors = torch.rand(n_gaussians, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [
+            [
+                [float(width), 0.0, width / 2.0],
+                [0.0, float(width), height / 2.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ],
+        device=device,
+    )
+
+    y, x = torch.meshgrid(
+        torch.arange(height, device=device, dtype=torch.float32),
+        torch.arange(width, device=device, dtype=torch.float32),
+        indexing="ij",
+    )
+    directions = torch.stack(
+        [
+            (x - width * 0.5) / width,
+            (y - height * 0.5) / height,
+            torch.ones_like(x),
+        ],
+        dim=-1,
+    )
+    directions = F.normalize(directions, dim=-1)
+    origins = torch.zeros_like(directions)
+    rays = torch.cat([origins, directions], dim=-1)
+
+    common_kwargs = dict(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=width,
+        height=height,
+        tile_size=8,
+        render_mode="RGB",
+        packed=False,
+        channel_chunk=3,
+        with_eval3d=True,
+    )
+    broadcast_colors, broadcast_alphas, _ = gsplat.rasterization(
+        **common_kwargs,
+        rays=rays,
+    )
+    exact_colors, exact_alphas, _ = gsplat.rasterization(
+        **common_kwargs,
+        rays=rays.unsqueeze(0).contiguous(),
+    )
+
+    torch.testing.assert_close(broadcast_colors, exact_colors, rtol=0, atol=0)
+    torch.testing.assert_close(broadcast_alphas, exact_alphas, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize("packed", [False, True])
