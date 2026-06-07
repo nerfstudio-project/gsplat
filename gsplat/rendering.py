@@ -845,6 +845,7 @@ def rasterization(
         or tangential_coeffs is not None
         or thin_prism_coeffs is not None
         or ftheta_coeffs is not None
+        or external_distortion_coeffs is not None
         or rolling_shutter != RollingShutterType.GLOBAL
     ):
         assert (
