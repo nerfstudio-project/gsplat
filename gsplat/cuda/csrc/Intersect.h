@@ -19,7 +19,10 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
+
+#include <ATen/core/Tensor.h>
 
 #include "Common.h"
 #include "Cameras.h"
@@ -32,7 +35,13 @@ class Tensor;
 
 namespace gsplat {
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
+struct TileIntersectResult {
+    at::Tensor tiles_per_gauss;
+    at::Tensor isect_ids;
+    at::Tensor flatten_ids;
+};
+
+TileIntersectResult intersect_tile(
     const at::Tensor &means2d,
     const at::Tensor &radii,
     const at::Tensor &depths,
@@ -40,7 +49,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const at::optional<at::Tensor> &opacities,
     const at::optional<at::Tensor> &image_ids,
     const at::optional<at::Tensor> &gaussian_ids,
-    int64_t I,
+    std::optional<int64_t> n_images,
     int64_t tile_size,
     int64_t tile_width,
     int64_t tile_height,
@@ -48,7 +57,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     bool segmented
 );
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
+TileIntersectResult intersect_tile_lidar(
     const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &lidar,
     const at::Tensor means2d,
     const at::Tensor radii,
