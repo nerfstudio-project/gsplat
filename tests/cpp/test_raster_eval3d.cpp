@@ -345,11 +345,9 @@ private:
         const at::Tensor &means2d = std::get<1>(projection);
         const at::Tensor &depths = std::get<2>(projection);
 
-        using IntersectionResult = std::tuple<at::Tensor, at::Tensor, at::Tensor>;
-
         // Intersect the projected Gaussians with the single image tile. Sorting
         // is enabled to match the normal production path.
-        IntersectionResult intersections = gsplat::intersect_tile(
+        gsplat::TileIntersectResult isects = gsplat::intersect_tile(
             means2d,
             radii,
             depths,
@@ -363,10 +361,8 @@ private:
             tile_height,
             true,  // sort
             false); // segmented
-        const at::Tensor &isect_ids = std::get<1>(intersections);
-        const at::Tensor &flatten_ids = std::get<2>(intersections);
         at::Tensor isect_offsets =
-            gsplat::intersect_offset(isect_ids, num_images, tile_width, tile_height);
+            gsplat::intersect_offset(isects.isect_ids, num_images, tile_width, tile_height);
 
         return Eval3DScene{
             .tile_size = tile_size,
@@ -381,7 +377,7 @@ private:
             .viewmats = viewmats,
             .Ks = Ks,
             .isect_offsets = isect_offsets,
-            .flatten_ids = flatten_ids,
+            .flatten_ids = isects.flatten_ids,
             .ut_params = ut_params,
             .ftheta_coeffs = ftheta_coeffs,
         };
