@@ -325,7 +325,11 @@ def _cuda_cflags(build_params) -> list[str]:
     # applies to test-only CUDA TUs -- nvcc spells it `-Xcompiler=-Werror` and
     # `--Werror all-warnings`.
     werror = {"-Xcompiler=-Werror", "--Werror", "all-warnings"}
-    return [flag for flag in build_params.extra_cuda_cflags if flag not in werror]
+    from gsplat.cuda.build import format_jit_cuda_cflags
+
+    return format_jit_cuda_cflags(
+        [flag for flag in build_params.extra_cuda_cflags if flag not in werror]
+    )
 
 
 def _python_link_flags() -> list[str]:
