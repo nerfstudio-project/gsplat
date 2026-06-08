@@ -21,8 +21,13 @@
 #include <cstdint>
 
 #include "Cameras.h"
+#include "Common.h"
+#include "Lidars.h"
 #include "ExternalDistortion.h"
-#include "Ops.h"
+
+namespace at {
+class Tensor;
+}
 
 namespace gsplat {
 
