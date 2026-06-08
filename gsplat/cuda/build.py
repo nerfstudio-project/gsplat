@@ -81,6 +81,20 @@ BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0"
 NUM_CHANNELS = os.getenv("NUM_CHANNELS")
 
 
+# nvcc requires escaped commas in -D values.
+def _cuda_num_channels_define(num_channels):
+    return "-DGSPLAT_NUM_CHANNELS=" + num_channels.replace(",", "\\,")
+
+
+def format_jit_cuda_cflags(cuda_cflags):
+    if sys.platform == "win32":
+        return cuda_cflags
+    return [
+        shlex.quote(f) if f.startswith("-DGSPLAT_NUM_CHANNELS=") else f
+        for f in cuda_cflags
+    ]
+
+
 def get_build_parameters():
     name = "gsplat_cuda"
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -237,10 +251,10 @@ def get_build_parameters():
         extra_cflags += ["-Werror"]
 
     if NUM_CHANNELS is not None:
-        # nvcc has a bug where you need to escape the commas in macro values defined with -D.
-        extra_cuda_cflags += [
-            '-DGSPLAT_NUM_CHANNELS="' + NUM_CHANNELS.replace(",", "\\,") + '"'
-        ]
+        # nvcc treats an unescaped comma in a -D value as a second macro identifier,
+        # so escape it as \, here. The AOT path passes this straight to nvcc; the
+        # JIT path additionally shell-quotes it (see format_jit_cuda_cflags).
+        extra_cuda_cflags += [_cuda_num_channels_define(NUM_CHANNELS)]
         # gcc would not grok the backslash, so here we just pass NUM_CHANNELS as is.
         extra_cflags += [f"-DGSPLAT_NUM_CHANNELS={NUM_CHANNELS}"]
 
@@ -438,7 +452,9 @@ def build_and_load_gsplat():
                 name=build_params.name,
                 sources=build_params.sources,
                 extra_cflags=build_params.extra_cflags,
-                extra_cuda_cflags=build_params.extra_cuda_cflags,
+                extra_cuda_cflags=format_jit_cuda_cflags(
+                    build_params.extra_cuda_cflags
+                ),
                 extra_include_paths=build_params.extra_include_paths,
                 extra_ldflags=build_params.extra_ldflags,
                 build_directory=build_dir,
@@ -572,11 +588,6 @@ def _setup_py_extra_cuda_cflags_for_loaded_csrc():
 def _setup_py_build_parameters_mismatch_reason(build_params):
     recorded_cflags = _setup_py_extra_cflags_for_loaded_csrc()
     recorded_cuda_cflags = _setup_py_extra_cuda_cflags_for_loaded_csrc()
-    if NUM_CHANNELS is not None:
-        recorded_cflags += [f"-DGSPLAT_NUM_CHANNELS={NUM_CHANNELS}"]
-        recorded_cuda_cflags += [
-            '-DGSPLAT_NUM_CHANNELS="' + NUM_CHANNELS.replace(",", "\\,") + '"'
-        ]
     # `_setup_py_extra_cuda_cflags_for_loaded_csrc()` drops every torch-injected
     # CUDA flag, including `--expt-relaxed-constexpr`, which build.py also adds.
     # Strip the build_params copy so the two sides remain comparable.
@@ -679,5 +690,6 @@ __all__ = [
     "get_gsplat_core_objects",
     "get_gsplat_link_inputs",
     "get_gsplat_link_inputs_skip_reason",
+    "format_jit_cuda_cflags",
     "get_loaded_csrc_path",
 ]
