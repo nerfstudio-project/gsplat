@@ -182,6 +182,8 @@ def get_build_parameters():
     extra_cuda_cflags += ["-diag-suppress", "3189,20012,186"]
     if not os.name == "nt":
         extra_cflags += ["-Wno-attributes"]
+        # PyTorch headers trip this under GCC when gsplat's debug build enables -Werror.
+        extra_cflags += ["-Wno-unused-but-set-variable"]
         # #pragma unroll is standard CUDA idiom but unknown to gcc
         extra_cflags += ["-Wno-unknown-pragmas"]
 

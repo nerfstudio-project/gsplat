@@ -15,10 +15,9 @@
 
 """Lightweight, CPU-safe packaging smoke tests.
 
-These tests inspect the source tree / setup.py packaging metadata using the
-filesystem and ``setuptools.find_packages`` only. They deliberately avoid
-importing the heavy top-level ``gsplat`` package (which would JIT-build the
-native extension) and never require CUDA.
+These tests inspect source-tree packaging metadata or installed wheel metadata
+without importing the heavy top-level ``gsplat`` package (which would JIT-build
+the native extension). They never require CUDA.
 """
 
 from __future__ import annotations
@@ -27,36 +26,56 @@ import os
 import subprocess
 import sys
 import tarfile
+from importlib import metadata
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Shipped package source dirs, which must not contain test_*.py.
-SHIPPED_PACKAGE_DIRS = [
-    REPO_ROOT / "gsplat" / "geometry",
-    REPO_ROOT / "gsplat" / "sensors",
-    REPO_ROOT / "gsplat" / "scene",
-    REPO_ROOT / "gsplat" / "stage",
-    REPO_ROOT / "gsplat" / "experimental",
+EXPECTED_PACKAGES = [
+    "gsplat",
+    "gsplat.experimental",
+    "gsplat.geometry",
+    "gsplat.scene",
+    "gsplat.stage",
+    "gsplat.sensors",
 ]
 
+SHIPPED_PACKAGES = EXPECTED_PACKAGES[1:]
+SHIPPED_PACKAGE_PARTS = [tuple(name.split(".")) for name in SHIPPED_PACKAGES]
+HAS_SOURCE_TREE = (REPO_ROOT / "gsplat" / "__init__.py").exists()
 
-def _compute_setup_packages() -> list[str]:
-    """Replicate the package list computed by setup.py.
 
-    Mirrors the ``find_packages(exclude=["tests", "tests.*"])`` logic in
-    setup.py so we can assert on it without importing setup.py (which pulls in
-    torch/setuptools extension machinery at import time).
-    """
+def _installed_files() -> list[metadata.PackagePath]:
+    """Return installed package files without importing gsplat."""
+    try:
+        files = metadata.files("gsplat")
+    except metadata.PackageNotFoundError:
+        return []
+    return list(files or [])
+
+
+def _published_packages() -> list[str]:
+    """Return packages from the source tree or an installed wheel."""
+    if not HAS_SOURCE_TREE:
+        return sorted(
+            {
+                ".".join(path.parts[:-1])
+                for path in _installed_files()
+                if path.parts[:1] == ("gsplat",) and path.name == "__init__.py"
+            }
+        )
+
+    # Mirror setup.py without importing it, which would pull in extension machinery.
     from setuptools import find_packages
 
-    packages = find_packages(
-        where=str(REPO_ROOT),
-        exclude=["tests", "tests.*"],
+    return sorted(
+        find_packages(
+            where=str(REPO_ROOT),
+            exclude=["tests", "tests.*"],
+        )
     )
-    return packages
 
 
 def test_no_test_files_in_shipped_packages():
@@ -65,26 +84,28 @@ def test_no_test_files_in_shipped_packages():
     Ensures test files won't ship in wheels/sdists.
     """
     offenders = []
-    for pkg_dir in SHIPPED_PACKAGE_DIRS:
-        if not pkg_dir.exists():
-            continue
-        for path in pkg_dir.rglob("test_*.py"):
-            offenders.append(str(path.relative_to(REPO_ROOT)))
+    if HAS_SOURCE_TREE:
+        for parts in SHIPPED_PACKAGE_PARTS:
+            pkg_dir = REPO_ROOT.joinpath(*parts)
+            if not pkg_dir.exists():
+                continue
+            for path in pkg_dir.rglob("test_*.py"):
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+    else:
+        for path in _installed_files():
+            if (
+                path.parts[:2] in SHIPPED_PACKAGE_PARTS
+                and path.name.startswith("test_")
+                and path.suffix == ".py"
+            ):
+                offenders.append(str(path))
     assert not offenders, f"stray test files inside shipped packages: {offenders}"
 
 
 def test_expected_packages_discoverable():
     """The mapped gsplat.* packages are all in the package list."""
-    packages = _compute_setup_packages()
-    expected = [
-        "gsplat",
-        "gsplat.experimental",
-        "gsplat.geometry",
-        "gsplat.scene",
-        "gsplat.stage",
-        "gsplat.sensors",
-    ]
-    missing = [name for name in expected if name not in packages]
+    packages = _published_packages()
+    missing = [name for name in EXPECTED_PACKAGES if name not in packages]
     assert not missing, f"missing from package list: {missing} (got {sorted(packages)})"
 
 
@@ -97,26 +118,28 @@ def test_experimental_published_under_gsplat_namespace():
     and never as a bare top-level ``experimental`` package.
     """
     # There must be no repo-root experimental/ dir.
-    assert not (REPO_ROOT / "experimental").exists(), (
-        "experimental/ must not exist at the repo root; it ships as "
-        "gsplat/experimental/"
-    )
+    if HAS_SOURCE_TREE:
+        assert not (REPO_ROOT / "experimental").exists(), (
+            "experimental/ must not exist at the repo root; it ships as "
+            "gsplat/experimental/"
+        )
 
     # The published package list must expose experimental only under the gsplat
     # namespace, never as a bare top-level package — that is the invariant a
     # wrong layout/exclude would violate.
-    packages = _compute_setup_packages()
+    packages = _published_packages()
     assert "gsplat.experimental" in packages
     assert not any(
         p == "experimental" or p.startswith("experimental.") for p in packages
     ), f"bare top-level 'experimental' published: {sorted(packages)}"
 
     # setup.py must not declare a package_dir remapping for experimental.
-    setup_text = (REPO_ROOT / "setup.py").read_text()
-    assert "package_dir" not in setup_text, (
-        "setup.py must not declare a package_dir remapping; experimental is a "
-        "normal gsplat submodule"
-    )
+    if HAS_SOURCE_TREE:
+        setup_text = (REPO_ROOT / "setup.py").read_text()
+        assert "package_dir" not in setup_text, (
+            "setup.py must not declare a package_dir remapping; experimental is a "
+            "normal gsplat submodule"
+        )
 
 
 @pytest.mark.skipif(
