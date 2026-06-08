@@ -699,16 +699,17 @@ def _make_distributed_validation_scene() -> dict:
         ("batch_dims", "batch dimensions"),
         ("with_eval3d", "with_eval3d=True"),
         ("with_ut", "with_ut=True"),
-        ("camera_model", "camera_model='ortho'"),
+        ("camera_model", "camera_model"),
         ("sparse_grad", "sparse_grad=True"),
         ("absgrad", "absgrad=True"),
         ("rolling_shutter", "rolling shutter"),
         ("distortion", "camera distortion"),
         ("global_z_order", "global_z_order=False"),
         ("per_view_color", "per-Gaussian colors"),
-        ("rays", "rays"),
+        ("rays", "does not support rays"),
         ("return_normals", "return_normals=True"),
         ("lidar", "lidar coefficients"),
+        ("wrong_n_color", "colors must have shape"),
     ],
 )
 def test_rasterization_distributed_rejects_unsupported_configs(
@@ -753,30 +754,88 @@ def test_rasterization_distributed_rejects_unsupported_configs(
     elif case == "return_normals":
         kwargs["return_normals"] = True
     elif case == "lidar":
-        from types import SimpleNamespace
-
-        # SimpleNamespace satisfies the n_columns/n_rows read that happens before
-        # the distributed-rejection block; the ValueError fires before any deeper
-        # lidar processing that would require a real LiDAR object.
-        kwargs["lidar_coeffs"] = SimpleNamespace(
-            n_columns=kwargs["width"], n_rows=kwargs["height"]
+        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+            "at128", (), 0, 0, device=device, seed=42
         )
+        kwargs[
+            "lidar_coeffs"
+        ] = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+            lidar_params, angles_to_columns_map, tiling
+        )
+    elif case == "wrong_n_color":
+        kwargs["colors"] = torch.rand((N + 1, 3), device=device)
     else:
         raise AssertionError(f"unhandled case {case}")
 
-    with pytest.raises(ValueError, match=match):
+    # Distributed validation now lives in the C++ op, which raises via TORCH_CHECK
+    # (surfaced as RuntimeError) rather than the former Python ValueError.
+    with pytest.raises(RuntimeError, match=match):
         gsplat.rasterization(**kwargs, distributed=True)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_external_distortion_requires_ut():
+    from gsplat.cuda._wrapper import BivariateWindshieldModelParameters
+
     kwargs = _make_distributed_validation_scene()
-    # The validation fires on `external_distortion_coeffs is not None` before
-    # any CUDA call, so any sentinel object suffices here.
-    kwargs["external_distortion_coeffs"] = object()
-    with pytest.raises(
-        (ValueError, AssertionError),
-        match="with_ut=True",
-    ):
+    # Pass a real bound custom-class instance so marshalling reaches the C++
+    # validation that owns this gate.
+    kwargs["external_distortion_coeffs"] = BivariateWindshieldModelParameters()
+    with pytest.raises(RuntimeError, match="with_ut=True"):
         gsplat.rasterization(**kwargs, with_ut=False)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("packed", [True, False])
+def test_rasterization_distributed_single_rank_matches_local(
+    packed: bool,
+    dist_init,
+):
+    """``distributed=True`` at world_size==1 must equal ``distributed=False``.
+
+    At one rank the all-gather / all-to-all / id-remap are identities over the
+    same kernels and data, so this exercises the full distributed seam +
+    collective plumbing (forward and backward) and asserts it does not perturb
+    the result. Cross-rank routing correctness needs >=2 ranks.
+    """
+    if not torch.distributed.is_initialized():
+        pytest.skip("distributed process group not initialized")
+    if torch.distributed.get_world_size() != 1:
+        pytest.skip("single-rank parity requires world_size == 1")
+
+    scene = _make_distributed_validation_scene()
+    grad_keys = ("means", "quats", "scales", "opacities", "colors")
+
+    def make_inputs() -> dict:
+        return {key: scene[key].clone().requires_grad_(True) for key in grad_keys}
+
+    static = dict(
+        viewmats=scene["viewmats"],
+        Ks=scene["Ks"],
+        width=scene["width"],
+        height=scene["height"],
+        packed=packed,
+    )
+
+    local_in = make_inputs()
+    dist_in = make_inputs()
+    colors_local, alphas_local, _ = gsplat.rasterization(
+        **local_in, **static, distributed=False
+    )
+    colors_dist, alphas_dist, _ = gsplat.rasterization(
+        **dist_in, **static, distributed=True
+    )
+
+    torch.testing.assert_close(colors_dist, colors_local)
+    torch.testing.assert_close(alphas_dist, alphas_local)
+
+    colors_local.sum().backward()
+    colors_dist.sum().backward()
+    for key in grad_keys:
+        torch.testing.assert_close(
+            dist_in[key].grad,
+            local_in[key].grad,
+            msg=lambda m, key=key: f"gradient mismatch for {key}: {m}",
+        )
