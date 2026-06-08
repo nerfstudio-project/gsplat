@@ -442,7 +442,7 @@ def load_ply_to_splats(path: str) -> dict:
     coefficients (1..K-1), then all G, then all B, where K = (sh_degree+1)^2
     and the DC term (k=0) lives in ``f_dc_0..f_dc_2`` separately.
 
-    Parsing adapted from FastGS (MIT License) — see
+    Parsing adapted from FastGS (MIT License) - see
     https://github.com/fastgs/FastGS/blob/main/scene/gaussian_model.py.
 
     Args:
@@ -487,7 +487,7 @@ def load_ply_to_splats(path: str) -> dict:
             np.asarray(vertex["f_dc_2"]),
         ],
         axis=1,
-    )  # (N, 3) — DC term
+    )  # (N, 3) DC term
 
     f_rest_names = sorted(
         (p.name for p in vertex.properties if p.name.startswith("f_rest_")),
@@ -504,7 +504,7 @@ def load_ply_to_splats(path: str) -> dict:
         )  # (N, 3 * (K - 1)) channel-major
         k_minus_1 = len(f_rest_names) // 3
         f_rest = f_rest.reshape(n_splats, 3, k_minus_1).swapaxes(1, 2)
-        # Now (N, K - 1, 3) in (basis, channel) order
+        # Now (N, K - 1, 3) in (basis, channel) order.
     else:
         f_rest = np.zeros((n_splats, 0, 3), dtype=np.float32)
 

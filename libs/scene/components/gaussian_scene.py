@@ -200,6 +200,13 @@ class GaussianScene(Scene):
             n = scene.splats["means"].shape[0] if has_splats else 0
             device = scene.splats["means"].device if has_splats else torch.device("cpu")
             component_index = torch.zeros(n, device=device, dtype=torch.long)
+        elif has_splats:
+            # Align loaded `component_index` to the splats' device. Without
+            # this, a checkpoint saved on CUDA + loaded with map_location="cpu"
+            # (or the reverse) leaves these tensors on different devices, and
+            # the next on_remove / on_duplicate / on_relocate crashes the
+            # moment it indexes one with the other.
+            component_index = component_index.to(scene.splats["means"].device)
         scene.component_index = component_index
         if has_splats and not scene.component_names:
             scene.component_names = [state["id"]]

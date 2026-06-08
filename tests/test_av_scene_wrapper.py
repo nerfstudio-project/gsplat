@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -26,56 +25,15 @@ import torch
 
 from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 
-
-@pytest.fixture
-def av_train_env(monkeypatch, tmp_path):
-    """Patch av_trainer.train() for CPU-only control-flow tests.
-
-    This bypasses real scene loading, Gaussian initialization, rendering, and
-    CUDA memory stats. It does not exercise real AV training or gsplat
-    rasterization.
-    """
-    scene = make_av_scene()
-    result_dir = str(tmp_path / "av_train")
-
-    def fake_load_scene(path: str, device: str = "cuda") -> SimpleNamespace:
-        del path, device
-        return scene
-
-    def fake_init_gaussians_from_lidar(
-        loaded_scene: SimpleNamespace, device: str = "cuda", **_kwargs
-    ) -> torch.nn.ParameterDict:
-        del loaded_scene, device
-        return make_av_splats()
-
-    def fake_render_gaussians(*_args, splats=None, **kwargs):
-        height = kwargs.get("H", 8)
-        width = kwargs.get("W", 8)
-        base = splats["means"].sum() * 0.0
-        return (
-            base + torch.full((1, height, width, 4), 0.25),
-            base + torch.full((1, height, width, 1), 0.5),
-            {},
-            torch.exp(splats["scales"]),
-            torch.sigmoid(splats["opacities"]),
-        )
-
-    monkeypatch.setattr(av_trainer, "load_scene", fake_load_scene)
-    monkeypatch.setattr(
-        av_trainer, "init_gaussians_from_lidar", fake_init_gaussians_from_lidar
-    )
-    monkeypatch.setattr(av_trainer, "render_gaussians", fake_render_gaussians)
-    monkeypatch.setattr(
-        torch.cuda, "reset_peak_memory_stats", lambda: None, raising=False
-    )
-    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0, raising=False)
-
-    return SimpleNamespace(
-        av_trainer=av_trainer,
-        scene=scene,
-        result_dir=result_dir,
-        monkeypatch=monkeypatch,
-    )
+# Skip the whole module when av_trainer's optional dependencies are not
+# installed (e.g. upstream GitHub Actions core_tests.yml). The fixture
+# av_train_env in conftest applies the same skip, but this guard short-
+# circuits collection-time attribute access (e.g. av_trainer.GaussianScene
+# in test bodies) when av_trainer is None.
+pytestmark = pytest.mark.skipif(
+    av_trainer is None,
+    reason="av_trainer optional dependencies not installed (e.g. imageio)",
+)
 
 
 def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
@@ -189,8 +147,11 @@ def test_av_evaluate_checkpoint_uses_saved_scene_path(monkeypatch, tmp_path) -> 
         del device
         return eval_scene
 
-    def fake_evaluate(passed_splats, loaded_scene, test_frame_ids, W, H, **_kwargs):
-        seen["splats"] = passed_splats
+    def fake_evaluate(
+        stage, passed_scene, loaded_scene, test_frame_ids, W, H, **_kwargs
+    ):
+        del stage
+        seen["splats"] = passed_scene.splats
         seen["test_frame_ids"] = test_frame_ids
         assert loaded_scene is eval_scene
         assert (W, H) == (1, 1)

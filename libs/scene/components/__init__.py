@@ -15,5 +15,6 @@
 
 from .base import Scene
 from .gaussian_scene import GaussianScene
+from .gaussian_inference_scene import GaussianInferenceScene
 
-__all__ = ["Scene", "GaussianScene"]
+__all__ = ["Scene", "GaussianScene", "GaussianInferenceScene"]

@@ -24,6 +24,7 @@ import gc
 import os
 import threading
 import time
+from types import SimpleNamespace
 from typing import List, Optional
 
 import pytest
@@ -314,6 +315,33 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         tr.write_line(f"  (full per-test CSV written to {out_path})")
 
 
+from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
+
+
+# When optional libs/* subpackages are not installed (e.g. on the upstream
+# GitHub Actions ``core_tests.yml`` runner that only installs core gsplat),
+# drop the corresponding testpaths so ``pytest`` does not try to collect
+# tests whose imports would crash. ``pytest.ini`` keeps the full testpaths
+# list for the internal NVIDIA GPU validation environment where the libs
+# are installed by ``libs/install.sh``.
+_LIBS_TESTPATH_TO_PACKAGE = (
+    ("libs/geometry/functional", "gsplat_geometry"),
+    ("libs/scene/components", "gsplat_scene"),
+    ("libs/stage/components", "gsplat_stage"),
+)
+
+
+def pytest_ignore_collect(collection_path, config):
+    path_str = str(collection_path)
+    for testpath, package in _LIBS_TESTPATH_TO_PACKAGE:
+        if testpath in path_str:
+            try:
+                __import__(package)
+            except ImportError:
+                return True
+    return False
+
+
 @pytest.fixture(autouse=True)
 def setup_test_environment():
     """
@@ -375,3 +403,59 @@ def dist_init():
 
     if torch.distributed.is_initialized():
         torch.distributed.destroy_process_group()
+
+
+@pytest.fixture
+def av_train_env(monkeypatch, tmp_path):
+    """Common scaffolding for tests that call av_trainer.train().
+
+    Stubs out load_scene, init_gaussians_from_lidar, render_gaussians,
+    and CUDA memory stats so train() runs without a GPU.
+
+    Skips the requesting test when av_trainer's optional dependencies are
+    not installed (e.g. upstream GitHub Actions core_tests.yml).
+    """
+    if av_trainer is None:
+        pytest.skip("av_trainer optional dependencies not installed (e.g. imageio)")
+
+    scene = make_av_scene()
+    result_dir = str(tmp_path / "av_train")
+
+    def fake_load_scene(path: str, device: str = "cuda") -> SimpleNamespace:
+        del path, device
+        return scene
+
+    def fake_init_gaussians_from_lidar(
+        loaded_scene: SimpleNamespace, device: str = "cuda", **_kwargs
+    ) -> torch.nn.ParameterDict:
+        del loaded_scene, device
+        return make_av_splats()
+
+    def fake_render_gaussians(*_args, splats=None, **kwargs):
+        height = kwargs.get("H", 8)
+        width = kwargs.get("W", 8)
+        base = splats["means"].sum() * 0.0
+        return (
+            base + torch.full((1, height, width, 4), 0.25),
+            base + torch.full((1, height, width, 1), 0.5),
+            {},
+            torch.exp(splats["scales"]),
+            torch.sigmoid(splats["opacities"]),
+        )
+
+    monkeypatch.setattr(av_trainer, "load_scene", fake_load_scene)
+    monkeypatch.setattr(
+        av_trainer, "init_gaussians_from_lidar", fake_init_gaussians_from_lidar
+    )
+    monkeypatch.setattr(av_trainer, "render_gaussians", fake_render_gaussians)
+    monkeypatch.setattr(
+        torch.cuda, "reset_peak_memory_stats", lambda: None, raising=False
+    )
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0, raising=False)
+
+    return SimpleNamespace(
+        av_trainer=av_trainer,
+        scene=scene,
+        result_dir=result_dir,
+        monkeypatch=monkeypatch,
+    )

@@ -13,7 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared helpers for AV trainer tests."""
+"""Shared helpers for AV trainer tests.
+
+``av_trainer`` is imported behind a try/except so that this helper module is
+safely importable from upstream environments (e.g. GitHub Actions
+``core_tests.yml`` on ubuntu-latest) that do not install av_trainer's
+optional dependencies (imageio, etc.). When the import fails, ``av_trainer``
+is set to ``None`` and consuming tests are expected to skip themselves
+(see ``tests/conftest.py::av_train_env`` and
+``tests/test_av_scene_wrapper.py`` for the canonical patterns).
+"""
 
 from __future__ import annotations
 
@@ -26,7 +35,10 @@ import numpy as np
 import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../examples"))
-av_trainer = importlib.import_module("av_trainer")
+try:
+    av_trainer = importlib.import_module("av_trainer")
+except ImportError:
+    av_trainer = None
 
 
 def make_av_splats() -> torch.nn.ParameterDict:

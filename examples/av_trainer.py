@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Multi-camera autonomous driving trainer with gsplat.
 
 Trains 3D Gaussians on surround-view driving scenes using NCore v4 data
@@ -32,8 +44,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 import gsplat
-from gsplat_scene import GaussianScene
-from gsplat_stage import Stage
+
+try:
+    from gsplat_scene import GaussianScene
+    from gsplat_stage import Stage
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(
+        f"{e.name} is not installed. The example trainers require the local "
+        "scene/stage helper libraries. Install them with:\n"
+        "    python -m pip install -e libs/scene -e libs/stage"
+    ) from e
 from gsplat.strategy import MCMCStrategy
 
 # ---------------------------------------------------------------------------
@@ -532,7 +552,8 @@ def load_checkpoint(
 
 
 def evaluate(
-    splats: torch.nn.ParameterDict,
+    stage: Stage,
+    gaussian_scene: GaussianScene,
     scene: SimpleNamespace,
     test_frame_ids: list[int],
     W: int,
@@ -540,6 +561,11 @@ def evaluate(
     renders_dir: str | None = None,
     sh_degree: int | None = None,
 ) -> float:
+    # Route through `stage.render` rather than calling `render_gaussians`
+    # directly so checkpoint eval shares the same forward path as `train()`
+    # (line ~860). Any future Stage-side change (e.g. an extra preprocess
+    # hook, a wrapped renderer) then applies to checkpoint eval automatically
+    # instead of silently diverging.
     psnrs = []
     with torch.no_grad():
         for tfid in test_frame_ids:
@@ -547,8 +573,8 @@ def evaluate(
                 gt = scene.images[tfid, tci].unsqueeze(0)
                 vm = scene.viewmats[tfid, tci].unsqueeze(0)
                 K = scene.Ks[tci]
-                rd, _, _, _, _ = render_gaussians(
-                    splats=splats,
+                rd, _, _, _, _ = stage.render(
+                    scene_id=gaussian_scene.id,
                     viewmat=vm,
                     K=K,
                     W=W,
@@ -602,9 +628,14 @@ def evaluate_checkpoint(
         "source_checkpoint": ckpt_path,
         "num_gaussians": gaussian_scene.splats["means"].shape[0],
     }
+    # Build a Stage exactly as `train()` does (line ~787) so the eval forward
+    # path is identical to the training forward path.
+    stage = Stage()
+    stage.add_scene(gaussian_scene, render_gaussians)
     if test_frame_ids:
         result["mean_psnr"] = evaluate(
-            gaussian_scene.splats,
+            stage,
+            gaussian_scene,
             scene,
             test_frame_ids,
             scene.W,

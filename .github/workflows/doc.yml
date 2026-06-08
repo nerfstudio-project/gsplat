@@ -21,12 +21,12 @@ jobs:
           
       - uses: actions/setup-python@v3
         with:
-          python-version: '3.9'
+          python-version: '3.10'
       
       - name: Install dependencies
         run: |
           pip install -r docs/requirements.txt
-          pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
           BUILD_NO_CUDA=1 pip install .
       
       # Get version (read from source to avoid importing gsplat; BUILD_NO_CUDA=1
