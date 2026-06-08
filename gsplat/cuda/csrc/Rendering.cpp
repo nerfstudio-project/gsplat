@@ -29,6 +29,7 @@
 #include "Cameras.h"
 #include "Common.h"
 #include "Config.h"
+#include "DistributedCollectives.h"
 #include "Intersect.h"
 #include "Projection.h"
 #include "Rasterization.h"
@@ -95,7 +96,8 @@ void check_rasterization_3dgs_inputs(
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     bool with_eval3d, bool with_ut, ShutterType rolling_shutter,
-    bool global_z_order, bool use_hit_distance, bool return_normals
+    bool global_z_order, bool use_hit_distance, bool return_normals,
+    bool distributed
 ) {
     CHECK_INPUT(means);
     if (covars.has_value()) {
@@ -133,6 +135,56 @@ void check_rasterization_3dgs_inputs(
     }
     if (thin_prism_coeffs.has_value()) {
         CHECK_INPUT(thin_prism_coeffs.value());
+    }
+
+    // The distributed gather/scatter orchestration is only correct for the
+    // unbatched classic 3DGS pinhole path; reject every other mode first, so the
+    // error names the distributed limitation rather than a generic one.
+    if (distributed) {
+        TORCH_CHECK(means.dim() == 2, "distributed=True does not support batch dimensions");
+        TORCH_CHECK(!sparse_grad, "distributed=True does not support sparse_grad=True");
+        TORCH_CHECK(!absgrad, "distributed=True does not support absgrad=True");
+        TORCH_CHECK(!with_ut, "distributed=True does not support with_ut=True");
+        TORCH_CHECK(!with_eval3d, "distributed=True does not support with_eval3d=True");
+        TORCH_CHECK(!return_normals, "distributed=True does not support return_normals=True");
+        TORCH_CHECK(!rays.has_value(), "distributed=True does not support rays");
+        TORCH_CHECK(
+            camera_model == CameraModelType::PINHOLE,
+            "distributed=True only supports camera_model='pinhole'"
+        );
+        TORCH_CHECK(global_z_order, "distributed=True does not support global_z_order=False");
+        TORCH_CHECK(
+            rolling_shutter == ShutterType::GLOBAL && !viewmats_rs.has_value(),
+            "distributed=True does not support rolling shutter"
+        );
+        // The OpenCV-style coefficient tensors are optional and only present when
+        // distortion is actually requested; ftheta is gated on camera_model
+        // (rejected above) and the Python wrapper always passes a default object.
+        TORCH_CHECK(
+            !radial_coeffs.has_value() && !tangential_coeffs.has_value() &&
+                !thin_prism_coeffs.has_value() &&
+                !external_distortion_params.has_value(),
+            "distributed=True does not support camera distortion"
+        );
+        TORCH_CHECK(
+            !lidar_coeffs.has_value(),
+            "distributed=True does not support lidar coefficients"
+        );
+        // Gaussians scatter per-Gaussian, so per-view (C, N, D) features have no
+        // distributed route; only the per-Gaussian (N, D) layout is allowed. SH
+        // coefficients ([N, K, D]) are shared across cameras and are fine.
+        if (has_color && sh_degree < 0) {
+            TORCH_CHECK(
+                colors.has_value() && colors.value().dim() == 2,
+                "distributed=True only supports per-Gaussian colors"
+            );
+        }
+        if (extra_signals.has_value() && extra_signals_sh_degree < 0) {
+            TORCH_CHECK(
+                extra_signals.value().dim() == 2,
+                "distributed=True only supports per-Gaussian extra signals"
+            );
+        }
     }
 
     const bool is_lidar_camera =
@@ -767,9 +819,15 @@ Rasterization3DGSResult rasterization_3dgs(
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     bool global_z_order, bool use_hit_distance, bool return_normals,
-    int64_t renderer_config
+    int64_t renderer_config,
+    const at::optional<std::string> &process_group_name, int64_t world_size
 ) {
     DEVICE_GUARD(means);
+
+    // A non-empty process-group name selects the multi-GPU distributed path.
+    // Input validation, including distributed-mode rejection, lives in
+    // check_rasterization_3dgs_inputs; the seams below gather/scatter when set.
+    const bool distributed = process_group_name.has_value();
 
     check_rasterization_3dgs_inputs(
         means, covars, quats, scales,
@@ -786,17 +844,42 @@ Rasterization3DGSResult rasterization_3dgs(
         channel_chunk, camera_model,
         lidar_coeffs, external_distortion_params,
         with_eval3d, with_ut, rolling_shutter,
-        global_z_order, use_hit_distance, return_normals
+        global_z_order, use_hit_distance, return_normals,
+        distributed
     );
 
     const int64_t batch_ndim = means.dim() - 2;
     const int64_t N = means.size(-2);
-    const int64_t C = viewmats.size(batch_ndim);
+    int64_t C = viewmats.size(batch_ndim);
     const int64_t B = means.numel() / (N * 3);
     const int64_t I = B * C;
     at::optional<at::Tensor> projection_covars = normalize_covars_for_3dgs(covars);
     at::optional<at::Tensor> raster_rays =
         expand_rays_for_3dgs(rays, means, viewmats, image_height, image_width);
+
+    // Seam A (distributed): all-gather cameras so this rank projects its local
+    // Gaussians against every rank's cameras. `C` becomes the global camera count
+    // for projection and feature assembly; Seam B resets it to the local count.
+    // `I = B * C` above stays at the local image count consumed by tiling.
+    const int64_t local_C = C;
+    const int64_t local_N = N;
+    at::Tensor proj_viewmats = viewmats;
+    at::Tensor proj_Ks = Ks;
+    std::vector<int64_t> N_world;
+    std::vector<int64_t> C_world;
+    if (distributed) {
+        DistributedCameraGather gathered = gather_cameras_for_distributed(
+            viewmats, Ks, local_N, local_C, world_size, process_group_name.value()
+        );
+        // The gather restores per-tensor shapes by slicing a packed buffer, so
+        // the cameras come back as non-contiguous views; the projection requires
+        // contiguous viewmats and Ks.
+        proj_viewmats = gathered.viewmats.contiguous();
+        proj_Ks = gathered.Ks.contiguous();
+        N_world = std::move(gathered.N_world);
+        C_world = std::move(gathered.C_world);
+        C = gathered.global_C;
+    }
 
     at::Tensor batch_ids;
     at::Tensor camera_ids;
@@ -836,7 +919,7 @@ Rasterization3DGSResult rasterization_3dgs(
     else if (packed) {
         ProjectionEWA3DGSPackedResult projection = projection_ewa_3dgs_packed(
             means, projection_covars, quats, scales, opacities,
-            viewmats, Ks,
+            proj_viewmats, proj_Ks,
             image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip,
             sparse_grad, calc_compensations, camera_model
@@ -860,7 +943,7 @@ Rasterization3DGSResult rasterization_3dgs(
     } else {
         ProjectionEWA3DGSFusedResult projection = projection_ewa_3dgs_fused(
             means, projection_covars, quats, scales, opacities,
-            viewmats, Ks,
+            proj_viewmats, proj_Ks,
             image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip,
             calc_compensations, camera_model
@@ -928,7 +1011,7 @@ Rasterization3DGSResult rasterization_3dgs(
     at::Tensor dirs;
     if (needs_dirs) {
         dirs = compute_classic_viewdirs(
-            means, viewmats, viewmats_rs,
+            means, proj_viewmats, viewmats_rs,
             batch_ids_opt, camera_ids_opt, gaussian_ids_opt, indptr_opt,
             B, C, N
         );
@@ -974,6 +1057,58 @@ Rasterization3DGSResult rasterization_3dgs(
         projected_features = feature_list[0];
     } else if (feature_list.size() > 1) {
         projected_features = at::cat(feature_list, -1);
+    }
+
+    // Record the returned metadata now: the pre-scatter, rank-local projection
+    // (Gaussian axis = local N; the densification strategy indexes it by
+    // gaussian_id). The scatter below mutates the local tensors that
+    // rasterization consumes, so capturing into `result` here keeps the metadata
+    // pre-scatter. For the non-distributed path nothing below mutates these.
+    Rasterization3DGSResult result;
+    result.batch_ids = batch_ids;
+    result.camera_ids = camera_ids;
+    result.gaussian_ids = gaussian_ids;
+    result.radii = radii;
+    result.means2d = means2d;
+    result.depths = depths;
+    result.conics = conics;
+    result.opacities = projected_opacities;
+
+    // Seam B (distributed): all-to-all scatter the projected Gaussians to the
+    // camera-owning ranks, then continue tiling/rasterization over this rank's
+    // cameras. `C` returns to the local camera count.
+    if (distributed) {
+        DistributedProjection in;
+        in.radii = radii;
+        in.means2d = means2d;
+        in.depths = depths;
+        in.conics = conics;
+        in.opacities = projected_opacities;
+        in.features = projected_features; // may be undefined (depth-only)
+        in.batch_ids = batch_ids;
+        in.camera_ids = camera_ids;
+        in.gaussian_ids = gaussian_ids;
+        DistributedProjection scattered = scatter_projection_for_distributed(
+            packed, in, C_world, N_world, local_C, local_N,
+            /*global_C=*/C, world_size, process_group_name.value()
+        );
+        radii = scattered.radii;
+        means2d = scattered.means2d;
+        depths = scattered.depths;
+        conics = scattered.conics;
+        projected_opacities = scattered.opacities;
+        if (projected_features.defined()) {
+            projected_features = scattered.features;
+        }
+        if (packed) {
+            batch_ids = scattered.batch_ids;
+            camera_ids = scattered.camera_ids;
+            gaussian_ids = scattered.gaussian_ids;
+            // camera_ids are now local; batch is always 0, so image id == camera id.
+            image_ids = camera_ids;
+            gaussian_ids_opt = gaussian_ids;
+        }
+        C = local_C;
     }
 
     // --- Append requested depth channel ----------------------------------
@@ -1143,28 +1278,20 @@ Rasterization3DGSResult rasterization_3dgs(
         extra_signal_channels
     );
 
-    // --- Return public outputs and metadata tensors -----------------------
-    return {
-        .render_colors = render_colors,
-        .render_alphas = render_alphas,
-        .render_extra_signals = render_extra_signals,
-        .render_normals = render_normals,
-        .means2d_absgrad = absgrad_holder,
-        .batch_ids = batch_ids,
-        .camera_ids = camera_ids,
-        .gaussian_ids = gaussian_ids,
-        .radii = radii,
-        .means2d = means2d,
-        .depths = depths,
-        .conics = conics,
-        .opacities = projected_opacities,
-        .tiles_per_gauss = isects.tiles_per_gauss,
-        .isect_ids = isects.isect_ids,
-        .flatten_ids = isects.flatten_ids,
-        .isect_offsets = isect_offsets,
-        .tile_width = tile_width,
-        .tile_height = tile_height,
-    };
+    // --- Fill in the render and tiling outputs (metadata was recorded above,
+    // pre-scatter) and return ---------------------------------------------
+    result.render_colors = render_colors;
+    result.render_alphas = render_alphas;
+    result.render_extra_signals = render_extra_signals;
+    result.render_normals = render_normals;
+    result.means2d_absgrad = absgrad_holder;
+    result.tiles_per_gauss = isects.tiles_per_gauss;
+    result.isect_ids = isects.isect_ids;
+    result.flatten_ids = isects.flatten_ids;
+    result.isect_offsets = isect_offsets;
+    result.tile_width = tile_width;
+    result.tile_height = tile_height;
+    return result;
 }
 
 #endif // GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT
