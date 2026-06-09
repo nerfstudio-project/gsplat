@@ -149,38 +149,18 @@ ProjectionEWASimpleFwdResult projection_ewa_simple_fwd(
     };
 }
 
-struct ProjectionEWA3DGSFusedFwdResult {
-    at::Tensor radii;
-    at::Tensor means2d;
-    at::Tensor depths;
-    at::Tensor conics;
-    at::optional<at::Tensor> compensations;
-};
 template <> struct TorchArgDef<ProjectionEWA3DGSFusedFwdResult> {
     static auto to(const ProjectionEWA3DGSFusedFwdResult &r) { return to_torch_args(
         r.radii, r.means2d, r.depths, r.conics, r.compensations
     ); }
 };
-using ProjectionEWA3DGSFusedResult = ProjectionEWA3DGSFusedFwdResult;
 
-struct ProjectionEWA3DGSPackedFwdResult {
-    at::Tensor batch_ids;
-    at::Tensor camera_ids;
-    at::Tensor gaussian_ids;
-    at::Tensor indptr;
-    at::Tensor radii;
-    at::Tensor means2d;
-    at::Tensor depths;
-    at::Tensor conics;
-    at::optional<at::Tensor> compensations;
-};
 template <> struct TorchArgDef<ProjectionEWA3DGSPackedFwdResult> {
     static auto to(const ProjectionEWA3DGSPackedFwdResult &r) { return to_torch_args(
         r.batch_ids, r.camera_ids, r.gaussian_ids, r.indptr, r.radii,
         r.means2d, r.depths, r.conics, r.compensations
     ); }
 };
-using ProjectionEWA3DGSPackedResult = ProjectionEWA3DGSPackedFwdResult;
 
 struct ProjectionEWASimpleBwdResult {
     at::Tensor v_means;

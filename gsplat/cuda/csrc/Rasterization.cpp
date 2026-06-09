@@ -52,13 +52,8 @@ template <> struct TorchArgDef<RasterizeToPixels3DGSFwdResult> {
     ); }
 };
 
-// Public outputs (the forward-internal last_ids is dropped).
-struct RasterizeToPixels3DGSResult {
-    at::Tensor renders;
-    at::Tensor alphas;
-    at::Tensor means2d_absgrad;
-};
-
+// RasterizeToPixels3DGSResult lives in Rasterization.h (cross-TU orchestration
+// callers). Its dispatcher boxing stays co-located with the op here.
 template <> struct TorchArgDef<RasterizeToPixels3DGSResult> {
     static auto to(const RasterizeToPixels3DGSResult &r) { return to_torch_args(r.renders, r.alphas, r.means2d_absgrad); }
 };
