@@ -21,6 +21,8 @@
 #include <cstdint>
 #include <tuple>
 
+#include <ATen/core/Tensor.h>
+
 #include "Cameras.h"
 #include "Common.h"
 #include "Lidars.h"
@@ -32,6 +34,43 @@ class Tensor;
 }
 
 namespace gsplat {
+
+struct Projection2DGSFusedResult {
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor ray_transforms;
+    at::Tensor normals;
+};
+
+Projection2DGSFusedResult projection_2dgs_fused(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip
+);
+
+struct Projection2DGSPackedResult {
+    at::Tensor batch_ids;
+    at::Tensor camera_ids;
+    at::Tensor gaussian_ids;
+    at::Tensor indptr;
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor ray_transforms;
+    at::Tensor normals;
+};
+
+Projection2DGSPackedResult projection_2dgs_packed(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double near_plane, double far_plane, double radius_clip,
+    bool sparse_grad
+);
 
 std::tuple<
     at::Tensor,

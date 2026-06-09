@@ -660,14 +660,6 @@ void check_projection_2dgs_inputs(
 
 } // namespace
 
-struct Projection2DGSFusedResult {
-    at::Tensor radii;
-    at::Tensor means2d;
-    at::Tensor depths;
-    at::Tensor ray_transforms;
-    at::Tensor normals;
-};
-
 template <> struct TorchArgDef<Projection2DGSFusedResult> {
     static auto to(const Projection2DGSFusedResult &r) { return to_torch_args(
         r.radii, r.means2d, r.depths, r.ray_transforms, r.normals
@@ -961,18 +953,6 @@ Projection2DGSFusedFwdResult projection_2dgs_fused(
         eps2d, near_plane, far_plane, radius_clip
     );
 }
-
-struct Projection2DGSPackedResult {
-    at::Tensor batch_ids;
-    at::Tensor camera_ids;
-    at::Tensor gaussian_ids;
-    at::Tensor indptr;
-    at::Tensor radii;
-    at::Tensor means2d;
-    at::Tensor depths;
-    at::Tensor ray_transforms;
-    at::Tensor normals;
-};
 
 template <> struct TorchArgDef<Projection2DGSPackedResult> {
     static auto to(const Projection2DGSPackedResult &r) { return to_torch_args(
