@@ -287,3 +287,33 @@ TEST(ContiguousOptionalTest, already_contiguous_returned_as_is) {
 TEST(ContiguousOptionalTest, nullopt_stays_nullopt) {
     EXPECT_FALSE(gsplat::contiguous_optional(at::optional<at::Tensor>{}).has_value());
 }
+
+// ---------------------------------------------------------------------------
+// make_sparse_coo_grad: builds a sparse-COO tensor carrying the supplied
+// indices/values at the requested dense shape.
+// ---------------------------------------------------------------------------
+
+TEST(MakeSparseCooGradTest, builds_expected_sparse_tensor) {
+    // Two non-zero rows of a [4, 2] dense gradient, addressed by row index.
+    // (Flat initializer lists + reshape; at::tensor has no nested-brace overload.)
+    at::Tensor indices =
+        at::tensor({0, 3}, at::kLong).reshape({1, 2}); // [1, nnz]
+    at::Tensor values =
+        at::tensor({1.0f, 2.0f, 3.0f, 4.0f}).reshape({2, 2}); // [nnz, 2]
+
+    at::Tensor sparse =
+        gsplat::make_sparse_coo_grad(indices, values, {4, 2}, /*is_coalesced=*/true);
+
+    EXPECT_TRUE(sparse.is_sparse());
+    EXPECT_EQ(sparse.sizes(), (std::vector<int64_t>{4, 2}));
+    EXPECT_EQ(sparse._nnz(), 2);
+    EXPECT_TRUE(at::equal(sparse._indices(), indices));
+    EXPECT_TRUE(at::equal(sparse._values(), values));
+
+    // Densifying reproduces the addressed rows and leaves the rest zero.
+    at::Tensor dense = sparse.to_dense();
+    at::Tensor expected = at::zeros({4, 2});
+    expected[0].copy_(values[0]);
+    expected[3].copy_(values[1]);
+    EXPECT_TRUE(at::equal(dense, expected));
+}
