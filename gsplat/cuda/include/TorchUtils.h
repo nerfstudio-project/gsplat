@@ -5,12 +5,79 @@
 
 #pragma once
 
-#include <ATen/core/grad_mode.h>
+#include <ATen/core/List.h> // c10::List<at::Tensor> for is_tensor_list
 #include <ATen/core/Tensor.h>
-#include <c10/util/intrusive_ptr.h>
+#include <ATen/core/grad_mode.h>
+
 #include <type_traits>
+#include <vector>
+
+#include <c10/util/intrusive_ptr.h>
 
 namespace gsplat {
+
+namespace detail {
+
+// Classification traits for the dispatcher marshalling and the saved-state
+// plumbing. Each exposes an `inner` alias defined for ALL types (void when no
+// match) so dependent member access is always well-formed -- an `if constexpr`
+// `&&` parses both operands, so a guarded `typename V::value_type` would be
+// ill-formed for non-optional V otherwise.
+
+// is_optional<T>: value_type is the optional's element type, else void.
+template <class T>
+struct is_optional : std::false_type {
+    using value_type = void;
+};
+
+template <class T>
+struct is_optional<at::optional<T>> : std::true_type {
+    using value_type = T;
+};
+
+// is_intrusive_ptr<T>: value_type is the held class, else void.
+template <class T>
+struct is_intrusive_ptr : std::false_type {
+    using value_type = void;
+};
+
+template <class T>
+struct is_intrusive_ptr<c10::intrusive_ptr<T>> : std::true_type {
+    using value_type = T;
+};
+
+// Extracts a classifier's value_type (its element/held type, or void).
+template <class T>
+using value_type_t = typename T::value_type;
+
+// is_tensor_list<T>: a sequence-of-tensors type. A saved input of such a type
+// must round-trip through save_for_backward, not saved_data -- the scalar/else
+// routing static_asserts against it, since storing tensors as a saved_data
+// IValue bypasses the saved-variable version/aliasing/double-backward checks.
+template <class T>
+struct is_tensor_list : std::false_type {};
+
+template <>
+struct is_tensor_list<std::vector<at::Tensor>> : std::true_type {};
+
+template <>
+struct is_tensor_list<c10::List<at::Tensor>> : std::true_type {};
+
+template <>
+struct is_tensor_list<at::TensorList> : std::true_type {};
+
+template <class T>
+inline constexpr bool is_tensor_list_v = is_tensor_list<T>::value;
+
+template <class V>
+inline constexpr bool is_optional_tensor_v =
+    std::is_same_v<value_type_t<is_optional<V>>, at::Tensor>;
+
+template <class V>
+inline constexpr bool is_optional_intrusive_v =
+    is_intrusive_ptr<value_type_t<is_optional<V>>>::value;
+
+} // namespace detail
 
 // Round-trip helpers between `at::optional<at::Tensor>` and `at::Tensor`.
 // An undefined Tensor (default-constructed, `.defined() == false`) is the

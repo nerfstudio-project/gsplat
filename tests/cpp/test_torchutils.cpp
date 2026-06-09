@@ -6,9 +6,20 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <ATen/ATen.h>
+#include <cstdint>
+#include <optional>
+#include <ostream>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include <ATen/core/Tensor.h>
+#include <ATen/core/grad_mode.h>
+#include <ATen/Functions.h>
 #include <c10/util/Exception.h>
 #include <c10/util/intrusive_ptr.h>
+#include <torch/torch.h>
 
 #include "TorchUtils.h"
 
@@ -18,6 +29,8 @@
 //     nullopt sentinel.
 //   - checked_deref: returns *ptr when set, else raises a TORCH_CHECK error
 //     that names the field (turning a null deref into an attributable failure).
+//   - gsplat::detail traits: classify the type shapes that drive dispatcher
+//     marshalling and saved-state routing.
 //
 // Pytest owns discovery/execution via tests/test_cpp.py; this calls the helpers
 // directly.
@@ -64,4 +77,121 @@ TEST(TorchUtils, CheckedDerefThrowsNamedErrorWhenNull) {
         [&] { gsplat::checked_deref(p, "fov_horiz_rad"); },
         testing::ThrowsMessage<c10::Error>(
             testing::HasSubstr("fov_horiz_rad must be set")));
+}
+
+// Named classification flags for a TraitCase. The case table encodes expected
+// trait combinations with explicit flag names.
+enum class Trait : unsigned {
+    None = 0,
+    Optional = 1u << 0,
+    IntrusivePtr = 1u << 1,
+    TensorList = 1u << 2,
+    OptionalTensor = 1u << 3,
+    OptionalIntrusive = 1u << 4,
+};
+
+constexpr Trait operator|(Trait a, Trait b) {
+    return static_cast<Trait>(static_cast<unsigned>(a) | static_cast<unsigned>(b));
+}
+
+constexpr bool has_trait(Trait flags, Trait t) {
+    return (static_cast<unsigned>(flags) & static_cast<unsigned>(t)) != 0;
+}
+
+// Print a flag set by name (e.g. "Optional|OptionalTensor"), so a case is
+// identifiable from its traits rather than an opaque value.
+inline std::ostream &operator<<(std::ostream &os, Trait flags) {
+    if (flags == Trait::None) {
+        return os << "None";
+    }
+    const char *sep = "";
+    const auto emit = [&](Trait t, const char *name) {
+        if (has_trait(flags, t)) {
+            os << sep << name;
+            sep = "|";
+        }
+    };
+    emit(Trait::Optional, "Optional");
+    emit(Trait::IntrusivePtr, "IntrusivePtr");
+    emit(Trait::TensorList, "TensorList");
+    emit(Trait::OptionalTensor, "OptionalTensor");
+    emit(Trait::OptionalIntrusive, "OptionalIntrusive");
+    return os;
+}
+
+template <class Type, Trait Flags, class OptionalValue, class IntrusiveValue>
+struct TraitCase {
+    using type = Type;
+    using optional_value = OptionalValue;
+    using intrusive_value = IntrusiveValue;
+
+    static constexpr Trait flags = Flags;
+    static constexpr bool is_optional = has_trait(Flags, Trait::Optional);
+    static constexpr bool is_intrusive_ptr = has_trait(Flags, Trait::IntrusivePtr);
+    static constexpr bool is_tensor_list = has_trait(Flags, Trait::TensorList);
+    static constexpr bool is_optional_tensor = has_trait(Flags, Trait::OptionalTensor);
+    static constexpr bool is_optional_intrusive =
+        has_trait(Flags, Trait::OptionalIntrusive);
+};
+
+template <class Case> class TorchTraitTest : public ::testing::Test {};
+
+using TorchTraitCases = ::testing::Types<
+    TraitCase<at::Tensor, Trait::None, void, void>,
+    TraitCase<at::optional<at::Tensor>, Trait::Optional | Trait::OptionalTensor, at::Tensor, void>,
+    TraitCase<Holder, Trait::None, void, void>,
+    TraitCase<c10::intrusive_ptr<Holder>, Trait::IntrusivePtr, void, Holder>,
+    TraitCase<
+        at::optional<c10::intrusive_ptr<Holder>>,
+        Trait::Optional | Trait::OptionalIntrusive,
+        c10::intrusive_ptr<Holder>,
+        void>,
+    TraitCase<std::vector<at::Tensor>, Trait::TensorList, void, void>,
+    TraitCase<c10::List<at::Tensor>, Trait::TensorList, void, void>,
+    TraitCase<at::TensorList, Trait::TensorList, void, void>>;
+TYPED_TEST_SUITE(TorchTraitTest, TorchTraitCases);
+
+TYPED_TEST(TorchTraitTest, ClassifiesOptionalTypesAtCompileTime) {
+    using T = typename TypeParam::type;
+    static_assert(gsplat::detail::is_optional<T>::value == TypeParam::is_optional);
+    SUCCEED();
+}
+
+TYPED_TEST(TorchTraitTest, ClassifiesIntrusivePtrTypesAtCompileTime) {
+    using T = typename TypeParam::type;
+    static_assert(
+        gsplat::detail::is_intrusive_ptr<T>::value == TypeParam::is_intrusive_ptr);
+    SUCCEED();
+}
+
+TYPED_TEST(TorchTraitTest, ExtractsClassifierValueTypesAtCompileTime) {
+    using T = typename TypeParam::type;
+    static_assert(std::is_same_v<
+                  gsplat::detail::value_type_t<gsplat::detail::is_optional<T>>,
+                  typename TypeParam::optional_value>);
+    static_assert(std::is_same_v<
+                  gsplat::detail::value_type_t<gsplat::detail::is_intrusive_ptr<T>>,
+                  typename TypeParam::intrusive_value>);
+    SUCCEED();
+}
+
+TYPED_TEST(TorchTraitTest, ClassifiesTensorListTypesAtCompileTime) {
+    using T = typename TypeParam::type;
+    static_assert(gsplat::detail::is_tensor_list<T>::value == TypeParam::is_tensor_list);
+    static_assert(gsplat::detail::is_tensor_list_v<T> == TypeParam::is_tensor_list);
+    SUCCEED();
+}
+
+TYPED_TEST(TorchTraitTest, ClassifiesOptionalTensorTypesAtCompileTime) {
+    using T = typename TypeParam::type;
+    static_assert(
+        gsplat::detail::is_optional_tensor_v<T> == TypeParam::is_optional_tensor);
+    SUCCEED();
+}
+
+TYPED_TEST(TorchTraitTest, ClassifiesOptionalIntrusiveTypesAtCompileTime) {
+    using T = typename TypeParam::type;
+    static_assert(
+        gsplat::detail::is_optional_intrusive_v<T> == TypeParam::is_optional_intrusive);
+    SUCCEED();
 }
