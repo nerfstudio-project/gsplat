@@ -8,6 +8,7 @@
 #include <ATen/core/List.h> // c10::List<at::Tensor> for is_tensor_list
 #include <ATen/core/Tensor.h>
 #include <ATen/core/grad_mode.h>
+#include <ATen/ops/sparse_coo_tensor.h> // at::sparse_coo_tensor
 
 #include <type_traits>
 #include <vector>
@@ -224,6 +225,16 @@ inline at::optional<at::Tensor> contiguous_optional(const at::optional<at::Tenso
         return tensor.value().contiguous();
     }
     return c10::nullopt;
+}
+
+inline at::Tensor make_sparse_coo_grad(const at::Tensor &indices, const at::Tensor &values,
+                                       at::IntArrayRef size, bool is_coalesced) {
+    return at::sparse_coo_tensor(indices, values, size,
+                                 c10::nullopt, // dtype, inferred from values
+                                 c10::nullopt, // layout
+                                 c10::nullopt, // device, inferred from indices/values
+                                 c10::nullopt, // pin_memory
+                                 is_coalesced);
 }
 
 } // namespace gsplat
