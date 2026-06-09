@@ -2,9 +2,9 @@
 
 ## Overview
 
-`libs/sensors` provides GPU-accelerated camera projection for gsplat using
-hand-written CUDA kernels and PyTorch bindings. The package is organized into
-three layers, mirroring `libs/geometry`:
+`libs/sensors` provides GPU-accelerated camera and spinning-LiDAR projection
+for gsplat using hand-written CUDA kernels and PyTorch bindings. The package
+is organized into three layers, mirroring `libs/geometry`:
 
 - `functional/` — Layer 1, the stateless public Python API.
 - `kernels/` — Layer 0, the native CUDA extension plus its Python wrappers,
@@ -23,7 +23,8 @@ package. Detailed per-layer designs live in `design-functional.md`,
    surface in front of an explicit native backend.
 2. Implement hand-written CUDA forward and backward kernels with PyTorch
    bindings; differentiability is a first-class property of every public op.
-3. Reuse `libs/geometry` for pose, quaternion, and trajectory math; do not
+3. Reuse `libs/geometry` for pose, quaternion, trajectory, and
+   coordinate-conversion math; do not
    introduce a second geometry stack in `libs/sensors`.
 4. Enforce strict CUDA / Torch isolation at the native layer so CUDA and
    Torch translation units never see each other's headers.
@@ -33,9 +34,10 @@ package. Detailed per-layer designs live in `design-functional.md`,
 
 ## Scope
 
-The package currently implements an OpenCV-pinhole camera slice:
+The package currently implements camera projection and a structured
+spinning-LiDAR slice:
 
-- Camera projection: `OpenCVPinholeProjection`.
+- Camera projections: `OpenCVPinholeProjection` and `FThetaProjection`.
 - External distortion: `NoExternalDistortion` (explicit, never `None`) and
   `BivariateWindshieldDistortion`.
 - Shutter modes: `GLOBAL`, `ROLLING_TOP_TO_BOTTOM`, `ROLLING_LEFT_TO_RIGHT`,
@@ -48,11 +50,18 @@ The package currently implements an OpenCV-pinhole camera slice:
   `design-functional.md`.
 - Rolling-shutter pose solving via slerp-based dynamic pose interpolation
   along the row or column scan axis.
+- LiDAR projection: `RowOffsetStructuredSpinningLidarProjection`, with
+  per-row elevations, per-column azimuths, optional per-row azimuth offsets,
+  scalar FOV fields, and `SpinningDirection`.
+- LiDAR operations re-exported by `functional/`: sensor ray ↔ sensor angle
+  conversion, element-index → sensor-angle lookup, spinning-LiDAR world-ray
+  generation, and rolling-shutter inverse projection from world points to
+  sensor angles. `LidarModel` wraps the same surface for model callers, and
+  `LidarFrame` / `LidarFrameSet` carry dense or sparse observation buffers.
 
-LiDAR support is reserved for future work: `functional/lidars.py` raises
-`NotImplementedError` for every name and `models/lidars/` is intentionally
-empty. A rendering-facing aggregator that bundles intrinsics, extrinsics,
-shutter, and timing for the rasterizer is out of scope for this package.
+A rendering-facing aggregator that bundles intrinsics, extrinsics, shutter,
+and timing for the rasterizer is out of scope for this package. `LidarModel`
+does not implement `forward()`; callers use its explicit projection methods.
 
 ## Module Layout
 
@@ -72,6 +81,7 @@ libs/sensors/
     lidars.py
     return_types.py
     test_cameras.py
+    test_lidars.py
   kernels/
     __init__.py
     _backend.py
@@ -88,6 +98,12 @@ libs/sensors/
       types.py
       windshield.py
       test_ops.py
+    lidars/
+      __init__.py
+      dispatch.py
+      ops.py
+      types.py
+      test_ops.py
     cuda/
       __init__.py
       build.py
@@ -103,6 +119,15 @@ libs/sensors/
         external_distortion_kernel.cuh
         external_distortion_torch.h
         external_distortion_torch.cpp
+        ftheta_kernel.cuh
+        ftheta_kernel.cu
+        ftheta_kernel_backward.cu
+        lidar_params.h
+        lidar_kernel.cuh
+        lidar_kernel.cu
+        lidar_kernel_backward.cu
+        lidar_torch.h
+        lidar_torch.cpp
         shutter_type.h
         math.cuh
   models/
@@ -119,16 +144,20 @@ libs/sensors/
       utils.py
     lidars/
       __init__.py
+      lidar_frame.py
+      lidar_model.py
+      test_lidar_frame.py
+      test_lidar_model.py
 ```
 
-The `kernels/` Python tree is organized by sensor family (only `cameras/`
-today) so each family's wrappers, type handles, and tests live together.
+The `kernels/` Python tree is organized by sensor family (`cameras/` and
+`lidars/`) so each family's wrappers, type handles, dispatch tables, and tests
+live together.
 `kernels/common/` owns cross-family Python helpers — most importantly the
 pose dataclasses (`Pose`, `DynamicPose`, `Trajectory`).
 `kernels/projective_sensor_ops.py` and its conformance test sit at the top of
-`kernels/` because they own the cross-family dispatch tables.
-`models/lidars/` is intentionally empty (`__all__ = []`) and reserved for
-future work, mirroring `functional/lidars.py`.
+`kernels/` because they own the camera `(projection, distortion)` dispatch
+tables. `kernels/lidars/dispatch.py` owns the single-key LiDAR dispatch tables.
 
 ## Package Roles
 
@@ -146,8 +175,10 @@ future work, mirroring `functional/lidars.py`.
 - **`models/`** — higher-level stateful layer. Provides a single concrete
   `CameraModel(nn.Module)` that holds a `CameraProjection` +
   `ExternalDistortion` pair as registered submodules and forwards to the
-  functional API, plus the `Frame` / `ImageFrame` / `ImageFrameGroup`
-  containers used by callers that work in frame batches. `models/` is
+  functional API, `LidarModel(nn.Module)` that holds a LiDAR projection,
+  plus the `Frame` / `ImageFrame` / `ImageFrameGroup` and `LidarFrame` /
+  `LidarFrameSet` containers used by callers that work in frame batches.
+  `models/` is
   optional. See `design-models.md`.
 
 ## Public API Surface
@@ -170,14 +201,15 @@ __all__ = ["functional", "models"]
 `kernels/` is implementation detail. Its submodules remain importable for
 in-repo tests and the model layer, but downstream users should not depend on
 entrypoint names or per-pair binding suffixes
-(`_opencv_pinhole_no_external`, `_opencv_pinhole_bivariate_windshield`, …) —
-those are dispatch implementation details hidden behind `functional/`.
+(`_opencv_pinhole_no_external`, `_opencv_pinhole_bivariate_windshield`, or
+raw LiDAR `torch.ops.gsplat_sensors.*` names). Those are dispatch
+implementation details hidden behind `functional/`.
 
 ## Dependency Boundaries
 
 ```text
 functional/  ->  kernels/  ->  kernels/cuda/
-models/      ->  functional/ and kernels/{cameras,common}
+models/      ->  functional/ and kernels/{cameras,lidars,common}
 ```
 
 Rules:
@@ -186,10 +218,11 @@ Rules:
   it does not import CUDA or Torch C++ symbols directly.
 - `models/` may depend on `functional/` and on kernel-layer parameter types
   and pose dataclasses (`kernels.cameras.types`, `kernels.cameras.windshield`,
-  `kernels.common.pose`). It does not call the C++ extension directly.
-- `kernels/cameras/ops.py` is the only Python module that calls the C++
-  extension; it validates inputs and dispatches to the per-pair entry
-  functions.
+  `kernels.lidars.types`, `kernels.common.pose`). It does not call the C++
+  extension directly.
+- `kernels/cameras/ops.py` and `kernels/lidars/ops.py` are the only Python
+  modules that call the C++ extension; they validate inputs and dispatch to
+  the matching entry functions.
 - **Pose contract at the public API.** Functions in `functional/`, `models/`,
   and `kernels/cameras/ops.py` accept `Pose | DynamicPose | Trajectory`
   dataclasses (defined in `kernels/common/pose.py`). The wrappers in
@@ -209,19 +242,22 @@ constraints live in each per-layer doc.
   a POD bridge header (`*_params.h`), CUDA-only `*_kernel.cuh` / `.cu`, and
   Torch-only `*_torch.h` / `.cpp`. Only the bridge POD and `shutter_type.h`
   are shared between the two halves.
-- Sensor parameter types (`OpenCVPinholeProjection`,
-  `BivariateWindshieldDistortion`, `NoExternalDistortion`) are defined in
-  C++ and exposed to Python via `torch::class_<>` registration with named
-  keyword constructors. Python does not own sensor parameter data layouts.
+- Sensor parameter types (`OpenCVPinholeProjection`, `FThetaProjection`,
+  `BivariateWindshieldDistortion`, `NoExternalDistortion`, and
+  `RowOffsetStructuredSpinningLidarProjection`) are defined in C++ and exposed
+  to Python via `torch::class_<>` registration with named keyword
+  constructors. Python does not own sensor parameter data layouts.
 - `OpenCVPinholeProjection` carries a `.transform(...)` method bound on the
   C++ class, so SE(3) re-framing of a projection is a method on the
   parameter object rather than a free function.
-- Runtime dispatch between sensor type combinations happens in Python via
-  explicit `dict[tuple[type, type], Callable]` tables, one per shared op.
-  `kernels/test_projective_sensor_ops.py` enforces that every table covers
-  the full Cartesian product of registered projection and distortion types.
-- `libs/geometry` is the canonical owner of pose / quaternion / trajectory
-  math. The pose dataclasses in `kernels/common/pose.py` are thin containers
+- Runtime dispatch happens in Python via explicit `dict` tables. Camera ops
+  use `(projection_type, distortion_type)` keys and
+  `kernels/test_projective_sensor_ops.py` enforces the full Cartesian product
+  of registered camera projection and distortion types. LiDAR ops use one
+  projection-type key in `kernels/lidars/dispatch.py`, with conformance
+  covered by `kernels/test_lidar_dispatch.py`.
+- `libs/geometry` is the canonical owner of pose / quaternion / trajectory /
+  coordinate-conversion math. The pose dataclasses in `kernels/common/pose.py` are thin containers
   that build on those primitives.
 
 ## See also

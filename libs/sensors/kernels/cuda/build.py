@@ -66,6 +66,9 @@ def get_build_parameters() -> SimpleNamespace:
         os.path.join(PATH, "csrc", "camera_kernel_backward.cu"),
         os.path.join(PATH, "csrc", "ftheta_kernel.cu"),
         os.path.join(PATH, "csrc", "ftheta_kernel_backward.cu"),
+        os.path.join(PATH, "csrc", "lidar_torch.cpp"),
+        os.path.join(PATH, "csrc", "lidar_kernel.cu"),
+        os.path.join(PATH, "csrc", "lidar_kernel_backward.cu"),
     ]
     geometry_csrc = os.path.normpath(
         os.path.join(PATH, "..", "..", "..", "geometry", "kernels", "cuda", "csrc")

@@ -941,6 +941,19 @@ __device__ void se3pose_inverse_transform_point_fwd_device(int64_t i, int64_t n,
     quat_rotate_vector_fwd_impl(-qx, -qy, -qz, qw, vx, vy, vz, out + ov, out + ov + 1, out + ov + 2);
 }
 
+// Scalar form of the inverse transform: out = R(q)^T (p - t) = rotate(q*, p-t)
+// with conjugate q*=(-x,-y,-z,w) in xyzw storage.  Only equals R^T for unit q
+// (no normalize here).  Single-point args so dtype-templated sensor kernels can
+// route through it without the batched stride math.
+template <typename T>
+__device__ __forceinline__ void se3_inverse_transform_point(
+    T qx, T qy, T qz, T qw,
+    T tx, T ty, T tz,
+    T px, T py, T pz,
+    T* ox, T* oy, T* oz) {
+    quat_rotate_vector_fwd_impl<T>(-qx, -qy, -qz, qw, px - tx, py - ty, pz - tz, ox, oy, oz);
+}
+
 // Batch row i: out = R(q)^T d (same conjugate trick as inverse point, without translation).
 template <typename scalar_t>
 __device__ void se3pose_inverse_transform_direction_fwd_device(int64_t i, int64_t n,
