@@ -494,14 +494,9 @@ def real_ftheta_windshield_distortion(
 ):
     """BivariateWindshieldDistortion built via ``from_components(int_code, ...)``.
 
-    The fixture packs the four JSON polynomial buffers into a
-    ``BivariateWindshieldDistortion`` through the
-    ``from_components(h_poly, v_poly, h_poly_inv, v_poly_inv, reference_polynomial)``
-    factory rather than calling the dataclass constructor directly. The
-    ``reference_polynomial`` argument is the *integer* code produced by
-    looking the JSON ``reference_poly`` string up in
-    ``_JSON_WINDSHIELD_REF_POLY_TO_GSPLAT`` (resolving to 0 or 1); it is
-    not a ``ReferencePolynomial`` enum member.
+    The ``reference_polynomial`` argument passed to ``from_components`` is the
+    *integer* code from ``_JSON_WINDSHIELD_REF_POLY_TO_GSPLAT`` (0 or 1), not a
+    ``ReferencePolynomial`` enum member.
 
     NOTE: the windshield ``reference_poly`` JSON field uses FORWARD=1 /
     BACKWARD=2, the OPPOSITE direction of the intrinsics ``reference_poly``
@@ -545,3 +540,109 @@ def real_ftheta_projection_with_windshield(
     return _build_real_ftheta_projection(
         real_ftheta_camera_record_with_windshield, sensor_device
     )
+
+
+# ---------------------------------------------------------------------------
+# Spinning-LiDAR fixtures
+# ---------------------------------------------------------------------------
+
+LIDAR_JSON_PATHS = {
+    "generic": TEST_DATA_DIR / "row-offset-spinning-lidar-model-parameters.json",
+    "waymo": TEST_DATA_DIR / "row-offset-spinning-lidar-model-parameters-waymo.json",
+}
+# generic carries per-row azimuth offsets; waymo has none -- together they cover
+# both branches of the has_row_offsets kernel fork.
+LIDAR_PRODUCTION_CONFIGS = ("generic", "waymo")
+
+
+@pytest.fixture
+def lidar_projection_from_json(sensor_device: torch.device):
+    """Return a callable ``config -> projection`` built from a reference sensor JSON.
+
+    FOV is derived from the angle tables (vertical from elevations; horizontal as
+    a full sweep); spinning direction is read from the JSON.
+    """
+    import json as _json
+
+    from gsplat_sensors.kernels.lidars.types import (
+        RowOffsetStructuredSpinningLidarProjection,
+        SpinningDirection,
+    )
+
+    def _factory(config: str = "generic"):
+        path = LIDAR_JSON_PATHS[config]
+        if not path.exists():
+            pytest.fail(f"required lidar JSON not available: {path.name}")
+        with path.open(encoding="utf-8") as f:
+            params = _json.load(f)
+        row_elev = torch.tensor(
+            params["row_elevations_rad"], device=sensor_device, dtype=torch.float32
+        )
+        col_az = torch.tensor(
+            params["column_azimuths_rad"], device=sensor_device, dtype=torch.float32
+        )
+        offsets = params.get("row_azimuth_offsets_rad")
+        has_offsets = offsets is not None and any(v != 0 for v in offsets)
+        row_offsets = (
+            torch.tensor(offsets, device=sensor_device, dtype=torch.float32)
+            if has_offsets
+            else torch.zeros((0,), device=sensor_device, dtype=torch.float32)
+        )
+        fov_vert_start = float(row_elev.max().item())
+        fov_vert_span = abs(fov_vert_start - float(row_elev.min().item()))
+        raw_direction = params.get("spinning_direction", 0)
+        if isinstance(raw_direction, str):
+            text_to_direction = {
+                "cw": SpinningDirection.CLOCKWISE,
+                "ccw": SpinningDirection.COUNTERCLOCKWISE,
+            }
+            direction = text_to_direction.get(raw_direction.lower())
+            if direction is None:
+                pytest.fail(
+                    f"invalid spinning_direction {raw_direction!r}; "
+                    "expected 'cw' or 'ccw'"
+                )
+        elif raw_direction in (0, 1):
+            direction = SpinningDirection(raw_direction)
+        else:
+            pytest.fail(
+                f"invalid spinning_direction {raw_direction!r}; expected 0 or 1"
+            )
+        spinning_direction = int(direction)
+        return RowOffsetStructuredSpinningLidarProjection(
+            row_elev,
+            col_az,
+            row_offsets,
+            fov_vert_start,
+            fov_vert_span,
+            -3.14159,
+            6.28318,
+            spinning_direction,
+            has_offsets,
+        )
+
+    return _factory
+
+
+@pytest.fixture
+def lidar_model(lidar_projection_from_json):
+    """Return a LidarModel backed by the generic reference sensor JSON."""
+    from gsplat_sensors.models import LidarModel
+
+    return LidarModel(projection=lidar_projection_from_json("generic"))
+
+
+@pytest.fixture
+def lidar_dynamic_pose(sensor_device: torch.device):
+    """Return a DynamicPose translating 0.1 m in X, identity rotation, wxyz."""
+    from gsplat_sensors.kernels.common import DynamicPose, Pose
+
+    start = Pose(
+        translation=torch.zeros(3, device=sensor_device),
+        rotation=torch.tensor([1.0, 0.0, 0.0, 0.0], device=sensor_device),
+    )
+    end = Pose(
+        translation=torch.tensor([0.1, 0.0, 0.0], device=sensor_device),
+        rotation=torch.tensor([1.0, 0.0, 0.0, 0.0], device=sensor_device),
+    )
+    return DynamicPose(start, end)

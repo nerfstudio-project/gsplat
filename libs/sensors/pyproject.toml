@@ -38,6 +38,7 @@ packages = [
     "gsplat_sensors.kernels.cameras",
     "gsplat_sensors.kernels.common",
     "gsplat_sensors.kernels.cuda",
+    "gsplat_sensors.kernels.lidars",
     "gsplat_sensors.models",
     "gsplat_sensors.models.common",
     "gsplat_sensors.models.cameras",
