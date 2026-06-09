@@ -72,12 +72,15 @@ Projection2DGSPackedResult projection_2dgs_packed(
     bool sparse_grad
 );
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+struct ProjectionUT3DGSFusedResult {
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor conics;
+    at::Tensor compensations;
+};
+
+ProjectionUT3DGSFusedResult
 projection_ut_3dgs_fused(
     const at::Tensor &means,
     const at::Tensor &quats,
@@ -93,10 +96,10 @@ projection_ut_3dgs_fused(
     double far_plane,
     double radius_clip,
     bool calc_compensations,
-    int64_t camera_model,
+    CameraModelType camera_model,
     bool global_z_order,
     const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
-    int64_t rs_type,
+    ShutterType rs_type,
     const at::optional<at::Tensor> &radial_coeffs,
     const at::optional<at::Tensor> &tangential_coeffs,
     const at::optional<at::Tensor> &thin_prism_coeffs,

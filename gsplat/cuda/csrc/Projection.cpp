@@ -38,6 +38,12 @@
 
 namespace gsplat {
 
+template <> struct TorchArgDef<ProjectionUT3DGSFusedResult> {
+    static auto to(const ProjectionUT3DGSFusedResult &r) { return to_torch_args(
+        r.radii, r.means2d, r.depths, r.conics, r.compensations
+    ); }
+};
+
 #if GSPLAT_BUILD_3DGS
 
 namespace {
@@ -2062,12 +2068,7 @@ Projection2DGSPackedResult projection_2dgs_packed(
 
 #if GSPLAT_BUILD_3DGUT
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+ProjectionUT3DGSFusedResult
 projection_ut_3dgs_fused_impl(
     const at::Tensor means,                   // [..., N, 3]
     const at::Tensor quats,                   // [..., N, 4]
@@ -2185,17 +2186,18 @@ projection_ut_3dgs_fused_impl(
         calc_compensations ? at::optional<at::Tensor>(compensations)
                            : at::nullopt
     );
-    return std::make_tuple(radii, means2d, depths, conics, compensations);
+    return {
+        .radii = radii,
+        .means2d = means2d,
+        .depths = depths,
+        .conics = conics,
+        .compensations = compensations
+    };
 }
 
 #endif // GSPLAT_BUILD_3DGUT
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+ProjectionUT3DGSFusedResult
 projection_ut_3dgs_fused(
     const at::Tensor &means,                   // [..., N, 3]
     const at::Tensor &quats,                   // [..., N, 4]
@@ -2211,10 +2213,10 @@ projection_ut_3dgs_fused(
     double far_plane,
     double radius_clip,
     bool calc_compensations,
-    int64_t camera_model,
+    CameraModelType camera_model,
     bool global_z_order,
     const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
-    int64_t rs_type,
+    ShutterType rs_type,
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
@@ -2244,10 +2246,10 @@ projection_ut_3dgs_fused(
         far_plane,
         radius_clip,
         calc_compensations,
-        static_cast<CameraModelType>(camera_model),
+        camera_model,
         global_z_order,
         ut_params,
-        static_cast<ShutterType>(rs_type),
+        rs_type,
         radial_coeffs,
         tangential_coeffs,
         thin_prism_coeffs,
@@ -2270,7 +2272,7 @@ void register_projection_cuda_impl(torch::Library &m) {
     m.impl("projection_2dgs_packed", to_torch_op<&projection_2dgs_packed_fwd>);
 #endif
 
-    m.impl("projection_ut_3dgs_fused", &projection_ut_3dgs_fused);
+    m.impl("projection_ut_3dgs_fused", to_torch_op<&projection_ut_3dgs_fused>);
 }
 
 void register_projection_autograd_cuda_impl(torch::Library &m) {
