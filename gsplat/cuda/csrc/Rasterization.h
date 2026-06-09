@@ -38,6 +38,24 @@ namespace gsplat {
 
 #define FILTER_INV_SQUARE_2DGS 2.0f
 
+// Public outputs of rasterize_to_pixels_3dgs (the forward-internal last_ids is
+// dropped).
+struct RasterizeToPixels3DGSResult {
+    at::Tensor renders;
+    at::Tensor alphas;
+    at::Tensor means2d_absgrad;
+};
+
+RasterizeToPixels3DGSResult rasterize_to_pixels_3dgs(
+    const at::Tensor &means2d, const at::Tensor &conics,
+    const at::Tensor &colors, const at::Tensor &opacities,
+    const at::optional<at::Tensor> &backgrounds,
+    const at::optional<at::Tensor> &masks,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &isect_offsets, const at::Tensor &flatten_ids,
+    bool packed, bool absgrad
+);
+
 // Public outputs of rasterize_to_pixels_2dgs (excludes the internal
 // last_ids / median_ids that the forward kernel additionally produces).
 struct RasterizeToPixels2DGSResult {

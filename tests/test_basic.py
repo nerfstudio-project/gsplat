@@ -5108,6 +5108,671 @@ def test_rasterize_eval3d_no_behind_camera_ghost_lobe(
         )
 
 
+def _make_cpp_classic_rasterization_scene(
+    *,
+    batch_dims: Tuple[int, ...] = (),
+    n_gaussians: int = 24,
+    n_cameras: int = 2,
+    n_channels: int = 3,
+    use_color_sh: bool = False,
+    use_extra_signals: bool = False,
+    use_extra_sh: bool = False,
+):
+    shape = batch_dims + (n_gaussians,)
+
+    means = torch.randn(*shape, 3, device=device) * 0.25
+    means[..., 2] = means[..., 2].abs() + 2.2
+
+    quats = torch.randn(*shape, 4, device=device)
+    quats = quats / quats.norm(dim=-1, keepdim=True)
+    scales = torch.rand(*shape, 3, device=device) * 0.04 + 0.02
+    opacities = torch.rand(*shape, device=device) * 0.8 + 0.1
+
+    viewmats = torch.eye(4, device=device).expand(*batch_dims, n_cameras, 4, 4).clone()
+    if n_cameras > 1:
+        viewmats[..., 1, 0, 3] = 0.12
+
+    Ks = torch.eye(3, device=device).expand(*batch_dims, n_cameras, 3, 3).clone()
+    Ks[..., 0, 0] = 70.0
+    Ks[..., 1, 1] = 72.0
+    Ks[..., 0, 2] = 24.0
+    Ks[..., 1, 2] = 20.0
+
+    if use_color_sh:
+        colors = torch.rand(n_gaussians, 4, 3, device=device) * 0.4
+        sh_degree = 1
+    else:
+        colors = torch.rand(*shape, n_channels, device=device)
+        sh_degree = None
+
+    extra_signals = None
+    extra_signals_sh_degree = None
+    if use_extra_signals:
+        if use_extra_sh:
+            extra_signals = torch.rand(n_gaussians, 4, 3, device=device) * 0.25
+            extra_signals_sh_degree = 1
+        else:
+            extra_signals = torch.rand(*shape, 2, device=device)
+
+    return {
+        "means": means,
+        "quats": quats,
+        "scales": scales,
+        "opacities": opacities,
+        "colors": colors,
+        "viewmats": viewmats,
+        "Ks": Ks,
+        "sh_degree": sh_degree,
+        "extra_signals": extra_signals,
+        "extra_signals_sh_degree": extra_signals_sh_degree,
+    }
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize(
+    "batch_dims,packed,render_mode,rasterize_mode,channel_chunk,n_channels,use_color_sh,use_extra_signals,use_extra_sh",
+    [
+        ((), True, "RGB", "classic", 3, 6, False, False, False),
+        ((2,), False, "RGB+D", "antialiased", 32, 3, False, False, False),
+        ((), True, "RGB", "classic", 32, 3, True, False, False),
+        ((), True, "RGB", "classic", 32, 3, False, True, True),
+        ((), True, "ED", "classic", 32, 3, False, False, False),
+        ((), True, "RGB+ED", "classic", 32, 3, False, True, False),
+    ],
+    ids=[
+        "packed_chunked_rgb",
+        "batch_nonpacked_rgbd_aa",
+        "packed_sh_rgb",
+        "packed_extra_sh_rgb",
+        "packed_depth_only_ed",
+        "packed_extra_rgb_expected_depth",
+    ],
+)
+def test_rasterization_cpp_classic_matches_python_reference(
+    batch_dims: Tuple[int, ...],
+    packed: bool,
+    render_mode: str,
+    rasterize_mode: str,
+    channel_chunk: int,
+    n_channels: int,
+    use_color_sh: bool,
+    use_extra_signals: bool,
+    use_extra_sh: bool,
+):
+    from gsplat.rendering import _rasterization
+
+    torch.manual_seed(11)
+    scene = _make_cpp_classic_rasterization_scene(
+        batch_dims=batch_dims,
+        n_channels=n_channels,
+        use_color_sh=use_color_sh,
+        use_extra_signals=use_extra_signals,
+        use_extra_sh=use_extra_sh,
+    )
+    if render_mode in ("D", "ED"):
+        scene["colors"] = None
+        scene["sh_degree"] = None
+
+    cpp_colors, cpp_alphas, cpp_meta = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode=render_mode,
+        rasterize_mode=rasterize_mode,
+        packed=packed,
+        channel_chunk=channel_chunk,
+    )
+    ref_colors, ref_alphas, ref_meta = _rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode=render_mode,
+        rasterize_mode=rasterize_mode,
+        channel_chunk=channel_chunk,
+    )
+
+    torch.testing.assert_close(cpp_colors, ref_colors, rtol=1e-4, atol=5e-5)
+    torch.testing.assert_close(cpp_alphas, ref_alphas, rtol=1e-4, atol=5e-5)
+
+    if use_extra_signals:
+        torch.testing.assert_close(
+            cpp_meta["render_extra_signals"],
+            ref_meta["render_extra_signals"],
+            rtol=1e-4,
+            atol=5e-5,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterization_cpp_classic_absgrad_is_optional():
+    torch.manual_seed(13)
+    scene = _make_cpp_classic_rasterization_scene()
+
+    _, _, meta = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        render_mode="RGB",
+        packed=True,
+        absgrad=False,
+    )
+    assert not hasattr(meta["means2d"], "absgrad")
+
+    scene = _make_cpp_classic_rasterization_scene(n_channels=6)
+    for tensor in (
+        scene["means"],
+        scene["quats"],
+        scene["scales"],
+        scene["opacities"],
+        scene["colors"],
+    ):
+        tensor.requires_grad_(True)
+
+    colors, alphas, meta = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        render_mode="RGB",
+        packed=True,
+        absgrad=True,
+        channel_chunk=3,
+    )
+    assert hasattr(meta["means2d"], "absgrad")
+    assert meta["means2d"].absgrad.shape == meta["means2d"].shape
+
+    (colors.sum() + alphas.sum()).backward()
+    assert meta["means2d"].absgrad.abs().sum() > 0
+
+
+def _set_rasterization_scene_requires_grad(scene: dict, names: Tuple[str, ...]) -> None:
+    for name in names:
+        tensor = scene[name]
+        if tensor is not None:
+            tensor.requires_grad_(True)
+
+
+def _clone_rasterization_scene(scene: dict) -> dict:
+    return {
+        key: value.detach().clone() if isinstance(value, torch.Tensor) else value
+        for key, value in scene.items()
+    }
+
+
+def _assert_public_rasterization_grad_close(
+    actual: torch.Tensor,
+    expected: torch.Tensor,
+    *,
+    name: str,
+    rtol: float = 5e-3,
+    atol: float = 5e-3,
+) -> None:
+    assert not (
+        torch.isnan(actual).any() or torch.isinf(actual).any()
+    ), f"{name}: public rasterization produced NaN/Inf gradient"
+    assert_grad_sparsity(actual, expected, min_ratio=0.1, msg=f"{name} sparsity")
+    torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol)
+
+
+def _classic_rasterization_loss_terms(colors: torch.Tensor, alphas: torch.Tensor):
+    return torch.randn_like(colors), torch.randn_like(alphas)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize(
+    "packed,channel_chunk,backgrounds",
+    [
+        pytest.param(True, 3, False, id="packed_chunked"),
+        pytest.param(False, 32, True, id="nonpacked_backgrounds"),
+    ],
+)
+def test_rasterization_cpp_classic_backward_matches_python_reference(
+    packed: bool, channel_chunk: int, backgrounds: bool
+):
+    from gsplat.rendering import _rasterization
+
+    torch.manual_seed(17)
+    scene = _make_cpp_classic_rasterization_scene(n_channels=6)
+    grad_names = ("means", "quats", "scales", "opacities", "colors", "viewmats")
+    _set_rasterization_scene_requires_grad(scene, grad_names)
+
+    background_tensor = None
+    if backgrounds:
+        C = scene["viewmats"].shape[-3]
+        background_tensor = torch.rand(C, scene["colors"].shape[-1], device=device)
+        background_tensor.requires_grad_(True)
+        grad_names = grad_names + ("backgrounds",)
+        scene_with_backgrounds = {**scene, "backgrounds": background_tensor}
+    else:
+        scene_with_backgrounds = scene
+
+    public_colors, public_alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        rasterize_mode="classic",
+        packed=packed,
+        channel_chunk=channel_chunk,
+        backgrounds=background_tensor,
+    )
+    v_colors, v_alphas = _classic_rasterization_loss_terms(public_colors, public_alphas)
+    public_inputs = tuple(scene_with_backgrounds[name] for name in grad_names)
+    public_grads = torch.autograd.grad(
+        (public_colors * v_colors).sum() + (public_alphas * v_alphas).sum(),
+        public_inputs,
+    )
+
+    ref_colors, ref_alphas, _ = _rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        rasterize_mode="classic",
+        channel_chunk=channel_chunk,
+        backgrounds=background_tensor,
+    )
+    ref_inputs = tuple(scene_with_backgrounds[name] for name in grad_names)
+    ref_grads = torch.autograd.grad(
+        (ref_colors * v_colors).sum() + (ref_alphas * v_alphas).sum(),
+        ref_inputs,
+    )
+
+    for name, actual, expected in zip(grad_names, public_grads, ref_grads):
+        _assert_public_rasterization_grad_close(actual, expected, name=name)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterization_cpp_classic_sparse_grad_layout():
+    torch.manual_seed(19)
+    scene = _make_cpp_classic_rasterization_scene(n_cameras=1)
+    _set_rasterization_scene_requires_grad(
+        scene, ("means", "quats", "scales", "opacities", "colors")
+    )
+
+    colors, alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        packed=True,
+        sparse_grad=True,
+    )
+    (colors.sum() + alphas.sum()).backward()
+
+    for name in ("means", "quats", "scales"):
+        grad = scene[name].grad
+        assert grad is not None, f"{name} gradient was not produced"
+        assert grad.is_sparse, f"{name} gradient should use sparse COO layout"
+        assert grad._nnz() > 0, f"{name} sparse gradient should have entries"
+
+    for name in ("opacities", "colors"):
+        grad = scene[name].grad
+        assert grad is not None, f"{name} gradient was not produced"
+        assert not grad.is_sparse, f"{name} gradient should remain dense"
+        assert grad.abs().sum() > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+def test_rasterization_cpp_classic_covars_input_path():
+    from gsplat.cuda._wrapper import quat_scale_to_covar_preci
+
+    torch.manual_seed(23)
+    scene = _make_cpp_classic_rasterization_scene()
+    covars, _ = quat_scale_to_covar_preci(
+        scene["quats"], scene["scales"], compute_preci=False, triu=False
+    )
+
+    quat_colors, quat_alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        packed=True,
+    )
+    covar_colors, covar_alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        packed=True,
+        covars=covars,
+    )
+
+    torch.testing.assert_close(covar_colors, quat_colors, rtol=1e-4, atol=5e-5)
+    torch.testing.assert_close(covar_alphas, quat_alphas, rtol=1e-4, atol=5e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "render_mode,channel_chunk,use_extra_signals,return_normals,absgrad",
+    [
+        pytest.param("RGB", 3, False, False, False, id="rgb_chunked"),
+        pytest.param("RGB-Ed", 32, True, True, False, id="hit_expected_extra_normals"),
+        pytest.param("RGB", 3, False, False, True, id="absgrad_ignored"),
+    ],
+)
+def test_rasterization_cpp_eval3d_matches_python_reference(
+    render_mode: str,
+    channel_chunk: int,
+    use_extra_signals: bool,
+    return_normals: bool,
+    absgrad: bool,
+):
+    torch.manual_seed(29)
+    scene = _make_cpp_classic_rasterization_scene(
+        n_channels=3,
+        use_extra_signals=use_extra_signals,
+    )
+
+    cpp_colors, cpp_alphas, cpp_meta = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=8,
+        render_mode=render_mode,
+        packed=False,
+        channel_chunk=channel_chunk,
+        with_eval3d=True,
+        return_normals=return_normals,
+        absgrad=absgrad,
+    )
+    ref_colors, ref_alphas, ref_meta = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=8,
+        render_mode=render_mode,
+        packed=False,
+        channel_chunk=channel_chunk,
+        with_eval3d=True,
+        return_normals=return_normals,
+        # Eval3D ignores absgrad. Keep this second call on the public path to
+        # verify that the flag remains forward-neutral after it stops gating
+        # C++ orchestration.
+        absgrad=True,
+    )
+
+    torch.testing.assert_close(cpp_colors, ref_colors, rtol=1e-4, atol=5e-5)
+    torch.testing.assert_close(cpp_alphas, ref_alphas, rtol=1e-4, atol=5e-5)
+
+    if use_extra_signals:
+        torch.testing.assert_close(
+            cpp_meta["render_extra_signals"],
+            ref_meta["render_extra_signals"],
+            rtol=1e-4,
+            atol=5e-5,
+        )
+    if return_normals:
+        assert "normals" in cpp_meta
+        assert "normals" in ref_meta
+        torch.testing.assert_close(
+            cpp_meta["normals"], ref_meta["normals"], rtol=1e-4, atol=5e-5
+        )
+    if absgrad:
+        assert not hasattr(cpp_meta["means2d"], "absgrad")
+        assert not hasattr(ref_meta["means2d"], "absgrad")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterization_cpp_eval3d_backward_matches_python_reference():
+    from gsplat.rendering import _rasterization
+
+    torch.manual_seed(31)
+    scene = _make_cpp_classic_rasterization_scene(n_channels=3)
+    grad_names = ("means", "quats", "scales", "opacities", "colors")
+    _set_rasterization_scene_requires_grad(scene, grad_names)
+
+    public_colors, public_alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=8,
+        render_mode="RGB",
+        packed=False,
+        channel_chunk=3,
+        with_eval3d=True,
+    )
+    v_colors, v_alphas = _classic_rasterization_loss_terms(public_colors, public_alphas)
+    public_inputs = tuple(scene[name] for name in grad_names)
+    public_grads = torch.autograd.grad(
+        (public_colors * v_colors).sum() + (public_alphas * v_alphas).sum(),
+        public_inputs,
+    )
+
+    ref_colors, ref_alphas, _ = _rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=8,
+        render_mode="RGB",
+        channel_chunk=3,
+        with_eval3d=True,
+    )
+    ref_inputs = tuple(scene[name] for name in grad_names)
+    ref_grads = torch.autograd.grad(
+        (ref_colors * v_colors).sum() + (ref_alphas * v_alphas).sum(),
+        ref_inputs,
+    )
+
+    for name, actual, expected in zip(grad_names, public_grads, ref_grads):
+        _assert_public_rasterization_grad_close(actual, expected, name=name)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "with_eval3d,render_mode,return_normals,tile_size",
+    [
+        pytest.param(False, "RGB+ED", False, 16, id="projected_expected_depth"),
+        pytest.param(True, "RGB-d", True, 8, id="hit_distance_normals"),
+    ],
+)
+def test_rasterization_cpp_ut_camera_absgrad_forward_neutral(
+    with_eval3d: bool,
+    render_mode: str,
+    return_normals: bool,
+    tile_size: int,
+):
+    torch.manual_seed(37)
+    scene = _make_cpp_classic_rasterization_scene(n_channels=3)
+    C = scene["viewmats"].shape[-3]
+
+    viewmats_rs = scene["viewmats"].clone()
+    viewmats_rs[..., 0, 3] += 0.01
+    radial_coeffs = torch.zeros(C, 6, device=device)
+    radial_coeffs[..., 0] = 1.0e-4
+
+    kwargs = dict(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=tile_size,
+        render_mode=render_mode,
+        rasterize_mode="classic",
+        packed=False,
+        with_ut=True,
+        with_eval3d=with_eval3d,
+        rolling_shutter=RollingShutterType.ROLLING_TOP_TO_BOTTOM,
+        viewmats_rs=viewmats_rs,
+        radial_coeffs=radial_coeffs,
+        return_normals=return_normals,
+    )
+
+    cpp_colors, cpp_alphas, cpp_meta = gsplat.rasterization(**kwargs)
+    ref_colors, ref_alphas, ref_meta = gsplat.rasterization(**kwargs, absgrad=True)
+
+    torch.testing.assert_close(cpp_colors, ref_colors, rtol=1e-4, atol=5e-5)
+    torch.testing.assert_close(cpp_alphas, ref_alphas, rtol=1e-4, atol=5e-5)
+    if return_normals:
+        torch.testing.assert_close(
+            cpp_meta["normals"], ref_meta["normals"], rtol=1e-4, atol=5e-5
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize("camera_model", ["pinhole", "lidar"])
+def test_rasterization_cpp_ut_projected_absgrad_matches_python_reference(
+    camera_model: str,
+):
+    torch.manual_seed(39)
+    base_scene = _make_cpp_classic_rasterization_scene(
+        n_channels=3,
+        n_cameras=1,
+    )
+    kwargs = dict(
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB+D",
+        rasterize_mode="classic",
+        packed=False,
+        channel_chunk=4,
+        with_ut=True,
+        absgrad=True,
+    )
+
+    if camera_model == "lidar":
+        from tests.test_cameras import parse_lidar_camera
+
+        base_scene["means"] = base_scene["means"].clone()
+        base_scene["means"][..., 0] = base_scene["means"][..., 0].abs() + 2.2
+        base_scene["means"][..., 1:] *= 0.1
+
+        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+            "at128", (), 0, 0, device=device, seed=42
+        )
+        lidar_coeffs = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+            lidar_params, angles_to_columns_map, tiling
+        )
+        width = lidar_coeffs.n_columns
+        height = lidar_coeffs.n_rows
+        focal = float(width)
+        base_scene["Ks"] = torch.tensor(
+            [
+                [
+                    [focal, 0.0, width / 2.0],
+                    [0.0, focal, height / 2.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            ],
+            device=device,
+        )
+        kwargs.update(
+            width=width,
+            height=height,
+            camera_model="lidar",
+            lidar_coeffs=lidar_coeffs,
+        )
+
+    grad_names = ("means", "quats", "scales", "opacities", "colors")
+    public_scene = _clone_rasterization_scene(base_scene)
+    ref_scene = _clone_rasterization_scene(base_scene)
+    _set_rasterization_scene_requires_grad(public_scene, grad_names)
+    _set_rasterization_scene_requires_grad(ref_scene, grad_names)
+
+    public_colors, public_alphas, public_meta = gsplat.rasterization(
+        **public_scene, **kwargs
+    )
+    ref_kwargs = dict(kwargs)
+    ref_kwargs["absgrad"] = False
+    ref_colors, ref_alphas, _ = gsplat.rasterization(**ref_scene, **ref_kwargs)
+
+    v_colors, v_alphas = _classic_rasterization_loss_terms(public_colors, public_alphas)
+    public_inputs = tuple(public_scene[name] for name in grad_names)
+    torch.autograd.grad(
+        (public_colors * v_colors).sum() + (public_alphas * v_alphas).sum(),
+        public_inputs,
+        allow_unused=True,
+    )
+
+    torch.testing.assert_close(public_colors, ref_colors, rtol=1e-4, atol=5e-5)
+    torch.testing.assert_close(public_alphas, ref_alphas, rtol=1e-4, atol=5e-5)
+    assert hasattr(public_meta["means2d"], "absgrad")
+    assert public_meta["means2d"].absgrad.shape == public_meta["means2d"].shape
+    if camera_model != "lidar":
+        assert public_meta["means2d"].absgrad.abs().sum() > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "with_eval3d,render_mode,tile_size",
+    [
+        pytest.param(False, "RGB+D", 16, id="projected_depth"),
+        pytest.param(True, "RGB-d", 8, id="hit_distance"),
+    ],
+)
+def test_rasterization_cpp_ut_lidar_absgrad_forward_neutral(
+    with_eval3d: bool,
+    render_mode: str,
+    tile_size: int,
+):
+    from tests.test_cameras import parse_lidar_camera
+
+    torch.manual_seed(41)
+    scene = _make_cpp_classic_rasterization_scene(
+        n_channels=3,
+        n_cameras=1,
+        use_extra_signals=True,
+    )
+    lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+        "at128", (), 0, 0, device=device, seed=42
+    )
+    lidar_coeffs = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
+    width = lidar_coeffs.n_columns
+    height = lidar_coeffs.n_rows
+    focal = float(width)
+    Ks = torch.tensor(
+        [[[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+    scene = {**scene, "Ks": Ks}
+    kwargs = dict(
+        **scene,
+        width=width,
+        height=height,
+        tile_size=tile_size,
+        render_mode=render_mode,
+        packed=False,
+        channel_chunk=3,
+        with_ut=True,
+        with_eval3d=with_eval3d,
+        camera_model="lidar",
+        lidar_coeffs=lidar_coeffs,
+    )
+
+    cpp_colors, cpp_alphas, cpp_meta = gsplat.rasterization(**kwargs)
+    ref_colors, ref_alphas, ref_meta = gsplat.rasterization(**kwargs, absgrad=True)
+
+    torch.testing.assert_close(cpp_colors, ref_colors, rtol=1e-4, atol=5e-5)
+    torch.testing.assert_close(cpp_alphas, ref_alphas, rtol=1e-4, atol=5e-5)
+    torch.testing.assert_close(
+        cpp_meta["render_extra_signals"],
+        ref_meta["render_extra_signals"],
+        rtol=1e-4,
+        atol=5e-5,
+    )
+    assert cpp_meta["tile_width"] == lidar_coeffs.tiling.n_bins_azimuth
+    assert cpp_meta["tile_height"] == lidar_coeffs.tiling.n_bins_elevation
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(

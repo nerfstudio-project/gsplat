@@ -24,7 +24,6 @@ import torch.distributed
 import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
-from ._helper import ensure_shape
 from .trace import trace_function, trace_pop, trace_push, trace_range
 from .profile import capture_inputs
 
@@ -44,9 +43,9 @@ from .cuda._wrapper import (
     isect_offset_encode,
     isect_tiles,
     isect_tiles_lidar,
-    rasterize_to_pixels,
     _make_lazy_cuda_func,
     _make_lazy_cuda_obj,
+    rasterize_to_pixels,
     rasterize_to_pixels_eval3d,
     rasterize_to_pixels_eval3d_extra,
     renderer_config_mixed_batch,
@@ -178,8 +177,8 @@ def _validate_3dgut_rasterize_mode(
         )
 
 
-def _validate_nccl_process_group() -> None:
-    """Validate that the default process group is available and uses NCCL."""
+def _get_default_nccl_process_group_name() -> str:
+    """Return the default NCCL process-group name used by c10d functional ops."""
 
     if not torch.distributed.is_available():
         raise ValueError("distributed=True requires torch.distributed to be available.")
@@ -189,12 +188,16 @@ def _validate_nccl_process_group() -> None:
             "process group."
         )
 
-    backend = torch.distributed.get_backend()
+    import torch.distributed.distributed_c10d as distributed_c10d
+
+    process_group = distributed_c10d._get_default_group()
+    backend = torch.distributed.get_backend(process_group)
     if str(backend).lower() != "nccl":
         raise ValueError(
             "distributed=True currently supports only the default NCCL process "
             f"group; got backend '{backend}'."
         )
+    return distributed_c10d._get_process_group_name(process_group)
 
 
 def normalize_features_layout(
@@ -395,6 +398,177 @@ def _resolve_tile_size(
     if with_eval3d:
         return 16 if min(width, height) >= 1080 else 8
     return 16
+
+
+def _call_cpp_classic_3dgs_rasterization(
+    means: Tensor,
+    covars: Optional[Tensor],
+    quats: Optional[Tensor],
+    scales: Optional[Tensor],
+    opacities: Tensor,
+    colors: Optional[Tensor],
+    viewmats: Tensor,
+    Ks: Tensor,
+    width: int,
+    height: int,
+    tile_size: int,
+    eps2d: float,
+    near_plane: float,
+    far_plane: float,
+    radius_clip: float,
+    backgrounds: Optional[Tensor],
+    render_mode: RenderMode,
+    rasterize_mode: RasterizeMode,
+    packed: bool,
+    sparse_grad: bool,
+    absgrad: bool,
+    camera_model: CameraModel,
+    segmented: bool,
+    channel_chunk: int,
+    sh_degree: Optional[int],
+    extra_signals: Optional[Tensor],
+    extra_signals_sh_degree: Optional[int],
+    with_eval3d: bool,
+    with_ut: bool,
+    rays: Optional[Tensor],
+    viewmats_rs: Optional[Tensor],
+    ut_params: Optional[UnscentedTransformParameters],
+    rolling_shutter: RollingShutterType,
+    radial_coeffs: Optional[Tensor],
+    tangential_coeffs: Optional[Tensor],
+    thin_prism_coeffs: Optional[Tensor],
+    ftheta_coeffs: Optional[FThetaCameraDistortionParameters],
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt],
+    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters],
+    global_z_order: bool,
+    return_normals: bool,
+    renderer_config: Any,
+) -> Tuple[Tensor, Tensor, Dict]:
+    """Call the C++ implementation for non-distributed 3DGS rasterization.
+
+    Python keeps metadata dictionary construction. The C++ entry point owns
+    validation and the rendering work.
+    """
+
+    has_color = render_mode_has_color(render_mode)
+    camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
+    sh_degree_value = sh_degree if sh_degree is not None else -1
+    extra_signals_sh_degree_value = (
+        extra_signals_sh_degree if extra_signals_sh_degree is not None else -1
+    )
+    ftheta_params = (
+        ftheta_coeffs
+        if ftheta_coeffs is not None
+        else FThetaCameraDistortionParameters()
+    )
+    (
+        render_colors,
+        render_alphas,
+        render_extra_signals,
+        render_normals,
+        means2d_absgrad,
+        batch_ids,
+        camera_ids,
+        gaussian_ids,
+        radii,
+        means2d,
+        depths,
+        conics,
+        projected_opacities,
+        tiles_per_gauss,
+        isect_ids,
+        flatten_ids,
+        isect_offsets,
+        tile_width,
+        tile_height,
+    ) = _make_lazy_cuda_func("rasterization_3dgs")(
+        means,
+        covars,
+        quats,
+        scales,
+        opacities,
+        colors if has_color else None,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        backgrounds,
+        packed,
+        sparse_grad,
+        absgrad,
+        rasterize_mode == "antialiased",
+        rasterize_mode == "classic",
+        camera_model_type,
+        segmented,
+        channel_chunk,
+        has_color,
+        sh_degree_value,
+        extra_signals,
+        extra_signals_sh_degree_value,
+        render_mode_has_depth_channel(render_mode),
+        render_mode_has_expected_depth(render_mode),
+        with_eval3d,
+        with_ut,
+        rays.contiguous() if rays is not None else None,
+        viewmats_rs.contiguous() if viewmats_rs is not None else None,
+        ut_params if ut_params is not None else UnscentedTransformParameters(),
+        rolling_shutter,
+        radial_coeffs.contiguous() if radial_coeffs is not None else None,
+        tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
+        thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
+        ftheta_params,
+        lidar_coeffs.to_cpp() if lidar_coeffs is not None else None,
+        external_distortion_coeffs,
+        global_z_order,
+        render_mode_has_hit_distance(render_mode),
+        return_normals,
+        renderer_config,
+    )
+
+    if absgrad and not with_eval3d:
+        means2d.absgrad = means2d_absgrad
+
+    if not packed:
+        batch_ids = None
+        camera_ids = None
+        gaussian_ids = None
+
+    batch_dims = means.shape[:-2]
+    B = math.prod(batch_dims)
+    C = viewmats.shape[-3]
+    meta = {
+        "batch_ids": batch_ids,
+        "camera_ids": camera_ids,
+        "gaussian_ids": gaussian_ids,
+        "radii": radii,
+        "means2d": means2d,
+        "depths": depths,
+        "conics": conics,
+        "opacities": projected_opacities,
+        "tile_width": tile_width,
+        "tile_height": tile_height,
+        "tiles_per_gauss": tiles_per_gauss,
+        "isect_ids": isect_ids,
+        "flatten_ids": flatten_ids,
+        "isect_offsets": isect_offsets,
+        "width": width,
+        "height": height,
+        "tile_size": tile_size,
+        "n_batches": B,
+        "n_cameras": C,
+    }
+
+    if extra_signals is not None:
+        meta["render_extra_signals"] = render_extra_signals
+    if return_normals:
+        meta["normals"] = render_normals
+
+    return render_colors, render_alphas, meta
 
 
 @trace_function("render")
@@ -685,34 +859,8 @@ def rasterization(
         'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
 
     """
-    if renderer_config is None:
-        renderer_config = RendererConfig_MixedBatch()
-    _validate_renderer_config(renderer_config)
-
     meta = {}
     has_color = render_mode_has_color(render_mode)
-
-    _validate_3dgut_rasterize_mode(
-        rasterize_mode, with_ut=with_ut, with_eval3d=with_eval3d
-    )
-    if not with_eval3d and not isinstance(renderer_config, RendererConfig_MixedBatch):
-        raise ValueError(
-            f"{type(renderer_config).__name__} requires with_eval3d=True; "
-            "non-eval3d rasterization only supports RendererConfig_MixedBatch."
-        )
-    renderer_config_impl = (
-        _renderer_config_type(renderer_config) if with_eval3d else None
-    )
-
-    if colors is None and has_color:
-        raise ValueError(
-            f"colors must be provided when render_mode='{render_mode}' includes RGB. "
-            f"Pass colors=None only for depth-only render modes (D, d, Ed, ED)."
-        )
-    if colors is None and sh_degree is not None:
-        raise ValueError(
-            f"sh_degree must be None when colors is None, got sh_degree={sh_degree}."
-        )
 
     external_distortion_coeffs = cast(
         Optional[BivariateWindshieldModelParameters], external_distortion_coeffs
@@ -736,22 +884,13 @@ def rasterization(
     H = height
     W = width
     device = means.device
-    assert means.shape == batch_dims + (N, 3), means.shape
-    if covars is None:
-        assert quats.shape == batch_dims + (N, 4), quats.shape
-        assert scales.shape == batch_dims + (N, 3), scales.shape
-    else:
-        assert covars.shape == batch_dims + (N, 3, 3), covars.shape
+    if covars is not None:
         quats, scales = None, None
         # convert covars from 3x3 matrix to upper-triangular 6D vector
         tri_indices = ([0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2])
         covars = covars[..., tri_indices[0], tri_indices[1]]
-    assert opacities.shape == batch_dims + (N,), opacities.shape
-    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    if rays is not None:
-        rays = ensure_shape("rays", rays, batch_dims + (C, H, W, 6))
 
+    distributed_process_group_name = None
     if distributed:
         # Distributed rasterization supports only classic 3DGS pinhole; the other
         # modes have no correct distributed path, so reject them here.
@@ -792,12 +931,7 @@ def rasterization(
                 "pinhole rasterization with the default NCCL process group. "
                 "Unsupported option(s): " + ", ".join(unsupported_reasons) + "."
             )
-        _validate_nccl_process_group()
-
-    assert global_z_order or with_ut, "global_z_order can be false only if with_ut=True"
-    assert (camera_model == "lidar") == (
-        lidar_coeffs is not None
-    ), "Lidar coefficients must be given if and only if camera model is lidar"
+        distributed_process_group_name = _get_default_nccl_process_group_name()
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -840,46 +974,69 @@ def rasterization(
     if extra_signals is not None:
         check_features(extra_signals, extra_signals_sh_degree, "extra signals")
 
-    if (
-        radial_coeffs is not None
-        or tangential_coeffs is not None
-        or thin_prism_coeffs is not None
-        or ftheta_coeffs is not None
-        or external_distortion_coeffs is not None
-        or rolling_shutter != RollingShutterType.GLOBAL
-    ):
-        assert (
-            with_ut
-        ), "Distortion and rolling shutter are only supported with `with_ut=True`."
+    if absgrad and distributed:
+        raise ValueError("AbsGrad is not supported in distributed mode.")
 
-    if rolling_shutter != RollingShutterType.GLOBAL:
-        assert (
-            viewmats_rs is not None
-        ), "Rolling shutter requires to provide viewmats_rs."
-    else:
-        assert (
-            viewmats_rs is None
-        ), "viewmats_rs should be None for global rolling shutter."
-
-    if with_ut or with_eval3d:
-        assert (quats is not None) and (
-            scales is not None
-        ), "UT and eval3d requires to provide quats and scales."
-        assert packed is False, "Packed mode is not supported with UT."
-        assert sparse_grad is False, "Sparse grad is not supported with UT."
-
-    if return_normals and not with_eval3d:
+    # Resolve the renderer configuration (MixedBatch / ParallelBatch). The
+    # custom-class instances live only in Python; flatten to the CUDA enum
+    # before crossing into the C++ orchestration op. ParallelBatch is only
+    # valid on the eval3d (from-world) path.
+    if renderer_config is None:
+        renderer_config = RendererConfig_MixedBatch()
+    _validate_renderer_config(renderer_config)
+    if not with_eval3d and not isinstance(renderer_config, RendererConfig_MixedBatch):
         raise ValueError(
-            "return_normals=True requires with_eval3d=True. "
-            "Normal computation is only supported in eval3d mode."
+            f"{type(renderer_config).__name__} requires with_eval3d=True; "
+            "the non-eval3d path only supports RendererConfig_MixedBatch."
         )
+    renderer_config_impl = _renderer_config_type(renderer_config)
 
-    # Validate hit distance modes require eval3d
-    if render_mode_has_hit_distance(render_mode) and not with_eval3d:
-        raise ValueError(
-            f"Hit distance mode '{render_mode}' requires with_eval3d=True. "
-            f"Classic mode only supports Gaussian depth modes ('D', 'ED', 'RGB+D', 'RGB+ED'). "
-            f"Either set with_eval3d=True or use a Gaussian depth render_mode."
+    if not distributed:
+        return _call_cpp_classic_3dgs_rasterization(
+            means=means.contiguous(),
+            covars=covars.contiguous() if covars is not None else None,
+            quats=quats.contiguous() if quats is not None else None,
+            scales=scales.contiguous() if scales is not None else None,
+            opacities=opacities.contiguous(),
+            colors=colors.contiguous() if colors is not None else None,
+            viewmats=viewmats.contiguous(),
+            Ks=Ks.contiguous(),
+            width=width,
+            height=height,
+            tile_size=tile_size,
+            eps2d=eps2d,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            radius_clip=radius_clip,
+            backgrounds=backgrounds.contiguous() if backgrounds is not None else None,
+            render_mode=render_mode,
+            rasterize_mode=rasterize_mode,
+            packed=packed,
+            sparse_grad=sparse_grad,
+            absgrad=absgrad,
+            camera_model=camera_model,
+            segmented=segmented,
+            channel_chunk=channel_chunk,
+            sh_degree=sh_degree,
+            extra_signals=(
+                extra_signals.contiguous() if extra_signals is not None else None
+            ),
+            extra_signals_sh_degree=extra_signals_sh_degree,
+            with_eval3d=with_eval3d,
+            with_ut=with_ut,
+            rays=rays,
+            viewmats_rs=viewmats_rs,
+            ut_params=ut_params,
+            rolling_shutter=rolling_shutter,
+            radial_coeffs=radial_coeffs,
+            tangential_coeffs=tangential_coeffs,
+            thin_prism_coeffs=thin_prism_coeffs,
+            ftheta_coeffs=ftheta_coeffs,
+            lidar_coeffs=lidar_coeffs,
+            external_distortion_coeffs=external_distortion_coeffs,
+            global_z_order=global_z_order,
+            return_normals=return_normals,
+            renderer_config=renderer_config_impl,
         )
 
     # Implement the multi-GPU strategy proposed in
