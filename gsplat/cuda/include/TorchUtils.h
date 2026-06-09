@@ -9,6 +9,7 @@
 #include <ATen/core/Tensor.h>
 #include <ATen/core/dispatch/Dispatcher.h> // c10::Dispatcher for call_torch_op
 #include <ATen/core/grad_mode.h>
+#include <ATen/core/ivalue.h> // c10::IValue for saved_data
 #include <ATen/ops/sparse_coo_tensor.h> // at::sparse_coo_tensor
 
 #include <concepts>
@@ -20,6 +21,8 @@
 #include <vector>
 
 #include <c10/util/intrusive_ptr.h>
+
+#include <torch/csrc/autograd/custom_function.h> // torch::autograd::AutogradContext / variable_list
 
 namespace gsplat {
 
@@ -749,6 +752,195 @@ auto call_torch_op(const char *qualified_name, Args &&...args) {
                   .findSchemaOrThrow(qualified_name, "").typed<DispatchSig>();
 
     return detail::invoke_torch_op<ResultT>(op, std::forward<Args>(args)...);
+}
+
+// ---------------------------------------------------------------------------
+// Saved-state plumbing for C++ torch::autograd::Function subclasses.
+//
+// The backward free-function's signature is the single source of truth for
+// the saved-state layout. It takes its saved state as its leading parameters
+// and the engine-supplied grad bundle as one trailing
+// `const torch::autograd::variable_list&`. `bwd_saved_t<&bwd>` reconstructs
+// the saved-state tuple type (params before that trailing list); `ctx_save`
+// and `ctx_load` route each saved value to/from the AutogradContext by type:
+//   - at::Tensor                          -> save_for_backward variable_list
+//   - at::optional<at::Tensor>            -> save_for_backward (boxed via
+//                                            as_tensor / unboxed via
+//                                            as_optional_tensor)
+//   - c10::intrusive_ptr<X> (custom class)-> saved_data[index] IValue
+//   - at::optional<intrusive_ptr<X>>      -> saved_data[index] IValue or None
+//   - other non-tensor values (scalar / enum / uint32_t / float / ...)
+//                                         -> crossed via TorchArgDef to a torch
+//                                            scalar, stored as saved_data[index]
+//                                            IValue
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+// Tuple with its last element removed.
+template <class Tuple>
+struct drop_last;
+
+template <class... Ts>
+struct drop_last<std::tuple<Ts...>> {
+    template <std::size_t... I>
+    static auto pick(std::index_sequence<I...>)
+        -> std::tuple<std::tuple_element_t<I, std::tuple<Ts...>>...>;
+
+    using type = decltype(pick(std::make_index_sequence<sizeof...(Ts) - 1>{}));
+};
+
+template <class Tuple>
+using drop_last_t = typename drop_last<Tuple>::type;
+
+// The backward function's saved-state tuple: its parameter types before the
+// trailing `const torch::autograd::variable_list&`.
+template <auto BwdFn>
+using bwd_saved_t = drop_last_t<typename fn_traits<decltype(BwdFn)>::decayed_args>;
+
+// The backward function's trailing parameter: the engine grad bundle. It must
+// be a variable_list — that is the boundary `drop_last` peels off to delimit
+// the saved state (everything before it). ctx_save/ctx_load static_assert this.
+template <auto BwdFn>
+using bwd_grad_bundle_t =
+    std::tuple_element_t<std::tuple_size_v<typename fn_traits<decltype(BwdFn)>::decayed_args> - 1,
+                         typename fn_traits<decltype(BwdFn)>::decayed_args>;
+
+} // namespace detail
+
+// Number of logical forward inputs a torch::autograd::Function sees: real
+// forward parameter count minus the leading AutogradContext*. Used by a
+// `FwdInput::COUNT == fwd_input_count<&forward>()` assert to pin the position
+// enum to the arity derived from the function type.
+template <auto FwdFn>
+inline constexpr std::size_t fwd_input_count() {
+    using args = typename detail::fn_traits<decltype(FwdFn)>::decayed_args;
+    static_assert(std::is_same_v<std::tuple_element_t<0, args>, torch::autograd::AutogradContext *>,
+                  "forward's first parameter must be torch::autograd::AutogradContext*");
+    return std::tuple_size_v<args> - 1;
+}
+
+namespace detail {
+
+// A backward function's trailing parameter is its grad bundle: a struct that
+// opts in with a `static constexpr bool is_grad_bundle = true`. ctx_save/
+// ctx_load assert the boundary is such a struct, so a stray saved tensor-list
+// in the last position can't masquerade as the bundle. This is a compile-time
+// type check — no RTTI, no runtime cost.
+template <class T>
+concept GradBundle = requires { requires T::is_grad_bundle; };
+
+// Save one value into the context at pack-index I.
+template <std::size_t I, class V>
+inline void save_one(torch::autograd::AutogradContext *ctx, torch::autograd::variable_list &tensors,
+                     const V &v) {
+    if constexpr (std::is_same_v<V, at::Tensor>) {
+        tensors.push_back(v);
+    } else if constexpr (is_optional_tensor_v<V>) {
+        tensors.push_back(as_tensor(v));
+    } else if constexpr (is_optional_intrusive_v<V>) {
+        // at::optional<c10::intrusive_ptr<X>> -> IValue(class) or None
+        ctx->saved_data[std::to_string(I)] = v.has_value() ? c10::IValue(v.value()) : c10::IValue();
+    } else if constexpr (is_intrusive_ptr<V>::value) {
+        ctx->saved_data[std::to_string(I)] = c10::IValue(v);
+    } else {
+        static_assert(!is_tensor_list_v<V>,
+                      "ctx_save: a tensor-list saved input (vector<Tensor> / List<Tensor> "
+                      "/ TensorList) must route through save_for_backward, not saved_data; "
+                      "extend the router before saving one.");
+        // A non-tensor saved value (scalar, enum, ...) crosses as its torch
+        // form via TorchArgDef, then stored as an IValue.
+        ctx->saved_data[std::to_string(I)] = c10::IValue(TorchArgDef<V>::to(v));
+    }
+}
+
+// Load one value of type V from the context at pack-index I. `tensors` is the
+// saved variable_list and `t` is a running cursor into it (advanced only for
+// tensor-ish slots, matching the push order in save_one).
+//
+// The non-tensor branches bind the saved entry to a named IValue before any
+// `.to<>()` / `.toCustomClass<>()` call. nvcc's EDG frontend treats the
+// `saved_data[std::to_string(I)]` subscript as dependent on the pack index I
+// and refuses to parse a member-template call directly on it; a named,
+// non-dependent IValue (or a `.template` disambiguator) is required.
+template <std::size_t I, class V>
+inline V load_one(torch::autograd::AutogradContext *ctx,
+                  const torch::autograd::variable_list &tensors, std::size_t &t) {
+    if constexpr (std::is_same_v<V, at::Tensor>) {
+        return tensors[t++];
+    } else if constexpr (is_optional_tensor_v<V>) {
+        return as_optional_tensor(tensors[t++]);
+    } else if constexpr (is_optional_intrusive_v<V>) {
+        using X = value_type_t<is_intrusive_ptr<value_type_t<is_optional<V>>>>;
+        const c10::IValue &iv = ctx->saved_data[std::to_string(I)];
+        return iv.isNone() ? V{} : V(iv.toCustomClass<X>());
+    } else if constexpr (is_intrusive_ptr<V>::value) {
+        using X = value_type_t<is_intrusive_ptr<V>>;
+        const c10::IValue &iv = ctx->saved_data[std::to_string(I)];
+        return iv.toCustomClass<X>();
+    } else {
+        static_assert(!is_tensor_list_v<V>,
+                      "ctx_load: a tensor-list saved input must round-trip via "
+                      "save_for_backward, not saved_data.");
+        const c10::IValue &iv = ctx->saved_data[std::to_string(I)];
+        return TorchArgDef<V>::from(iv.to<torch_arg_t<V>>());
+    }
+}
+
+template <auto BwdFn, class Tuple, std::size_t... I>
+inline void ctx_save_impl(torch::autograd::AutogradContext *ctx, const Tuple &vals,
+                          std::index_sequence<I...>) {
+    torch::autograd::variable_list tensors;
+    (save_one<I>(ctx, tensors, std::get<I>(vals)), ...);
+    ctx->save_for_backward(std::move(tensors));
+}
+
+template <auto BwdFn, std::size_t... I>
+inline bwd_saved_t<BwdFn> ctx_load_impl(torch::autograd::AutogradContext *ctx,
+                                        std::index_sequence<I...>) {
+    const torch::autograd::variable_list tensors = ctx->get_saved_variables();
+    std::size_t t = 0;
+    using Saved = bwd_saved_t<BwdFn>;
+    // Brace-init enforces left-to-right evaluation so the tensor cursor `t`
+    // advances in slot order.
+    return Saved{load_one<I, std::tuple_element_t<I, Saved>>(ctx, tensors, t)...};
+}
+
+} // namespace detail
+
+// Save the values that backward needs, type-checked against bwd's parameters.
+// The values must be passed in bwd's parameter order; a wrong-typed or
+// out-of-order (different type) save is a compile error.
+template <auto BwdFn, class... Vals>
+inline void ctx_save(torch::autograd::AutogradContext *ctx, const Vals &...vals) {
+    static_assert(detail::GradBundle<detail::bwd_grad_bundle_t<BwdFn>>,
+                  "ctx_save: backward's last parameter must be the grad bundle "
+                  "(variable_list, or a struct tagged is_grad_bundle).");
+    static_assert(std::is_same_v<std::tuple<std::decay_t<Vals>...>, detail::bwd_saved_t<BwdFn>>,
+                  "ctx_save values must match the backward function's saved-state "
+                  "parameters (types and order) exactly.");
+    detail::ctx_save_impl<BwdFn>(ctx, std::forward_as_tuple(vals...),
+                                 std::make_index_sequence<sizeof...(Vals)>{});
+}
+
+// Reconstruct backward's saved-state tuple for structured-binding / std::apply.
+template <auto BwdFn>
+inline detail::bwd_saved_t<BwdFn> ctx_load(torch::autograd::AutogradContext *ctx) {
+    static_assert(detail::GradBundle<detail::bwd_grad_bundle_t<BwdFn>>,
+                  "ctx_load: backward's last parameter must be the grad bundle "
+                  "(variable_list, or a struct tagged is_grad_bundle).");
+    constexpr std::size_t N = std::tuple_size_v<detail::bwd_saved_t<BwdFn>>;
+    return detail::ctx_load_impl<BwdFn>(ctx, std::make_index_sequence<N>{});
+}
+
+// Restore bwd's saved state from `ctx` and invoke it with `bundle` (the grad
+// outputs) appended as the trailing argument. The call is copy-free:
+// ctx_load's tuple is moved into bwd's by-value params, while `bundle` stays
+// a reference via forward_as_tuple. Both are consumed within this
+// full-expression, so the reference can't dangle.
+template <auto BwdFn, class Bundle>
+inline auto apply_bwd(torch::autograd::AutogradContext *ctx, const Bundle &bundle) {
+    return std::apply(BwdFn, std::tuple_cat(ctx_load<BwdFn>(ctx), std::forward_as_tuple(bundle)));
 }
 
 } // namespace gsplat

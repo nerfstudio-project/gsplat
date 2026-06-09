@@ -841,3 +841,165 @@ TEST(CallTorchOpTest, optional_output_absent_round_trips_as_nullopt) {
     EXPECT_TRUE(at::allclose(r.scaled, a));
     EXPECT_FALSE(r.extra.has_value());
 }
+
+// ---------------------------------------------------------------------------
+// ctx_save / ctx_load / apply_bwd end-to-end through a throwaway
+// torch::autograd::Function. The backward free-function's signature is the
+// saved-state source of truth: leading saved params, trailing grad bundle.
+// Modeled on the autograd Functions in Projection.cpp (forward uses ctx_save,
+// backward uses apply_bwd; backward free-fn takes saved params then a trailing
+// grad-bundle reference). Saves a tensor pair plus a non-tensor scalar to
+// exercise both the save_for_backward and saved_data IValue routes.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Grad bundle: the engine-supplied trailing parameter, opted in via the
+// is_grad_bundle tag (mirrors the *Grad structs in Projection.cpp).
+struct ScaleMulGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor grad_out;
+};
+
+struct ScaleMulBwdResult {
+    at::Tensor v_a;
+    at::Tensor v_b;
+};
+
+// Backward free-function: saved state (a, b, scale) then the grad bundle.
+// y = a * b * scale  =>  dy/da = b * scale, dy/db = a * scale.
+ScaleMulBwdResult scale_mul_bwd(
+    const at::Tensor &a,
+    const at::Tensor &b,
+    double scale,
+    const ScaleMulGrad &grad
+) {
+    return ScaleMulBwdResult{
+        .v_a = grad.grad_out * b * scale,
+        .v_b = grad.grad_out * a * scale,
+    };
+}
+
+// Records the saved state ctx_load reconstructed, so a test can assert the
+// round-trip recovers exactly what forward saved.
+struct CtxLoadProbe {
+    inline static bool ran = false;
+    inline static at::Tensor a;
+    inline static at::Tensor b;
+    inline static double scale = 0.0;
+};
+
+class ScaleMulAutograd : public torch::autograd::Function<ScaleMulAutograd> {
+public:
+    struct FwdInput {
+        // SCALE is a non-differentiable double input; its grad slot stays an
+        // undefined tensor. COUNT must equal forward()'s input arity (3) so the
+        // returned grad list is sized correctly.
+        enum { A, B, SCALE, COUNT };
+    };
+    struct FwdOutput {
+        enum { Y, COUNT };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &a,
+        const at::Tensor &b,
+        double scale
+    ) {
+        static_assert(
+            FwdInput::COUNT == gsplat::fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        at::Tensor y = a * b * scale;
+
+        // Save the values backward needs, type-checked against scale_mul_bwd's
+        // parameters (a, b, scale) in order.
+        gsplat::ctx_save<&scale_mul_bwd>(ctx, a, b, scale);
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::Y] = y;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        // Round-trip the saved state out, to exercise ctx_load explicitly (the
+        // saved variables are only valid to unpack during backward). apply_bwd
+        // below re-loads them itself to invoke scale_mul_bwd.
+        auto [la, lb, lscale] = gsplat::ctx_load<&scale_mul_bwd>(ctx);
+        CtxLoadProbe::ran = true;
+        CtxLoadProbe::a = la;
+        CtxLoadProbe::b = lb;
+        CtxLoadProbe::scale = lscale;
+
+        ScaleMulGrad grad{.grad_out = grad_outputs[FwdOutput::Y]};
+        ScaleMulBwdResult g = gsplat::apply_bwd<&scale_mul_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::A] = g.v_a;
+        grads[FwdInput::B] = g.v_b;
+        return grads;
+    }
+};
+
+} // namespace
+
+TEST(CtxSaveLoadApplyBwdTest, round_trips_saved_state_and_computes_gradients) {
+    constexpr double kScale = 2.0;
+    at::Tensor a = at::tensor({1.0, 2.0, 3.0}).set_requires_grad(true);
+    at::Tensor b = at::tensor({4.0, 5.0, 6.0}).set_requires_grad(true);
+
+    CtxLoadProbe::ran = false;
+
+    // Forward: y = a * b * scale. ctx_save stores (a, b, scale) for backward.
+    torch::autograd::variable_list out = ScaleMulAutograd::apply(a, b, kScale);
+    at::Tensor y = out[ScaleMulAutograd::FwdOutput::Y];
+    EXPECT_TRUE(at::allclose(y, a.detach() * b.detach() * kScale));
+
+    // Backward runs the saved-state plumbing: an explicit ctx_load round-trip
+    // (recorded into the probe) plus apply_bwd, which re-loads the state from
+    // ctx and invokes scale_mul_bwd with the grad bundle appended.
+    y.sum().backward();
+
+    // ctx_load round-trip: the saved tensors and scalar come back intact, in
+    // order (tensors via save_for_backward, scalar via saved_data IValue).
+    ASSERT_TRUE(CtxLoadProbe::ran);
+    EXPECT_TRUE(at::equal(CtxLoadProbe::a, a.detach()));
+    EXPECT_TRUE(at::equal(CtxLoadProbe::b, b.detach()));
+    EXPECT_DOUBLE_EQ(CtxLoadProbe::scale, kScale);
+
+    // dy/da = b * scale, dy/db = a * scale (grad_out is ones from .sum()).
+    ASSERT_TRUE(a.grad().defined());
+    ASSERT_TRUE(b.grad().defined());
+    EXPECT_TRUE(at::allclose(a.grad(), b.detach() * kScale));
+    EXPECT_TRUE(at::allclose(b.grad(), a.detach() * kScale));
+}
+
+namespace {
+
+// A second forward signature, with a different arity than ScaleMulAutograd's.
+// The test exercises fwd_input_count with a different parameter count to verify
+// it tracks the arity encoded in the function type. Never invoked; only its
+// type is inspected.
+torch::autograd::variable_list two_input_forward(
+    torch::autograd::AutogradContext * /*ctx*/,
+    const at::Tensor & /*x*/,
+    const at::Tensor & /*y*/
+) {
+    return {};
+}
+
+} // namespace
+
+// fwd_input_count<&Fwd>() == forward's arity minus the leading AutogradContext*.
+// It is a compile-time constant, so assert it via static_assert as well.
+TEST(FwdInputCountTest, counts_inputs_excluding_context) {
+    static_assert(gsplat::fwd_input_count<&ScaleMulAutograd::forward>() == 3);
+    static_assert(gsplat::fwd_input_count<&two_input_forward>() == 2);
+    EXPECT_EQ((gsplat::fwd_input_count<&ScaleMulAutograd::forward>()), 3u);
+    EXPECT_EQ((gsplat::fwd_input_count<&two_input_forward>()), 2u);
+}
