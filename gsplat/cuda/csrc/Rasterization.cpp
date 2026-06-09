@@ -1114,7 +1114,19 @@ RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
     );
 }
 
-std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
+struct RasterizeToIndices2DGSResult {
+    at::Tensor gaussian_ids;
+    at::Tensor pixel_ids;
+};
+
+template <>
+struct TorchArgDef<RasterizeToIndices2DGSResult> {
+    static auto to(const RasterizeToIndices2DGSResult &r) {
+        return to_torch_args(r.gaussian_ids, r.pixel_ids);
+    }
+};
+
+RasterizeToIndices2DGSResult rasterize_to_indices_2dgs(
     int64_t range_start,
     int64_t range_end,        // iteration steps
     const at::Tensor &transmittances, // [..., image_height, image_width]
@@ -1196,7 +1208,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
             at::optional<at::Tensor>(pixel_ids)
         );
     }
-    return std::make_tuple(gaussian_ids, pixel_ids);
+    return {.gaussian_ids = gaussian_ids, .pixel_ids = pixel_ids};
 }
 
 #endif
@@ -2175,7 +2187,7 @@ void register_rasterization_cuda_impl(torch::Library &m) {
 
 #if GSPLAT_BUILD_2DGS
     m.impl("rasterize_to_pixels_2dgs", to_torch_op<&rasterize_to_pixels_2dgs_fwd>);
-    m.impl("rasterize_to_indices_2dgs", &rasterize_to_indices_2dgs);
+    m.impl("rasterize_to_indices_2dgs", to_torch_op<&rasterize_to_indices_2dgs>);
 #endif
 
     m.impl(
