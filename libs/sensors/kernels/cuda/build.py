@@ -138,7 +138,7 @@ def build_and_load_sensors_cuda():
     file (older than GSPLAT_BUILD_LOCK_AGE_S seconds) is removed before the
     build to avoid blocking on a crashed previous attempt.
 
-    If jit.load() fails but a pre-built .so/.lib already exists, falls back to
+    If jit.load() fails but a pre-built .so/.pyd already exists, falls back to
     importing the cached artefact directly.
 
     Returns:
@@ -182,7 +182,7 @@ def build_and_load_sensors_cuda():
 
     module_exists = os.path.exists(
         os.path.join(build_dir, f"{build_params.name}.so")
-    ) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.lib"))
+    ) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.pyd"))
     ctx = (
         _status_context("gsplat_sensors: compiling registration extension...")
         if (not module_exists or build_params_changed)
