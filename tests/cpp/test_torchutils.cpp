@@ -252,3 +252,38 @@ TEST(NeedsCustomAutogradTest, requires_grad_mode_and_a_grad_input) {
         EXPECT_FALSE(gsplat::needs_custom_autograd(grad_t, plain));
     }
 }
+
+// ---------------------------------------------------------------------------
+// contiguous_optional: a non-contiguous optional becomes contiguous; an
+// already-contiguous one is returned untouched; nullopt stays nullopt.
+// ---------------------------------------------------------------------------
+
+TEST(ContiguousOptionalTest, makes_noncontiguous_contiguous) {
+    // A transpose produces a non-contiguous view; contiguous_optional copies it.
+    at::Tensor base = at::arange(6).reshape({2, 3});
+    at::Tensor non_contig = base.t(); // [3, 2], non-contiguous
+    ASSERT_FALSE(non_contig.is_contiguous());
+
+    at::optional<at::Tensor> out =
+        gsplat::contiguous_optional(at::optional<at::Tensor>(non_contig));
+    ASSERT_TRUE(out.has_value());
+    EXPECT_TRUE(out.value().is_contiguous());
+    // Same values, just laid out contiguously.
+    EXPECT_TRUE(at::equal(out.value(), non_contig));
+}
+
+TEST(ContiguousOptionalTest, already_contiguous_returned_as_is) {
+    at::Tensor contig = at::ones({2, 3});
+    ASSERT_TRUE(contig.is_contiguous());
+
+    at::optional<at::Tensor> out =
+        gsplat::contiguous_optional(at::optional<at::Tensor>(contig));
+    ASSERT_TRUE(out.has_value());
+    EXPECT_TRUE(out.value().is_contiguous());
+    // contiguous() on an already-contiguous tensor returns the same storage.
+    EXPECT_TRUE(out.value().is_same(contig));
+}
+
+TEST(ContiguousOptionalTest, nullopt_stays_nullopt) {
+    EXPECT_FALSE(gsplat::contiguous_optional(at::optional<at::Tensor>{}).has_value());
+}
