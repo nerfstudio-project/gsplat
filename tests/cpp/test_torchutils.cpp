@@ -195,3 +195,60 @@ TYPED_TEST(TorchTraitTest, ClassifiesOptionalIntrusiveTypesAtCompileTime) {
         gsplat::detail::is_optional_intrusive_v<T> == TypeParam::is_optional_intrusive);
     SUCCEED();
 }
+
+// ---------------------------------------------------------------------------
+// tensor_requires_grad: true only for a defined tensor that requires grad;
+// false for non-grad / undefined / nullopt (both Tensor and optional overloads).
+// ---------------------------------------------------------------------------
+
+TEST(TensorRequiresGradTest, tensor_overload) {
+    at::Tensor grad_t = at::ones({2}).set_requires_grad(true);
+    EXPECT_TRUE(gsplat::tensor_requires_grad(grad_t));
+
+    at::Tensor plain = at::ones({2});
+    EXPECT_FALSE(gsplat::tensor_requires_grad(plain));
+
+    at::Tensor undefined;
+    EXPECT_FALSE(gsplat::tensor_requires_grad(undefined));
+}
+
+TEST(TensorRequiresGradTest, optional_overload) {
+    at::Tensor grad_t = at::ones({2}).set_requires_grad(true);
+    EXPECT_TRUE(
+        gsplat::tensor_requires_grad(at::optional<at::Tensor>(grad_t))
+    );
+
+    at::Tensor plain = at::ones({2});
+    EXPECT_FALSE(
+        gsplat::tensor_requires_grad(at::optional<at::Tensor>(plain))
+    );
+
+    EXPECT_FALSE(gsplat::tensor_requires_grad(at::optional<at::Tensor>{}));
+}
+
+// ---------------------------------------------------------------------------
+// needs_custom_autograd: true only when GradMode is enabled AND some input
+// requires grad. Off either way otherwise.
+// ---------------------------------------------------------------------------
+
+TEST(NeedsCustomAutogradTest, requires_grad_mode_and_a_grad_input) {
+    at::Tensor grad_t = at::ones({2}).set_requires_grad(true);
+    at::Tensor plain = at::ones({2});
+
+    {
+        // GradMode enabled + a grad-requiring input -> true.
+        at::AutoGradMode guard(true);
+        EXPECT_TRUE(gsplat::needs_custom_autograd(grad_t, plain));
+        // GradMode enabled but no grad-requiring input -> false.
+        EXPECT_FALSE(gsplat::needs_custom_autograd(plain, plain));
+        // Mixes optional + tensor inputs.
+        EXPECT_TRUE(gsplat::needs_custom_autograd(
+            at::optional<at::Tensor>(grad_t), plain
+        ));
+    }
+    {
+        // GradMode disabled -> always false, even with a grad-requiring input.
+        at::AutoGradMode guard(false);
+        EXPECT_FALSE(gsplat::needs_custom_autograd(grad_t, plain));
+    }
+}
