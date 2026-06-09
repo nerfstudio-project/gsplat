@@ -25,6 +25,15 @@ class Tensor;
 
 namespace gsplat {
 
+// Autograd-aware SH color evaluation; declared here for cross-TU orchestration
+// callers (Rendering.cpp). Returns colors only.
+at::Tensor spherical_harmonics(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,               // [..., 3]
+    const at::Tensor &coeffs,             // [..., K, 3]
+    const at::optional<at::Tensor> &masks // [...]
+);
+
 void launch_spherical_harmonics_fwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
