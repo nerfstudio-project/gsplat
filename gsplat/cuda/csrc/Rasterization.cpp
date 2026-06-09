@@ -63,6 +63,18 @@ template <> struct TorchArgDef<RasterizeToPixels3DGSResult> {
     static auto to(const RasterizeToPixels3DGSResult &r) { return to_torch_args(r.renders, r.alphas, r.means2d_absgrad); }
 };
 
+struct RasterizeToIndices3DGSResult {
+    at::Tensor gaussian_ids;
+    at::Tensor pixel_ids;
+};
+
+template <>
+struct TorchArgDef<RasterizeToIndices3DGSResult> {
+    static auto to(const RasterizeToIndices3DGSResult &r) {
+        return to_torch_args(r.gaussian_ids, r.pixel_ids);
+    }
+};
+
 #if GSPLAT_BUILD_3DGUT
 namespace {
 
@@ -559,7 +571,7 @@ RasterizeToPixels3DGSResult rasterize_to_pixels_3dgs(
     );
 }
 
-std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
+RasterizeToIndices3DGSResult rasterize_to_indices_3dgs(
     int64_t range_start,
     int64_t range_end,        // iteration steps
     const at::Tensor &transmittances, // [..., image_height, image_width]
@@ -641,7 +653,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
             at::optional<at::Tensor>(pixel_ids)
         );
     }
-    return std::make_tuple(gaussian_ids, pixel_ids);
+    return {.gaussian_ids = gaussian_ids, .pixel_ids = pixel_ids};
 }
 
 std::tuple<at::Tensor, at::Tensor> rasterize_num_contributing_gaussians(
@@ -2511,7 +2523,7 @@ rasterize_to_pixels_from_world_3dgs_autograd(
 void register_rasterization_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_3DGS
     m.impl("rasterize_to_pixels_3dgs", to_torch_op<&rasterize_to_pixels_3dgs_fwd>);
-    m.impl("rasterize_to_indices_3dgs", &rasterize_to_indices_3dgs);
+    m.impl("rasterize_to_indices_3dgs", to_torch_op<&rasterize_to_indices_3dgs>);
     m.impl("rasterize_num_contributing_gaussians", &rasterize_num_contributing_gaussians);
     m.impl("rasterize_contributing_gaussian_ids", &rasterize_contributing_gaussian_ids);
     m.impl("rasterize_top_contributing_gaussian_ids", &rasterize_top_contributing_gaussian_ids);
