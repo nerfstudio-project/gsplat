@@ -20,6 +20,9 @@
 
 #include <cstdint>
 #include <tuple>
+
+#include <ATen/core/Tensor.h>
+
 #include "Cameras.h"
 #include "Common.h"
 #include "Config.h"
@@ -33,6 +36,28 @@ class Tensor;
 namespace gsplat {
 
 #define FILTER_INV_SQUARE_2DGS 2.0f
+
+// Public outputs of rasterize_to_pixels_2dgs (excludes the internal
+// last_ids / median_ids that the forward kernel additionally produces).
+struct RasterizeToPixels2DGSResult {
+    at::Tensor renders;
+    at::Tensor alphas;
+    at::Tensor render_normals;
+    at::Tensor render_distort;
+    at::Tensor render_median;
+    at::Tensor means2d_absgrad;
+};
+
+RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
+    const at::Tensor &means2d, const at::Tensor &ray_transforms,
+    const at::Tensor &colors, const at::Tensor &opacities,
+    const at::Tensor &normals, const at::Tensor &densify,
+    const at::optional<at::Tensor> &backgrounds,
+    const at::optional<at::Tensor> &masks,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
+    bool packed, bool absgrad, bool distloss
+);
 
 /////////////////////////////////////////////////
 // rasterize_to_pixels_3dgs

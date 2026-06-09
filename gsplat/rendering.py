@@ -40,13 +40,13 @@ from .cuda._wrapper import (
     ExternalDistortionReferencePolynomial,
     BivariateWindshieldModelParameters,
     fully_fused_projection,
-    fully_fused_projection_2dgs,
     fully_fused_projection_with_ut,
     isect_offset_encode,
     isect_tiles,
     isect_tiles_lidar,
     rasterize_to_pixels,
-    rasterize_to_pixels_2dgs,
+    _make_lazy_cuda_func,
+    _make_lazy_cuda_obj,
     rasterize_to_pixels_eval3d,
     rasterize_to_pixels_eval3d_extra,
     renderer_config_mixed_batch,
@@ -2315,182 +2315,57 @@ def rasterization_2dgs(
 
     """
 
-    batch_dims = means.shape[:-2]
-    num_batch_dims = len(batch_dims)
-    B = math.prod(batch_dims)
-    N = means.shape[-2]
-    C = viewmats.shape[-3]
-    I = B * C
-    device = means.device
-    channels = colors.shape[-1]
-
-    assert means.shape == batch_dims + (N, 3), means.shape
-    assert quats.shape == batch_dims + (N, 4), quats.shape
-    assert scales.shape == batch_dims + (N, 3), scales.shape
-    assert opacities.shape == batch_dims + (N,), opacities.shape
-    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    if distloss:
-        assert render_mode_has_depth(
-            render_mode
-        ), f"distloss requires depth rendering, but render mode is {render_mode}"
-
-    if sh_degree is None:
-        # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
-        assert (
-            colors.dim() == num_batch_dims + 2
-            and colors.shape[:-1] == batch_dims + (N,)
-        ) or (
-            colors.dim() == num_batch_dims + 3
-            and colors.shape[:-1] == batch_dims + (C, N)
-        ), colors.shape
-    else:
-        # treat colors as SH coefficients, must be in shape [N, K, D].
-        # Allowing for activating partial SH bands.
-        assert colors.dim() == 3 and colors.shape[0] == N, colors.shape
-        assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
-
-    # Compute Ray-Splat intersection transformation.
-    proj_results = fully_fused_projection_2dgs(
-        means,
-        quats,
-        scales,
-        viewmats,
-        Ks,
-        width,
-        height,
-        eps2d,
-        near_plane,
-        far_plane,
-        radius_clip,
-        packed,
-        sparse_grad,
-    )
-
-    if packed:
-        (
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            indptr,
-            radii,
-            means2d,
-            depths,
-            ray_transforms,
-            normals,
-        ) = proj_results
-        opacities = opacities.view(B, N)[batch_ids, gaussian_ids]
-        image_ids = batch_ids * C + camera_ids
-    else:
-        radii, means2d, depths, ray_transforms, normals = proj_results
-        opacities = torch.broadcast_to(
-            opacities[..., None, :], batch_dims + (C, N)
-        )  # [..., C, N]
-        indptr, batch_ids, camera_ids, gaussian_ids = None, None, None, None
-        image_ids = None
-
-    densify = torch.zeros_like(
-        means2d, dtype=means.dtype, requires_grad=True, device="cuda"
-    )
-    # Identify intersecting tiles
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
-        radii,
-        depths,
-        tile_size,
-        tile_width,
-        tile_height,
-        packed=packed,
-        n_images=I,
-        image_ids=image_ids,
-        gaussian_ids=gaussian_ids,
-    )
-    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
-    isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
-
-    if sh_degree is not None:  # SH coefficients
-        if packed:
-            dirs = compute_directions(
-                batch_dims,
-                means,
-                viewmats,
-                batch_ids,
-                camera_ids,
-                gaussian_ids,
-                indptr,
-            )  # [nnz, 3]
-            # Gather per-Gaussian coeffs to match the [nnz, K, 3] dirs.
-            shs = colors[gaussian_ids]
-        else:
-            camtoworlds = torch.inverse(viewmats)
-            dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]
-            shs = colors
-        colors = spherical_harmonics(
-            sh_degree, dirs, shs, masks=(radii > 0).all(dim=-1)
-        )  # [nnz, 3] or [..., C, N, 3]
-        # make it apple-to-apple with Inria's CUDA Backend.
-        colors = torch.clamp_min(colors + 0.5, 0.0)
-
-    # Rasterize to pixels
-    if render_mode_has_depth_channel(render_mode) and render_mode_has_color(
-        render_mode
-    ):
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
-
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                (backgrounds, torch.zeros_like(backgrounds[..., :1])), dim=-1
-            )
-    elif render_mode_has_only_depth_channel(render_mode):
-        colors = depths[..., None]
-    else:  # RGB
-        pass
-
     (
         render_colors,
         render_alphas,
         render_normals,
+        render_normals_from_depth,
         render_distort,
         render_median,
-    ) = rasterize_to_pixels_2dgs(
+        means2d_absgrad,
+        camera_ids,
+        gaussian_ids,
+        radii,
         means2d,
+        depths,
         ray_transforms,
-        colors,
         opacities,
         normals,
+        tiles_per_gauss,
+        isect_ids,
+        flatten_ids,
+        isect_offsets,
         densify,
+        tile_width,
+        tile_height,
+        n_cameras,
+    ) = _make_lazy_cuda_func("rasterization_2dgs")(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        opacities.contiguous(),
+        colors.contiguous(),
+        viewmats.contiguous(),
+        Ks.contiguous(),
         width,
         height,
         tile_size,
-        isect_offsets,
-        flatten_ids,
-        backgrounds=backgrounds,
-        packed=packed,
-        absgrad=absgrad,
-        distloss=distloss,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        backgrounds.contiguous() if backgrounds is not None else None,
+        packed,
+        sparse_grad,
+        absgrad,
+        distloss,
+        sh_degree,
+        render_mode,
+        depth_mode,
     )
-    render_normals_from_depth = None
-    if render_mode_has_expected_depth(render_mode):
-        # normalize the accumulated depth to get the expected depth
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
-    if render_mode_has_depth(render_mode) and render_mode_has_color(render_mode):
-        # render_depths = render_colors[..., -1:]
-        if depth_mode == "expected":
-            depth_for_normal = render_colors[..., -1:]
-        elif depth_mode == "median":
-            depth_for_normal = render_median
 
-        render_normals_from_depth = depth_to_normal(
-            depth_for_normal, torch.linalg.inv_ex(viewmats).inverse, Ks
-        ).squeeze(0)
+    if absgrad:
+        means2d.absgrad = means2d_absgrad
 
     meta = {
         "camera_ids": camera_ids,
@@ -2510,16 +2385,10 @@ def rasterization_2dgs(
         "width": width,
         "height": height,
         "tile_size": tile_size,
-        "n_cameras": C,
+        "n_cameras": n_cameras,
         "render_distort": render_distort,
         "gradient_2dgs": densify,  # This holds the gradient used for densification for 2dgs
     }
-
-    render_normals = torch.einsum(
-        "...ij,...hwj->...hwi",
-        torch.linalg.inv_ex(viewmats).inverse[..., :3, :3],
-        render_normals,
-    )
 
     return (
         render_colors,

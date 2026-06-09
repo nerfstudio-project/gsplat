@@ -916,16 +916,6 @@ rasterize_to_pixels_2dgs_bwd(
     };
 }
 
-// Public outputs of rasterize_to_pixels_2dgs
-struct RasterizeToPixels2DGSResult {
-    at::Tensor renders;
-    at::Tensor alphas;
-    at::Tensor render_normals;
-    at::Tensor render_distort;
-    at::Tensor render_median;
-    at::Tensor means2d_absgrad;
-};
-
 template <> struct TorchArgDef<RasterizeToPixels2DGSResult> {
     static auto to(const RasterizeToPixels2DGSResult &r) { return to_torch_args(
         r.renders, r.alphas, r.render_normals, r.render_distort,
