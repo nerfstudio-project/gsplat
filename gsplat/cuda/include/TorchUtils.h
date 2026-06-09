@@ -219,4 +219,11 @@ inline const T &checked_deref(const at::optional<c10::intrusive_ptr<T>> &opt, co
     return checked_deref(*opt, name);
 }
 
+inline at::optional<at::Tensor> contiguous_optional(const at::optional<at::Tensor> &tensor) {
+    if (tensor.has_value()) {
+        return tensor.value().contiguous();
+    }
+    return c10::nullopt;
+}
+
 } // namespace gsplat
