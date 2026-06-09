@@ -156,31 +156,13 @@ torch::Tensor distort_camera_rays(
     return result;
 }
 
-torch::Tensor distort_camera_rays_torch_op(
-    const torch::Tensor& rays,
-    const torch::Tensor& h_poly,
-    const torch::Tensor& v_poly,
-    const torch::Tensor& h_inv_poly,
-    const torch::Tensor& v_inv_poly,
-    int64_t reference_poly,
-    bool inverse)
-{
-    BivariateWindshieldModelParameters params;
-    params.horizontal_poly = h_poly;
-    params.vertical_poly = v_poly;
-    params.horizontal_poly_inverse = h_inv_poly;
-    params.vertical_poly_inverse = v_inv_poly;
-    params.reference_poly = static_cast<ReferencePolynomialType>(reference_poly);
-    return distort_camera_rays(rays, params, inverse);
-}
-
 } // namespace gsplat::extdist
 
 namespace gsplat {
 
 void register_external_distortion_wrappers_cuda_impl(torch::Library &m) {
-    m.impl("distort_camera_rays", &extdist::distort_camera_rays_torch_op);
-    m.impl("eval_bivariate_poly", &extdist::eval_bivariate_poly_wrapper);
+    m.impl("distort_camera_rays", to_torch_op<&extdist::distort_camera_rays>);
+    m.impl("eval_bivariate_poly", to_torch_op<&extdist::eval_bivariate_poly_wrapper>);
 }
 
 } // namespace gsplat
