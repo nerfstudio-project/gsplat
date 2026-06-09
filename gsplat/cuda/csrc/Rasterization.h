@@ -116,6 +116,47 @@ void launch_rasterize_to_indices_3dgs_kernel(
     at::optional<at::Tensor> pixel_ids     // [n_elems]
 );
 
+void launch_rasterize_num_contributing_gaussians_kernel(
+    const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor opacities, // [..., N] or [nnz]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    at::Tensor num_contributing,   // [..., image_height, image_width]
+    at::Tensor alphas              // [..., image_height, image_width]
+);
+
+void launch_rasterize_contributing_gaussian_ids_kernel(
+    const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor opacities, // [..., N] or [nnz]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const uint32_t max_num_contributing,
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    at::Tensor contributing_ids,   // [..., image_height, image_width, K]
+    at::Tensor contributing_weights // [..., image_height, image_width, K]
+);
+
+void launch_rasterize_top_contributing_gaussian_ids_kernel(
+    const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor opacities, // [..., N] or [nnz]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const uint32_t num_depth_samples,
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    at::Tensor top_ids,            // [..., image_height, image_width, K]
+    at::Tensor top_weights         // [..., image_height, image_width, K]
+);
+
 /////////////////////////////////////////////////
 // rasterize_to_pixels_2dgs
 /////////////////////////////////////////////////
