@@ -307,16 +307,14 @@ private:
         c10::intrusive_ptr<FThetaCameraDistortionParameters> ftheta_coeffs =
             default_ftheta_coeffs();
 
-        using ProjectionResult =
-            std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>;
-
         // Use the same operator pipeline as normal 3DGUT rasterization: project
         // world-space Gaussians, compute tile intersections, then call the
         // low-level rasterizer so the test can inspect fwd_batch_state directly.
         // The four scalar literals (eps2d, near_plane, far_plane, radius_clip)
         // mirror the defaults of fully_fused_projection_with_ut in
         // gsplat/rendering.py.
-        ProjectionResult projection = gsplat::projection_ut_3dgs_fused(
+        const gsplat::ProjectionUT3DGSFusedResult projection =
+            gsplat::projection_ut_3dgs_fused(
             means,
             quats,
             scales,
@@ -331,19 +329,19 @@ private:
             1.0e10, // far_plane
             0.0,   // radius_clip
             false, // calc_compensations
-            static_cast<int64_t>(gsplat::PINHOLE),
+            gsplat::PINHOLE,
             true,  // global_z_order
             ut_params,
-            static_cast<int64_t>(ShutterType::GLOBAL),
+            ShutterType::GLOBAL,
             c10::nullopt, // radial_coeffs
             c10::nullopt, // tangential_coeffs
             c10::nullopt, // thin_prism_coeffs
             ftheta_coeffs,
             c10::nullopt, // lidar_coeffs
             c10::nullopt); // external_distortion_params
-        const at::Tensor &radii = std::get<0>(projection);
-        const at::Tensor &means2d = std::get<1>(projection);
-        const at::Tensor &depths = std::get<2>(projection);
+        const at::Tensor &radii = projection.radii;
+        const at::Tensor &means2d = projection.means2d;
+        const at::Tensor &depths = projection.depths;
 
         // Intersect the projected Gaussians with the single image tile. Sorting
         // is enabled to match the normal production path.
