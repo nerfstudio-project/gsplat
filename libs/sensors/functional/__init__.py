@@ -18,7 +18,8 @@
 This package re-exports stateless projection functions for cameras and LiDARs,
 wrapping the Layer 0 GPU kernels with input validation and structured return
 types. Camera ops cover projection, back-projection, and ray generation;
-LiDAR ops (spinning lidar geometry) are stubbed in this OpenCV-pinhole slice.
+LiDAR ops cover spinning-LiDAR geometry: angle/ray conversions, element-to-angle
+lookup, rolling-shutter ray generation, and inverse projection.
 """
 
 from .cameras import (

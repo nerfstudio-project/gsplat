@@ -2,9 +2,10 @@
 
 ## Overview
 
-`libs/sensors/functional/` is the public stateless API for camera projection.
-It is the import path downstream code should prefer (`gsplat_sensors.functional`
-or `from gsplat_sensors import functional as F`). The layer owns three things:
+`libs/sensors/functional/` is the public stateless API for camera and
+spinning-LiDAR projection. It is the import path downstream code should prefer
+(`gsplat_sensors.functional` or `from gsplat_sensors import functional as F`).
+The layer owns three things:
 
 - the public function names and their argument contracts,
 - the cross-family return-type dataclasses (`return_types.py`),
@@ -34,12 +35,18 @@ Camera operations re-exported from `cameras.py`:
 - `pixel_grid_to_world_rays_shutter_pose`
 - `generate_image_points`
 
-LiDAR operations are present as import-stable placeholders only. The names in
-`lidars.py` (`elements_to_sensor_angles`, `sensor_rays_to_sensor_angles`,
-`sensor_angles_to_sensor_rays`, `generate_spinning_lidar_rays`,
-`inverse_project_spinning_lidar`) all bind to a single `_deferred` callable
-that raises `NotImplementedError` at call time. There is no `kernels/lidars/`
-directory and no LiDAR torch ops dispatch through this layer today.
+LiDAR operations re-exported from `lidars.py`:
+
+- `sensor_rays_to_sensor_angles`
+- `sensor_angles_to_sensor_rays`
+- `elements_to_sensor_angles`
+- `generate_spinning_lidar_rays`
+- `inverse_project_spinning_lidar`
+
+These are thin wrappers over `kernels/lidars/ops.py`. They accept a
+`RowOffsetStructuredSpinningLidarProjection` where a projection is required and
+package raw kernel tuples into `SensorAnglesReturn`, `SensorRayReturn`,
+`WorldRaysReturn`, and `WorldPointsToSensorAnglesReturn`.
 
 ## Module Layout
 
@@ -50,12 +57,12 @@ libs/sensors/functional/
   lidars.py
   return_types.py
   test_cameras.py
+  test_lidars.py
 ```
 
-The layer is intentionally flat. `cameras.py` is a series of thin per-op
-wrappers; `return_types.py` is the single home for the dataclasses; `lidars.py`
-holds the placeholder bindings; `test_cameras.py` exercises the public API
-contract.
+The layer is intentionally flat. `cameras.py` and `lidars.py` are thin per-op
+wrappers; `return_types.py` is the single home for the dataclasses;
+`test_cameras.py` and `test_lidars.py` exercise the public API contract.
 
 ## Public API
 
@@ -75,6 +82,14 @@ end-to-end from the kernel layer.
 | `image_points_to_world_rays_shutter_pose` | `(N, 2)` image points, `projection`, `external_distortion`, `resolution`, `ShutterType`, `DynamicPose` | [`WorldRaysReturn`](#return-types) |
 | `pixel_grid_to_world_rays_shutter_pose` | `projection`, `external_distortion`, `resolution`, `ShutterType`, `DynamicPose` | [`WorldRaysReturn`](#return-types) |
 | `generate_image_points` | `resolution`, `device` | bare `Tensor` `(H, W, 2)` |
+
+| LiDAR op | Inputs (at a glance) | Returns |
+| -- | -------------------- | ------- |
+| `sensor_rays_to_sensor_angles` | `(N, 3)` sensor-frame rays | [`SensorAnglesReturn`](#return-types) |
+| `sensor_angles_to_sensor_rays` | `(N, 2)` `[elevation, azimuth]` | [`SensorRayReturn`](#return-types) |
+| `elements_to_sensor_angles` | `(N, 2)` int `[row, col]`, `RowOffsetStructuredSpinningLidarProjection` | [`SensorAnglesReturn`](#return-types) |
+| `generate_spinning_lidar_rays` | projection, optional elements, `DynamicPose` (+ optional timestamps) | [`WorldRaysReturn`](#return-types) |
+| `inverse_project_spinning_lidar` | projection, `(N, 3)` world points, `DynamicPose` (+ solver knobs) | [`WorldPointsToSensorAnglesReturn`](#return-types) |
 
 `pixel_grid_to_world_rays_shutter_pose` is a convenience wrapper: internally it
 generates a pixel-center grid and dispatches to
@@ -112,11 +127,11 @@ Two rules govern shape:
 | `SensorRayReturn` | `sensor_rays (N, 3)` | `valid_flag (N,)` |
 | `WorldPointsToSensorAnglesReturn` | `sensor_angles (N, 2)` | same optional set as `WorldPointsToImagePointsReturn` |
 
-`PixelsReturn`, `WorldPointsToPixelsReturn`, and the three `SensorAngles*` /
-`SensorRay*` types are owned here for single-source-of-truth purposes but are
-not constructed by any functional op today. `Pixels*` is populated by the model
-layer when callers want pixel-rounded outputs; the `SensorAngles*` /
-`SensorRay*` types belong to the deferred LiDAR surface.
+`PixelsReturn` and `WorldPointsToPixelsReturn` are owned here for
+single-source-of-truth purposes but are not constructed by any functional op
+today. `Pixels*` is populated by the model layer when callers want
+pixel-rounded outputs. The `SensorAngles*` / `SensorRay*` types are populated
+by the LiDAR functional surface.
 
 `valid_flag`, `valid_indices`, and `timestamps_us` are non-differentiable (the
 kernels emit them with no gradient). Every other field flows gradients normally.
@@ -132,10 +147,11 @@ C++ launch (see `design-kernels.md`).
 
 `projection` and `external_distortion` are not Python dataclasses. They are
 TorchScript custom-class handles (`torch::class_<>`) registered by the C++
-extension and surfaced through `kernels/cameras/types.py` as
-`OpenCVPinholeProjection`, `NoExternalDistortion`, and
-`BivariateWindshieldDistortion`. The functional layer never inspects their
-internals; it just passes them through.
+extension and surfaced through `kernels/cameras/types.py` and
+`kernels/lidars/types.py` as `OpenCVPinholeProjection`, `FThetaProjection`,
+`NoExternalDistortion`, `BivariateWindshieldDistortion`, and
+`RowOffsetStructuredSpinningLidarProjection`. The functional layer never
+inspects their internals; it just passes them through.
 
 `external_distortion` is always an explicit instance — pass
 `NoExternalDistortion()` for the identity case. There is no `None`-permissive
@@ -162,8 +178,7 @@ output `device`.
 
 The public op names describe sensor operations (what they do), not backend
 dispatch (which type they dispatch to). There is no `_opencv_pinhole_no_external`
-suffix at this layer, even though OpenCV pinhole is the only backend currently
-wired up. New camera models will land additional `(projection,
+suffix at this layer. New camera models land additional `(projection,
 external_distortion)` pairs in the kernel dispatch table without changing any
 public name in `functional/`.
 
@@ -177,15 +192,22 @@ The conventional verbs in this API:
 - `image_points_to_world_rays_*` / `pixel_grid_to_world_rays_*` — image →
   world rays, again with pose handling in the suffix.
 - `generate_image_points` — no sensor parameters, just a pixel-center grid.
+- `sensor_rays_to_sensor_angles` / `sensor_angles_to_sensor_rays` — operate
+  purely in LiDAR sensor space.
+- `elements_to_sensor_angles` — maps structured LiDAR `[row, col]` elements to
+  `[elevation, azimuth]` using projection tables.
+- `generate_spinning_lidar_rays` / `inverse_project_spinning_lidar` — LiDAR
+  rolling-shutter world-ray generation and inverse projection with a
+  `DynamicPose`.
 
 ## Testing Structure
 
-`functional/test_cameras.py` covers the public API surface end-to-end:
+`functional/test_cameras.py` and `functional/test_lidars.py` cover the public
+API surface end-to-end:
 return-type construction, optional-flag behavior (only the requested
 optional fields are populated), the `allow_device_transfer=False` strict
 device check, consistency with the underlying kernel op for representative
-cases, and gradient flow through the dataclass tensor fields. There is no
-`test_lidars.py` because the LiDAR ops raise unconditionally.
+cases, and gradient flow through the dataclass tensor fields.
 
 Per-op kernel correctness, autograd backward correctness against finite
 differences, and edge-case numerical coverage live one layer down in the
