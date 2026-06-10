@@ -758,3 +758,86 @@ TEST(ToTorchArgsTest, unwraps_single_dispatch_value) {
     auto none = gsplat::to_torch_args();
     EXPECT_TRUE((std::is_same_v<decltype(none), std::tuple<>>));
 }
+
+// ---------------------------------------------------------------------------
+// call_torch_op: the dispatcher-CALL mirror of to_torch_op. A native call site
+// passes native args and receives the native result struct, while the op is
+// reached through the dispatcher (so an Autograd-key registration would fire).
+// Exercised end-to-end against a self-contained op registered here -- the gtest
+// binary does not link ext.cpp, so no gsplat:: ops exist in this process.
+// ---------------------------------------------------------------------------
+
+namespace gsplat {
+
+// A multi-output result with an optional field: the same shape (Tensor, Tensor,
+// Tensor?) the real projection/rasterize forwards produce, so the test covers
+// both the multi-value and the optional reconstruction paths of from().
+struct CallTorchOpResult {
+    at::Tensor scaled;
+    at::Tensor shifted;
+    at::optional<at::Tensor> extra;
+};
+
+template <>
+struct TorchArgDef<CallTorchOpResult> {
+    static auto to(const CallTorchOpResult &r) { return to_torch_args(r.scaled, r.shifted, r.extra); }
+    template <class TT>
+    static CallTorchOpResult from(TT &&t) {
+        return CallTorchOpResult{
+            std::get<0>(std::forward<TT>(t)),
+            std::get<1>(t),
+            std::get<2>(t),
+        };
+    }
+};
+
+// Native-typed forward: scalar args (double/int64/bool) exercise arg flattening;
+// the optional output is present iff `with_extra`.
+CallTorchOpResult call_torch_op_probe_fwd(
+    const at::Tensor &a, double scale, int64_t shift, bool with_extra
+) {
+    return CallTorchOpResult{
+        a * scale,
+        a + static_cast<double>(shift),
+        with_extra ? at::optional<at::Tensor>(a.clone()) : at::nullopt,
+    };
+}
+
+} // namespace gsplat
+
+TORCH_LIBRARY(gsplat_call_torch_op_test, m) {
+    m.def("probe(Tensor a, float scale, int shift, bool with_extra) -> (Tensor, Tensor, Tensor?)",
+          gsplat::to_torch_op<&gsplat::call_torch_op_probe_fwd>);
+}
+
+TEST(CallTorchOpTest, struct_round_trips_through_dispatcher) {
+    at::Tensor a = at::tensor({1.0f, 2.0f, 3.0f});
+    gsplat::CallTorchOpResult r = gsplat::call_torch_op<&gsplat::call_torch_op_probe_fwd>(
+        "gsplat_call_torch_op_test::probe", a, /*scale=*/2.0, /*shift=*/10, /*with_extra=*/true);
+    EXPECT_TRUE(at::allclose(r.scaled, a * 2.0));
+    EXPECT_TRUE(at::allclose(r.shifted, a + 10.0));
+    ASSERT_TRUE(r.extra.has_value());
+    EXPECT_TRUE(at::allclose(r.extra.value(), a));
+}
+
+TEST(CallTorchOpTest, signature_form_round_trips_through_dispatcher) {
+    at::Tensor a = at::tensor({1.0f, 2.0f, 3.0f});
+    // The signature-explicit overload: the op's native signature is supplied as
+    // a type instead of a forward-function pointer. Marshalling and result
+    // reconstruction otherwise match the forward-pointer form.
+    using Sig = gsplat::CallTorchOpResult(const at::Tensor &, double, int64_t, bool);
+    gsplat::CallTorchOpResult r = gsplat::call_torch_op<Sig>(
+        "gsplat_call_torch_op_test::probe", a, /*scale=*/2.0, /*shift=*/10, /*with_extra=*/true);
+    EXPECT_TRUE(at::allclose(r.scaled, a * 2.0));
+    EXPECT_TRUE(at::allclose(r.shifted, a + 10.0));
+    ASSERT_TRUE(r.extra.has_value());
+    EXPECT_TRUE(at::allclose(r.extra.value(), a));
+}
+
+TEST(CallTorchOpTest, optional_output_absent_round_trips_as_nullopt) {
+    at::Tensor a = at::tensor({4.0f, 5.0f});
+    gsplat::CallTorchOpResult r = gsplat::call_torch_op<&gsplat::call_torch_op_probe_fwd>(
+        "gsplat_call_torch_op_test::probe", a, /*scale=*/1.0, /*shift=*/0, /*with_extra=*/false);
+    EXPECT_TRUE(at::allclose(r.scaled, a));
+    EXPECT_FALSE(r.extra.has_value());
+}
