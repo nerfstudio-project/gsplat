@@ -106,6 +106,9 @@ RUN --mount=type=tmpfs,target=/tmp \
     rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
 
+# cmake — future setup.py install dependency, not yet formally declared there.
+RUN pip install "cmake==4.3.2" && rm -rf $PYTHONPYCACHEPREFIX/*
+
 # Test/dev dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
