@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install black[jupyter]==22.3.0 pytest
-          pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           BUILD_NO_CUDA=1 pip install .
       - name: Code Formatting Check
         run: lint/format-code.sh --check --full
