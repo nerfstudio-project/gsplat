@@ -975,7 +975,9 @@ size_t SegmentedSortSetup(SegmentedSortState &s, int32_t n_segments, int32_t n_i
 
     if (!s.sm_count)
     {
-        cudaDeviceGetAttribute(&s.sm_count, cudaDevAttrMultiProcessorCount, 0);
+        int device = 0;
+        cudaGetDevice(&device);
+        cudaDeviceGetAttribute(&s.sm_count, cudaDevAttrMultiProcessorCount, device);
     }
 
     return total;
