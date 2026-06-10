@@ -317,3 +317,402 @@ TEST(MakeSparseCooGradTest, builds_expected_sparse_tensor) {
     expected[3].copy_(values[1]);
     EXPECT_TRUE(at::equal(dense, expected));
 }
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Test fixtures: instrumented payloads and struct-returning ops.
+// ---------------------------------------------------------------------------
+
+// Counts copy/move construction so a test can assert the identity path neither
+// copies nor moves its argument.
+struct Tracked {
+    int value = 0;
+    inline static int copies = 0;
+    inline static int moves = 0;
+
+    Tracked() = default;
+    explicit Tracked(int v) : value(v) {}
+    Tracked(const Tracked &o) : value(o.value) { ++copies; }
+    Tracked(Tracked &&o) noexcept : value(o.value) { ++moves; }
+    Tracked &operator=(const Tracked &) = default;
+    Tracked &operator=(Tracked &&) = default;
+
+    static void reset() {
+        copies = 0;
+        moves = 0;
+    }
+};
+
+// A C++ argument that decomposes into two dispatcher arguments (the shape a
+// future tensor-carrying object would take).
+struct Pair {
+    int a = 0;
+    double b = 0.0;
+};
+
+// A 1<->N struct whose columns are copy-instrumented, so a typed copy test can
+// assert the marshalling round-trip moves rather than copies the payload.
+struct TrackedPair {
+    Tracked a;
+    Tracked b;
+};
+
+// A copy-instrumented element that marshals 1<->1 to a native int64 (its spec is
+// below). Unlike Tracked, it reduces to a dispatch type, so it can ride the tuple
+// spec's recursive (to_torch_args) path -- letting a test assert that path neither
+// copies nor moves the element.
+struct CountedScalar {
+    int64_t value = 0;
+    inline static int copies = 0;
+    inline static int moves = 0;
+
+    CountedScalar() = default;
+    explicit CountedScalar(int64_t v) : value(v) {}
+    CountedScalar(const CountedScalar &o) : value(o.value) { ++copies; }
+    CountedScalar(CountedScalar &&o) noexcept : value(o.value) { ++moves; }
+
+    static void reset() {
+        copies = 0;
+        moves = 0;
+    }
+};
+
+enum UnscopedEnum : int { UNSCOPED_X = 0, UNSCOPED_Y = 7 };
+enum class ScopedEnum : int64_t { A = 0, B = 5 };
+
+// Result structs cross native->dispatch via a co-located TorchArgDef spec
+// (below), like the gsplat ops.
+struct IntResult {
+    int64_t value;
+};
+struct DoubleResult {
+    double value;
+};
+
+
+} // namespace
+
+namespace gsplat {
+
+// Identity marshalling for the copy-instrumented payload (mirrors the native
+// primary template, which Tracked cannot use since it is not torch-native). A
+// 1<->1 mapping: a bare value, no tuple.
+template <> struct TorchArgDef<Tracked> {
+    template <class U> static auto to(U &&v) { return std::forward<U>(v); }
+    template <class U> static decltype(auto) from(U &&v) {
+        return std::forward<U>(v);
+    }
+};
+
+// 1<->N marshalling: one Pair decomposes into (int64_t, double).
+template <> struct TorchArgDef<Pair> {
+    static std::tuple<int64_t, double> to(const Pair &p) { return {p.a, p.b}; }
+    template <class TT> static Pair from(TT &&t) {
+        static_assert(std::tuple_size_v<std::decay_t<TT>> == 2);
+        return Pair{static_cast<int>(std::get<0>(t)), std::get<1>(t)};
+    }
+};
+
+// 1<->N marshalling, move-correct: TrackedPair decomposes into (Tracked,
+// Tracked), moving each column in and out rather than copying it.
+template <> struct TorchArgDef<TrackedPair> {
+    static std::tuple<Tracked, Tracked> to(TrackedPair p) {
+        return {std::move(p.a), std::move(p.b)};
+    }
+    template <class TT> static TrackedPair from(TT &&t) {
+        return TrackedPair{std::move(std::get<0>(t)), std::move(std::get<1>(t))};
+    }
+};
+
+// Result structs cross native->dispatch via to_torch_args; to()-only specs (a
+// result is never un-marshalled inbound, so no from()).
+template <> struct TorchArgDef<IntResult> {
+    static auto to(const IntResult &r) { return to_torch_args(r.value); }
+};
+template <> struct TorchArgDef<DoubleResult> {
+    static auto to(const DoubleResult &r) { return to_torch_args(r.value); }
+};
+
+// 1<->1 to a native int64. to() reads the value through a forwarding reference
+// (no copy/move of the element), so a tuple round-trip that copies an element
+// would show up in CountedScalar's counters.
+template <> struct TorchArgDef<CountedScalar> {
+    template <class U> static int64_t to(U &&v) { return v.value; }
+    static CountedScalar from(int64_t v) { return CountedScalar{v}; }
+};
+
+} // namespace gsplat
+
+// ---------------------------------------------------------------------------
+// Type mappings: torch_arg_t<T> is the dispatcher type(s) T crosses as -- a bare
+// type for a 1<->1 mapping, a tuple for a 1<->N mapping. Asserted at run time
+// (EXPECT, not static_assert) so a mismatch surfaces as a test failure rather
+// than a build break, and parameterized over the type pairs so each mapping is
+// an independent case.
+// ---------------------------------------------------------------------------
+
+template <class Natural, class ExpectedTorch> struct MapCase {
+    using natural = Natural;
+    using expected = ExpectedTorch;
+};
+
+template <class Case> class TorchArgMappingTest : public ::testing::Test {};
+
+using MappingCases = ::testing::Types<
+    MapCase<float, double>,
+    MapCase<const float &, double>,
+    MapCase<uint32_t, int64_t>,
+    MapCase<int64_t, int64_t>,
+    MapCase<UnscopedEnum, int64_t>,
+    MapCase<ScopedEnum, int64_t>,
+    MapCase<bool, bool>,
+    MapCase<at::Tensor, at::Tensor>,
+    MapCase<const at::Tensor &, at::Tensor>,
+    MapCase<at::optional<at::Tensor>, at::optional<at::Tensor>>,
+    MapCase<Pair, std::tuple<int64_t, double>>,
+    // optional<torch-native> stays identity; optional<marshalled> marshals per
+    // column (a 1<->N inner -> a tuple of optionals, not an optional of tuple).
+    MapCase<std::optional<int64_t>, std::optional<int64_t>>,
+    MapCase<std::optional<uint32_t>, std::optional<int64_t>>,
+    MapCase<std::optional<Pair>,
+            std::tuple<std::optional<int64_t>, std::optional<double>>>>;
+TYPED_TEST_SUITE(TorchArgMappingTest, MappingCases);
+
+TYPED_TEST(TorchArgMappingTest, crosses_as_expected_torch_types) {
+    EXPECT_TRUE((std::is_same_v<
+                 gsplat::torch_arg_t<typename TypeParam::natural>,
+                 typename TypeParam::expected>));
+}
+
+// ---------------------------------------------------------------------------
+// to() / from() round-trips.
+// ---------------------------------------------------------------------------
+
+TEST(TorchArgTest, scalar_round_trip) {
+    // 1<->1: to() yields the bare dispatcher value, from() takes it directly.
+    double f = gsplat::TorchArgDef<float>::to(1.5f);
+    EXPECT_DOUBLE_EQ(f, 1.5);
+    EXPECT_FLOAT_EQ(gsplat::TorchArgDef<float>::from(f), 1.5f);
+
+    int64_t u = gsplat::TorchArgDef<uint32_t>::to(42u);
+    EXPECT_EQ(u, 42);
+    EXPECT_EQ(gsplat::TorchArgDef<uint32_t>::from(u), 42u);
+
+    int64_t e = gsplat::TorchArgDef<ScopedEnum>::to(ScopedEnum::B);
+    EXPECT_EQ(e, 5);
+    EXPECT_EQ(gsplat::TorchArgDef<ScopedEnum>::from(e), ScopedEnum::B);
+}
+
+TEST(TorchArgTest, tuple_round_trip) {
+    // 1<->N: to() yields a tuple, from() rebuilds the type from it.
+    std::tuple<int64_t, double> t = gsplat::TorchArgDef<Pair>::to(Pair{3, 1.5});
+    EXPECT_EQ(std::get<0>(t), 3);
+    EXPECT_DOUBLE_EQ(std::get<1>(t), 1.5);
+
+    Pair back = gsplat::TorchArgDef<Pair>::from(t);
+    EXPECT_EQ(back.a, 3);
+    EXPECT_DOUBLE_EQ(back.b, 1.5);
+}
+
+TEST(TorchArgTest, tuple_marshals_non_native_elements) {
+    // A tuple of non-native elements is not passed through: each element is
+    // marshalled (1<->1 replace) -- float -> double, ScopedEnum -> int64.
+    using Def = gsplat::TorchArgDef<std::tuple<float, ScopedEnum>>;
+    auto d = Def::to(std::tuple<float, ScopedEnum>{1.5f, ScopedEnum::B});
+    static_assert(std::is_same_v<decltype(d), std::tuple<double, int64_t>>);
+    EXPECT_DOUBLE_EQ(std::get<0>(d), 1.5);
+    EXPECT_EQ(std::get<1>(d), 5);
+
+    auto back = Def::from(d);
+    static_assert(std::is_same_v<decltype(back), std::tuple<float, ScopedEnum>>);
+    EXPECT_FLOAT_EQ(std::get<0>(back), 1.5f);
+    EXPECT_EQ(std::get<1>(back), ScopedEnum::B);
+}
+
+TEST(TorchArgTest, tuple_expands_one_to_many_element) {
+    // A 1<->N element (Pair -> (int64, double)) is expanded into its columns and
+    // spliced; a scalar element is replaced. tuple<Pair, int> crosses as
+    // (int64, double, int64), and from() regroups it column-for-column.
+    using Def = gsplat::TorchArgDef<std::tuple<Pair, int>>;
+    auto d = Def::to(std::tuple<Pair, int>{Pair{3, 1.5}, 7});
+    static_assert(
+        std::is_same_v<decltype(d), std::tuple<int64_t, double, int64_t>>
+    );
+    EXPECT_EQ(std::get<0>(d), 3);
+    EXPECT_DOUBLE_EQ(std::get<1>(d), 1.5);
+    EXPECT_EQ(std::get<2>(d), 7);
+
+    auto back = Def::from(d);
+    EXPECT_EQ(std::get<0>(back).a, 3);
+    EXPECT_DOUBLE_EQ(std::get<0>(back).b, 1.5);
+    EXPECT_EQ(std::get<1>(back), 7);
+}
+
+TEST(TorchArgTest, tuple_all_native_is_identity) {
+    // When every element is already a dispatch type the tuple crosses unchanged.
+    using Def = gsplat::TorchArgDef<std::tuple<int64_t, double>>;
+    auto d = Def::to(std::tuple<int64_t, double>{3, 1.5});
+    static_assert(std::is_same_v<decltype(d), std::tuple<int64_t, double>>);
+    EXPECT_EQ(std::get<0>(d), 3);
+    EXPECT_DOUBLE_EQ(std::get<1>(d), 1.5);
+
+    auto back = Def::from(d);
+    static_assert(std::is_same_v<decltype(back), std::tuple<int64_t, double>>);
+    EXPECT_EQ(std::get<0>(back), 3);
+}
+
+TEST(TorchArgTest, tuple_marshals_without_spurious_copy) {
+    // The recursive tuple path forwards each element to its TorchArgDef and moves
+    // it through to_torch_args / the regroup -- it never copies an element.
+    using Def = gsplat::TorchArgDef<std::tuple<CountedScalar, CountedScalar>>;
+
+    std::tuple<CountedScalar, CountedScalar> t{CountedScalar{1}, CountedScalar{2}};
+    CountedScalar::reset();
+    auto d = Def::to(std::move(t));
+    EXPECT_EQ(CountedScalar::copies, 0) << "tuple to() copied an element";
+    static_assert(std::is_same_v<decltype(d), std::tuple<int64_t, int64_t>>);
+    EXPECT_EQ(std::get<0>(d), 1);
+    EXPECT_EQ(std::get<1>(d), 2);
+
+    CountedScalar::reset();
+    auto back = Def::from(std::move(d));
+    EXPECT_EQ(CountedScalar::copies, 0) << "tuple from() copied an element";
+    EXPECT_EQ(std::get<0>(back).value, 1);
+    EXPECT_EQ(std::get<1>(back).value, 2);
+}
+
+TEST(TorchArgTest, optional_scalar_round_trip) {
+    // 1<->1 marshalled inner: optional<uint32> crosses as optional<int64>.
+    using Def = gsplat::TorchArgDef<std::optional<uint32_t>>;
+
+    // present: the inner uint32 marshals to int64 inside the optional.
+    std::optional<int64_t> d = Def::to(std::optional<uint32_t>(42u));
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(*d, 42);
+
+    std::optional<uint32_t> back = Def::from(d);
+    ASSERT_TRUE(back.has_value());
+    EXPECT_EQ(*back, 42u);
+
+    // absent round-trips to absent.
+    EXPECT_FALSE(Def::to(std::optional<uint32_t>{}).has_value());
+    EXPECT_FALSE(Def::from(std::optional<int64_t>{}).has_value());
+}
+
+TEST(TorchArgTest, optional_tuple_round_trip) {
+    // 1<->N inner: optional<Pair> crosses as a tuple of one optional per column
+    // (optional<int64>, optional<double>) -- never an optional of a tuple.
+    using Def = gsplat::TorchArgDef<std::optional<Pair>>;
+
+    // present: one optional per column, each carrying the marshalled value.
+    auto cols = Def::to(std::optional<Pair>(Pair{3, 1.5}));
+    static_assert(std::tuple_size_v<decltype(cols)> == 2);
+
+    ASSERT_TRUE(std::get<0>(cols).has_value());
+    ASSERT_TRUE(std::get<1>(cols).has_value());
+    EXPECT_EQ(*std::get<0>(cols), 3);
+    EXPECT_DOUBLE_EQ(*std::get<1>(cols), 1.5);
+
+    std::optional<Pair> back = Def::from(cols);
+    ASSERT_TRUE(back.has_value());
+    EXPECT_EQ(back->a, 3);
+    EXPECT_DOUBLE_EQ(back->b, 1.5);
+
+    // absent: every column nullopt, and from() reads absence from the first.
+    auto none = Def::to(std::optional<Pair>{});
+    EXPECT_FALSE(std::get<0>(none).has_value());
+    EXPECT_FALSE(std::get<1>(none).has_value());
+    EXPECT_FALSE(Def::from(none).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// No-spurious-copy guard: a TorchArgDef path must move the wrapped payload
+// through to()/from(), never copy it. Parametrized over the marshalling shapes
+// so each is its own case; the body counts Tracked copies.
+// ---------------------------------------------------------------------------
+
+// Build a payload of the case type carrying instrumented Tracked values.
+template <class T> T make_tracked_payload();
+
+template <>
+Tracked make_tracked_payload<Tracked>() {
+    return Tracked{1};
+}
+
+template <>
+std::optional<Tracked> make_tracked_payload<std::optional<Tracked>>() {
+    return Tracked{1};
+}
+
+template <>
+TrackedPair make_tracked_payload<TrackedPair>() {
+    return TrackedPair{Tracked{1}, Tracked{2}};
+}
+
+template <>
+std::optional<TrackedPair> make_tracked_payload<std::optional<TrackedPair>>() {
+    return TrackedPair{Tracked{1}, Tracked{2}};
+}
+
+template <class T> class NoSpuriousCopyTest : public ::testing::Test {};
+
+using CopyCases = ::testing::Types<
+    Tracked,                     // identity (1<->1)
+    std::optional<Tracked>,      // 1<->1 optional
+    TrackedPair,                 // 1<->N struct
+    std::optional<TrackedPair>>; // 1<->N optional
+TYPED_TEST_SUITE(NoSpuriousCopyTest, CopyCases);
+
+TYPED_TEST(NoSpuriousCopyTest, marshals_without_spurious_copy) {
+    using T = TypeParam;
+    using Def = gsplat::TorchArgDef<T>;
+
+    // to(): crossing an owned (rvalue) value moves the payload out, never copies.
+    T value = make_tracked_payload<T>();
+    Tracked::reset();
+    auto crossed = Def::to(std::move(value));
+    EXPECT_EQ(Tracked::copies, 0) << "to() introduced a spurious copy";
+
+    // from(): rebuilding from an owned dispatcher value moves it back, no copy.
+    Tracked::reset();
+    T back = Def::from(std::move(crossed));
+    EXPECT_EQ(Tracked::copies, 0) << "from() introduced a spurious copy";
+    (void)back;
+}
+
+// ---------------------------------------------------------------------------
+// to_torch_args: recursive native->dispatch flattening (the result-boxing core).
+// ---------------------------------------------------------------------------
+
+TEST(ToTorchArgsTest, flattens_and_recurses_to_dispatch_types) {
+    // enum -> int64, float -> double, Pair -> (int64, double); a non-dispatch
+    // value (the Pair) is reduced by its TorchArgDef::to and spliced in flat, so
+    // every element of the result is a dispatch type, in order.
+    auto flat = gsplat::to_torch_args(ScopedEnum::B, 1.5f, Pair{3, 2.5});
+    EXPECT_TRUE((std::is_same_v<
+                 decltype(flat),
+                 std::tuple<int64_t, double, int64_t, double>>));
+    EXPECT_EQ(std::get<0>(flat), 5);
+    EXPECT_DOUBLE_EQ(std::get<1>(flat), 1.5);
+    EXPECT_EQ(std::get<2>(flat), 3);
+    EXPECT_DOUBLE_EQ(std::get<3>(flat), 2.5);
+}
+
+TEST(ToTorchArgsTest, unwraps_single_dispatch_value) {
+    // A single arg mapping to one dispatch value comes back bare (the 1<->1 case),
+    // not wrapped in a 1-tuple, so it matches a single-output op's m.impl return.
+    auto one = gsplat::to_torch_args(int64_t{7});
+    EXPECT_TRUE((std::is_same_v<decltype(one), int64_t>));
+    EXPECT_EQ(one, 7);
+
+    // A single arg mapping to several dispatch values stays a tuple (the 1<->N case).
+    auto pair = gsplat::to_torch_args(Pair{3, 1.5});
+    EXPECT_TRUE((std::is_same_v<decltype(pair), std::tuple<int64_t, double>>));
+    EXPECT_EQ(std::get<0>(pair), 3);
+    EXPECT_DOUBLE_EQ(std::get<1>(pair), 1.5);
+
+    // Zero args -> empty tuple.
+    auto none = gsplat::to_torch_args();
+    EXPECT_TRUE((std::is_same_v<decltype(none), std::tuple<>>));
+}
