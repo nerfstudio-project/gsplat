@@ -510,7 +510,9 @@ MTOffsets::MTOffsets(int32_t n_macro_tiles, int32_t gauss_batch_log2)
     , m_numSMs(0)
     , m_barrierExpected(0)
 {
-    cudaDeviceGetAttribute(&m_numSMs, cudaDevAttrMultiProcessorCount, 0);
+    int device = 0;
+    cudaGetDevice(&device);
+    cudaDeviceGetAttribute(&m_numSMs, cudaDevAttrMultiProcessorCount, device);
 
     const int32_t n_scan_blocks = (n_macro_tiles + MT_OFFSETS_BLOCK_SIZE - 1) / MT_OFFSETS_BLOCK_SIZE;
     const int32_t n_ctas        = min(n_scan_blocks, m_numSMs);

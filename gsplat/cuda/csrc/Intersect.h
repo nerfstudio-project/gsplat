@@ -19,7 +19,10 @@
 #pragma once
 
 #include <cstdint>
-#include "Ops.h"
+#include "Common.h"
+#include "Cameras.h"
+#include "Lidars.h"
+#include "ExternalDistortion.h"
 
 namespace at {
 class Tensor;

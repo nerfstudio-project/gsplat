@@ -30,6 +30,7 @@ from typing import List, Optional
 import pytest
 import torch
 import torch.distributed
+from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 
 # Default fraction of *post-CUDA-context* free VRAM the test process is
 # allowed to use. Caps the PyTorch caching allocator so an over-allocation
@@ -315,9 +316,6 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         tr.write_line(f"  (full per-test CSV written to {out_path})")
 
 
-from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
-
-
 # When optional libs/* subpackages are not installed (e.g. on the upstream
 # GitHub Actions ``core_tests.yml`` runner that only installs core gsplat),
 # drop the corresponding testpaths so ``pytest`` does not try to collect
@@ -327,6 +325,9 @@ from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 _LIBS_TESTPATH_TO_PACKAGE = (
     ("libs/geometry/functional", "gsplat_geometry"),
     ("libs/scene/components", "gsplat_scene"),
+    ("libs/scene/functional", "gsplat_scene"),
+    ("libs/scene/test_package_imports.py", "gsplat_scene"),
+    ("libs/sensors", "gsplat_sensors"),
     ("libs/stage/components", "gsplat_stage"),
 )
 

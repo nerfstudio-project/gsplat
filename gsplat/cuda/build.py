@@ -433,7 +433,7 @@ def build_and_load_gsplat():
     # and we can load it.
     module_exists = os.path.exists(
         os.path.join(build_dir, f"{build_params.name}.so")
-    ) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.lib"))
+    ) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.pyd"))
 
     with (
         status_context() if not module_exists or build_params_changed else nullcontext()

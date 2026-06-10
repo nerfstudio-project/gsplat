@@ -226,6 +226,27 @@ class GaussianInferenceRenderer:
         viewmat_t = self._normalize_viewmat(viewmat, viewmats)
         K_t = self._normalize_K(K, Ks)
 
+        # -- Validate camera tensors against scene device ------------------
+        scene_device = self._scene.means_planar.device
+        for name, tensor in (("viewmat", viewmat_t), ("K", K_t)):
+            if not tensor.is_cuda or tensor.device != scene_device:
+                raise ValueError(
+                    f"{name} must be a CUDA tensor on {scene_device}; "
+                    f"got device={tensor.device}"
+                )
+            if not tensor.is_contiguous():
+                raise ValueError(f"{name} must be contiguous")
+        if background is not None and (
+            not background.is_cuda
+            or background.device != scene_device
+            or not background.is_contiguous()
+        ):
+            raise ValueError(
+                f"background must be a contiguous CUDA tensor on {scene_device}; "
+                f"got device={background.device}, "
+                f"contiguous={background.is_contiguous()}"
+            )
+
         # -- tile_size -----------------------------------------------------
         effective_tile_size = tile_size if tile_size is not None else self._tile_size
         if effective_tile_size not in (8, 16):
