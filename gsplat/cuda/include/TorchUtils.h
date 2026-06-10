@@ -7,6 +7,7 @@
 
 #include <ATen/core/List.h> // c10::List<at::Tensor> for is_tensor_list
 #include <ATen/core/Tensor.h>
+#include <ATen/core/dispatch/Dispatcher.h> // c10::Dispatcher for call_torch_op
 #include <ATen/core/grad_mode.h>
 #include <ATen/ops/sparse_coo_tensor.h> // at::sparse_coo_tensor
 
@@ -668,6 +669,86 @@ auto to_torch_args(Args &&...args) {
     } else {
         return flat;
     }
+}
+
+namespace detail {
+
+// Assemble the dispatcher's typed<> signature for an op whose torch result is
+// `Ret` and whose flat torch argument pack is `FlatTuple`: `Ret(as_param_t<F>...)`
+// -- the very signature `to_torch_op`'s kernel is registered with (the kernel is
+// `auto call(as_param_t<Flat>... flat) -> torch_arg_t<Result>`).
+template <class Ret, class FlatTuple>
+struct typed_sig;
+
+template <class Ret, class... Flat>
+struct typed_sig<Ret, std::tuple<Flat...>> {
+    using type = Ret(as_param_t<Flat>...);
+};
+
+template <class Ret, class FlatTuple>
+using typed_sig_t = typename typed_sig<Ret, FlatTuple>::type;
+
+// Shared core of both call_torch_op forms: marshal the native args to torch,
+// invoke the already-typed dispatcher handle, and rebuild the native result
+// `ResultT` via TorchArgDef::from. The two entry points differ only in how they
+// obtain the handle (the FwdFn form caches it in a static, the signature form
+// does not), so the marshalling itself lives here.
+template <class ResultT, class TypedOp, class... Args>
+auto invoke_torch_op(TypedOp &op, Args &&...args) {
+    auto flat = to_torch_args(std::forward<Args>(args)...);
+    auto ret = [&] {
+        if constexpr (IsTuple<std::decay_t<decltype(flat)>>) {
+            return std::apply(
+                [&](auto &&...f) { return op.call(std::forward<decltype(f)>(f)...); },
+                std::move(flat));
+        } else {
+            return op.call(std::move(flat));
+        }
+    }();
+    return TorchArgDef<ResultT>::from(std::move(ret));
+}
+
+} // namespace detail
+
+// Call a registered op through the dispatcher from native (C++) code -- the
+// mirror image of `to_torch_op`. `FwdFn`'s signature is the single source of
+// truth: its argument types flatten (via `TorchArgDef::to`, the same path
+// `to_torch_args` takes) into the dispatcher's typed<> argument pack, and its
+// declared return struct is reconstructed (via `TorchArgDef::from`) from the
+// torch values the op returns. So the call site passes and receives native
+// types -- a result struct comes back as a struct, not a flat tuple.
+//
+// Unlike a direct C++ call to the op's free function, this routes through the
+// dispatcher, so the op's registered autograd fires and the call is recorded in
+// the autograd graph.
+template <auto FwdFn, class... Args>
+auto call_torch_op(const char *qualified_name, Args &&...args) {
+    using Traits = detail::fn_traits<decltype(FwdFn)>;
+    using ResultT = std::decay_t<typename Traits::return_type>;
+    using DispatchSig = detail::typed_sig_t<
+        torch_arg_t<ResultT>, detail::flat_torch_types_t<typename Traits::args>>;
+
+    // FwdFn is unique per op, so the resolved handle is cached in a static.
+    static auto op = c10::Dispatcher::singleton()
+                         .findSchemaOrThrow(qualified_name, "").typed<DispatchSig>();
+
+    return detail::invoke_torch_op<ResultT>(op, std::forward<Args>(args)...);
+}
+
+// Signature-explicit form, for ops with no gsplat C++ forward function: the
+// caller supplies the native signature `R(Args...)`. A signature is not unique
+// to an op, so the handle is resolved each call rather than cached.
+template <class Sig, class... Args>
+auto call_torch_op(const char *qualified_name, Args &&...args) {
+    using Traits = detail::fn_traits<std::add_pointer_t<Sig>>;
+    using ResultT = std::decay_t<typename Traits::return_type>;
+    using DispatchSig = detail::typed_sig_t<
+        torch_arg_t<ResultT>, detail::flat_torch_types_t<typename Traits::args>>;
+
+    auto op = c10::Dispatcher::singleton()
+                  .findSchemaOrThrow(qualified_name, "").typed<DispatchSig>();
+
+    return detail::invoke_torch_op<ResultT>(op, std::forward<Args>(args)...);
 }
 
 } // namespace gsplat
