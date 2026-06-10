@@ -327,6 +327,9 @@ from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 _LIBS_TESTPATH_TO_PACKAGE = (
     ("libs/geometry/functional", "gsplat_geometry"),
     ("libs/scene/components", "gsplat_scene"),
+    ("libs/scene/functional", "gsplat_scene"),
+    ("libs/scene/test_package_imports.py", "gsplat_scene"),
+    ("libs/sensors", "gsplat_sensors"),
     ("libs/stage/components", "gsplat_stage"),
 )
 
