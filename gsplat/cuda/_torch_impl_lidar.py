@@ -21,7 +21,6 @@ from typing import Tuple, Union, Literal
 from ._lidar import SpinningDirection, relative_sensor_angles
 from ._torch_impl import _bits_for_count
 from ._wrapper import RowOffsetStructuredSpinningLidarModelParametersExt
-import struct
 
 ANGLE_TO_PIXEL_SCALING_FACTOR: int = 1024
 
@@ -326,13 +325,6 @@ def _isect_tiles_lidar(
     tiles_per_gauss = el_count * az_count
 
     assert len(tiles_per_gauss) == I * N
-    n_isects = int(tiles_per_gauss.sum().item())
-    accum_tiles_per_gauss = torch.cumsum(tiles_per_gauss, dim=0)
-    assert accum_tiles_per_gauss[-1] == n_isects
-
-    isect_ids_lo = torch.empty(n_isects, dtype=torch.int32, device="cpu")
-    isect_ids_hi = torch.empty(n_isects, dtype=torch.int32, device="cpu")
-    flatten_ids = torch.empty(n_isects, dtype=torch.int32, device="cpu")
 
     image_n_bits = _bits_for_count(I)
     tile_n_bits = _bits_for_count(
@@ -342,35 +334,48 @@ def _isect_tiles_lidar(
 
     depths = depths.reshape(-1)
 
-    def kernel(image_id, gauss_id):
-        index = image_id * N + gauss_id
+    az_count_a = (tile_ranges_az[0][1] - tile_ranges_az[0][0]).to(torch.int64)
+    az_count = az_count.to(torch.int64)
+    el_count = el_count.to(torch.int64)
+    counts = el_count * az_count
+    total = int(counts.sum().item())
 
-        if not nonzero_extent[index]:
-            return
+    if total == 0:
+        isect_ids_hi = torch.empty(0, dtype=torch.int64, device=device)
+        flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
+    else:
+        indices = torch.repeat_interleave(
+            torch.arange(I * N, device=device, dtype=torch.int64),
+            counts,
+            output_size=total,
+        )
+        offsets = torch.arange(total, device=device, dtype=torch.int64)
+        range_starts = torch.cumsum(counts, dim=0) - counts
+        offsets = offsets - torch.repeat_interleave(
+            range_starts, counts, output_size=total
+        )
 
-        curr_idx = accum_tiles_per_gauss[index - 1] if index > 0 else 0
+        az_count_i = az_count[indices]
+        az_count_a_i = az_count_a[indices]
+        in_el_offsets = offsets % az_count_i
+        el = tile_range_el[0][indices].to(torch.int64) + offsets // az_count_i
 
-        depth_f32 = depths[index]
-        depth_id = struct.unpack("i", struct.pack("f", depth_f32))[0]
-        depth_id = int(depth_id) & 0xFFFFFFFF
+        in_region_a = in_el_offsets < az_count_a_i
+        az = torch.where(
+            in_region_a,
+            tile_ranges_az[0][0][indices].to(torch.int64) + in_el_offsets,
+            tile_ranges_az[1][0][indices].to(torch.int64)
+            + (in_el_offsets - az_count_a_i),
+        )
+        if periodic_az:
+            az = az % n_bins_az
 
-        for el in range(int(tile_range_el[0][index]), int(tile_range_el[1][index])):
-            for az_s, az_e in tile_ranges_az:
-                for az in range(int(az_s[index]), int(az_e[index])):
-                    actual_az = az % n_bins_az if periodic_az else az
-                    tile_id = el * lidar.tiling.n_bins_azimuth + actual_az
-                    isect_ids_lo[curr_idx] = depth_id
-                    isect_ids_hi[curr_idx] = (image_id << tile_n_bits) | tile_id
-                    flatten_ids[curr_idx] = index
-                    curr_idx += 1
+        tile_id = el * lidar.tiling.n_bins_azimuth + az
+        image_id = indices // N
+        isect_ids_hi = (image_id << tile_n_bits) | tile_id
+        flatten_ids = indices.to(torch.int32)
 
-    for image_id in range(I):
-        for gauss_id in range(N):
-            kernel(image_id, gauss_id)
-
-    isect_ids_lo = isect_ids_lo.to(device=device)
-    isect_ids_hi = isect_ids_hi.to(device=device)
-    flatten_ids = flatten_ids.to(device=device)
+    isect_ids_lo = depths[flatten_ids.to(torch.int64)].view(torch.int32).to(torch.int64)
 
     isect_ids = (isect_ids_hi.to(torch.int64) << 32) | (
         isect_ids_lo.to(torch.int64) & 0xFFFFFFFF
