@@ -50,12 +50,16 @@ jobs:
         if: github.event_name == 'push'
 
       - name: Sphinx build
-        # Fail on warnings (e.g. "document isn't included in any toctree" if
-        # docs/source/index.rst is ever truncated or a new page is added
-        # without wiring it in). `--keep-going` collects every warning before
-        # exiting so a single failure doesn't hide the rest.
+        env:
+          NUM_CHANNELS: "3"
+          BUILD_3DGUT: "0"
+          BUILD_2DGS: "0"
+          BUILD_ADAM: "0"
+          BUILD_RELOC: "0"
+          BUILD_LOSSES: "0"
+          BUILD_CAMERA_WRAPPERS: "0"
         run: |
-          sphinx-build -W --keep-going docs/source _build
+          bash docs/render_docs.sh _build
 
       # Deploy to version-dependent subdirectory.
       - name: Deploy to GitHub Pages
