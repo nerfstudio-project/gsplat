@@ -30,6 +30,7 @@ from typing import List, Optional
 import pytest
 import torch
 import torch.distributed
+from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 
 # Default fraction of *post-CUDA-context* free VRAM the test process is
 # allowed to use. Caps the PyTorch caching allocator so an over-allocation
@@ -313,9 +314,6 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             for r in sorted_peaks:
                 writer.writerow([r["nodeid"], r["device_peak"], r["torch_peak"]])
         tr.write_line(f"  (full per-test CSV written to {out_path})")
-
-
-from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
 
 
 # When optional libs/* subpackages are not installed (e.g. on the upstream
