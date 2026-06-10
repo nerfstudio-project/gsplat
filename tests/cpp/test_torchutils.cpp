@@ -390,6 +390,20 @@ struct DoubleResult {
     double value;
 };
 
+// Reads a native (Tensor) argument by const&, returning the refcount it observes.
+// at::Tensor is torch-native, so it crosses via the identity TorchArgDef; a
+// wrapper that copied the argument along the way would bump its use_count.
+IntResult read_tensor_use_count(const at::Tensor &t) {
+    return IntResult{static_cast<int64_t>(t.use_count())};
+}
+
+// Mixed natural arguments, including a 1->2 decomposition followed by a scalar.
+DoubleResult pair_then_scalar(const Pair &p, int64_t k) {
+    return DoubleResult{p.a + p.b + static_cast<double>(k)};
+}
+
+// A scalar-converting op: float argument crosses as double.
+DoubleResult scale(float x) { return DoubleResult{static_cast<double>(x) * 2.0}; }
 
 } // namespace
 
@@ -679,6 +693,34 @@ TYPED_TEST(NoSpuriousCopyTest, marshals_without_spurious_copy) {
     T back = Def::from(std::move(crossed));
     EXPECT_EQ(Tracked::copies, 0) << "from() introduced a spurious copy";
     (void)back;
+}
+
+// ---------------------------------------------------------------------------
+// to_torch_op wiring.
+// ---------------------------------------------------------------------------
+
+TEST(ToTorchOpTest, flattens_one_to_many_and_regroups) {
+    // pair_then_scalar(Pair, int64_t): Pair -> (int64_t, double), so the
+    // registered wrapper takes (int64_t, double, int64_t) and rebuilds the Pair
+    // from the first two before calling the op.
+    auto result = gsplat::to_torch_op<&pair_then_scalar>(2, 3.5, 10);
+    // DoubleResult has one field, so the boxed result comes back bare (1<->1).
+    EXPECT_DOUBLE_EQ(result, 15.5);
+}
+
+TEST(ToTorchOpTest, converts_scalar_argument) {
+    // scale(float): the wrapper takes a double and narrows it back to float.
+    auto result = gsplat::to_torch_op<&scale>(2.5);
+    EXPECT_DOUBLE_EQ(result, 5.0);
+}
+
+TEST(ToTorchOpTest, identity_path_does_not_copy) {
+    // The wrapper forwards a native argument by const& all the way to the op, so
+    // no intermediate copy bumps its refcount (and a const& cannot be moved from).
+    at::Tensor t = at::ones({2});
+    int64_t before = static_cast<int64_t>(t.use_count());
+    auto inside = gsplat::to_torch_op<&read_tensor_use_count>(t);
+    EXPECT_EQ(inside, before);
 }
 
 // ---------------------------------------------------------------------------

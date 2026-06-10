@@ -395,6 +395,24 @@ using torch_arg_t = decltype(TorchArgDef<T>::to(std::declval<T>()));
 
 namespace detail {
 
+// Decomposes a free-function pointer R(*)(A...): its return type, its parameter
+// tuple (as declared), and the decayed parameter tuple. Shared by to_torch_op
+// (reads `args`) and the saved-state plumbing (reads `decayed_args`).
+template <class F>
+struct fn_traits;
+
+template <class R, class... A>
+struct fn_traits<R (*)(A...)> {
+    using return_type = R;
+    using args = std::tuple<A...>;
+    using decayed_args = std::tuple<std::decay_t<A>...>;
+};
+
+// Parameter form of a flat torch type: by const& for class types, by value
+// for scalars.
+template <class T>
+using as_param_t = std::conditional_t<std::is_scalar_v<T>, T, const T &>;
+
 // IsTuple<T>: whether T is a std::tuple (the form a 1<->N marshalling yields).
 // Detected the way the STL detects tuple-like types -- a class-template partial
 // specialization -- fronted by a concept.
@@ -442,6 +460,19 @@ struct as_tuple<std::tuple<Ts...>> {
 template <class T>
 using as_tuple_t = typename as_tuple<T>::type;
 
+// The flat m.impl parameter pack for an op: each argument's torch tuple
+// (as_tuple_t<torch_arg_t<Arg>>) concatenated. Takes the op's argument tuple so
+// ToTorchOp can bind it straight from fn_traits, with no intermediate template.
+template <class ArgsTuple>
+struct flat_torch_types;
+
+template <class... Args>
+struct flat_torch_types<std::tuple<Args...>> {
+    using type = decltype(std::tuple_cat(std::declval<as_tuple_t<torch_arg_t<Args>>>()...));
+};
+
+template <class ArgsTuple>
+using flat_torch_types_t = typename flat_torch_types<ArgsTuple>::type;
 
 // Regroups a flat torch tuple back into the native values it was flattened
 // from: each type T_i consumes its value count (1 for a 1<->1 mapping, N for a
@@ -499,6 +530,52 @@ struct ToNativeArgs<std::tuple<Args...>> {
     }
 };
 
+template <auto Fn, class ArgsTuple, class FlatTuple>
+struct ToTorchOpImpl;
+
+// Synthesizes the dispatcher kernel for a struct-returning op `Fn`.
+//   - Args... are the op's C++ parameter types.
+//   - Flat... are the torch argument types: each argument's torch
+//     tuple (as_tuple_t<torch_arg_t<Arg>>), concatenated (flat_torch_types_t).
+// `call` is the kernel registered with m.impl. It receives the flat torch
+// arguments, regroups them into one slice per op argument, rebuilds each C++
+// argument through TorchArgDef::from(), invokes the op, and boxes the result
+// through TorchArgDef::to (a result struct becomes its field tuple, a
+// torch result passes through). An argument whose type is unchanged
+// forwards through by reference, so the common case copies nothing.
+template <auto Fn, class... Args, class... Flat>
+struct ToTorchOpImpl<Fn, std::tuple<Args...>, std::tuple<Flat...>> {
+    // Every flattened argument value must be a torch type (a 1<->N argument's
+    // values and a tuple argument's elements included). A non-torch value means
+    // a TorchArgDef failed to reduce it.
+    static_assert((IsTorch<Flat> && ...),
+                  "to_torch_op: an argument did not reduce to torch types; add "
+                  "a TorchArgDef specialization (or marshal its non-torch members).");
+
+    // The registered kernel. Its parameter list is the flat dispatcher pack; it
+    // captures the arguments by reference into a tuple and hands them to invoke.
+    static auto call(as_param_t<Flat>... flat) {
+        return invoke(std::forward_as_tuple(flat...), std::index_sequence_for<Args...>{});
+    }
+
+  private:
+    // Rebuild every op argument from its slice of `packed` (via ToNativeArgs),
+    // call the op, and box the result through TorchArgDef::to (struct -> tuple,
+    // a torch type -> itself). `Arg...` indexes the op arguments.
+    template <class Packed, std::size_t... Arg>
+    static auto invoke(Packed &&packed, std::index_sequence<Arg...>) {
+        decltype(auto) result =
+            Fn(ToNativeArgs<std::tuple<Args...>>::template rebuild<Arg, Args>(packed)...);
+        return TorchArgDef<std::decay_t<decltype(result)>>::to(
+            std::forward<decltype(result)>(result));
+    }
+};
+
+// Recover the op's argument tuple from its pointer via fn_traits, then bind the
+// kernel to those arguments and their flattened torch values.
+template <auto Fn>
+using ToTorchOp = ToTorchOpImpl<Fn, typename fn_traits<decltype(Fn)>::args,
+                                flat_torch_types_t<typename fn_traits<decltype(Fn)>::args>>;
 
 } // namespace detail
 
@@ -563,6 +640,14 @@ struct TorchArgDef<std::optional<T>> {
     }
 };
 
+// Adapts an op into the function the torch dispatcher's `m.impl` expects. The
+// m.impl argument list is each op argument's torch type(s)
+// (`torch_arg_t`) concatenated; the result is boxed by `TorchArgDef::to` (a
+// result struct via its co-located TorchArgDef spec, a torch result
+// as-is). A generic lambda has no single signature for `m.impl` to infer and
+// could not be registered directly.
+template <auto Fn>
+inline constexpr auto to_torch_op = &detail::ToTorchOp<Fn>::call;
 
 // Flatten native values into torch values: each value is reduced by
 // detail::flatten_one (torch leaf -> 1-tuple; struct / 1<->N -> its tuple,
