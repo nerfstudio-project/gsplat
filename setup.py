@@ -38,6 +38,7 @@ if os.path.exists(_version_file):
 URL = "https://github.com/nerfstudio-project/gsplat"
 
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
+BUILD_EXPERIMENTAL = os.getenv("BUILD_EXPERIMENTAL", "1") == "1"
 
 
 def _detect_cupy_requirement() -> str:
@@ -214,6 +215,9 @@ def get_extensions():
         },
         extra_link_args=params.extra_ldflags,
     )
+
+    if not BUILD_EXPERIMENTAL:
+        return [gsplat_ext]
 
     # --- experimental Inference render extension ---
     inference_build = _load_build_module(
