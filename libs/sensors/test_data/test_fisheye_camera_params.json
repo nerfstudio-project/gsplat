@@ -1,0 +1,220 @@
+{
+  "camera_front_fisheye_140fov@clipgt-46dcc430-7e50-46da-8caf-5f001f3ecf56": {
+    "logical_sensor_name": "camera_front_fisheye_140fov",
+    "sequence_id": "clipgt-46dcc430-7e50-46da-8caf-5f001f3ecf56",
+    "unique_sensor_idx": 0,
+    "camera_model_type": "opencv-fisheye",
+    "resolution": [
+      3840,
+      2160
+    ],
+    "shutter_type": "1",
+    "T_sensor_rig": [
+      [
+        0.9197002053260803,
+        -0.0171663835644722,
+        0.3922458589076996,
+        2.619468927383423
+      ],
+      [
+        -0.3919978141784668,
+        0.016132820397615433,
+        0.9198246598243713,
+        0.8863193392753601
+      ],
+      [
+        -0.02211809530854225,
+        -0.9997224807739258,
+        0.008108174428343773,
+        0.8246679306030273
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "intrinsics": {
+      "principal_point": [
+        1928.184506,
+        1083.862789
+      ],
+      "focal_length": [
+        1913.76478,
+        1913.99708
+      ],
+      "forward_poly": [
+        -0.030093122,
+        -0.005103817,
+        -0.000849622,
+        0.001079542
+      ],
+      "max_angle_rad": 1.2217304763960306
+    },
+    "external_distortion": null
+  },
+  "camera_left_fisheye_mild@clipgt-46dcc430-7e50-46da-8caf-5f001f3ecf56": {
+    "logical_sensor_name": "camera_left_fisheye_mild",
+    "sequence_id": "clipgt-46dcc430-7e50-46da-8caf-5f001f3ecf56",
+    "unique_sensor_idx": 1,
+    "camera_model_type": "opencv-fisheye",
+    "resolution": [
+      640,
+      480
+    ],
+    "shutter_type": "1",
+    "T_sensor_rig": [
+      [
+        0.0026748867239803076,
+        -0.01498562190681696,
+        0.9998841285705566,
+        1.9812040328979492
+      ],
+      [
+        -0.9998554587364197,
+        0.01674754172563553,
+        0.002925811568275094,
+        -0.14863985776901245
+      ],
+      [
+        -0.016789447516202927,
+        -0.9997474551200867,
+        -0.0149386590346694,
+        1.3764238357543945
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "intrinsics": {
+      "principal_point": [
+        320.0,
+        240.0
+      ],
+      "focal_length": [
+        200.0,
+        200.0
+      ],
+      "forward_poly": [
+        0.02,
+        0.01,
+        0.005,
+        0.002
+      ],
+      "max_angle_rad": 1.8
+    },
+    "external_distortion": {
+      "type": "bivariate-windshield",
+      "reference_poly": "1",
+      "horizontal_poly": [
+        0.0,
+        1.01,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vertical_poly": [
+        0.0,
+        1.01,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "horizontal_poly_inverse": [
+        0.0,
+        0.99,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vertical_poly_inverse": [
+        0.0,
+        0.99,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "camera_rear_fisheye_nodist@clipgt-46dcc430-7e50-46da-8caf-5f001f3ecf56": {
+    "logical_sensor_name": "camera_rear_fisheye_nodist",
+    "sequence_id": "clipgt-46dcc430-7e50-46da-8caf-5f001f3ecf56",
+    "unique_sensor_idx": 2,
+    "camera_model_type": "opencv-fisheye",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "shutter_type": "1",
+    "T_sensor_rig": [
+      [
+        -0.9149746894836426,
+        0.0008172739180736244,
+        0.4035104215145111,
+        2.583655834197998
+      ],
+      [
+        -0.4035002887248993,
+        -0.009227650240063667,
+        -0.9149330258369446,
+        -0.9326835870742798
+      ],
+      [
+        0.002975702052935958,
+        -0.9999570846557617,
+        0.008772836066782475,
+        0.8120271563529968
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "intrinsics": {
+      "principal_point": [
+        960.0,
+        540.0
+      ],
+      "focal_length": [
+        600.0,
+        600.0
+      ],
+      "forward_poly": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_angle_rad": 1.5707963267948966
+    },
+    "external_distortion": null
+  }
+}

@@ -34,8 +34,8 @@ gsplat_sensors.functional.<op>(...)
 The kernel layer covers camera projection and one structured spinning-LiDAR
 projection at this revision:
 
-- Camera projection models: OpenCV pinhole (radial + tangential + thin prism)
-  and F-Theta (`FThetaProjection`).
+- Three camera projection models: OpenCV pinhole (radial + tangential + thin
+  prism), FTheta, and OpenCV equidistant fisheye.
 - Two external distortion models: `NoExternalDistortion` (identity) and
   `BivariateWindshieldDistortion` (packed `(42,)` coefficients, degree ≤ 2
   horizontal and ≤ 4 vertical bivariate polynomials).
@@ -152,19 +152,22 @@ table below states what each one is actually called.
 | Registered type | Torch host (`*_torch.h`/`.cpp`) | Bridge POD (`*_params.h`) | Per-thread (`*_kernel.cuh`) |
 | --- | --- | --- | --- |
 | OpenCV pinhole | `gsplat_sensors::OpenCVPinholeProjection` | `OpenCVPinholeProjection_KernelParameters` | `OpenCVPinholeParams` |
+| FTheta | `gsplat_sensors::FThetaProjection` | `FThetaProjection_KernelParameters` | `FThetaParams` |
+| OpenCV fisheye | `gsplat_sensors::OpenCVFisheyeProjection` | `OpenCVFisheyeProjection_KernelParameters` | `OpenCVFisheyeParams` |
 | No external distortion | `gsplat_sensors::NoExternalDistortion` | `NoExternalDistortion_KernelParameters` (empty) | `NoExternalDistortion_Parameters` (empty no-op tag) |
 | Bivariate windshield | `gsplat_sensors::BivariateWindshieldDistortion` | `BivariateWindshieldDistortion_KernelParameters` | `BivariateWindshieldParams` |
 | Row-offset spinning LiDAR | `gsplat_sensors::RowOffsetStructuredSpinningLidarProjection` | `RowOffsetStructuredSpinningLidarProjection_KernelParameters` | raw table/POD access in `lidar_kernel.cuh` |
 
-The naming asymmetry is intentional and worth flagging: the OpenCV pinhole
-per-thread struct is `OpenCVPinholeParams` (not `OpenCVPinholeProjection_Parameters`),
-and the bivariate per-thread struct is `BivariateWindshieldParams`. Only the
-two empty / no-op slots follow the `_Parameters` suffix convention.
+The naming asymmetry is intentional and worth flagging: projection per-thread
+structs drop the `Projection` suffix (`OpenCVPinholeParams`, `FThetaParams`,
+`OpenCVFisheyeParams`), and the bivariate per-thread struct is
+`BivariateWindshieldParams`. Only the two empty / no-op slots follow the
+`_Parameters` suffix convention.
 
 The Torch host structs store per-component `at::Tensor` members (no packed
 wire format) plus frozen scalars / arrays such as the
-`std::array<int64_t, 2> resolution` on `OpenCVPinholeProjection` and the FOV /
-direction fields on `RowOffsetStructuredSpinningLidarProjection`. Each
+`std::array<int64_t, 2> resolution` on the camera projection classes and the
+FOV / direction fields on `RowOffsetStructuredSpinningLidarProjection`. Each
 `to_kernel_params()` collects raw `const float*` pointers and scalar metadata
 into the bridge POD. No tensor allocation or device transfer happens there.
 
@@ -176,12 +179,14 @@ from Python:
 
 **Type definition (C++ via `torch::class_<>`).** `ext.cpp` registers the camera
 classes (`OpenCVPinholeProjection`, `FThetaProjection`,
-`NoExternalDistortion`, `BivariateWindshieldDistortion`) and the LiDAR
-projection class (`RowOffsetStructuredSpinningLidarProjection`) with
-named-kwargs `torch::init` constructors, per-component `def_readwrite` /
-`def_readonly` properties, and pickle hooks. Camera projections also expose
-`transform(scale, offset, new_resolution)`. These classes are accessed from
-Python as `torch.classes.gsplat_sensors.<Name>`.
+`OpenCVFisheyeProjection`, `NoExternalDistortion`,
+`BivariateWindshieldDistortion`) and the LiDAR projection class
+(`RowOffsetStructuredSpinningLidarProjection`) with named-kwargs `torch::init`
+constructors, per-component `def_readwrite` / `def_readonly` properties, and
+pickle hooks. Camera projections also expose
+`transform(scale, offset, new_resolution)`, which returns a freshly-constructed
+projection with rescaled intrinsics. These classes are accessed from Python as
+`torch.classes.gsplat_sensors.<Name>`.
 
 **Torch op binding (C++ via `m.def`).** Camera ops are registered per
 `(projection, distortion[, _backward])` triple with names like
@@ -200,10 +205,13 @@ TorchScript class name because every `torch.classes.*` instance reports
 `external_distortion=None` raises `TypeError`; callers must construct
 `NoExternalDistortion()` explicitly.
 
-LiDAR shared ops use `kernels/lidars/dispatch.py` tables keyed only by the
-projection class. `kernels/test_lidar_dispatch.py` asserts the five LiDAR
-tables match `REGISTERED_LIDAR_PROJECTIONS`; the camera conformance test
-continues to cover `REGISTERED_CAMERA_PROJECTIONS × REGISTERED_DISTORTIONS`.
+`test_projective_sensor_ops.py::test_dispatch_table_keys_match_registered_pairs`
+walks `_DISPATCH_TABLES` and asserts each table covers exactly
+`REGISTERED_CAMERA_PROJECTIONS × REGISTERED_DISTORTIONS` (currently 3 × 2 = 6
+entries per table). Adding a registered class without populating every table
+fails this conformance test. LiDAR shared ops use `kernels/lidars/dispatch.py`
+tables keyed only by the projection class; `kernels/test_lidar_dispatch.py`
+asserts the five LiDAR tables match `REGISTERED_LIDAR_PROJECTIONS`.
 
 ## Parameter-pack design
 
@@ -293,7 +301,7 @@ themselves, not in Python — see `trajectory_cuda::quat_slerp_pair_fwd_f` /
 | `kernels/projective_sensor_ops.py` | Seven `(projection, distortion)`-keyed dispatch dicts + the public `_DISPATCH_TABLES` registry and `_lookup` helper. |
 | `kernels/test_projective_sensor_ops.py` | Dispatch-table conformance + a smoke test that the `None`-distortion path raises and the bivariate path returns a valid point. |
 | `kernels/test_lidar_dispatch.py` | Single-key LiDAR dispatch conformance for all five LiDAR ops. |
-| `kernels/cameras/ops.py` | Public Python op wrappers, twelve `torch.autograd.Function` classes (one per `(op, distortion)` pair), and the pose / device / contiguity helpers (`_check_pair`, `_to_dev`, `_projection_on_device`, `_external_distortion_on_device`, `_select_camera_op`, `_unpack_static_pose`, `unpack_dynamic_pose_components`, `_unpack_trajectory`, `interpolate_dynamic_pose`, `relative_frame_times`). |
+| `kernels/cameras/ops.py` | Public Python op wrappers, projection-family `torch.autograd.Function` classes for each `(op, distortion)` pair, and the pose / device / contiguity helpers (`_check_pair`, `_to_dev`, `_projection_on_device_any`, `_external_distortion_on_device`, `_select_op`, `_unpack_static_pose`, `unpack_dynamic_pose_components`, `_unpack_trajectory`, `interpolate_dynamic_pose`, `relative_frame_times`). |
 | `kernels/cameras/types.py` | `torch.classes.gsplat_sensors.*` Python handles, `ShutterType` IntEnum (import-time verified against C++), `ReferencePolynomial`, `REGISTERED_CAMERA_PROJECTIONS`, `REGISTERED_DISTORTIONS`, `script_class_name`, and the `CameraProjection` / `ExternalDistortion` type aliases. |
 | `kernels/cameras/windshield.py` | `from_components(...)` factory + `MAX_H_POLYNOMIAL_TERMS` / `MAX_V_POLYNOMIAL_TERMS` constants. |
 | `kernels/cameras/test_ops.py` | Per-pair forward and backward correctness tests plus PyTorch `gradcheck` on small inputs. |
@@ -305,9 +313,11 @@ themselves, not in Python — see `trajectory_cuda::quat_slerp_pair_fwd_f` /
 | `kernels/common/utils.py` | `wxyz_to_xyzw`, `xyzw_to_wxyz`, `poses_to_matrix`, `valid_flags_to_indices`. |
 | `kernels/cuda/build.py` | `get_build_parameters()` + `build_and_load_sensors_cuda()` JIT entry; `DEBUG` / `NVCC_FLAGS` / `VERBOSE` env handling; stale ninja lock cleanup. |
 | `kernels/cuda/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
-| `csrc/camera_params.h` | `OpenCVPinholeProjection_KernelParameters` POD + 13 forward + 13 backward `_launch` prototypes + `kMaxRollingShutterIterations`. Forward-declared `cudaStream_t`. |
+| `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter and Newton-iteration bounds. Forward-declared `cudaStream_t`. |
 | `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters` (empty) + `BivariateWindshieldDistortion_KernelParameters`. |
-| `csrc/camera_kernel.cuh` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; all OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `libs/geometry/kernels/cuda/csrc/pose.cuh`. |
+| `csrc/camera_kernel.cuh` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `libs/geometry/kernels/cuda/csrc/pose.cuh`. |
+| `csrc/ftheta_kernel.cuh` / `.cu` / `_backward.cu` | FTheta device math, forward kernels, and backward kernels. |
+| `csrc/fisheye_kernel.cuh` / `.cu` / `_backward.cu` | OpenCV fisheye device math, forward kernels, and backward kernels. |
 | `csrc/external_distortion_kernel.cuh` | `BivariateWindshieldParams` + `NoExternalDistortion_Parameters` no-op tag + header-only bivariate distortion math (no companion `.cu`). |
 | `csrc/math.cuh` | `safe_nonzero`, `add3 / sub3 / scale3 / dot3`, `normalize3` forward and backward. |
 | `libs/geometry/.../coordinate_conversions.cuh` | Geometry-owned header-only `sincos_t` and `spherical_to_cartesian` / `cartesian_to_spherical` ray<->angle conversions shared by the sensor kernels. |
@@ -316,7 +326,7 @@ themselves, not in Python — see `trajectory_cuda::quat_slerp_pair_fwd_f` /
 | `csrc/lidar_kernel.cuh` | LiDAR device math for table lookup, rolling-shutter timing, FOV checks, and pose interpolation helpers; the spherical<->cartesian ray/angle conversions and `sincos_t` are owned by `libs/geometry/kernels/cuda/csrc/coordinate_conversions.cuh`. |
 | `csrc/camera_kernel.cu` | Thirteen forward `__global__` kernels + matching `_forward_launch` definitions. |
 | `csrc/camera_kernel_backward.cu` | Twelve backward `__global__` kernels + matching `_backward_launch` definitions; isolated TU so forward and backward can be compiled and reviewed independently. |
-| `csrc/camera_torch.h` / `.cpp` | `OpenCVPinholeProjection` host struct + per-pair Torch entries + `generate_image_points` + the `check_*` validators called from `ext.cpp`. |
+| `csrc/camera_torch.h` / `.cpp` | Projection host structs + per-pair Torch entries + `generate_image_points` + the `check_*` validators called from `ext.cpp`. |
 | `csrc/external_distortion_torch.h` / `.cpp` | `NoExternalDistortion` and `BivariateWindshieldDistortion` host structs + `to_kernel_params()` + `check_bivariate_windshield_distortion`. |
 | `csrc/lidar_kernel.cu` / `lidar_kernel_backward.cu` | LiDAR forward and backward `__global__` kernels + typed launch definitions. |
 | `csrc/lidar_torch.h` / `.cpp` | `RowOffsetStructuredSpinningLidarProjection` host struct + LiDAR Torch entries + validators called from `ext.cpp`. |
@@ -331,8 +341,8 @@ is `gsplat_sensors_cuda`. Both host C++ and nvcc compile at `-std=c++20`
 folded together on Windows. Sources split cleanly between compilers:
 
 - `nvcc`: `camera_kernel.cu`, `camera_kernel_backward.cu`,
-  `ftheta_kernel.cu`, `ftheta_kernel_backward.cu`, `lidar_kernel.cu`,
-  `lidar_kernel_backward.cu`.
+  `ftheta_kernel.cu`, `ftheta_kernel_backward.cu`, `fisheye_kernel.cu`,
+  `fisheye_kernel_backward.cu`, `lidar_kernel.cu`, `lidar_kernel_backward.cu`.
 - Host C++: `ext.cpp`, `camera_torch.cpp`, `external_distortion_torch.cpp`,
   `lidar_torch.cpp`.
 
@@ -379,9 +389,11 @@ the wheel path is the deployment workflow.
   the two definitions drift apart.
 - `SpinningDirection` follows the same C++ source-of-truth pattern via
   `csrc/lidar_params.h` and `kernels/lidars/types.py`.
-- Downstream dispatch code should iterate `REGISTERED_CAMERA_PROJECTIONS` or
-  `REGISTERED_LIDAR_PROJECTIONS` rather than `isinstance`-ing against a type
-  alias.
+- `CameraProjection` is annotated `Any` with a runtime value of `object`
+  (deliberately not bound to any single projection, so no projection appears
+  canonical); downstream dispatch code should iterate
+  `REGISTERED_CAMERA_PROJECTIONS` / `REGISTERED_LIDAR_PROJECTIONS` or match on
+  `script_class_name` rather than `isinstance`-ing against a single class.
 
 ## Testing Structure
 

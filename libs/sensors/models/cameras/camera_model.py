@@ -41,6 +41,7 @@ from ...kernels.cameras.types import (
     CameraProjection,
     ExternalDistortion,
     FThetaProjection,
+    OpenCVFisheyeProjection,
     OpenCVPinholeProjection,
     ShutterType,
     script_class_name,
@@ -79,6 +80,17 @@ def _move_projection(projection: CameraProjection, fn) -> CameraProjection:
             reference_polynomial=int(projection.reference_polynomial),
             fw_poly_degree=int(projection.fw_poly_degree),
             bw_poly_degree=int(projection.bw_poly_degree),
+            newton_iterations=int(projection.newton_iterations),
+            max_angle=float(projection.max_angle),
+            min_2d_norm=float(projection.min_2d_norm),
+        )
+    if class_name == "OpenCVFisheyeProjection":
+        return OpenCVFisheyeProjection(
+            principal_point=fn(projection.principal_point),
+            focal_length=fn(projection.focal_length),
+            forward_poly=fn(projection.forward_poly),
+            approx_backward_factor=fn(projection.approx_backward_factor),
+            resolution=projection.resolution,
             newton_iterations=int(projection.newton_iterations),
             max_angle=float(projection.max_angle),
             min_2d_norm=float(projection.min_2d_norm),

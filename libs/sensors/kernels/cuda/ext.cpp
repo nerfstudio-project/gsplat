@@ -18,7 +18,23 @@
 // ext.cpp — TORCH_LIBRARY and PYBIND11_MODULE initialisation point.
 //
 // This is the sole translation unit that registers the gsplat_sensors torch
-// library.
+// library.  It has two top-level blocks:
+//
+//   TORCH_LIBRARY(gsplat_sensors, m)
+//     Registers TorchScript custom classes (OpenCVPinholeProjection,
+//     FThetaProjection, OpenCVFisheyeProjection,
+//     RowOffsetStructuredSpinningLidarProjection, NoExternalDistortion,
+//     BivariateWindshieldDistortion)
+//     with their constructors, readable properties, transform helpers,
+//     and pickle hooks.
+//     Then registers every C++ wrapper function from camera_torch.h and
+//     lidar_torch.h as a named op in the gsplat_sensors namespace so they
+//     are reachable from Python as torch.ops.gsplat_sensors.<name>().
+//
+//   PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+//     Exposes ShutterType and SpinningDirection as pybind11 enums so they
+//     are importable directly from the .so (re-exported as IntEnums from
+//     cameras/types.py).
 
 #include "csrc/camera_torch.h"
 #include "csrc/external_distortion_torch.h"
@@ -36,6 +52,7 @@ TORCH_LIBRARY(gsplat_sensors, m) {
     using gsplat_sensors::BivariateWindshieldDistortion;
     using gsplat_sensors::FThetaProjection;
     using gsplat_sensors::NoExternalDistortion;
+    using gsplat_sensors::OpenCVFisheyeProjection;
     using gsplat_sensors::OpenCVPinholeProjection;
     using gsplat_sensors::RowOffsetStructuredSpinningLidarProjection;
 
@@ -465,6 +482,112 @@ TORCH_LIBRARY(gsplat_sensors, m) {
             }
         );
 
+    m.class_<OpenCVFisheyeProjection>("OpenCVFisheyeProjection")
+        .def(
+            torch::init([](
+                at::Tensor principal_point,
+                at::Tensor focal_length,
+                at::Tensor forward_poly,
+                at::Tensor approx_backward_factor,
+                std::array<int64_t, 2> resolution,
+                int64_t newton_iterations,
+                double max_angle,
+                double min_2d_norm) {
+                auto ptr = c10::make_intrusive<OpenCVFisheyeProjection>(
+                    std::move(principal_point),
+                    std::move(focal_length),
+                    std::move(forward_poly),
+                    std::move(approx_backward_factor),
+                    resolution,
+                    newton_iterations,
+                    max_angle,
+                    min_2d_norm);
+                gsplat_sensors::check_opencv_fisheye_projection(ptr);
+                return ptr;
+            }),
+            "Construct from per-component tensors and scalar config",
+            {torch::arg("principal_point"),
+             torch::arg("focal_length"),
+             torch::arg("forward_poly"),
+             torch::arg("approx_backward_factor"),
+             torch::arg("resolution"),
+             torch::arg("newton_iterations"),
+             torch::arg("max_angle"),
+             torch::arg("min_2d_norm")}
+        )
+        .def_readonly("principal_point", &OpenCVFisheyeProjection::principal_point)
+        .def_readonly("focal_length", &OpenCVFisheyeProjection::focal_length)
+        .def_readonly("forward_poly", &OpenCVFisheyeProjection::forward_poly)
+        .def_readonly(
+            "approx_backward_factor",
+            &OpenCVFisheyeProjection::approx_backward_factor)
+        .def_readonly("newton_iterations", &OpenCVFisheyeProjection::newton_iterations)
+        .def_readonly("max_angle", &OpenCVFisheyeProjection::max_angle)
+        .def_readonly("min_2d_norm", &OpenCVFisheyeProjection::min_2d_norm)
+        // torch::Library is designed for operators, not standalone constants.
+        // Expose the compile-time term cap via a static getter so Python can
+        // query the authoritative C++ value.
+        .def_static(
+            "get_max_forward_poly_terms",
+            []() -> int64_t {
+                return static_cast<int64_t>(kFisheyeForwardPolyTerms);
+            }
+        )
+        .def_property(
+            "resolution",
+            [](const c10::intrusive_ptr<OpenCVFisheyeProjection>& self) {
+                return std::make_tuple(self->resolution[0], self->resolution[1]);
+            }
+        )
+        .def(
+            "transform",
+            [](const c10::intrusive_ptr<OpenCVFisheyeProjection>& self,
+               std::tuple<double, double> scale,
+               std::tuple<double, double> offset,
+               std::tuple<int64_t, int64_t> new_resolution) {
+                return self->transform(scale, offset, new_resolution);
+            },
+            "Transform image-domain intrinsics",
+            {torch::arg("scale"), torch::arg("offset"), torch::arg("new_resolution")}
+        )
+        .def_pickle(
+            [](const c10::intrusive_ptr<OpenCVFisheyeProjection>& self) -> c10::IValue {
+                return c10::IValue(c10::ivalue::Tuple::create({
+                    c10::IValue(static_cast<int64_t>(1)),
+                    c10::IValue(self->principal_point),
+                    c10::IValue(self->focal_length),
+                    c10::IValue(self->forward_poly),
+                    c10::IValue(self->approx_backward_factor),
+                    c10::IValue(self->resolution[0]),
+                    c10::IValue(self->resolution[1]),
+                    c10::IValue(self->newton_iterations),
+                    c10::IValue(self->max_angle),
+                    c10::IValue(self->min_2d_norm),
+                }));
+            },
+            [](c10::IValue state) -> c10::intrusive_ptr<OpenCVFisheyeProjection> {
+                auto elems = state.toTuple()->elements();
+                TORCH_CHECK(
+                    !elems.empty() && elems[0].isInt(),
+                    "unsupported OpenCVFisheyeProjection pickle state");
+                int64_t version = elems[0].toInt();
+                TORCH_CHECK(
+                    version == 1 && elems.size() == 10,
+                    "unsupported OpenCVFisheyeProjection pickle state");
+                auto ptr = c10::make_intrusive<OpenCVFisheyeProjection>(
+                    elems[1].toTensor(),
+                    elems[2].toTensor(),
+                    elems[3].toTensor(),
+                    elems[4].toTensor(),
+                    std::array<int64_t, 2>{elems[5].toInt(), elems[6].toInt()},
+                    elems[7].toInt(),
+                    elems[8].toDouble(),
+                    elems[9].toDouble());
+                gsplat_sensors::check_opencv_fisheye_projection(ptr);
+                return ptr;
+            }
+        );
+
     m.def("generate_image_points", &gsplat_sensors::generate_image_points);
     m.def(
         "camera_rays_to_image_points_opencv_pinhole_no_external",
@@ -634,6 +757,80 @@ TORCH_LIBRARY(gsplat_sensors, m) {
     m.def(
         "inverse_project_spinning_lidar_backward",
         &gsplat_sensors::inverse_project_spinning_lidar_backward);
+
+    m.def(
+        "camera_rays_to_image_points_opencv_fisheye_no_external",
+        &gsplat_sensors::camera_rays_to_image_points_opencv_fisheye_no_external);
+    m.def(
+        "camera_rays_to_image_points_opencv_fisheye_no_external_backward",
+        &gsplat_sensors::camera_rays_to_image_points_opencv_fisheye_no_external_backward);
+    m.def(
+        "image_points_to_camera_rays_opencv_fisheye_no_external",
+        &gsplat_sensors::image_points_to_camera_rays_opencv_fisheye_no_external);
+    m.def(
+        "image_points_to_camera_rays_opencv_fisheye_no_external_backward",
+        &gsplat_sensors::image_points_to_camera_rays_opencv_fisheye_no_external_backward);
+    m.def(
+        "project_world_points_mean_pose_opencv_fisheye_no_external",
+        &gsplat_sensors::project_world_points_mean_pose_opencv_fisheye_no_external);
+    m.def(
+        "project_world_points_mean_pose_opencv_fisheye_no_external_backward",
+        &gsplat_sensors::project_world_points_mean_pose_opencv_fisheye_no_external_backward);
+    m.def(
+        "image_points_to_world_rays_static_pose_opencv_fisheye_no_external",
+        &gsplat_sensors::image_points_to_world_rays_static_pose_opencv_fisheye_no_external);
+    m.def(
+        "image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward",
+        &gsplat_sensors::image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward);
+
+    m.def(
+        "camera_rays_to_image_points_opencv_fisheye_bivariate_windshield",
+        &gsplat_sensors::camera_rays_to_image_points_opencv_fisheye_bivariate_windshield);
+    m.def(
+        "camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward",
+        &gsplat_sensors::camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward);
+    m.def(
+        "image_points_to_camera_rays_opencv_fisheye_bivariate_windshield",
+        &gsplat_sensors::image_points_to_camera_rays_opencv_fisheye_bivariate_windshield);
+    m.def(
+        "image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward",
+        &gsplat_sensors::image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward);
+    m.def(
+        "project_world_points_mean_pose_opencv_fisheye_bivariate_windshield",
+        &gsplat_sensors::project_world_points_mean_pose_opencv_fisheye_bivariate_windshield);
+    m.def(
+        "project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward",
+        &gsplat_sensors::project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward);
+    m.def(
+        "image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield",
+        &gsplat_sensors::image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield);
+    m.def(
+        "image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward",
+        &gsplat_sensors::image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward);
+    m.def(
+        "project_world_points_shutter_pose_opencv_fisheye_no_external",
+        &gsplat_sensors::project_world_points_shutter_pose_opencv_fisheye_no_external);
+    m.def(
+        "project_world_points_shutter_pose_opencv_fisheye_no_external_backward",
+        &gsplat_sensors::project_world_points_shutter_pose_opencv_fisheye_no_external_backward);
+    m.def(
+        "project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield",
+        &gsplat_sensors::project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield);
+    m.def(
+        "project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward",
+        &gsplat_sensors::project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward);
+    m.def(
+        "image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external",
+        &gsplat_sensors::image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external);
+    m.def(
+        "image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward",
+        &gsplat_sensors::image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward);
+    m.def(
+        "image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield",
+        &gsplat_sensors::image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield);
+    m.def(
+        "image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward",
+        &gsplat_sensors::image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
