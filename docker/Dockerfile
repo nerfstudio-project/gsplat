@@ -79,6 +79,7 @@ FROM python as gsplat-deps
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 COPY --link --from=gsplatrepo setup.py /opt/dep-check/setup.py
 COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
+COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirements.txt
 
 # Main library dependencies
 RUN --mount=type=tmpfs,target=/tmp \
@@ -104,6 +105,9 @@ RUN --mount=type=tmpfs,target=/tmp \
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
+
+# cmake — future setup.py install dependency, not yet formally declared there.
+RUN pip install "cmake==4.3.2" && rm -rf $PYTHONPYCACHEPREFIX/*
 
 # Test/dev dependencies
 RUN --mount=type=tmpfs,target=/tmp \
@@ -224,6 +228,25 @@ RUN --mount=type=tmpfs,target=/tmp \
         "$fused_ssim" "${packages[@]}" > /opt/dep-check/all_packages.txt
 
     # To save space, we can remove the python cache files
+    rm -rf $PYTHONPYCACHEPREFIX/*
+EOS
+
+# Docs dependencies
+RUN --mount=type=tmpfs,target=/tmp \
+<<EOS
+    packages=(
+        "furo==2025.12.19"
+        "sphinx==9.1.0"
+        "sphinx-copybutton==0.5.2"
+        "sphinx-design==0.7.0"
+        "sphinxcontrib-bibtex==2.7.0"
+        "sphinxcontrib-video==0.4.2"
+    )
+
+    check_gsplat_deps.sh -f /opt/dep-check/docs/requirements.txt -- "${packages[@]}"
+
+    pip install "${packages[@]}"
+
     rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
 

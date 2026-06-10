@@ -31,6 +31,8 @@ workflow:
 stages:
   - lint
   - test
+  - docs
+  - deploy
 
 default:
   image: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
@@ -109,3 +111,65 @@ test-release:
   extends: .test-base
   variables:
     DEBUG: 0
+
+render-docs:
+  stage: docs
+
+  # Render as soon as lint passes; rendering doesn't depend on the test stage.
+  needs:
+    - code-format
+
+  variables:
+    GIT_SUBMODULE_STRATEGY: none
+    # Restrict CUDA build scope: doc output is identical regardless of which
+    # features or channel counts are compiled in; compile the minimum to keep
+    # the JIT build fast.
+    NUM_CHANNELS: "3"
+    BUILD_3DGUT: "0"
+    BUILD_2DGS: "0"
+    BUILD_ADAM: "0"
+    BUILD_RELOC: "0"
+    BUILD_LOSSES: "0"
+    BUILD_CAMERA_WRAPPERS: "0"
+
+  tags:
+    - type/docker
+    - os/linux
+    - arch/x86_64
+
+  script:
+    - BUILD_NO_CUDA=1 pip install .
+    - bash docs/render_docs.sh build/html
+
+  artifacts:
+    name: "docs-${CI_COMMIT_SHORT_SHA}"
+    expose_as: "Rendered documentation"
+    paths:
+      - build/html/
+    when: always
+
+# Publish the rendered documentation to GitLab Pages on nv/main only. Reuses
+# the render-docs artifact rather than rendering again.
+pages:
+  stage: deploy
+
+  # Minimal image — this job only relocates files; no build/render here.
+  image: alpine:3.24.0
+
+  tags:
+    - type/docker
+    - os/linux
+    - arch/x86_64
+
+  rules:
+    - if: $CI_COMMIT_BRANCH == "nv/main"
+
+  needs:
+    - render-docs
+
+  script:
+    - mv build/html public
+
+  artifacts:
+    paths:
+      - public
