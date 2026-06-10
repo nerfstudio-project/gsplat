@@ -352,6 +352,41 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     const at::Tensor &flatten_ids   // [n_isects]
 );
 
+std::tuple<at::Tensor, at::Tensor> rasterize_num_contributing_gaussians(
+    const at::Tensor &means2d,      // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,       // [..., N, 3] or [nnz, 3]
+    const at::Tensor &opacities,    // [..., N] or [nnz]
+    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size
+);
+
+std::tuple<at::Tensor, at::Tensor> rasterize_contributing_gaussian_ids(
+    const at::Tensor &means2d,      // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,       // [..., N, 3] or [nnz, 3]
+    const at::Tensor &opacities,    // [..., N] or [nnz]
+    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    const at::Tensor &num_contributing_gaussians // [..., image_height, image_width]
+);
+
+std::tuple<at::Tensor, at::Tensor> rasterize_top_contributing_gaussian_ids(
+    const at::Tensor &means2d,      // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,       // [..., N, 3] or [nnz, 3]
+    const at::Tensor &opacities,    // [..., N] or [nnz]
+    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    int64_t num_depth_samples
+);
+
 // Relocate some Gaussians in the Densification Process.
 // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
 std::tuple<at::Tensor, at::Tensor> relocation(
