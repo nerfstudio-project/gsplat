@@ -32,6 +32,7 @@ stages:
   - lint
   - test
   - docs
+  - deploy
 
 default:
   image: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
@@ -146,3 +147,29 @@ render-docs:
     paths:
       - build/html/
     when: always
+
+# Publish the rendered documentation to GitLab Pages on nv/main only. Reuses
+# the render-docs artifact rather than rendering again.
+pages:
+  stage: deploy
+
+  # Minimal image — this job only relocates files; no build/render here.
+  image: alpine:3.24.0
+
+  tags:
+    - type/docker
+    - os/linux
+    - arch/x86_64
+
+  rules:
+    - if: $CI_COMMIT_BRANCH == "nv/main"
+
+  needs:
+    - render-docs
+
+  script:
+    - mv build/html public
+
+  artifacts:
+    paths:
+      - public
