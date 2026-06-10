@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 import torch.nn.functional as F

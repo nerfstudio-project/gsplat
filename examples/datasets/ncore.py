@@ -27,6 +27,7 @@ from scipy import ndimage
 import ncore.data
 import ncore.data.v4
 import ncore.sensors
+from ncore.data import PointCloudsSourceProtocol
 
 from gsplat.rendering import FThetaCameraDistortionParameters, FThetaPolynomialType
 
@@ -185,7 +186,7 @@ class NCoreParser:
         self.bounds = np.array([0.01, 1.0])
         self.extconf = {"spiral_radius_scale": 1.0, "no_factor_suffix": False}
 
-        self.points, self.points_rgb = self._load_lidar_points(
+        self.points, self.points_rgb = self._load_point_clouds(
             sequence_loader, max_lidar_points, lidar_step_frame
         )
 
@@ -256,29 +257,39 @@ class NCoreParser:
 
             print(f"[NCoreParser] Auto-detected cameras: {camera_ids}")
         if not lidar_ids:
-            lidar_ids = sequence_loader.lidar_ids
+            point_clouds_source_ids = list(sequence_loader.lidar_ids) + list(
+                sequence_loader.point_clouds_ids
+            )
 
-            if len(lidar_ids) > 1:
+            if len(point_clouds_source_ids) > 1:
                 raise ValueError(
-                    "NCoreParser: Multiple lidar sensors in dataset, explicit"
-                    f" specification of a (subset) of lidar sensors required to avoid ambiguity: {lidar_ids}"
+                    "NCoreParser: Multiple point cloud sources in dataset, explicit"
+                    f" specification of a (subset) of sources required to avoid ambiguity: {lidar_ids}"
                 )
 
-            print(f"[NCoreParser] Auto-detected lidars: {lidar_ids}")
+            print(f"[NCoreParser] Auto-detected point cloud sources: {lidar_ids}")
+        else:
+            point_clouds_source_ids = lidar_ids
 
         assert all(
             cid in sequence_loader.camera_ids for cid in camera_ids
         ), f"NCoreParser: some specified camera_ids {camera_ids} not found in dataset cameras {sequence_loader.camera_ids}"
+
+        all_point_cloud_ids = set(sequence_loader.lidar_ids) | set(
+            sequence_loader.point_clouds_ids
+        )
         assert all(
-            lid in sequence_loader.lidar_ids for lid in lidar_ids
-        ), f"NCoreParser: some specified lidar_ids {lidar_ids} not found in dataset lidars {sequence_loader.lidar_ids}"
+            pid in all_point_cloud_ids for pid in point_clouds_source_ids
+        ), f"NCoreParser: some specified lidar_ids {lidar_ids} not found in dataset point cloud sources {all_point_cloud_ids}"
 
         self.camera_ids: List[str] = list(camera_ids)
-        self.lidar_ids: List[str] = list(lidar_ids)
+        self.point_clouds_source_ids: List[str] = list(point_clouds_source_ids)
         self.num_cameras: int = len(self.camera_ids)
 
         print(f"[NCoreParser] Using cameras: {self.camera_ids}")
-        print(f"[NCoreParser] Using lidars: {self.lidar_ids}")
+        print(
+            f"[NCoreParser] Using point cloud sources: {self.point_clouds_source_ids}"
+        )
 
     def _compute_world_global_transform(
         self, sequence_loader: ncore.data.SequenceLoaderProtocol
@@ -579,86 +590,107 @@ class NCoreParser:
         T_poses_common = self.T_world_to_scene_world @ T_poses_world.reshape(-1, 4, 4)
         return self.world_global_to_scene.transform_poses(T_poses_common)
 
-    def _load_lidar_points(
+    def _load_point_clouds(
         self,
         sequence_loader: ncore.data.SequenceLoaderProtocol,
         max_points: int,
         step_frame: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Load and transform lidar points to scene frame for Gaussian initialisation."""
-        if not self.lidar_ids:
+        """Load and transform point clouds to scene frame for Gaussian initialization.
+
+        Supports any PointCloudsSourceProtocol source (lidar, radar, or native
+        point clouds) via the unified ``get_point_clouds_source()`` API.
+        """
+        if not self.point_clouds_source_ids:
             print(
-                "[NCoreParser] No lidar sensors available; using empty init point cloud"
+                "[NCoreParser] No point cloud sources available; using empty init point cloud"
             )
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
 
-        lidar_id = self.lidar_ids[0]
-        lidar_sensor = sequence_loader.get_lidar_sensor(lidar_id)
-        lidar_frame_range = self.time_range_us.cover_range(
-            lidar_sensor.get_frames_timestamps_us()
-        )
+        # Pre-compute the world-to-scene transform (identity in "sensor" space = world).
+        T_world_scene = self._ncore_world_to_scene_poses(
+            np.eye(4, dtype=np.float32)[np.newaxis]
+        )  # (4, 4)
+        scale = self.world_global_to_scene.target_scale
 
         all_points: List[np.ndarray] = []
         all_colors: List[np.ndarray] = []
-        for lidar_frame_idx in lidar_frame_range[::step_frame]:
-            try:
-                pc = lidar_sensor.get_frame_point_cloud(
-                    frame_index=lidar_frame_idx,
-                    motion_compensation=True,
-                    with_start_points=True,
-                    return_index=0,
-                )
-            except Exception as exc:
-                print(
-                    f"[NCoreParser] Warning: failed to load lidar frame "
-                    f"{lidar_frame_idx}: {exc}"
-                )
-                continue
 
-            xyz = pc.xyz_m_end
-            color: Optional[np.ndarray] = None
-            if lidar_sensor.has_frame_generic_data(
-                lidar_frame_idx, self.lidar_color_generic_data_name
-            ):
-                color = lidar_sensor.get_frame_generic_data(
-                    lidar_frame_idx, self.lidar_color_generic_data_name
-                )
-                if color.shape != xyz.shape:
-                    raise ValueError(
-                        "Color data length does not match point cloud length "
-                        "(expecting 3-channel RGB color per point)"
-                    )
-                if color.dtype != np.uint8:
-                    raise ValueError("Expected color data in uint8 format")
-
-            point_filter = ...
-            if lidar_sensor.has_frame_generic_data(lidar_frame_idx, "dynamic_flag"):
-                point_filter = (
-                    lidar_sensor.get_frame_generic_data(lidar_frame_idx, "dynamic_flag")
-                    != 1
-                )
-            xyz = xyz[point_filter]
-            if color is not None:
-                color = color[point_filter]
-            if not len(xyz):
-                continue
-
-            T_sensor_scene = self._ncore_world_to_scene_poses(
-                lidar_sensor.get_frames_T_sensor_target("world", lidar_frame_idx)
+        for source_id in self.point_clouds_source_ids:
+            source: PointCloudsSourceProtocol = sequence_loader.get_point_clouds_source(
+                source_id
             )
-            xyz_scene = (
-                (self.world_global_to_scene.target_scale * T_sensor_scene[:3, :3])
-                @ xyz.T
-                + T_sensor_scene[:3, 3:4]
-            ).T
-            all_points.append(xyz_scene.astype(np.float32))
-            if color is not None:
-                all_colors.append(color)
-            else:
-                all_colors.append(np.full((len(xyz_scene), 3), 128, dtype=np.uint8))
+            ts = source.pc_timestamps_us
+
+            for pc_idx in range(source.pcs_count):
+                # Time filtering
+                pc_ts = int(ts[pc_idx])
+                if not (self.time_range_us.start <= pc_ts < self.time_range_us.stop):
+                    continue
+
+                # Step frame
+                if pc_idx % step_frame != 0:
+                    continue
+
+                try:
+                    pc = source.get_pc(pc_idx)
+                except Exception as exc:
+                    print(
+                        f"[NCoreParser] Warning: failed to load point cloud "
+                        f"{pc_idx} from '{source_id}': {exc}"
+                    )
+                    continue
+
+                # Transform to world frame
+                pc_world = pc.transform(
+                    "world", pc.reference_frame_timestamp_us, sequence_loader.pose_graph
+                )
+                xyz_world = pc_world.xyz
+
+                # Color: check point cloud attributes first, then source generic data
+                color: Optional[np.ndarray] = None
+                if pc.has_attribute(self.lidar_color_generic_data_name):
+                    color = pc.get_attribute(self.lidar_color_generic_data_name)
+                elif source.has_pc_generic_data(
+                    pc_idx, self.lidar_color_generic_data_name
+                ):
+                    color = source.get_pc_generic_data(
+                        pc_idx, self.lidar_color_generic_data_name
+                    )
+                if color is not None:
+                    if color.shape != xyz_world.shape:
+                        raise ValueError(
+                            "Color data length does not match point cloud length "
+                            "(expecting 3-channel RGB color per point)"
+                        )
+                    if color.dtype != np.uint8:
+                        raise ValueError("Expected color data in uint8 format")
+
+                # Dynamic flag filtering
+                point_filter = ...
+                if source.has_pc_generic_data(pc_idx, "dynamic_flag"):
+                    point_filter = (
+                        source.get_pc_generic_data(pc_idx, "dynamic_flag") != 1
+                    )
+                xyz_world = xyz_world[point_filter]
+                if color is not None:
+                    color = color[point_filter]
+                if not len(xyz_world):
+                    continue
+
+                # Apply world-to-scene transform
+                xyz_scene = (
+                    (scale * T_world_scene[:3, :3]) @ xyz_world.T
+                    + T_world_scene[:3, 3:4]
+                ).T
+                all_points.append(xyz_scene.astype(np.float32))
+                if color is not None:
+                    all_colors.append(color)
+                else:
+                    all_colors.append(np.full((len(xyz_scene), 3), 128, dtype=np.uint8))
 
         if not all_points:
-            print("[NCoreParser] Warning: no lidar points loaded")
+            print("[NCoreParser] Warning: no point cloud data loaded")
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
 
         points = np.vstack(all_points)
@@ -668,7 +700,10 @@ class NCoreParser:
             points = points[idx]
             points_rgb = points_rgb[idx]
 
-        print(f"[NCoreParser] Loaded {len(points)} lidar points from '{lidar_id}'")
+        source_names = ", ".join(f"'{s}'" for s in self.point_clouds_source_ids)
+        print(
+            f"[NCoreParser] Loaded {len(points)} point cloud points from {source_names}"
+        )
         return points, points_rgb
 
 

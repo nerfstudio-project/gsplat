@@ -59,7 +59,9 @@ class GsplatViewer(Viewer):
         render_fn: Callable,
         output_dir: Path,
         mode: Literal["rendering", "training"] = "rendering",
+        render_modes: tuple = ("rgb", "depth(accumulated)", "depth(expected)", "alpha"),
     ):
+        self._render_modes = render_modes
         super().__init__(server, render_fn, output_dir, mode)
         server.gui.set_panel_label("gsplat viewer")
 
@@ -160,7 +162,7 @@ class GsplatViewer(Viewer):
 
                 render_mode_dropdown = server.gui.add_dropdown(
                     "Render Mode",
-                    ("rgb", "depth(accumulated)", "depth(expected)", "alpha"),
+                    self._render_modes,
                     initial_value=self.render_tab_state.render_mode,
                     hint="Render mode to use.",
                 )

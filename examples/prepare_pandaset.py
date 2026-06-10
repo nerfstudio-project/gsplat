@@ -1,8 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Download and convert a PandaSet scene to npz for av_trainer.py.
 
 Produces an npz file compatible with av_trainer.py containing camera images,
-intrinsics, extrinsics, LiDAR points, LiDAR sensor poses, and optionally
-Pandar64 LiDAR sensor parameters for gsplat LiDAR rendering.
+intrinsics, extrinsics, LiDAR points, and LiDAR sensor poses. The PandaSet
+path in av_trainer uses the LiDAR points for sparse depth supervision; native
+LiDAR rasterization is currently NCore-only.
 
 Two input modes:
   1. From a local PandaSet directory (--pandaset-dir)
@@ -70,12 +85,25 @@ HF_DATASET_URL_PUBLIC = (
 def _http_read_range(
     url: str, start: int, length: int, token: str | None = None
 ) -> bytes:
-    """Read a byte range from a URL via HTTP Range request."""
+    """Read a byte range from a URL via HTTP Range request.
+
+    Verifies the server actually honored the ``Range`` header by checking
+    for a ``206 Partial Content`` response. If a proxy strips the header
+    and the origin returns ``200 OK`` with the full body instead, fail
+    loudly rather than silently slurping the entire (potentially
+    multi-gigabyte) zip into memory.
+    """
     req = Request(url)
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Range", f"bytes={start}-{start + length - 1}")
     with urlopen(req, timeout=60) as resp:
+        if resp.status != 206:
+            raise RuntimeError(
+                f"Expected 206 Partial Content for Range request to {url}, "
+                f"got {resp.status}. A proxy may be stripping the Range header; "
+                "refusing to download the full body."
+            )
         return resp.read()
 
 
@@ -85,6 +113,8 @@ def _http_get_size(url: str, token: str | None = None) -> int:
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     with urlopen(req, timeout=30) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"Expected 200 OK for HEAD {url}, got {resp.status}.")
         return int(resp.headers["Content-Length"])
 
 
@@ -516,32 +546,17 @@ def convert_scene(
         "downsample": np.int32(downsample_factor),
     }
 
-    # Add LiDAR sensor parameters if available
-    if lidar_sensor_json and os.path.exists(lidar_sensor_json):
-        print(f"Loading LiDAR sensor parameters from {lidar_sensor_json}")
-        with open(lidar_sensor_json) as f:
-            sensor = json.load(f)
-        npz_data["lidar_row_elevations_rad"] = np.array(
-            sensor["row_elevations_rad"], dtype=np.float32
-        )
-        npz_data["lidar_column_azimuths_rad"] = np.array(
-            sensor["column_azimuths_rad"], dtype=np.float32
-        )
-        npz_data["lidar_row_azimuth_offsets_rad"] = np.array(
-            sensor["row_azimuth_offsets_rad"], dtype=np.float32
-        )
-        npz_data["lidar_spinning_frequency_hz"] = np.float32(
-            sensor["spinning_frequency_hz"]
-        )
-        npz_data["lidar_spinning_direction"] = np.array(sensor["spinning_direction"])
+    # --lidar-sensor-json is reserved for future PandaSet LiDAR rendering;
+    # av_trainer's PandaSet path currently consumes only `lidar_points` /
+    # `lidar_frame_indices` (sparse depth supervision) and never reads any of
+    # the per-sensor keys we used to write here, so writing them would just
+    # bloat the npz with dead data and mislead readers of the call site into
+    # thinking PandaSet LiDAR rasterization is wired up.
+    if lidar_sensor_json:
         print(
-            f"  Pandar64: {sensor['n_rows']} beams x {sensor['n_columns']} columns, "
-            f"{sensor['spinning_frequency_hz']} Hz {sensor['spinning_direction']}"
+            "note: --lidar-sensor-json is reserved for future PandaSet LiDAR "
+            "rendering and is currently not consumed by av_trainer"
         )
-    else:
-        print("No LiDAR sensor parameters file provided (--lidar-sensor-json).")
-        print("  LiDAR rendering with gsplat will not be available.")
-        print("  LiDAR points are still included for depth supervision.")
 
     # Save
     print(f"Saving to {output_path}...")
@@ -651,9 +666,8 @@ examples:
         "--lidar-sensor-json",
         type=str,
         default=None,
-        help="path to Pandar64 sensor parameters JSON (beam elevations, azimuths). "
-        "Enables gsplat LiDAR rendering. If not provided, LiDAR points are "
-        "still included for depth supervision but LiDAR rendering is unavailable.",
+        help="reserved for future PandaSet LiDAR rendering; currently a no-op "
+        "(av_trainer's PandaSet path uses sparse-LiDAR depth supervision only).",
     )
     parser.add_argument(
         "--hf-token",
