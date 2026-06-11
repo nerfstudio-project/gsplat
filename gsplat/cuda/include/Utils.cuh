@@ -577,6 +577,35 @@ inline __device__ void persp_proj(
         -fy * ty * rz2 // 3rd column
     );
     cov2d = J * cov3d * glm::transpose(J);
+    // Orientation-preserving clamp: J above (with the box-clamped tx, ty)
+    // bounds the projected covariance size but rotates it for off-frustum
+    // Gaussians. Keep that bounded size spectrum on the unclamped (correct)
+    // eigenvectors:
+    //   cov2d <- alpha * cov_true + beta * I,  alpha = R_box / R_true,
+    //   beta = mean_box - alpha * mean_true   (R = half eigen-gap, mean =
+    //   trace/2).
+    // cov2d above is the box-clamped covariance; this is an exact no-op when
+    // the clamp is inactive (cov_true == cov2d => alpha = 1, beta = 0).
+    mat3x2 J_unclamped = mat3x2(
+        fx * rz,
+        0.f, // 1st column
+        0.f,
+        fy * rz, // 2nd column
+        -fx * x * rz2,
+        -fy * y * rz2 // 3rd column
+    );
+    mat2 cov_true = J_unclamped * cov3d * glm::transpose(J_unclamped);
+    float a = cov2d[0][0], b = cov2d[0][1], c = cov2d[1][1];
+    float at = cov_true[0][0], bt = cov_true[0][1], ct = cov_true[1][1];
+    float Rb = sqrtf(fmaxf(0.25f * (a - c) * (a - c) + b * b, 0.f));
+    float Rt = fmaxf(
+        sqrtf(fmaxf(0.25f * (at - ct) * (at - ct) + bt * bt, 0.f)), 1e-12f
+    );
+    float alpha = Rb / Rt;
+    float beta = 0.5f * (a + c) - alpha * 0.5f * (at + ct);
+    cov2d = alpha * cov_true;
+    cov2d[0][0] += beta;
+    cov2d[1][1] += beta;
     mean2d = vec2({fx * x * rz + cx, fy * y * rz + cy});
 }
 
@@ -621,11 +650,6 @@ inline __device__ void persp_proj_vjp(
         -fy * ty * rz2 // 3rd column
     );
 
-    // cov = J * V * Jt; G = df/dcov = v_cov
-    // -> df/dV = Jt * G * J
-    // -> df/dJ = G * J * Vt + Gt * J * V
-    v_cov3d += glm::transpose(J) * v_cov2d * J;
-
     // df/dx = fx * rz * df/dpixx
     // df/dy = fy * rz * df/dpixy
     // df/dz = - fx * mean.x * rz2 * df/dpixx - fy * mean.y * rz2 * df/dpixy
@@ -634,22 +658,86 @@ inline __device__ void persp_proj_vjp(
         fy * rz * v_mean2d[1],
         -(fx * x * v_mean2d[0] + fy * y * v_mean2d[1]) * rz2
     );
-
     // df/dx = -fx * rz2 * df/dJ_02
     // df/dy = -fy * rz2 * df/dJ_12
     // df/dz = -fx * rz2 * df/dJ_00 - fy * rz2 * df/dJ_11
     //         + 2 * fx * tx * rz3 * df/dJ_02 + 2 * fy * ty * rz3
     float rz3 = rz2 * rz;
-    mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
-                 glm::transpose(v_cov2d) * J * cov3d;
 
     // fov clipping
-    if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
+    bool clamp_x = !(x * rz <= lim_x_pos && x * rz >= -lim_x_neg);
+    bool clamp_y = !(y * rz <= lim_y_pos && y * rz >= -lim_y_neg);
+    // In-frustum the clamp is inactive, so this branch is identical to the
+    // upstream EWA VJP; only the off-frustum case below needs the exact
+    // scale-and-shift gradient (see persp_proj).
+    if (!clamp_x && !clamp_y) {
+        // cov = J * V * Jt; G = df/dcov = v_cov
+        // -> df/dV = Jt * G * J
+        // -> df/dJ = G * J * Vt + Gt * J * V
+        v_cov3d += glm::transpose(J) * v_cov2d * J;
+        mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
+                     glm::transpose(v_cov2d) * J * cov3d;
+        v_mean3d.x += -fx * rz2 * v_J[2][0];
+        v_mean3d.y += -fy * rz2 * v_J[2][1];
+        v_mean3d.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1] +
+                      2.f * fx * x * rz3 * v_J[2][0] +
+                      2.f * fy * y * rz3 * v_J[2][1];
+        return;
+    }
+
+    // Clamp active: exact gradient of cov2d = alpha * cov_true + beta * I (see
+    // persp_proj). J (box-clamped tx, ty) gives cov_box; J_unclamped gives
+    // cov_true.
+    mat3x2 J_unclamped = mat3x2(
+        fx * rz,
+        0.f, // 1st column
+        0.f,
+        fy * rz, // 2nd column
+        -fx * x * rz2,
+        -fy * y * rz2 // 3rd column
+    );
+    mat2 cov_box = J * cov3d * glm::transpose(J);
+    mat2 cov_true = J_unclamped * cov3d * glm::transpose(J_unclamped);
+    float a = cov_box[0][0], b = cov_box[0][1], c = cov_box[1][1];
+    float at = cov_true[0][0], bt = cov_true[0][1], ct = cov_true[1][1];
+    float Rb = sqrtf(fmaxf(0.25f * (a - c) * (a - c) + b * b, 0.f));
+    float Rt = fmaxf(
+        sqrtf(fmaxf(0.25f * (at - ct) * (at - ct) + bt * bt, 0.f)), 1e-12f
+    );
+    float alpha = Rb / Rt;
+    float G00 = v_cov2d[0][0], G11 = v_cov2d[1][1];
+    float Goff = v_cov2d[0][1] + v_cov2d[1][0];
+    float Tr_G = G00 + G11;
+    float K = (G00 * at + Goff * bt + G11 * ct) - 0.5f * Tr_G * (at + ct);
+    float Ka = K * alpha / (Rt * Rt);
+    float Kr = (Rb > 1e-12f) ? K / (Rt * Rb) : 0.f;
+    // upstream grads on cov_true (a,b,c) and cov_box (A,B,C) entries
+    float gt00 = alpha * G00 - 0.5f * alpha * Tr_G - 0.25f * Ka * (at - ct);
+    float gt11 = alpha * G11 - 0.5f * alpha * Tr_G + 0.25f * Ka * (at - ct);
+    float gt01 = alpha * Goff - Ka * bt;
+    float gb00 = 0.5f * Tr_G + 0.25f * Kr * (a - c);
+    float gb11 = 0.5f * Tr_G - 0.25f * Kr * (a - c);
+    float gb01 = Kr * b;
+    mat2 G_true = mat2(gt00, 0.5f * gt01, 0.5f * gt01, gt11);
+    mat2 G_box = mat2(gb00, 0.5f * gb01, 0.5f * gb01, gb11);
+    v_cov3d += glm::transpose(J_unclamped) * G_true * J_unclamped +
+               glm::transpose(J) * G_box * J;
+    mat3x2 v_Jt = G_true * J_unclamped * glm::transpose(cov3d) +
+                  glm::transpose(G_true) * J_unclamped * cov3d;
+    mat3x2 v_J =
+        G_box * J * glm::transpose(cov3d) + glm::transpose(G_box) * J * cov3d;
+    v_mean3d.x += -fx * rz2 * v_Jt[2][0];
+    v_mean3d.y += -fy * rz2 * v_Jt[2][1];
+    v_mean3d.z += -fx * rz2 * v_Jt[0][0] - fy * rz2 * v_Jt[1][1] +
+                  2.f * fx * x * rz3 * v_Jt[2][0] +
+                  2.f * fy * y * rz3 * v_Jt[2][1];
+    // J (box) -> mean, with the same per-axis fov clipping as upstream
+    if (!clamp_x) {
         v_mean3d.x += -fx * rz2 * v_J[2][0];
     } else {
         v_mean3d.z += -fx * rz3 * v_J[2][0] * tx;
     }
-    if (y * rz <= lim_y_pos && y * rz >= -lim_y_neg) {
+    if (!clamp_y) {
         v_mean3d.y += -fy * rz2 * v_J[2][1];
     } else {
         v_mean3d.z += -fy * rz3 * v_J[2][1] * ty;
