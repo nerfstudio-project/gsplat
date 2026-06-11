@@ -197,6 +197,34 @@ TYPED_TEST(TorchTraitTest, ClassifiesOptionalIntrusiveTypesAtCompileTime) {
 }
 
 // ---------------------------------------------------------------------------
+// tensor_or_zeros / tensor_or_zeros_like: return the gradient if present, else
+// a zero tensor of the given shape / like a reference. Used to materialize an
+// absent output grad (set_materialize_grads(false) -> nullopt) as an explicit
+// zero for kernels that read dense gradients.
+// ---------------------------------------------------------------------------
+
+TEST(TensorOrZerosTest, returns_grad_when_present) {
+    // The shape / reference is ignored when the optional holds a value.
+    at::Tensor g = at::tensor({1.0f, 2.0f, 3.0f});
+    EXPECT_TRUE(at::equal(
+        gsplat::tensor_or_zeros(at::optional<at::Tensor>(g), {9, 9}, g.options()), g));
+    EXPECT_TRUE(at::equal(
+        gsplat::tensor_or_zeros_like(at::optional<at::Tensor>(g), at::empty({9})), g));
+}
+
+TEST(TensorOrZerosTest, zeros_when_absent) {
+    auto options = at::TensorOptions().dtype(at::kFloat);
+    at::Tensor z = gsplat::tensor_or_zeros(c10::nullopt, {2, 3}, options);
+    EXPECT_EQ(z.sizes(), (at::IntArrayRef{2, 3}));
+    EXPECT_TRUE(at::equal(z, at::zeros({2, 3}, options)));
+
+    at::Tensor reference = at::ones({4, 5});
+    at::Tensor zl = gsplat::tensor_or_zeros_like(c10::nullopt, reference);
+    EXPECT_EQ(zl.sizes(), reference.sizes());
+    EXPECT_TRUE(at::equal(zl, at::zeros_like(reference)));
+}
+
+// ---------------------------------------------------------------------------
 // tensor_requires_grad: true only for a defined tensor that requires grad;
 // false for non-grad / undefined / nullopt (both Tensor and optional overloads).
 // ---------------------------------------------------------------------------
