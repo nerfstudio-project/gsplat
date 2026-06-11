@@ -26,7 +26,6 @@
 #include <c10/cuda/CUDAException.h>
 
 using gsplat_sensors::kLidarThreads;
-using gsplat_sensors::slerp_pair_fwd;
 
 namespace
 {
@@ -51,94 +50,6 @@ template<>
 constexpr __device__ __forceinline__ double det_guard_eps<double>()
 {
     return 1.0e-12;
-}
-
-// VJP for slerp_pair_fwd: forward outputs (rx,ry,rz,rw) and upstream
-// (gx..gw) -> gq1*, gq2* (xyzw).  ti is non-differentiable here (derived from
-// the column index), so the slerp time grad is computed and discarded by the
-// caller; this helper does not emit it.
-template<typename T>
-__device__ __forceinline__ void slerp_pair_bwd(
-    T x1,
-    T y1,
-    T z1,
-    T w1,
-    T x2,
-    T y2,
-    T z2,
-    T w2,
-    T ti,
-    T rx,
-    T ry,
-    T rz,
-    T rw,
-    T gx,
-    T gy,
-    T gz,
-    T gw,
-    T *gq1x,
-    T *gq1y,
-    T *gq1z,
-    T *gq1w,
-    T *gq2x,
-    T *gq2y,
-    T *gq2z,
-    T *gq2w
-)
-{
-    const T dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
-    const T s   = dot < T(0) ? T(-1) : T(1);
-    const T sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
-    const T c_raw         = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
-    const T c             = quat_slerp_clamp_dot<T>(c_raw);
-    const bool interior_c = (c_raw > T(-1)) && (c_raw < T(1));
-    const T c_mask        = interior_c ? T(1) : T(0);
-
-    if(c > quat_slerp_small_angle_dot_threshold<T>())
-    {
-        const T om     = T(1) - ti;
-        const T rrx    = om * x1 + ti * sx;
-        const T rry    = om * y1 + ti * sy;
-        const T rrz    = om * z1 + ti * sz;
-        const T rrw    = om * w1 + ti * sw;
-        const T r_norm = sqrt(rrx * rrx + rry * rry + rrz * rrz + rrw * rrw);
-        const T ydotg  = rx * gx + ry * gy + rz * gz + rw * gw;
-        const T scale  = T(1) / r_norm;
-        const T grx    = (gx - rx * ydotg) * scale;
-        const T gry    = (gy - ry * ydotg) * scale;
-        const T grz    = (gz - rz * ydotg) * scale;
-        const T grw    = (gw - rw * ydotg) * scale;
-        *gq1x          = om * grx;
-        *gq1y          = om * gry;
-        *gq1z          = om * grz;
-        *gq1w          = om * grw;
-        *gq2x          = s * ti * grx;
-        *gq2y          = s * ti * gry;
-        *gq2z          = s * ti * grz;
-        *gq2w          = s * ti * grw;
-        return;
-    }
-
-    const T theta      = acos(c);
-    const T sin_theta  = sin(theta);
-    const T w1s        = sin((T(1) - ti) * theta) / sin_theta;
-    const T w2s        = sin(ti * theta) / sin_theta;
-    const T G1         = gx * x1 + gy * y1 + gz * z1 + gw * w1;
-    const T G2         = gx * sx + gy * sy + gz * sz + gw * sw;
-    const T den        = sin_theta * sin_theta;
-    const T dw1_dtheta = ((T(1) - ti) * cos((T(1) - ti) * theta) * sin_theta - sin((T(1) - ti) * theta) * c) / den;
-    const T dw2_dtheta = (ti * cos(ti * theta) * sin_theta - sin(ti * theta) * c) / den;
-    const T dw1_dc     = sin_theta > T(1e-20) ? (-dw1_dtheta / sin_theta) * c_mask : T(0);
-    const T dw2_dc     = sin_theta > T(1e-20) ? (-dw2_dtheta / sin_theta) * c_mask : T(0);
-    const T K          = G1 * dw1_dc + G2 * dw2_dc;
-    *gq1x              = w1s * gx + K * sx;
-    *gq1y              = w1s * gy + K * sy;
-    *gq1z              = w1s * gz + K * sz;
-    *gq1w              = w1s * gw + K * sw;
-    *gq2x              = s * (w2s * gx + K * x1);
-    *gq2y              = s * (w2s * gy + K * y1);
-    *gq2z              = s * (w2s * gz + K * z1);
-    *gq2w              = s * (w2s * gw + K * w1);
 }
 
 // Fused block reduction for the 14 control-pose grad components
@@ -256,8 +167,8 @@ __global__ void sensor_angles_to_sensor_rays_backward_kernel(
     T elevation = sensor_angles[idx * 2 + 0];
     T azimuth   = sensor_angles[idx * 2 + 1];
     T ce, se, ca, sa;
-    sincos_t<T>(elevation, se, ce);
-    sincos_t<T>(azimuth, sa, ca);
+    gsplat_geometry::sincos_t<T>(elevation, se, ce);
+    gsplat_geometry::sincos_t<T>(azimuth, sa, ca);
 
     T gx = grad_sensor_rays[idx * 3 + 0];
     T gy = grad_sensor_rays[idx * 3 + 1];
@@ -388,7 +299,7 @@ __global__ void elements_to_sensor_angles_backward_kernel(
 //                                                       + grad_sensor_ray
 //   grad_sensor_ray -> spherical_to_cartesian VJP -> grad_elev, grad_az
 //                       (scattered per (row, col) into the 3 angle tables)
-//   grad_q_interp -> slerp_pair VJP -> grad_q0/q1 (xyzw, hemisphere folded in)
+//   grad_q_interp -> SLERP VJP -> grad_q0/q1 (xyzw, hemisphere folded in)
 //   grad_world_rays[0:3] (origin) -> lerp3 -> grad_t0 = (1-a) g, grad_t1 = a g.
 // Control-pose grads are shared across all threads, so each component is
 // block-reduced then atomicAdded once per block.  The slerp time grad is
@@ -461,9 +372,11 @@ __global__ void __launch_bounds__(kLidarThreads, 5) generate_spinning_lidar_rays
                     q1w = control_rotations[4];
 
             T qix, qiy, qiz, qiw;
-            slerp_pair_fwd<T>(q0x, q0y, q0z, q0w, q1x, q1y, q1z, q1w, alpha, &qix, &qiy, &qiz, &qiw);
+            gsplat_geometry::quat_slerp_pair_fwd<T>(
+                q0x, q0y, q0z, q0w, q1x, q1y, q1z, q1w, alpha, &qix, &qiy, &qiz, &qiw
+            );
             T srx, sry, srz;
-            spherical_to_cartesian<T>(elevation, azimuth, srx, sry, srz);
+            gsplat_geometry::spherical_to_cartesian<T>(elevation, azimuth, srx, sry, srz);
 
             const T g_ox = grad_world_rays[idx * 6 + 0];
             const T g_oy = grad_world_rays[idx * 6 + 1];
@@ -475,7 +388,7 @@ __global__ void __launch_bounds__(kLidarThreads, 5) generate_spinning_lidar_rays
             // world_dir = R(q_interp) sensor_ray.
             T gq_ix, gq_iy, gq_iz, gq_iw;
             T g_srx, g_sry, g_srz;
-            quat_rotate_vector_bwd_impl<T>(
+            gsplat_geometry::quat_rotate_vector_bwd_impl<T>(
                 qix,
                 qiy,
                 qiz,
@@ -516,7 +429,7 @@ __global__ void __launch_bounds__(kLidarThreads, 5) generate_spinning_lidar_rays
             }
 
             // q_interp = slerp(q0, q1, alpha).
-            slerp_pair_bwd<T>(
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<T>(
                 q0x,
                 q0y,
                 q0z,
@@ -643,11 +556,15 @@ __global__ void __launch_bounds__(kLidarThreads, 5) inverse_project_spinning_lid
             const T trans_y = om * t0y + alpha * t1y;
             const T trans_z = om * t0z + alpha * t1z;
             T qix, qiy, qiz, qiw;
-            slerp_pair_fwd<T>(q0x, q0y, q0z, q0w, q1x, q1y, q1z, q1w, alpha, &qix, &qiy, &qiz, &qiw);
+            gsplat_geometry::quat_slerp_pair_fwd<T>(
+                q0x, q0y, q0z, q0w, q1x, q1y, q1z, q1w, alpha, &qix, &qiy, &qiz, &qiw
+            );
 
             // s = R(q)^T (p - t), then ray = s / |s|.
             T sx, sy, sz;
-            se3_inverse_transform_point<T>(qix, qiy, qiz, qiw, trans_x, trans_y, trans_z, px, py, pz, &sx, &sy, &sz);
+            gsplat_geometry::se3_inverse_transform_point<T>(
+                qix, qiy, qiz, qiw, trans_x, trans_y, trans_z, px, py, pz, &sx, &sy, &sz
+            );
             const T s2         = fmax(sx * sx + sy * sy + sz * sz, gsplat_sensors::normalize_normsq_floor<T>());
             const T s_norm     = sqrt(s2);
             const T inv_s_norm = T(1) / s_norm;
@@ -683,7 +600,7 @@ __global__ void __launch_bounds__(kLidarThreads, 5) inverse_project_spinning_lid
             // s = rotate(q_conj, v), v = p - t.  q_conj = (-qx,-qy,-qz,qw).
             const T vx = px - trans_x, vy = py - trans_y, vz = pz - trans_z;
             T g_cqx, g_cqy, g_cqz, g_cqw, g_vx, g_vy, g_vz;
-            quat_rotate_vector_bwd_impl<T>(
+            gsplat_geometry::quat_rotate_vector_bwd_impl<T>(
                 -qix, -qiy, -qiz, qiw, vx, vy, vz, g_sx, g_sy, g_sz, &g_cqx, &g_cqy, &g_cqz, &g_cqw, &g_vx, &g_vy, &g_vz
             );
             // Undo the conjugate sign on the rotation grad.
@@ -704,7 +621,7 @@ __global__ void __launch_bounds__(kLidarThreads, 5) inverse_project_spinning_lid
             g_t1z = alpha * g_tz;
 
             // q = slerp(q0, q1, alpha).
-            slerp_pair_bwd<T>(
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<T>(
                 q0x,
                 q0y,
                 q0z,

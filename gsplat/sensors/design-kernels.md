@@ -289,9 +289,8 @@ The convention helpers `wxyz_to_xyzw` / `xyzw_to_wxyz` live in
 by the functional layer for downstream tools that still want a `(N, 4, 4)`
 representation.
 
-Pose interpolation (slerp + lerp) is performed on the device by the kernels
-themselves, not in Python — see `trajectory_cuda::quat_slerp_pair_fwd_f` /
-`quat_slerp_pair_bwd_f` in `gsplat/geometry/kernels/cuda/csrc/pose.cuh`.
+Pose interpolation runs on device using geometry-owned SLERP helpers in
+`gsplat/geometry/kernels/cuda/csrc/pose.cuh`.
 
 ## File-level reference
 

@@ -42,7 +42,7 @@ __global__ void se3pose_transform_point_fwd_kernel(
     {
         return;
     }
-    se3pose_transform_point_fwd_device(i, n, translation, rotation, point, out);
+    gsplat_geometry::se3pose_transform_point_fwd_device(i, n, translation, rotation, point, out);
 }
 
 // Grid-stride: direction (N,3), rotation (N,4) → R(q)d per row.
@@ -56,7 +56,7 @@ __global__ void se3pose_transform_direction_fwd_kernel(
     {
         return;
     }
-    se3pose_transform_direction_fwd_device(i, n, rotation, direction, out);
+    gsplat_geometry::se3pose_transform_direction_fwd_device(i, n, rotation, direction, out);
 }
 
 // Grid-stride: row-wise SE(3) pose composition parent * child.
@@ -133,7 +133,7 @@ __global__ void se3pose_inverse_transform_point_fwd_kernel(
     {
         return;
     }
-    se3pose_inverse_transform_point_fwd_device(i, n, translation, rotation, point, out);
+    gsplat_geometry::se3pose_inverse_transform_point_fwd_device(i, n, translation, rotation, point, out);
 }
 
 // Grid-stride: R^T d per row (no translation).
@@ -147,7 +147,7 @@ __global__ void se3pose_inverse_transform_direction_fwd_kernel(
     {
         return;
     }
-    se3pose_inverse_transform_direction_fwd_device(i, n, rotation, direction, out);
+    gsplat_geometry::se3pose_inverse_transform_direction_fwd_device(i, n, rotation, direction, out);
 }
 
 // Launch the forward SE(3) point transform kernel on the current CUDA stream.
@@ -325,7 +325,7 @@ void se3pose_transform_point_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         point.scalar_type(),
         "se3pose_transform_point_cuda",
-        [&] { launch_se3pose_transform_point_fwd<scalar_t>(translation, rotation, point, out); }
+        ([&] { launch_se3pose_transform_point_fwd<scalar_t>(translation, rotation, point, out); })
     );
 }
 
@@ -337,7 +337,7 @@ void se3pose_transform_direction_cuda(const at::Tensor &rotation, const at::Tens
     AT_DISPATCH_FLOATING_TYPES(
         direction.scalar_type(),
         "se3pose_transform_direction_cuda",
-        [&] { launch_se3pose_transform_direction_fwd<scalar_t>(rotation, direction, out); }
+        ([&] { launch_se3pose_transform_direction_fwd<scalar_t>(rotation, direction, out); })
     );
 }
 
@@ -409,7 +409,7 @@ void se3pose_inverse_transform_point_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         point.scalar_type(),
         "se3pose_inverse_transform_point_cuda",
-        [&] { launch_se3pose_inverse_transform_point_fwd<scalar_t>(translation, rotation, point, out); }
+        ([&] { launch_se3pose_inverse_transform_point_fwd<scalar_t>(translation, rotation, point, out); })
     );
 }
 
@@ -421,7 +421,7 @@ void se3pose_inverse_transform_direction_cuda(const at::Tensor &rotation, const 
     AT_DISPATCH_FLOATING_TYPES(
         direction.scalar_type(),
         "se3pose_inverse_transform_direction_cuda",
-        [&] { launch_se3pose_inverse_transform_direction_fwd<scalar_t>(rotation, direction, out); }
+        ([&] { launch_se3pose_inverse_transform_direction_fwd<scalar_t>(rotation, direction, out); })
     );
 }
 
@@ -440,7 +440,7 @@ __global__ void se3pose_to_matrix_pack_kernel(
     {
         return;
     }
-    se3pose_to_matrix_pack_device(i, n, translation, R9, out16);
+    gsplat_geometry::se3pose_to_matrix_pack_device(i, n, translation, R9, out16);
 }
 
 // Launch homogeneous matrix packing from translation and row-major rotation blocks.
@@ -471,7 +471,7 @@ void se3pose_to_matrix_pack_cuda(const at::Tensor &translation, const at::Tensor
     AT_DISPATCH_FLOATING_TYPES(
         translation.scalar_type(),
         "se3pose_to_matrix_pack_cuda",
-        [&] { launch_se3pose_to_matrix_pack<scalar_t>(translation, R9, out_flat); }
+        ([&] { launch_se3pose_to_matrix_pack<scalar_t>(translation, R9, out_flat); })
     );
 }
 
@@ -490,7 +490,7 @@ __global__ void se3pose_to_inverse_matrix_fwd_kernel(
     {
         return;
     }
-    se3pose_to_inverse_matrix_fwd_device(i, n, translation, rotation, out16, wxyz_format);
+    gsplat_geometry::se3pose_to_inverse_matrix_fwd_device(i, n, translation, rotation, out16, wxyz_format);
 }
 
 // Launch inverse homogeneous matrix construction for a batch of SE(3) poses.
@@ -529,7 +529,7 @@ void se3pose_to_inverse_matrix_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         translation.scalar_type(),
         "se3pose_to_inverse_matrix_cuda",
-        [&] { launch_se3pose_to_inverse_matrix_fwd<scalar_t>(translation, rotation, out_flat, wxyz_format); }
+        ([&] { launch_se3pose_to_inverse_matrix_fwd<scalar_t>(translation, rotation, out_flat, wxyz_format); })
     );
 }
 
@@ -544,7 +544,7 @@ __global__ void se3pose_from_matrix_fwd_kernel(
     {
         return;
     }
-    se3pose_from_matrix_fwd_device(i, n, m16, translation, rotation);
+    gsplat_geometry::se3pose_from_matrix_fwd_device(i, n, m16, translation, rotation);
 }
 
 // Grid-stride: VJP for se3pose_from_matrix; per row fills grad_m16 (row-major) from grad_translation and grad_rotation.
@@ -562,7 +562,7 @@ __global__ void se3pose_from_matrix_bwd_kernel(
     {
         return;
     }
-    se3pose_from_matrix_bwd_device(i, n, m16, grad_translation, grad_rotation, grad_m16);
+    gsplat_geometry::se3pose_from_matrix_bwd_device(i, n, m16, grad_translation, grad_rotation, grad_m16);
 }
 
 // Launch matrix -> pose decomposition for a batch of row-major homogeneous transforms.
@@ -622,7 +622,7 @@ void se3pose_from_matrix_cuda(const at::Tensor &matrix, at::Tensor &translation,
     AT_DISPATCH_FLOATING_TYPES(
         matrix.scalar_type(),
         "se3pose_from_matrix_cuda",
-        [&] { launch_se3pose_from_matrix_fwd<scalar_t>(matrix, translation, rotation); }
+        ([&] { launch_se3pose_from_matrix_fwd<scalar_t>(matrix, translation, rotation); })
     );
 }
 
@@ -639,7 +639,7 @@ void se3pose_from_matrix_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         matrix.scalar_type(),
         "se3pose_from_matrix_bwd_cuda",
-        [&] { launch_se3pose_from_matrix_bwd<scalar_t>(matrix, grad_translation, grad_rotation, grad_matrix); }
+        ([&] { launch_se3pose_from_matrix_bwd<scalar_t>(matrix, grad_translation, grad_rotation, grad_matrix); })
     );
 }
 
@@ -647,7 +647,7 @@ void se3pose_from_matrix_bwd_cuda(
 // 2-pose trajectories, float32 only.
 // -----------------------------------------------------------------------------
 
-namespace trajectory_cuda
+namespace gsplat_geometry::trajectory_cuda
 {
 // Grid-stride float: 2-keyframe trajectory point + OOB; strides st0,st1,sqt index time/query_time rows (see device).
 __global__ void trajectory_transform_point_2poses_fwd_kernel(
@@ -1199,7 +1199,7 @@ void launch_trajectory_get_rotation_2poses_bwd(
     );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
-} // namespace trajectory_cuda
+} // namespace gsplat_geometry::trajectory_cuda
 
 namespace packed_track_cuda
 {
@@ -1663,7 +1663,7 @@ void trajectory_transform_point_2poses_cuda(
 )
 {
     TORCH_CHECK(trans0.scalar_type() == at::kFloat, "trajectory_transform_point_2poses_cuda: float32 only");
-    trajectory_cuda::launch_trajectory_transform_point_2poses_fwd(
+    gsplat_geometry::trajectory_cuda::launch_trajectory_transform_point_2poses_fwd(
         trans0, rot0, time0, trans1, rot1, time1, point, query_time, result_point, result_out_of_bounds
     );
 }
@@ -1692,7 +1692,7 @@ void trajectory_transform_point_2poses_bwd_cuda(
 )
 {
     TORCH_CHECK(trans0.scalar_type() == at::kFloat, "trajectory_transform_point_2poses_bwd_cuda: float32 only");
-    trajectory_cuda::launch_trajectory_transform_point_2poses_bwd(
+    gsplat_geometry::trajectory_cuda::launch_trajectory_transform_point_2poses_bwd(
         trans0,
         rot0,
         time0,
@@ -1729,7 +1729,7 @@ void trajectory_get_rotation_2poses_cuda(
 )
 {
     TORCH_CHECK(rot0.scalar_type() == at::kFloat, "trajectory_get_rotation_2poses_cuda: float32 only");
-    trajectory_cuda::launch_trajectory_get_rotation_2poses_fwd(
+    gsplat_geometry::trajectory_cuda::launch_trajectory_get_rotation_2poses_fwd(
         trans0, rot0, time0, trans1, rot1, time1, query_time, result_quat, result_out_of_bounds
     );
 }
@@ -1758,7 +1758,7 @@ void trajectory_get_rotation_2poses_bwd_cuda(
     (void)trans0;
     (void)trans1;
     TORCH_CHECK(rot0.scalar_type() == at::kFloat, "trajectory_get_rotation_2poses_bwd_cuda: float32 only");
-    trajectory_cuda::launch_trajectory_get_rotation_2poses_bwd(
+    gsplat_geometry::trajectory_cuda::launch_trajectory_get_rotation_2poses_bwd(
         time0,
         time1,
         query_time,
@@ -1787,7 +1787,7 @@ void trajectory_transform_point_1pose_cuda(
 )
 {
     TORCH_CHECK(trans.scalar_type() == at::kFloat, "trajectory_transform_point_1pose_cuda: float32 only");
-    trajectory_cuda::launch_trajectory_transform_point_1pose_fwd(
+    gsplat_geometry::trajectory_cuda::launch_trajectory_transform_point_1pose_fwd(
         trans, rot, time, point, query_time, result_point, result_out_of_bounds
     );
 }
@@ -1810,7 +1810,7 @@ void trajectory_transform_point_1pose_bwd_cuda(
 )
 {
     TORCH_CHECK(rot.scalar_type() == at::kFloat, "trajectory_transform_point_1pose_bwd_cuda: float32 only");
-    trajectory_cuda::launch_trajectory_transform_point_1pose_bwd(
+    gsplat_geometry::trajectory_cuda::launch_trajectory_transform_point_1pose_bwd(
         trans,
         rot,
         time,
@@ -1842,7 +1842,7 @@ void frame_transform_poses_tquat_cuda(
 )
 {
     TORCH_CHECK(input_poses.scalar_type() == at::kFloat, "frame_transform_poses_tquat_cuda: float32 only");
-    trajectory_cuda::launch_frame_transform_poses_tquat_fwd(
+    gsplat_geometry::trajectory_cuda::launch_frame_transform_poses_tquat_fwd(
         input_poses, frx, fry, frz, frw, ftx, fty, ftz, scale, output_poses
     );
 }
