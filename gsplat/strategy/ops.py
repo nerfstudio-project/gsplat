@@ -28,7 +28,7 @@ from gsplat.relocation import compute_relocation
 from gsplat.utils import normalized_quat_to_rotmat
 
 if TYPE_CHECKING:
-    from gsplat_scene import Scene
+    from gsplat.scene import Scene
 
 _MCMC_BACKEND_TORCH = {"torch", "pytorch", "py"}
 _MCMC_BACKEND_CUDA = {"cuda", "native", ""}
