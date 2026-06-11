@@ -813,7 +813,9 @@ def rasterization(
             "Pass global_z_order=False explicitly when using lidar."
         )
     else:
-        assert global_z_order or with_ut, "global_z_order=False is only supported with with_ut=True"
+        assert (
+            global_z_order or with_ut
+        ), "global_z_order=False is only supported with with_ut=True"
     assert (camera_model == "lidar") == (
         lidar_coeffs is not None
     ), "Lidar coefficients must be given if and only if camera model is lidar"

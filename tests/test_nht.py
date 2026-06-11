@@ -1132,7 +1132,9 @@ class TestNHTFusedInference:
             dim=1,
         ).half()
         sizes = [enc_dim * hidden] + [hidden * hidden] * (n_layers - 1) + [hidden * 16]
-        shapes = [(hidden, enc_dim)] + [(hidden, hidden)] * (n_layers - 1) + [(16, hidden)]
+        shapes = (
+            [(hidden, enc_dim)] + [(hidden, hidden)] * (n_layers - 1) + [(16, hidden)]
+        )
         h, offset = enc, 0
         for li, (sz, (o, i_)) in enumerate(zip(sizes, shapes)):
             W = params[offset : offset + sz].view(o, i_)
@@ -1179,7 +1181,9 @@ class TestNHTFusedInference:
         K, c2w, width, height = _make_camera(width=64, height=48)
         viewmat = torch.linalg.inv(c2w)
 
-        n_feat = (feature_dim // get_feature_divisor()) * get_encoding_expansion_factor()
+        n_feat = (
+            feature_dim // get_feature_divisor()
+        ) * get_encoding_expansion_factor()
         enc_dim = (n_feat + 9 + 15) // 16 * 16
         n_params = enc_dim * hidden + (n_layers - 1) * hidden * hidden + hidden * 16
         params = (torch.randn(n_params, device=device) * 0.2).half()
@@ -1211,43 +1215,75 @@ class TestNHTFusedInference:
             ts = 16
             tw, th = (width + ts - 1) // ts, (height + ts - 1) // ts
             radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
-                means=means, quats=quats, scales=scales, opacities=opacities,
-                viewmats=viewmat, Ks=K, width=width, height=height,
-                eps2d=0.3, near_plane=0.01, far_plane=1e10,
-                calc_compensations=False, camera_model="pinhole",
+                means=means,
+                quats=quats,
+                scales=scales,
+                opacities=opacities,
+                viewmats=viewmat,
+                Ks=K,
+                width=width,
+                height=height,
+                eps2d=0.3,
+                near_plane=0.01,
+                far_plane=1e10,
+                calc_compensations=False,
+                camera_model="pinhole",
                 ut_params=UnscentedTransformParameters(),
                 rolling_shutter=RollingShutterType.GLOBAL,
-                viewmats_rs=None, global_z_order=True,
+                viewmats_rs=None,
+                global_z_order=True,
             )
             _, isect_ids, flatten_ids = isect_tiles(
-                means2d, radii, depths, tile_size=ts,
-                tile_width=tw, tile_height=th, packed=False, n_images=1,
+                means2d,
+                radii,
+                depths,
+                tile_size=ts,
+                tile_width=tw,
+                tile_height=th,
+                packed=False,
+                n_images=1,
             )
             tile_offsets = isect_offset_encode(isect_ids, 1, tw, th)
 
             params_native = convert_mlp_params_to_fused_native(
-                params, n_feat_in=n_feat,
-                mlp_hidden_dim=hidden, mlp_num_layers=n_layers,
+                params,
+                n_feat_in=n_feat,
+                mlp_hidden_dim=hidden,
+                mlp_num_layers=n_layers,
             )
-            rgb_fused, alpha_fused, _, _ = rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+            (
+                rgb_fused,
+                alpha_fused,
+                _,
+                _,
+            ) = rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
                 means=means[None, None],
                 quats=quats[None, None],
                 scales=scales[None, None],
                 colors=features[None, None],
                 opacities=opacities[None, None],
-                image_width=width, image_height=height, tile_size=ts,
-                viewmats0=viewmat[None], viewmats1=None, Ks=K[None],
+                image_width=width,
+                image_height=height,
+                tile_size=ts,
+                viewmats0=viewmat[None],
+                viewmats1=None,
+                Ks=K[None],
                 camera_model=_make_lazy_cuda_obj("CameraModelType.PINHOLE"),
                 ut_params=UnscentedTransformParameters(),
                 rs_type=int(RollingShutterType.GLOBAL),
-                radial_coeffs=None, tangential_coeffs=None,
+                radial_coeffs=None,
+                tangential_coeffs=None,
                 thin_prism_coeffs=None,
                 ftheta_coeffs=FThetaCameraDistortionParameters(),
-                lidar_coeffs=None, external_distortion_params=None,
-                tile_offsets=tile_offsets, flatten_ids=flatten_ids,
-                center_ray_mode=False, ray_dir_scale=ray_dir_scale,
+                lidar_coeffs=None,
+                external_distortion_params=None,
+                tile_offsets=tile_offsets,
+                flatten_ids=flatten_ids,
+                center_ray_mode=False,
+                ray_dir_scale=ray_dir_scale,
                 mlp_params=params_native,
-                mlp_hidden_dim=hidden, mlp_num_layers=n_layers,
+                mlp_hidden_dim=hidden,
+                mlp_num_layers=n_layers,
             )
 
         rgb_fused = rgb_fused.reshape(height, width, 3).float()
@@ -1288,8 +1324,9 @@ class TestNHTFusedInference:
         params_raw = (torch.randn(n_params, device=device) * 0.2).half().float()
 
         Kmat = torch.tensor(
-            [[100.0, 0., W_img / 2], [0., 100.0, H_img / 2], [0., 0., 1.]],
-            device=device)
+            [[100.0, 0.0, W_img / 2], [0.0, 100.0, H_img / 2], [0.0, 0.0, 1.0]],
+            device=device,
+        )
         c2w = torch.eye(4, device=device)
         c2w[2, 3] = -3.0
         viewmat = torch.linalg.inv(c2w)
@@ -1298,8 +1335,14 @@ class TestNHTFusedInference:
         w_alpha = torch.randn(H_img, W_img, device=device) / (H_img * W_img)
 
         def leaves():
-            t = [means_raw.clone(), quats_raw.clone(), scales_raw.clone(),
-                 feats_raw.clone(), opac_raw.clone(), params_raw.clone()]
+            t = [
+                means_raw.clone(),
+                quats_raw.clone(),
+                scales_raw.clone(),
+                feats_raw.clone(),
+                opac_raw.clone(),
+                params_raw.clone(),
+            ]
             for x in t:
                 x.requires_grad_(True)
             return t
@@ -1307,16 +1350,26 @@ class TestNHTFusedInference:
         def emulate_fp32(params, feat_ray):
             pad = enc_dim - n_feat - 9
             P = feat_ray.shape[0]
-            rd = feat_ray[:, n_feat:n_feat + 3] * 2.0 - 1.0
-            enc = torch.cat([feat_ray[:, :n_feat], self._sh3_basis(rd),
-                             torch.ones(P, pad, device=device)], dim=1)
-            sizes = ([enc_dim * hidden] + [hidden * hidden] * (n_layers - 1)
-                     + [hidden * 16])
-            shapes = ([(hidden, enc_dim)] + [(hidden, hidden)] * (n_layers - 1)
-                      + [(16, hidden)])
+            rd = feat_ray[:, n_feat : n_feat + 3] * 2.0 - 1.0
+            enc = torch.cat(
+                [
+                    feat_ray[:, :n_feat],
+                    self._sh3_basis(rd),
+                    torch.ones(P, pad, device=device),
+                ],
+                dim=1,
+            )
+            sizes = (
+                [enc_dim * hidden] + [hidden * hidden] * (n_layers - 1) + [hidden * 16]
+            )
+            shapes = (
+                [(hidden, enc_dim)]
+                + [(hidden, hidden)] * (n_layers - 1)
+                + [(16, hidden)]
+            )
             h, offset = enc, 0
             for li, (sz, (o, i_)) in enumerate(zip(sizes, shapes)):
-                Wm = params[offset:offset + sz].view(o, i_)
+                Wm = params[offset : offset + sz].view(o, i_)
                 offset += sz
                 h = h @ Wm.t()
                 if li < len(sizes) - 1:
@@ -1326,12 +1379,21 @@ class TestNHTFusedInference:
         # Reference
         m, q, s, f, o, p = leaves()
         render_colors, render_alphas, _ = rasterization(
-            means=m, quats=F.normalize(q, dim=-1), scales=torch.exp(s),
-            opacities=torch.sigmoid(o), colors=f.half(),
-            viewmats=viewmat[None], Ks=Kmat[None],
-            width=W_img, height=H_img, sh_degree=None,
-            near_plane=0.01, far_plane=1e10, packed=False,
-            with_ut=True, with_eval3d=True,
+            means=m,
+            quats=F.normalize(q, dim=-1),
+            scales=torch.exp(s),
+            opacities=torch.sigmoid(o),
+            colors=f.half(),
+            viewmats=viewmat[None],
+            Ks=Kmat[None],
+            width=W_img,
+            height=H_img,
+            sh_degree=None,
+            near_plane=0.01,
+            far_plane=1e10,
+            packed=False,
+            with_ut=True,
+            with_eval3d=True,
             nht_params=NHTParams(enabled=True, ray_dir_scale=ray_dir_scale),
             render_mode="RGB",
         )
@@ -1344,11 +1406,20 @@ class TestNHTFusedInference:
         # Fused
         m2, q2, s2, f2, o2, p2 = leaves()
         rgb_fused, alpha_fused = nht_fused_render(
-            means=m2, quats=F.normalize(q2, dim=-1), scales=torch.exp(s2),
-            features=f2, opacities=torch.sigmoid(o2), mlp_params=p2,
-            viewmat=viewmat, K=Kmat, width=W_img, height=H_img,
-            tile_size=16, ray_dir_scale=ray_dir_scale,
-            mlp_hidden_dim=hidden, mlp_num_layers=n_layers,
+            means=m2,
+            quats=F.normalize(q2, dim=-1),
+            scales=torch.exp(s2),
+            features=f2,
+            opacities=torch.sigmoid(o2),
+            mlp_params=p2,
+            viewmat=viewmat,
+            K=Kmat,
+            width=W_img,
+            height=H_img,
+            tile_size=16,
+            ray_dir_scale=ray_dir_scale,
+            mlp_hidden_dim=hidden,
+            mlp_num_layers=n_layers,
         )
         loss_fused = (rgb_fused * w_rgb).sum() + (alpha_fused * w_alpha).sum()
         loss_fused.backward()
@@ -1360,7 +1431,8 @@ class TestNHTFusedInference:
             ga, gb = ga.float().flatten(), gb.float().flatten()
             rel = (ga - gb).norm().item() / max(ga.norm().item(), 1e-12)
             cos = torch.dot(ga, gb).item() / max(
-                ga.norm().item() * gb.norm().item(), 1e-20)
+                ga.norm().item() * gb.norm().item(), 1e-20
+            )
             assert rel < 0.08, f"{nm}: rel_err={rel}"
             assert cos > 0.99, f"{nm}: cos={cos}"
 
@@ -1376,9 +1448,7 @@ class TestNHTFusedInference:
         assert out.shape == params.shape
         assert out.dtype == torch.float16
         # The conversion is a permutation: same multiset of values per layer.
-        assert torch.equal(
-            params.float().sort().values, out.float().sort().values
-        )
+        assert torch.equal(params.float().sort().values, out.float().sort().values)
 
         with pytest.raises(ValueError):
             convert_mlp_params_to_fused_native(params[:-1], n_feat, hidden, n_layers)

@@ -79,7 +79,13 @@ class GsplatViewer(Viewer):
         render_fn: Callable,
         output_dir: Path,
         mode: Literal["rendering", "training"] = "rendering",
-        render_modes: tuple = ("rgb", "depth(accumulated)", "depth(expected)", "normal", "alpha"),
+        render_modes: tuple = (
+            "rgb",
+            "depth(accumulated)",
+            "depth(expected)",
+            "normal",
+            "alpha",
+        ),
     ):
         if len(render_modes) == 0:
             raise ValueError("render_modes must contain at least one mode")

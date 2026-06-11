@@ -47,12 +47,12 @@ from ._wrapper import (
 
 @dataclass
 class NHTInferenceConfig:
-    tile_size:        int   = 16
-    near_plane:       float = 0.01
-    far_plane:        float = 1e10
-    eps2d:            float = 0.3
-    center_ray_mode:  bool  = False
-    backgrounds:      Optional[Tensor] = None
+    tile_size: int = 16
+    near_plane: float = 0.01
+    far_plane: float = 1e10
+    eps2d: float = 0.3
+    center_ray_mode: bool = False
+    backgrounds: Optional[Tensor] = None
 
 
 class NHTInferenceRenderer:
@@ -107,11 +107,11 @@ class NHTInferenceRenderer:
     @torch.inference_mode()
     def render(
         self,
-        splats:      Dict[str, Tensor],
-        viewmat:     Tensor,   # [4, 4]
-        K:           Tensor,   # [3, 3]
-        width:       int,
-        height:      int,
+        splats: Dict[str, Tensor],
+        viewmat: Tensor,  # [4, 4]
+        K: Tensor,  # [3, 3]
+        width: int,
+        height: int,
         *,
         backgrounds: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor, Dict]:
@@ -126,11 +126,11 @@ class NHTInferenceRenderer:
         """
         device = viewmat.device
 
-        means     = splats["means"]
-        quats     = F.normalize(splats["quats"], dim=-1)
-        scales    = torch.exp(splats["scales"])
+        means = splats["means"]
+        quats = F.normalize(splats["quats"], dim=-1)
+        scales = torch.exp(splats["scales"])
         opacities = torch.sigmoid(splats["opacities"])
-        features  = splats.get("features", splats.get("sh0"))
+        features = splats.get("features", splats.get("sh0"))
         assert features is not None, "splats must contain a 'features' key"
 
         if features.dtype != torch.float16:
@@ -138,7 +138,7 @@ class NHTInferenceRenderer:
 
         N = means.shape[0]
         ts = self.config.tile_size
-        tile_width  = (width  + ts - 1) // ts
+        tile_width = (width + ts - 1) // ts
         tile_height = (height + ts - 1) // ts
 
         # ── Pre-pass 1: UT projection for tile intersection bounding boxes ────
@@ -155,8 +155,14 @@ class NHTInferenceRenderer:
         )
         if self._cached_proj is None or view_changed:
             radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
-                means=means, quats=quats, scales=scales, opacities=opacities,
-                viewmats=viewmat[None], Ks=K[None], width=width, height=height,
+                means=means,
+                quats=quats,
+                scales=scales,
+                opacities=opacities,
+                viewmats=viewmat[None],
+                Ks=K[None],
+                width=width,
+                height=height,
                 eps2d=self.config.eps2d,
                 near_plane=self.config.near_plane,
                 far_plane=self.config.far_plane,
@@ -175,30 +181,46 @@ class NHTInferenceRenderer:
 
         # ── Pre-pass 2: tile intersection ─────────────────────────────────────
         _, isect_ids, flatten_ids = isect_tiles(
-            means2d, radii, depths, tile_size=ts,
-            tile_width=tile_width, tile_height=tile_height,
-            packed=False, n_images=1,
+            means2d,
+            radii,
+            depths,
+            tile_size=ts,
+            tile_width=tile_width,
+            tile_height=tile_height,
+            packed=False,
+            n_images=1,
         )
         tile_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
 
         # ── Fused kernel: rasterization + encoding + MLP + sigmoid ───────────
-        render_rgb, render_alphas, _, _ = rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+        (
+            render_rgb,
+            render_alphas,
+            _,
+            _,
+        ) = rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
             means=means.unsqueeze(0).unsqueeze(0),
             quats=quats.unsqueeze(0).unsqueeze(0),
             scales=scales.unsqueeze(0).unsqueeze(0),
             colors=features.unsqueeze(0).unsqueeze(0),
             opacities=opacities.unsqueeze(0).unsqueeze(0),
-            image_width=width, image_height=height, tile_size=ts,
+            image_width=width,
+            image_height=height,
+            tile_size=ts,
             viewmats0=viewmat.unsqueeze(0).unsqueeze(0),
             viewmats1=None,
             Ks=K.unsqueeze(0).unsqueeze(0),
             camera_model=_make_lazy_cuda_obj("CameraModelType.PINHOLE"),
             ut_params=UnscentedTransformParameters(),
             rs_type=int(RollingShutterType.GLOBAL),
-            radial_coeffs=None, tangential_coeffs=None, thin_prism_coeffs=None,
+            radial_coeffs=None,
+            tangential_coeffs=None,
+            thin_prism_coeffs=None,
             ftheta_coeffs=FThetaCameraDistortionParameters(),
-            lidar_coeffs=None, external_distortion_params=None,
-            tile_offsets=tile_offsets, flatten_ids=flatten_ids,
+            lidar_coeffs=None,
+            external_distortion_params=None,
+            tile_offsets=tile_offsets,
+            flatten_ids=flatten_ids,
             center_ray_mode=self.config.center_ray_mode,
             ray_dir_scale=self.shader.ray_dir_scale,
             mlp_params=self._get_mlp_params(device),
@@ -207,16 +229,16 @@ class NHTInferenceRenderer:
         )
         # render_rgb:    [1, 1, H, W, 3] fp16 -> [H, W, 3]
         # render_alphas: [1, 1, H, W]    fp32 -> [H, W]
-        rgb   = render_rgb.reshape(height, width, 3).float()
+        rgb = render_rgb.reshape(height, width, 3).float()
         alpha = render_alphas.reshape(height, width)
 
         bg = backgrounds if backgrounds is not None else self.config.backgrounds
         if bg is not None:
             bg_t = bg.to(device=device, dtype=torch.float32)
-            rgb  = rgb * alpha.unsqueeze(-1) + bg_t * (1.0 - alpha.unsqueeze(-1))
+            rgb = rgb * alpha.unsqueeze(-1) + bg_t * (1.0 - alpha.unsqueeze(-1))
 
         return (
-            rgb.unsqueeze(0),                  # [1, H, W, 3]
+            rgb.unsqueeze(0),  # [1, H, W, 3]
             alpha.unsqueeze(0).unsqueeze(-1),  # [1, H, W, 1]
             {"n_gaussians": N},
         )

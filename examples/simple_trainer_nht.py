@@ -737,9 +737,7 @@ class Runner:
             )
             # Fused-kernel preview toggle (only when the shader config has
             # compiled fused-kernel support).
-            fused_ok, _ = nht_fused_supported(
-                self._deferred_mod(), for_training=False
-            )
+            fused_ok, _ = nht_fused_supported(self._deferred_mod(), for_training=False)
             if fused_ok:
                 with self.viewer._rendering_folder:
                     self._viewer_fused_checkbox = self.server.gui.add_checkbox(

@@ -77,7 +77,10 @@ def nht_fused_supported(shader, for_training: bool = True) -> Tuple[bool, str]:
             "(no AOV/auxiliary outputs, tcnn output_activation='Sigmoid')"
         )
     if shader.mlp_hidden_dim not in (64, 128):
-        return False, f"mlp_hidden_dim must be in {{64, 128}}, got {shader.mlp_hidden_dim}"
+        return (
+            False,
+            f"mlp_hidden_dim must be in {{64, 128}}, got {shader.mlp_hidden_dim}",
+        )
     if shader.mlp_num_layers not in (2, 3):
         return False, f"mlp_num_layers must be in {{2, 3}}, got {shader.mlp_num_layers}"
     dims = _FUSED_BWD_FEATURE_DIMS if for_training else _FUSED_FWD_FEATURE_DIMS
@@ -92,14 +95,14 @@ class _NHTFusedRasterize(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,        # [N, 3] fp32
-        quats: Tensor,        # [N, 4] fp32 (normalized)
-        scales: Tensor,       # [N, 3] fp32 (activated)
-        features: Tensor,     # [N, CDIM] fp16/fp32
-        opacities: Tensor,    # [N] fp32 (activated)
-        mlp_params: Tensor,   # [n_params] tcnn linear layout
-        viewmat: Tensor,      # [4, 4]
-        K: Tensor,            # [3, 3]
+        means: Tensor,  # [N, 3] fp32
+        quats: Tensor,  # [N, 4] fp32 (normalized)
+        scales: Tensor,  # [N, 3] fp32 (activated)
+        features: Tensor,  # [N, CDIM] fp16/fp32
+        opacities: Tensor,  # [N] fp32 (activated)
+        mlp_params: Tensor,  # [n_params] tcnn linear layout
+        viewmat: Tensor,  # [4, 4]
+        K: Tensor,  # [3, 3]
         width: int,
         height: int,
         tile_size: int,
@@ -128,42 +131,68 @@ class _NHTFusedRasterize(torch.autograd.Function):
             for t in (means, quats, scales, features, opacities, mlp_params)
         )
 
-        rgb, alphas, render_feat, last_ids = (
-            rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
-                means=means[None, None],
-                quats=quats[None, None],
-                scales=scales[None, None],
-                colors=features_h[None, None],
-                opacities=opacities[None, None],
-                image_width=width, image_height=height, tile_size=tile_size,
-                viewmats0=viewmat[None, None], viewmats1=None,
-                Ks=K[None, None],
-                camera_model=_make_lazy_cuda_obj("CameraModelType.PINHOLE"),
-                ut_params=UnscentedTransformParameters(),
-                rs_type=int(RollingShutterType.GLOBAL),
-                radial_coeffs=None, tangential_coeffs=None,
-                thin_prism_coeffs=None,
-                ftheta_coeffs=FThetaCameraDistortionParameters(),
-                lidar_coeffs=None, external_distortion_params=None,
-                tile_offsets=tile_offsets, flatten_ids=flatten_ids,
-                center_ray_mode=center_ray_mode,
-                ray_dir_scale=ray_dir_scale,
-                mlp_params=params_native,
-                mlp_hidden_dim=mlp_hidden_dim,
-                mlp_num_layers=mlp_num_layers,
-                save_state=needs_grad,
-            )
+        (
+            rgb,
+            alphas,
+            render_feat,
+            last_ids,
+        ) = rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+            means=means[None, None],
+            quats=quats[None, None],
+            scales=scales[None, None],
+            colors=features_h[None, None],
+            opacities=opacities[None, None],
+            image_width=width,
+            image_height=height,
+            tile_size=tile_size,
+            viewmats0=viewmat[None, None],
+            viewmats1=None,
+            Ks=K[None, None],
+            camera_model=_make_lazy_cuda_obj("CameraModelType.PINHOLE"),
+            ut_params=UnscentedTransformParameters(),
+            rs_type=int(RollingShutterType.GLOBAL),
+            radial_coeffs=None,
+            tangential_coeffs=None,
+            thin_prism_coeffs=None,
+            ftheta_coeffs=FThetaCameraDistortionParameters(),
+            lidar_coeffs=None,
+            external_distortion_params=None,
+            tile_offsets=tile_offsets,
+            flatten_ids=flatten_ids,
+            center_ray_mode=center_ray_mode,
+            ray_dir_scale=ray_dir_scale,
+            mlp_params=params_native,
+            mlp_hidden_dim=mlp_hidden_dim,
+            mlp_num_layers=mlp_num_layers,
+            save_state=needs_grad,
         )
 
         ctx.save_for_backward(
-            means, quats, scales, features_h, opacities, params_native,
-            viewmat, K, tile_offsets, flatten_ids,
-            render_feat, alphas, last_ids,
+            means,
+            quats,
+            scales,
+            features_h,
+            opacities,
+            params_native,
+            viewmat,
+            K,
+            tile_offsets,
+            flatten_ids,
+            render_feat,
+            alphas,
+            last_ids,
         )
         ctx.meta = (
-            width, height, tile_size, ray_dir_scale, center_ray_mode,
-            mlp_hidden_dim, mlp_num_layers, loss_scale,
-            features.dtype, mlp_params.dtype,
+            width,
+            height,
+            tile_size,
+            ray_dir_scale,
+            center_ray_mode,
+            mlp_hidden_dim,
+            mlp_num_layers,
+            loss_scale,
+            features.dtype,
+            mlp_params.dtype,
         )
 
         # [H, W, 3] fp32, [H, W] fp32
@@ -173,12 +202,33 @@ class _NHTFusedRasterize(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_rgb: Tensor, v_alphas: Tensor):
-        (means, quats, scales, features_h, opacities, params_native,
-         viewmat, K, tile_offsets, flatten_ids,
-         render_feat, alphas, last_ids) = ctx.saved_tensors
-        (width, height, tile_size, ray_dir_scale, center_ray_mode,
-         mlp_hidden_dim, mlp_num_layers, loss_scale,
-         feat_dtype, params_dtype) = ctx.meta
+        (
+            means,
+            quats,
+            scales,
+            features_h,
+            opacities,
+            params_native,
+            viewmat,
+            K,
+            tile_offsets,
+            flatten_ids,
+            render_feat,
+            alphas,
+            last_ids,
+        ) = ctx.saved_tensors
+        (
+            width,
+            height,
+            tile_size,
+            ray_dir_scale,
+            center_ray_mode,
+            mlp_hidden_dim,
+            mlp_num_layers,
+            loss_scale,
+            feat_dtype,
+            params_dtype,
+        ) = ctx.meta
 
         v_rgb_c = v_rgb.float().reshape(1, 1, height, width, 3).contiguous()
         if v_alphas is None:
@@ -188,37 +238,48 @@ class _NHTFusedRasterize(torch.autograd.Function):
         else:
             v_alphas_c = v_alphas.float().reshape(1, 1, height, width).contiguous()
 
-        (v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp) = (
-            rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
-                means=means[None, None],
-                quats=quats[None, None],
-                scales=scales[None, None],
-                colors=features_h[None, None],
-                opacities=opacities[None, None],
-                image_width=width, image_height=height, tile_size=tile_size,
-                viewmats0=viewmat[None, None], viewmats1=None,
-                Ks=K[None, None],
-                camera_model=_make_lazy_cuda_obj("CameraModelType.PINHOLE"),
-                ut_params=UnscentedTransformParameters(),
-                rs_type=int(RollingShutterType.GLOBAL),
-                radial_coeffs=None, tangential_coeffs=None,
-                thin_prism_coeffs=None,
-                ftheta_coeffs=FThetaCameraDistortionParameters(),
-                lidar_coeffs=None, external_distortion_params=None,
-                tile_offsets=tile_offsets, flatten_ids=flatten_ids,
-                center_ray_mode=center_ray_mode,
-                ray_dir_scale=ray_dir_scale,
-                mlp_params=params_native,
-                mlp_hidden_dim=mlp_hidden_dim,
-                mlp_num_layers=mlp_num_layers,
-                loss_scale=loss_scale,
-                render_feat=render_feat,
-                render_alphas=alphas,
-                last_ids=last_ids,
-                v_render_rgb=v_rgb_c,
-                v_render_alphas=v_alphas_c,
-                compute_mlp_grad=ctx.needs_input_grad[5],
-            )
+        (
+            v_means,
+            v_quats,
+            v_scales,
+            v_colors,
+            v_opacities,
+            v_mlp,
+        ) = rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
+            means=means[None, None],
+            quats=quats[None, None],
+            scales=scales[None, None],
+            colors=features_h[None, None],
+            opacities=opacities[None, None],
+            image_width=width,
+            image_height=height,
+            tile_size=tile_size,
+            viewmats0=viewmat[None, None],
+            viewmats1=None,
+            Ks=K[None, None],
+            camera_model=_make_lazy_cuda_obj("CameraModelType.PINHOLE"),
+            ut_params=UnscentedTransformParameters(),
+            rs_type=int(RollingShutterType.GLOBAL),
+            radial_coeffs=None,
+            tangential_coeffs=None,
+            thin_prism_coeffs=None,
+            ftheta_coeffs=FThetaCameraDistortionParameters(),
+            lidar_coeffs=None,
+            external_distortion_params=None,
+            tile_offsets=tile_offsets,
+            flatten_ids=flatten_ids,
+            center_ray_mode=center_ray_mode,
+            ray_dir_scale=ray_dir_scale,
+            mlp_params=params_native,
+            mlp_hidden_dim=mlp_hidden_dim,
+            mlp_num_layers=mlp_num_layers,
+            loss_scale=loss_scale,
+            render_feat=render_feat,
+            render_alphas=alphas,
+            last_ids=last_ids,
+            v_render_rgb=v_rgb_c,
+            v_render_alphas=v_alphas_c,
+            compute_mlp_grad=ctx.needs_input_grad[5],
         )
 
         v_features = v_colors.reshape(features_h.shape).to(feat_dtype)
@@ -233,32 +294,67 @@ class _NHTFusedRasterize(torch.autograd.Function):
             v_features,
             v_opacities.reshape(opacities.shape),
             v_mlp_params,
-            None, None, None, None, None, None, None,
-            None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
 
 @torch.no_grad()
 def _binning(
-    means, quats, scales, opacities, viewmat, K, width, height, tile_size,
-    near_plane, far_plane, eps2d,
+    means,
+    quats,
+    scales,
+    opacities,
+    viewmat,
+    K,
+    width,
+    height,
+    tile_size,
+    near_plane,
+    far_plane,
+    eps2d,
 ):
     """Non-differentiable projection + tile intersection for the fused path."""
     tile_width = (width + tile_size - 1) // tile_size
     tile_height = (height + tile_size - 1) // tile_size
     radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
-        means=means, quats=quats, scales=scales, opacities=opacities,
-        viewmats=viewmat[None], Ks=K[None], width=width, height=height,
-        eps2d=eps2d, near_plane=near_plane, far_plane=far_plane,
-        calc_compensations=False, camera_model="pinhole",
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        viewmats=viewmat[None],
+        Ks=K[None],
+        width=width,
+        height=height,
+        eps2d=eps2d,
+        near_plane=near_plane,
+        far_plane=far_plane,
+        calc_compensations=False,
+        camera_model="pinhole",
         ut_params=UnscentedTransformParameters(),
         rolling_shutter=RollingShutterType.GLOBAL,
-        viewmats_rs=None, global_z_order=True,
+        viewmats_rs=None,
+        global_z_order=True,
     )
     _, isect_ids, flatten_ids = isect_tiles(
-        means2d, radii, depths, tile_size=tile_size,
-        tile_width=tile_width, tile_height=tile_height,
-        packed=False, n_images=1,
+        means2d,
+        radii,
+        depths,
+        tile_size=tile_size,
+        tile_width=tile_width,
+        tile_height=tile_height,
+        packed=False,
+        n_images=1,
     )
     tile_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
     return tile_offsets, flatten_ids
@@ -295,12 +391,36 @@ def nht_fused_render(
     Returns ``(rgb [H, W, 3] fp32, alpha [H, W] fp32)``, both differentiable.
     """
     tile_offsets, flatten_ids = _binning(
-        means.detach(), quats.detach(), scales.detach(), opacities.detach(),
-        viewmat, K, width, height, tile_size, near_plane, far_plane, eps2d,
+        means.detach(),
+        quats.detach(),
+        scales.detach(),
+        opacities.detach(),
+        viewmat,
+        K,
+        width,
+        height,
+        tile_size,
+        near_plane,
+        far_plane,
+        eps2d,
     )
     return _NHTFusedRasterize.apply(
-        means, quats, scales, features, opacities, mlp_params,
-        viewmat, K, width, height, tile_size, tile_offsets, flatten_ids,
-        ray_dir_scale, center_ray_mode, mlp_hidden_dim, mlp_num_layers,
+        means,
+        quats,
+        scales,
+        features,
+        opacities,
+        mlp_params,
+        viewmat,
+        K,
+        width,
+        height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+        ray_dir_scale,
+        center_ray_mode,
+        mlp_hidden_dim,
+        mlp_num_layers,
         loss_scale,
     )

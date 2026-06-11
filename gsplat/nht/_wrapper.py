@@ -630,7 +630,9 @@ _rasterize_to_pixels_from_world_nht_3dgs_fused_fwd = _make_lazy_cuda_func(
 _NATIVE_FRAG_MAP_CACHE: dict = {}
 
 
-def _native_fragment_index_maps(K: int, N: int, device) -> Tuple[Tensor, Tensor, Tensor]:
+def _native_fragment_index_maps(
+    K: int, N: int, device
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Index maps between a (K x N) operand matrix B[k][n] and tcnn's "native"
     warp-fragment serialization (mma_mat<K, N, CM>::into_native_memory).
 
@@ -724,11 +726,11 @@ def convert_mlp_params_to_fused_native(
     offset = 0
     for sz, (k_, n_) in zip(sizes, kn):
         # tcnn linear storage: B[k][n] at index n*K + k  (column-major)
-        B = params[offset:offset + sz].view(n_, k_).t()
+        B = params[offset : offset + sz].view(n_, k_).t()
         bi, ki, ni = _native_fragment_index_maps(k_, n_, params.device)
         chunk = torch.empty(sz, device=params.device, dtype=params.dtype)
         chunk[bi] = B[ki, ni]
-        out[offset:offset + sz] = chunk
+        out[offset : offset + sz] = chunk
         offset += sz
     return out
 
