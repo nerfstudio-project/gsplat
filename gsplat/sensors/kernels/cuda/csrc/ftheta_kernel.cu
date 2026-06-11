@@ -17,7 +17,7 @@
 
 // FTheta forward CUDA kernels: 6 ops x {no_external, bivariate_windshield} =
 // 12 kernel entry points. Backwards live in ftheta_kernel_backward.cu and must
-// match the per-op scratch strides documented at each kernel below:
+// match the per-op scratch strides centralized in DistortionScratchTraits:
 //
 //   D1  cr -> ip,  no_external                  : 8  floats / row
 //   D2  ip -> cr,  no_external                  : 8  floats / row
@@ -41,6 +41,10 @@
 namespace
 {
 constexpr int kThreads = 256;
+
+template<DistortionOpFamily Op, typename PolicyTag>
+using FThetaForwardScratch
+    = DistortionScratchTraits<DistortionSensor::FTheta, Op, DistortionDirection::Forward, PolicyTag>;
 
 // Returns a 1-D grid large enough to cover `count` threads at kThreads/block.
 dim3 grid_for_count(int64_t count)
@@ -110,7 +114,8 @@ __global__ void camera_rays_to_image_points_ftheta_no_external_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FThetaForwardScratch<DistortionOpFamily::CameraRaysToImagePoints, NoExternalDistortionPolicyTag>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
         return;
@@ -125,7 +130,7 @@ __global__ void camera_rays_to_image_points_ftheta_no_external_forward_kernel(
     valid_flags[idx]          = valid && ftheta_image_point_in_frame(img, params);
     if(scratch != nullptr)
     {
-        ftheta_save_proj_state_8(scratch, idx * 8, state);
+        ftheta_save_proj_state_8(scratch, idx * Scratch::kScratchStride, state);
     }
 }
 
@@ -141,7 +146,8 @@ __global__ void image_points_to_camera_rays_ftheta_no_external_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FThetaForwardScratch<DistortionOpFamily::ImagePointsToCameraRays, NoExternalDistortionPolicyTag>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
         return;
@@ -153,7 +159,7 @@ __global__ void image_points_to_camera_rays_ftheta_no_external_forward_kernel(
     write_vec3(camera_rays, idx, ray);
     if(scratch != nullptr)
     {
-        ftheta_save_bp_state_8(scratch, idx * 8, state);
+        ftheta_save_bp_state_8(scratch, idx * Scratch::kScratchStride, state);
     }
 }
 
@@ -172,7 +178,8 @@ __global__ void camera_rays_to_image_points_ftheta_bivariate_windshield_forward_
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FThetaForwardScratch<DistortionOpFamily::CameraRaysToImagePoints, BivariateWindshieldPolicyTag>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
         return;
@@ -192,7 +199,7 @@ __global__ void camera_rays_to_image_points_ftheta_bivariate_windshield_forward_
     {
         // Backward reconstructs distorted_ray from camera_rays; only the
         // FTheta primal needs to be persisted.
-        ftheta_save_proj_state_8(scratch, idx * 8, state);
+        ftheta_save_proj_state_8(scratch, idx * Scratch::kScratchStride, state);
     }
 }
 
@@ -210,7 +217,8 @@ __global__ void image_points_to_camera_rays_ftheta_bivariate_windshield_forward_
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FThetaForwardScratch<DistortionOpFamily::ImagePointsToCameraRays, BivariateWindshieldPolicyTag>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
         return;
@@ -225,7 +233,7 @@ __global__ void image_points_to_camera_rays_ftheta_bivariate_windshield_forward_
     write_vec3(camera_rays, idx, camera_ray);
     if(scratch != nullptr)
     {
-        int64_t off = idx * 12;
+        int64_t off = idx * Scratch::kScratchStride;
         ftheta_save_bp_state_8(scratch, off, bp_state);
         scratch[off + 8]  = unnorm_out.x;
         scratch[off + 9]  = unnorm_out.y;
@@ -257,7 +265,8 @@ __global__ void project_world_points_mean_pose_ftheta_no_external_forward_kernel
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FThetaForwardScratch<DistortionOpFamily::ProjectWorldPointsMeanPose, NoExternalDistortionPolicyTag>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     __shared__ FThetaParams block_params;
     __shared__ float3 block_pose_t;
     __shared__ float4 block_pose_r_xyzw;
@@ -322,7 +331,7 @@ __global__ void project_world_points_mean_pose_ftheta_no_external_forward_kernel
     }
     if(scratch != nullptr)
     {
-        int64_t off      = idx * 10;
+        int64_t off      = idx * Scratch::kScratchStride;
         scratch[off + 0] = p_rel.x;
         scratch[off + 1] = p_rel.y;
         scratch[off + 2] = p_rel.z;
@@ -360,7 +369,8 @@ __global__ void project_world_points_mean_pose_ftheta_bivariate_windshield_forwa
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FThetaForwardScratch<DistortionOpFamily::ProjectWorldPointsMeanPose, BivariateWindshieldPolicyTag>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     __shared__ FThetaParams block_params;
     __shared__ BivariateWindshieldParams block_bivariate_params;
     __shared__ float3 block_pose_t;
@@ -428,7 +438,7 @@ __global__ void project_world_points_mean_pose_ftheta_bivariate_windshield_forwa
     }
     if(scratch != nullptr)
     {
-        int64_t off      = idx * 10;
+        int64_t off      = idx * Scratch::kScratchStride;
         scratch[off + 0] = p_rel.x;
         scratch[off + 1] = p_rel.y;
         scratch[off + 2] = p_rel.z;
@@ -460,6 +470,8 @@ __global__ void image_points_to_world_rays_static_pose_ftheta_no_external_forwar
     float *__restrict__ scratch
 )
 {
+    using Scratch
+        = FThetaForwardScratch<DistortionOpFamily::ImagePointsToWorldRaysStaticPose, NoExternalDistortionPolicyTag>;
     int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
@@ -484,7 +496,7 @@ __global__ void image_points_to_world_rays_static_pose_ftheta_no_external_forwar
     write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
     if(scratch != nullptr)
     {
-        ftheta_save_bp_state_8(scratch, idx * 8, state);
+        ftheta_save_bp_state_8(scratch, idx * Scratch::kScratchStride, state);
     }
 }
 
@@ -507,6 +519,8 @@ __global__ void image_points_to_world_rays_static_pose_ftheta_bivariate_windshie
     float *__restrict__ scratch
 )
 {
+    using Scratch
+        = FThetaForwardScratch<DistortionOpFamily::ImagePointsToWorldRaysStaticPose, BivariateWindshieldPolicyTag>;
     int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
@@ -534,7 +548,7 @@ __global__ void image_points_to_world_rays_static_pose_ftheta_bivariate_windshie
     write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
     if(scratch != nullptr)
     {
-        int64_t off = idx * 12;
+        int64_t off = idx * Scratch::kScratchStride;
         ftheta_save_bp_state_8(scratch, off, bp_state);
         scratch[off + 8]  = unnorm_out.x;
         scratch[off + 9]  = unnorm_out.y;
@@ -573,6 +587,8 @@ __global__ void project_world_points_shutter_pose_ftheta_no_external_forward_ker
     float *__restrict__ scratch
 )
 {
+    using Scratch
+        = FThetaForwardScratch<DistortionOpFamily::ProjectWorldPointsShutterPose, NoExternalDistortionPolicyTag>;
     int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
@@ -666,7 +682,7 @@ __global__ void project_world_points_shutter_pose_ftheta_no_external_forward_ker
     }
     if(scratch != nullptr)
     {
-        int64_t off       = idx * 11;
+        int64_t off       = idx * Scratch::kScratchStride;
         scratch[off + 0]  = p_rel.x;
         scratch[off + 1]  = p_rel.y;
         scratch[off + 2]  = p_rel.z;
@@ -711,6 +727,8 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_fo
     float *__restrict__ scratch
 )
 {
+    using Scratch
+        = FThetaForwardScratch<DistortionOpFamily::ProjectWorldPointsShutterPose, BivariateWindshieldPolicyTag>;
     int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
@@ -806,7 +824,7 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_fo
     }
     if(scratch != nullptr)
     {
-        int64_t off       = idx * 11;
+        int64_t off       = idx * Scratch::kScratchStride;
         scratch[off + 0]  = p_rel.x;
         scratch[off + 1]  = p_rel.y;
         scratch[off + 2]  = p_rel.z;
@@ -846,6 +864,8 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_no_external_forwa
     float *__restrict__ scratch
 )
 {
+    using Scratch
+        = FThetaForwardScratch<DistortionOpFamily::ImagePointsToWorldRaysShutterPose, NoExternalDistortionPolicyTag>;
     int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
@@ -887,7 +907,7 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_no_external_forwa
     }
     if(scratch != nullptr)
     {
-        int64_t off = idx * 9;
+        int64_t off = idx * Scratch::kScratchStride;
         ftheta_save_bp_state_8(scratch, off, bp_state);
         scratch[off + 8] = relative_time;
     }
@@ -918,6 +938,8 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshi
     float *__restrict__ scratch
 )
 {
+    using Scratch
+        = FThetaForwardScratch<DistortionOpFamily::ImagePointsToWorldRaysShutterPose, BivariateWindshieldPolicyTag>;
     int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if(idx >= count)
     {
@@ -962,7 +984,7 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshi
     }
     if(scratch != nullptr)
     {
-        int64_t off = idx * 12;
+        int64_t off = idx * Scratch::kScratchStride;
         ftheta_save_bp_state_8(scratch, off, bp_state);
         scratch[off + 8]  = unnorm_out.x;
         scratch[off + 9]  = unnorm_out.y;
