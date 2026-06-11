@@ -13,7 +13,7 @@ reviews:
   profile: "chill"
   request_changes_workflow: false
   changed_files_summary: true
-  high_level_summary: true
+  high_level_summary: false
   sequence_diagrams: true
   poem: false
   related_issues: true
