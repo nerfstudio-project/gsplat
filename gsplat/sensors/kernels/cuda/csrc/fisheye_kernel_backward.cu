@@ -320,7 +320,7 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backwa
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
             float rx, ry, rz, rw;
-            trajectory_cuda::quat_slerp_pair_fwd_f(
+            gsplat_geometry::quat_slerp_pair_fwd<float>(
                 rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &rx, &ry, &rz, &rw
             );
             float4 rot_mid_xyzw   = make_float4(rx, ry, rz, rw);
@@ -340,8 +340,8 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backwa
             d_trans1.y      += 0.5f * d_mean_t.y;
             d_trans1.z      += 0.5f * d_mean_t.z;
 
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-            trajectory_cuda::quat_slerp_pair_bwd_f(
+            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
                 rot0.x,
                 rot0.y,
                 rot0.z,
@@ -366,8 +366,7 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backwa
                 &gq1x,
                 &gq1y,
                 &gq1z,
-                &gq1w,
-                &ga_unused
+                &gq1w
             );
             d_rot0.x += gq0x;
             d_rot0.y += gq0y;
@@ -700,7 +699,7 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_bivariate_windshie
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
             float rx, ry, rz, rw;
-            trajectory_cuda::quat_slerp_pair_fwd_f(
+            gsplat_geometry::quat_slerp_pair_fwd<float>(
                 rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &rx, &ry, &rz, &rw
             );
             float4 rot_mid_xyzw   = make_float4(rx, ry, rz, rw);
@@ -720,8 +719,8 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_bivariate_windshie
             d_trans1.y      += 0.5f * d_mean_t.y;
             d_trans1.z      += 0.5f * d_mean_t.z;
 
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-            trajectory_cuda::quat_slerp_pair_bwd_f(
+            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
                 rot0.x,
                 rot0.y,
                 rot0.z,
@@ -746,8 +745,7 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_bivariate_windshie
                 &gq1x,
                 &gq1y,
                 &gq1z,
-                &gq1w,
-                &ga_unused
+                &gq1w
             );
             d_rot0.x += gq0x;
             d_rot0.y += gq0y;
@@ -1037,7 +1035,7 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_no_external_bac
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
             float rx, ry, rz, rw;
-            trajectory_cuda::quat_slerp_pair_fwd_f(
+            gsplat_geometry::quat_slerp_pair_fwd<float>(
                 rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
             );
             float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
@@ -1057,8 +1055,8 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_no_external_bac
             d_trans1.y      += alpha * d_pose_t.y;
             d_trans1.z      += alpha * d_pose_t.z;
 
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-            trajectory_cuda::quat_slerp_pair_bwd_f(
+            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
                 rot0.x,
                 rot0.y,
                 rot0.z,
@@ -1083,8 +1081,7 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_no_external_bac
                 &gq1x,
                 &gq1y,
                 &gq1z,
-                &gq1w,
-                &ga_unused
+                &gq1w
             );
             d_rot0.x += gq0x;
             d_rot0.y += gq0y;
@@ -1176,7 +1173,7 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_extern
         float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
         float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
         float rx, ry, rz, rw;
-        trajectory_cuda::quat_slerp_pair_fwd_f(
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
             rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
         );
         float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
@@ -1200,8 +1197,8 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_extern
             grad_image_points[idx * 2 + 1] = d_img.y;
         }
 
-        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-        trajectory_cuda::quat_slerp_pair_bwd_f(
+        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+        gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
             rot0.x,
             rot0.y,
             rot0.z,
@@ -1226,8 +1223,7 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_extern
             &gq1x,
             &gq1y,
             &gq1z,
-            &gq1w,
-            &ga_unused
+            &gq1w
         );
         d_rot0.x += gq0x;
         d_rot0.y += gq0y;
@@ -1314,7 +1310,7 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_bivariate_winds
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
             float rx, ry, rz, rw;
-            trajectory_cuda::quat_slerp_pair_fwd_f(
+            gsplat_geometry::quat_slerp_pair_fwd<float>(
                 rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
             );
             float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
@@ -1334,8 +1330,8 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_bivariate_winds
             d_trans1.y      += alpha * d_pose_t.y;
             d_trans1.z      += alpha * d_pose_t.z;
 
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-            trajectory_cuda::quat_slerp_pair_bwd_f(
+            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
                 rot0.x,
                 rot0.y,
                 rot0.z,
@@ -1360,8 +1356,7 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_bivariate_winds
                 &gq1x,
                 &gq1y,
                 &gq1z,
-                &gq1w,
-                &ga_unused
+                &gq1w
             );
             d_rot0.x += gq0x;
             d_rot0.y += gq0y;
@@ -1462,7 +1457,7 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate
         float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
         float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
         float rx, ry, rz, rw;
-        trajectory_cuda::quat_slerp_pair_fwd_f(
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
             rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
         );
         float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
@@ -1489,8 +1484,8 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate
             grad_image_points[idx * 2 + 1] = d_img.y;
         }
 
-        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-        trajectory_cuda::quat_slerp_pair_bwd_f(
+        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+        gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
             rot0.x,
             rot0.y,
             rot0.z,
@@ -1515,8 +1510,7 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate
             &gq1x,
             &gq1y,
             &gq1z,
-            &gq1w,
-            &ga_unused
+            &gq1w
         );
         d_rot0.x += gq0x;
         d_rot0.y += gq0y;
