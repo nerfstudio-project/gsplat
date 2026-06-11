@@ -14,6 +14,9 @@
 # limitations under the License.
 
 from ._rendering import NHTParams
+from ._inference_renderer import NHTInferenceConfig, NHTInferenceRenderer
+from ._wrapper import convert_mlp_params_to_fused_native
+from ._fused_train import nht_fused_render, nht_fused_supported
 from .deferred_shader import (
     DeferredShaderModule,
     DeferredShaderModuleAOV,
@@ -29,8 +32,13 @@ __all__ = [
     "DeferredShaderModule",
     "DeferredShaderModuleAOV",
     "HarmonicFeatures",
+    "NHTInferenceConfig",
+    "NHTInferenceRenderer",
     "NHTParams",
     "cast_state_dict_to_fp16",
     "cast_state_dict_to_fp32",
+    "convert_mlp_params_to_fused_native",
     "export_splats_nht",
+    "nht_fused_render",
+    "nht_fused_supported",
 ]

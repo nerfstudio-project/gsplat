@@ -118,6 +118,71 @@ rasterize_to_pixels_from_world_nht_3dgs_bwd(
     const at::optional<at::Tensor> &v_render_normals
 );
 
+// ── Fully-fused NHT inference / training forward ─────────────────────────────
+// Rasterization + SH3 encoding + N-layer WMMA MLP + sigmoid in one kernel.
+// `mlp_params` must be in the fused-native fragment layout; convert tcnn
+// params once via gsplat.nht.convert_mlp_params_to_fused_native().
+// With save_state=true also emits the per-pixel accumulated feature buffer and
+// last_ids needed by the fused backward (empty tensors otherwise).
+// Returns: (render_rgb [B,C,H,W,3] fp16, render_alphas [B,C,H,W] fp32,
+//           render_feat [B,C,H,W,FEAT_OUT] fp32 | empty,
+//           last_ids [B,C,H,W] int32 | empty)
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+    const at::Tensor &means, const at::Tensor &quats, const at::Tensor &scales,
+    const at::Tensor &colors, const at::Tensor &opacities,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &viewmats0, const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks, int64_t camera_model,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
+    bool center_ray_mode, double ray_dir_scale,
+    const at::Tensor &mlp_params,
+    int64_t mlp_hidden_dim,
+    int64_t mlp_num_layers,
+    bool save_state
+);
+
+// ── Fused NHT training backward ──────────────────────────────────────────────
+// Inline MLP backward (from the saved feature buffer) + rasterization backward
+// in one kernel. v_mlp_params comes back in tcnn LINEAR layout, fp32, still
+// multiplied by loss_scale (divide on the host).
+// Returns: (v_means, v_quats, v_scales, v_colors fp32, v_opacities, v_mlp_params)
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
+    const at::Tensor &means, const at::Tensor &quats, const at::Tensor &scales,
+    const at::Tensor &colors, const at::Tensor &opacities,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &viewmats0, const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks, int64_t camera_model,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
+    bool center_ray_mode, double ray_dir_scale,
+    const at::Tensor &mlp_params,
+    int64_t mlp_hidden_dim, int64_t mlp_num_layers,
+    double loss_scale,
+    const at::Tensor &render_feat,
+    const at::Tensor &render_alphas,
+    const at::Tensor &last_ids,
+    const at::Tensor &v_render_rgb,
+    const at::Tensor &v_render_alphas,
+    bool compute_mlp_grad
+);
+
 #endif // GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
 
 } // namespace gsplat

@@ -25,7 +25,14 @@ from pathlib import Path
 
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
-from gsplat.nht import DeferredShaderModule, NHTParams, cast_state_dict_to_fp32
+from gsplat.nht import (
+    DeferredShaderModule,
+    NHTInferenceConfig,
+    NHTInferenceRenderer,
+    NHTParams,
+    cast_state_dict_to_fp32,
+    nht_fused_supported,
+)
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer import (
@@ -106,6 +113,34 @@ def main(local_rank: int, world_rank, world_size: int, args):
         print("Applied EMA weights to deferred module")
     deferred_module.eval()
 
+    # Fused single-kernel renderer (rasterize + inline MLP). Only available
+    # when the shader config has a compiled fused-kernel instantiation, and
+    # only for RGB / alpha modes — depth, normal, and AOV modes fall back to
+    # the standard NHT path.
+    fused_ok, fused_reason = nht_fused_supported(deferred_module, for_training=False)
+    if not fused_ok:
+        print(f"Fused kernel unavailable for this shader config: {fused_reason}")
+    fused_renderer = (
+        NHTInferenceRenderer(
+            deferred_module,
+            NHTInferenceConfig(
+                tile_size=args.tile_size,
+                center_ray_mode=args.center_ray_encoding,
+            ),
+        )
+        if fused_ok
+        else None
+    )
+    fused_splats = {
+        "means": means,
+        # NHTInferenceRenderer applies the activations itself
+        "quats": quats,
+        "scales": torch.log(scales),
+        "opacities": torch.logit(opacities.clamp(1e-6, 1 - 1e-6)),
+        "features": features,
+    }
+    ui_state = {"use_fused": fused_ok}
+
     @torch.no_grad()
     def viewer_render_fn(camera_state: CameraState, render_tab_state: RenderTabState):
         assert isinstance(render_tab_state, GsplatRenderTabState)
@@ -122,6 +157,32 @@ def main(local_rank: int, world_rank, world_size: int, args):
         if render_tab_state.camera_model == "ortho":
             K = apply_ortho_scale_to_K(K, width, height, render_tab_state.ortho_scale)
         viewmat = c2w.inverse()
+
+        # ── Fused single-kernel path (RGB / alpha, pinhole only) ───────────
+        use_fused = (
+            ui_state["use_fused"]
+            and fused_renderer is not None
+            and render_tab_state.render_mode in ("rgb", "alpha")
+            and render_tab_state.camera_model == "pinhole"
+        )
+        if use_fused:
+            rgb_f, alpha_f, _ = fused_renderer.render(
+                fused_splats, viewmat, K, width, height
+            )
+            render_tab_state.total_gs_count = len(means)
+            render_tab_state.rendered_gs_count = len(means)
+            if render_tab_state.render_mode == "rgb":
+                rgb = rgb_f[0].clamp(0, 1)
+                bkgd = (
+                    torch.tensor(render_tab_state.backgrounds, device=device).float()
+                    / 255.0
+                )
+                rgb = rgb + bkgd * (1.0 - alpha_f[0])
+                return rgb.clamp(0, 1).cpu().numpy()
+            alpha = alpha_f[0]
+            if render_tab_state.inverse:
+                alpha = 1 - alpha
+            return apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
 
         need_depth = render_tab_state.render_mode in [
             "depth(accumulated)",
@@ -210,12 +271,29 @@ def main(local_rank: int, world_rank, world_size: int, args):
             return apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
 
     server = viser.ViserServer(port=args.port, verbose=False)
-    _ = GsplatViewer(
+    viewer = GsplatViewer(
         server=server,
         render_fn=viewer_render_fn,
         output_dir=Path(args.output_dir),
         mode="rendering",
     )
+    if fused_renderer is not None:
+        with viewer._rendering_folder:
+            fused_checkbox = server.gui.add_checkbox(
+                "NHT fused kernel",
+                initial_value=ui_state["use_fused"],
+                hint=(
+                    "Render with the fully-fused rasterize+MLP kernel. "
+                    "RGB and alpha only — depth, normal, and AOV modes "
+                    "automatically fall back to the standard NHT path."
+                ),
+            )
+
+            @fused_checkbox.on_update
+            def _(_) -> None:
+                ui_state["use_fused"] = fused_checkbox.value
+                viewer.rerender(_)
+
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(100000)
 

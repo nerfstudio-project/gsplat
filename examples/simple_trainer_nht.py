@@ -55,7 +55,10 @@ from gsplat.nht import (
     cast_state_dict_to_fp16,
     cast_state_dict_to_fp32,
     export_splats_nht,
+    nht_fused_render,
+    nht_fused_supported,
 )
+from gsplat.nht._inference_renderer import NHTInferenceConfig, NHTInferenceRenderer
 from gsplat.strategy import MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
@@ -304,6 +307,10 @@ class Config:
     deferred_mlp_ema_decay: float = 0.95
     # Step to start EMA updates (allow MLP to warm up first)
     deferred_mlp_ema_start_step: int = 0
+    # Use fully-fused NHT kernels (single fwd+bwd kernel for training,
+    # NHTInferenceRenderer for eval). Incompatible with depth/normal/AOV losses,
+    # post-processing, and packed rasterization.
+    nht_fused: bool = True
 
     ##### AOV OPTIONS #####
     # Generic AOV target key in the dataset batch. External wrappers can provide
@@ -614,6 +621,48 @@ class Runner:
         if world_size > 1:
             self.deferred_module = DDP(self.deferred_module)
 
+        self._inference_renderer = None
+        if cfg.nht_fused:
+            incompatible = []
+            if cfg.depth_loss:
+                incompatible.append("depth_loss")
+            if cfg.normal_loss:
+                incompatible.append("normal_loss")
+            if cfg.aov_target_key:
+                incompatible.append("aov_target_key")
+            if cfg.post_processing:
+                incompatible.append("post_processing")
+            if cfg.packed:
+                incompatible.append("packed")
+            if cfg.sparse_grad:
+                incompatible.append("sparse_grad")
+            if cfg.visible_adam:
+                incompatible.append("visible_adam")
+            if cfg.pose_opt:
+                # the fused kernel does not propagate gradients to camera poses
+                incompatible.append("pose_opt")
+            if cfg.antialiased:
+                incompatible.append("antialiased")
+            if incompatible:
+                raise ValueError(
+                    f"--nht_fused is incompatible with: {', '.join(incompatible)}"
+                )
+            if cfg.batch_size != 1:
+                raise ValueError(
+                    f"--nht_fused requires batch_size=1 (single view per "
+                    f"kernel launch), got {cfg.batch_size}"
+                )
+            if cfg.camera_model != "pinhole":
+                raise ValueError(
+                    f"--nht_fused currently supports camera_model='pinhole' "
+                    f"only, got {cfg.camera_model!r}"
+                )
+            supported, reason = nht_fused_supported(
+                self._deferred_mod(), for_training=True
+            )
+            if not supported:
+                raise ValueError(f"--nht_fused not supported: {reason}")
+
         # EMA shadow weights for deferred MLP
         self._ema_shadow = None
         if cfg.deferred_mlp_ema:
@@ -677,6 +726,7 @@ class Runner:
         ).to(self.device)
 
         # Viewer
+        self._viewer_fused_checkbox = None
         if not self.cfg.disable_viewer:
             self.server = viser.ViserServer(port=cfg.port, verbose=False)
             self.viewer = GsplatViewer(
@@ -685,6 +735,26 @@ class Runner:
                 output_dir=Path(cfg.result_dir),
                 mode="training",
             )
+            # Fused-kernel preview toggle (only when the shader config has
+            # compiled fused-kernel support).
+            fused_ok, _ = nht_fused_supported(
+                self._deferred_mod(), for_training=False
+            )
+            if fused_ok:
+                with self.viewer._rendering_folder:
+                    self._viewer_fused_checkbox = self.server.gui.add_checkbox(
+                        "NHT fused kernel",
+                        initial_value=cfg.nht_fused,
+                        hint=(
+                            "Render with the fully-fused rasterize+MLP kernel. "
+                            "RGB and alpha only — depth, normal, and AOV modes "
+                            "automatically fall back to the standard NHT path."
+                        ),
+                    )
+
+                    @self._viewer_fused_checkbox.on_update
+                    def _(_) -> None:
+                        self.viewer.rerender(_)
 
         # Track if Gaussians are frozen (for controller distillation)
         self._gaussians_frozen = False
@@ -777,6 +847,14 @@ class Runner:
         self._ema_saved = {n: p.data.clone() for n, p in dm.named_parameters()}
         for n, p in dm.named_parameters():
             p.data.copy_(self._ema_shadow[n])
+        self._invalidate_inference_renderer()
+
+    def _invalidate_inference_renderer(self) -> None:
+        if self._inference_renderer is None:
+            return
+        self._inference_renderer.shader = self._deferred_mod()
+        self._inference_renderer._mlp_params_native = None
+        self._inference_renderer.invalidate_cache()
 
     @torch.no_grad()
     def _restore_from_ema(self):
@@ -848,6 +926,63 @@ class Runner:
             "thin_prism_coeffs": coeff("thin_prism_coeffs", 4),
         }
 
+    def _rasterize_splats_fused(
+        self,
+        camtoworlds: Tensor,
+        Ks: Tensor,
+        width: int,
+        height: int,
+        masks: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Tensor, Dict]:
+        viewmat = torch.linalg.inv(camtoworlds[0])
+        K = Ks[0]
+        dm = self._deferred_mod()
+
+        if torch.is_grad_enabled():
+            rgb, alpha = nht_fused_render(
+                means=self.splats["means"],
+                quats=F.normalize(self.splats["quats"], dim=-1),
+                scales=torch.exp(self.splats["scales"]),
+                features=self.splats["features"],
+                opacities=torch.sigmoid(self.splats["opacities"]),
+                mlp_params=dm.backbone.params,
+                viewmat=viewmat,
+                K=K,
+                width=width,
+                height=height,
+                tile_size=self.cfg.tile_size,
+                ray_dir_scale=dm.ray_dir_scale,
+                center_ray_mode=self.cfg.deferred_opt_center_ray_encoding,
+                mlp_hidden_dim=dm.mlp_hidden_dim,
+                mlp_num_layers=dm.mlp_num_layers,
+                near_plane=self.cfg.near_plane,
+                far_plane=self.cfg.far_plane,
+            )
+            colors = rgb.unsqueeze(0)
+            alphas = alpha.unsqueeze(0).unsqueeze(-1)
+            info: Dict = {}
+        else:
+            if self._inference_renderer is None:
+                self._inference_renderer = NHTInferenceRenderer(
+                    dm,
+                    NHTInferenceConfig(
+                        tile_size=self.cfg.tile_size,
+                        near_plane=self.cfg.near_plane,
+                        far_plane=self.cfg.far_plane,
+                        center_ray_mode=self.cfg.deferred_opt_center_ray_encoding,
+                    ),
+                )
+            else:
+                self._inference_renderer.shader = dm
+            splats = {k: self.splats[k] for k in self.splats}
+            colors, alphas, info = self._inference_renderer.render(
+                splats, viewmat, K, width, height
+            )
+
+        if masks is not None:
+            colors[~masks] = 0
+        return colors, alphas, info
+
     def rasterize_splats(
         self,
         camtoworlds: Tensor,
@@ -860,8 +995,16 @@ class Runner:
         frame_idcs: Optional[Tensor] = None,
         camera_idcs: Optional[Tensor] = None,
         exposure: Optional[Tensor] = None,
+        use_fused: Optional[bool] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
+        # use_fused overrides cfg.nht_fused per call: callers that need outputs
+        # the fused kernel cannot produce (depth/normal channels, per-Gaussian
+        # info) pass False; the viewer's fused toggle passes True/False.
+        if self.cfg.nht_fused if use_fused is None else use_fused:
+            return self._rasterize_splats_fused(
+                camtoworlds, Ks, width, height, masks=masks
+            )
 
         means = self.splats["means"]  # [N, 3]
         quats = self.splats["quats"]  # [N, 4]
@@ -1806,6 +1949,20 @@ class Runner:
         }
         need_normals = render_tab_state.render_mode == "normal"
 
+        # Fused-kernel preview: from the GUI toggle when present, else the
+        # training config. The fused path only produces RGB + alpha, so
+        # depth/normal preview modes (and non-pinhole cameras) automatically
+        # fall back to the standard NHT rasterizer.
+        want_fused = (
+            self._viewer_fused_checkbox.value
+            if self._viewer_fused_checkbox is not None
+            else self.cfg.nht_fused
+        )
+        viewer_use_fused = want_fused and (
+            render_tab_state.render_mode in ("rgb", "alpha")
+            and render_tab_state.camera_model == "pinhole"
+        )
+
         render_colors, render_alphas, info = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
@@ -1819,9 +1976,14 @@ class Runner:
             rasterize_mode=render_tab_state.rasterize_mode,
             camera_model=render_tab_state.camera_model,
             return_normals=need_normals,
+            use_fused=viewer_use_fused,
         )
         render_tab_state.total_gs_count = len(self.splats["means"])
-        render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
+        render_tab_state.rendered_gs_count = (
+            (info["radii"] > 0).all(-1).sum().item()
+            if "radii" in info
+            else len(self.splats["means"])  # fused path: per-Gaussian info n/a
+        )
 
         if render_tab_state.render_mode == "rgb":
             rgb = render_colors[0, ..., 0:3].clamp(0, 1)

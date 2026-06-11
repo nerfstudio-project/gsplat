@@ -611,9 +611,6 @@ def _rasterize_nht_features(
         use_hit_distance,
         with_normals,
     )
-    # fused_renders: [..., C, H, W, padded_feat_ch + 3]
-    # Split off the 3 ray direction channels, strip padding from features,
-    # then re-concatenate.
     ray_dirs = fused_renders[..., -3:]
     feat_renders = fused_renders[..., :-3]
     orig_output = orig_fvdim * encf
@@ -621,3 +618,279 @@ def _rasterize_nht_features(
         feat_renders = feat_renders[..., :orig_output]
     fused_renders = torch.cat([feat_renders, ray_dirs], dim=-1)
     return fused_renders, render_alphas, render_depth, render_normals
+
+
+# ── Fully-fused NHT inference (rasterization + encoding + MLP) ───────────────
+
+_rasterize_to_pixels_from_world_nht_3dgs_fused_fwd = _make_lazy_cuda_func(
+    "rasterize_to_pixels_from_world_nht_3dgs_fused_fwd"
+)
+
+
+_NATIVE_FRAG_MAP_CACHE: dict = {}
+
+
+def _native_fragment_index_maps(K: int, N: int, device) -> Tuple[Tensor, Tensor, Tensor]:
+    """Index maps between a (K x N) operand matrix B[k][n] and tcnn's "native"
+    warp-fragment serialization (mma_mat<K, N, CM>::into_native_memory).
+
+    Layout, mirroring tcnn/mma.h (and NHTFusedMLPDevice.cuh):
+      - the matrix is tiled into 16x16 fragments, ordered column-major:
+        frag_id = c16 * (K/16) + r16
+      - each fragment is serialized as 32 consecutive 16-byte entries
+        (one per warp lane); entry = 4 registers x half2
+      - register r of lane l holds, per the PTX m16n8k16 fragment layout:
+          rows  k = r16*16 + (l%4)*2 + (8 if r in {1,3} else 0) + {0,1}
+          col   n = c16*16 + l//4    + (8 if r in {2,3} else 0)
+
+    Returns flat int64 tensors (buf_idx, k_idx, n_idx) with one entry per half.
+    Cached per (K, N, device) — called every conversion (e.g. once per training
+    iteration), so the maps must not be rebuilt in Python loops each time.
+    """
+    key = (K, N, str(device))
+    hit = _NATIVE_FRAG_MAP_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    fs = K // 16
+    lanes = torch.arange(32, device=device)
+    k_pair = (lanes % 4) * 2
+    n_base = lanes // 4
+
+    buf_idx, k_idx, n_idx = [], [], []
+    for c16 in range(N // 16):
+        for r16 in range(K // 16):
+            fid = c16 * fs + r16
+            for reg in range(4):
+                k_off = k_pair + (8 if reg in (1, 3) else 0)
+                n_off = n_base + (8 if reg in (2, 3) else 0)
+                for half in range(2):
+                    buf_idx.append((fid * 32 + lanes) * 8 + reg * 2 + half)
+                    k_idx.append(r16 * 16 + k_off + half)
+                    n_idx.append(c16 * 16 + n_off)
+    maps = (torch.cat(buf_idx), torch.cat(k_idx), torch.cat(n_idx))
+    _NATIVE_FRAG_MAP_CACHE[key] = maps
+    return maps
+
+
+def convert_mlp_params_to_fused_native(
+    params: Tensor,
+    n_feat_in: int,
+    mlp_hidden_dim: int,
+    mlp_num_layers: int,
+) -> Tensor:
+    """Convert tcnn ``backbone.params`` to the layout the fused inference kernel expects.
+
+    tcnn's PyTorch parameter buffer stores each layer's weight matrix in linear
+    column-major order (equivalently: row-major ``[n_out, n_in]``).  The fused
+    inference kernel (``NHTFusedMLPDevice.cuh``) instead loads weights in tcnn's
+    "native" warp-fragment layout for direct WMMA consumption.  This function
+    performs the one-time re-packing; do it at model-load time and reuse.
+
+    Parameters
+    ----------
+    params:
+        tcnn network parameters, fp16, shape ``[n_params]`` with
+        ``n_params = enc_dim*H + (L-1)*H*H + H*16`` where
+        ``enc_dim = round_up16(n_feat_in + 9)``.
+    n_feat_in:
+        Number of identity-encoded feature inputs (``shader.encoded_dim``,
+        e.g. 24 for feature_dim=48).
+    mlp_hidden_dim:
+        Hidden width H (64 or 128).
+    mlp_num_layers:
+        Number of hidden ReLU layers L (2 or 3).
+
+    Returns
+    -------
+    fp16 tensor of the same shape in fused-native layout.
+    """
+    if params.dtype != torch.float16:
+        params = params.half()
+    params = params.detach().contiguous()
+    H = mlp_hidden_dim
+    L = mlp_num_layers
+    enc_dim = (n_feat_in + 9 + 15) // 16 * 16
+    sizes = [enc_dim * H] + [H * H] * (L - 1) + [H * 16]
+    kn = [(enc_dim, H)] + [(H, H)] * (L - 1) + [(H, 16)]
+    if params.numel() != sum(sizes):
+        raise ValueError(
+            f"convert_mlp_params_to_fused_native: params has {params.numel()} "
+            f"elements, expected {sum(sizes)} for enc_dim={enc_dim}, "
+            f"hidden={H}, layers={L}."
+        )
+
+    out = torch.empty_like(params)
+    offset = 0
+    for sz, (k_, n_) in zip(sizes, kn):
+        # tcnn linear storage: B[k][n] at index n*K + k  (column-major)
+        B = params[offset:offset + sz].view(n_, k_).t()
+        bi, ki, ni = _native_fragment_index_maps(k_, n_, params.device)
+        chunk = torch.empty(sz, device=params.device, dtype=params.dtype)
+        chunk[bi] = B[ki, ni]
+        out[offset:offset + sz] = chunk
+        offset += sz
+    return out
+
+
+def rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+    means: Tensor,
+    quats: Tensor,
+    scales: Tensor,
+    colors: Tensor,
+    opacities: Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    viewmats0: Tensor,
+    viewmats1: Optional[Tensor],
+    Ks: Tensor,
+    camera_model: int,
+    ut_params,
+    rs_type: int,
+    radial_coeffs: Optional[Tensor],
+    tangential_coeffs: Optional[Tensor],
+    thin_prism_coeffs: Optional[Tensor],
+    ftheta_coeffs,
+    lidar_coeffs,
+    external_distortion_params,
+    tile_offsets: Tensor,
+    flatten_ids: Tensor,
+    center_ray_mode: bool,
+    ray_dir_scale: float,
+    mlp_params: Tensor,
+    mlp_hidden_dim: int = 64,
+    mlp_num_layers: int = 2,
+    save_state: bool = False,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Fully-fused NHT forward: rasterization + SH3 encoding + N-layer MLP + sigmoid.
+
+    With ``save_state=True`` the kernel additionally emits the per-pixel
+    accumulated feature buffer and last_ids required by the fused backward.
+
+    Returns
+    -------
+    render_rgb   : [B, C, H, W, 3]         float16
+    render_alpha : [B, C, H, W]            float32
+    render_feat  : [B, C, H, W, FEAT_OUT]  float32 (empty if not save_state)
+    last_ids     : [B, C, H, W]            int32   (empty if not save_state)
+    """
+    return _rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        viewmats0.contiguous(),
+        viewmats1.contiguous() if viewmats1 is not None else None,
+        Ks.contiguous(),
+        camera_model,
+        ut_params,
+        rs_type,
+        radial_coeffs.contiguous() if radial_coeffs is not None else None,
+        tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
+        thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
+        ftheta_coeffs,
+        lidar_coeffs,
+        external_distortion_params,
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        center_ray_mode,
+        ray_dir_scale,
+        mlp_params.contiguous(),
+        mlp_hidden_dim,
+        mlp_num_layers,
+        save_state,
+    )
+
+
+_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd = _make_lazy_cuda_func(
+    "rasterize_to_pixels_from_world_nht_3dgs_fused_bwd"
+)
+
+
+def rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
+    means: Tensor,
+    quats: Tensor,
+    scales: Tensor,
+    colors: Tensor,
+    opacities: Tensor,
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    viewmats0: Tensor,
+    viewmats1: Optional[Tensor],
+    Ks: Tensor,
+    camera_model: int,
+    ut_params,
+    rs_type: int,
+    radial_coeffs: Optional[Tensor],
+    tangential_coeffs: Optional[Tensor],
+    thin_prism_coeffs: Optional[Tensor],
+    ftheta_coeffs,
+    lidar_coeffs,
+    external_distortion_params,
+    tile_offsets: Tensor,
+    flatten_ids: Tensor,
+    center_ray_mode: bool,
+    ray_dir_scale: float,
+    mlp_params: Tensor,
+    mlp_hidden_dim: int,
+    mlp_num_layers: int,
+    loss_scale: float,
+    render_feat: Tensor,
+    render_alphas: Tensor,
+    last_ids: Tensor,
+    v_render_rgb: Tensor,
+    v_render_alphas: Tensor,
+    compute_mlp_grad: bool = True,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Fused NHT training backward: inline MLP backward + rasterization backward.
+
+    ``mlp_params`` must be in fused-native layout. The returned
+    ``v_mlp_params`` is fp32 in tcnn LINEAR layout and is still multiplied by
+    ``loss_scale`` — divide before use.
+
+    Returns
+    -------
+    (v_means, v_quats, v_scales, v_colors fp32, v_opacities, v_mlp_params)
+    """
+    return _rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        viewmats0.contiguous(),
+        viewmats1.contiguous() if viewmats1 is not None else None,
+        Ks.contiguous(),
+        camera_model,
+        ut_params,
+        rs_type,
+        radial_coeffs.contiguous() if radial_coeffs is not None else None,
+        tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
+        thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
+        ftheta_coeffs,
+        lidar_coeffs,
+        external_distortion_params,
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        center_ray_mode,
+        ray_dir_scale,
+        mlp_params.contiguous(),
+        mlp_hidden_dim,
+        mlp_num_layers,
+        loss_scale,
+        render_feat.contiguous(),
+        render_alphas.contiguous(),
+        last_ids.contiguous(),
+        v_render_rgb.contiguous(),
+        v_render_alphas.contiguous(),
+        compute_mlp_grad,
+    )

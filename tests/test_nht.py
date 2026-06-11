@@ -1075,3 +1075,310 @@ class TestNHTExporter:
         for k in sd:
             assert up[k].shape == sd[k].shape
             assert up[k].dtype == sd[k].dtype
+
+
+# ---------------------------------------------------------------------------
+# Fully-fused inference kernel
+# ---------------------------------------------------------------------------
+
+
+class TestNHTFusedInference:
+    """Regression tests for the fused inference kernel (rasterize + WMMA MLP).
+
+    The reference is the training rasterizer's feature output pushed through a
+    pure-PyTorch emulation of the tcnn backbone (Composite[Identity + SH3]
+    encoding with one-padding, row-major [out, in] weights, fp16 activations,
+    sigmoid output). The emulation has been validated against tcnn itself to
+    ~1.6e-4 mean error.
+
+    These tests would have caught both historical fused-kernel bugs:
+    wrong lane_id() under 2-D thread blocks, and consuming tcnn linear-layout
+    params without converting to the native fragment layout.
+    """
+
+    @staticmethod
+    def _sh3_basis(d):
+        x, y, z = d[:, 0], d[:, 1], d[:, 2]
+        xy, xz, yz = x * y, x * z, y * z
+        x2, y2, z2 = x * x, y * y, z * z
+        return torch.stack(
+            [
+                torch.full_like(x, 0.28209479177387814),
+                -0.48860251190291987 * y,
+                0.48860251190291987 * z,
+                -0.48860251190291987 * x,
+                1.0925484305920792 * xy,
+                -1.0925484305920792 * yz,
+                0.94617469575755997 * z2 - 0.31539156525251999,
+                -1.0925484305920792 * xz,
+                0.54627421529603959 * (x2 - y2),
+            ],
+            dim=1,
+        )
+
+    @classmethod
+    def _emulate_mlp(cls, params, feat_ray, n_feat, hidden, n_layers):
+        """tcnn-equivalent forward on [P, n_feat+3] rasterized features."""
+        enc_dim = (n_feat + 9 + 15) // 16 * 16
+        pad = enc_dim - n_feat - 9
+        P = feat_ray.shape[0]
+        rd = feat_ray[:, n_feat : n_feat + 3].float() * 2.0 - 1.0
+        enc = torch.cat(
+            [
+                feat_ray[:, :n_feat].float(),
+                cls._sh3_basis(rd),
+                torch.ones(P, pad, device=feat_ray.device),
+            ],
+            dim=1,
+        ).half()
+        sizes = [enc_dim * hidden] + [hidden * hidden] * (n_layers - 1) + [hidden * 16]
+        shapes = [(hidden, enc_dim)] + [(hidden, hidden)] * (n_layers - 1) + [(16, hidden)]
+        h, offset = enc, 0
+        for li, (sz, (o, i_)) in enumerate(zip(sizes, shapes)):
+            W = params[offset : offset + sz].view(o, i_)
+            offset += sz
+            h = h @ W.t()
+            if li < len(sizes) - 1:
+                h = torch.relu(h)
+        return torch.sigmoid(h.float())[:, :3]
+
+    @pytest.mark.skipif(not _nht_ok, reason="NHT rasterizer unavailable")
+    @pytest.mark.parametrize(
+        "feature_dim,hidden,n_layers",
+        [(48, 128, 3), (16, 64, 2)],
+    )
+    def test_fused_inference_matches_training_reference(
+        self, feature_dim, hidden, n_layers
+    ):
+        from gsplat.cuda._wrapper import (
+            FThetaCameraDistortionParameters,
+            RollingShutterType,
+            UnscentedTransformParameters,
+            _make_lazy_cuda_obj,
+            fully_fused_projection_with_ut,
+            isect_offset_encode,
+            isect_tiles,
+        )
+        from gsplat.nht._wrapper import (
+            convert_mlp_params_to_fused_native,
+            rasterize_to_pixels_from_world_nht_3dgs_fused_fwd,
+        )
+        from gsplat.rendering import rasterization
+
+        torch.manual_seed(7)
+        N = 512
+        ray_dir_scale = 1.0
+        means, quats_raw, scales_raw, opac_raw, features = _make_splats(
+            N=N, feature_dim=feature_dim
+        )
+        quats = F.normalize(quats_raw, dim=-1)
+        scales = torch.exp(scales_raw)
+        opacities = torch.sigmoid(opac_raw)
+        features = (features * 0.5).half()
+
+        K, c2w, width, height = _make_camera(width=64, height=48)
+        viewmat = torch.linalg.inv(c2w)
+
+        n_feat = (feature_dim // get_feature_divisor()) * get_encoding_expansion_factor()
+        enc_dim = (n_feat + 9 + 15) // 16 * 16
+        n_params = enc_dim * hidden + (n_layers - 1) * hidden * hidden + hidden * 16
+        params = (torch.randn(n_params, device=device) * 0.2).half()
+
+        # Reference: training rasterizer + emulated MLP
+        with torch.inference_mode():
+            render_colors, render_alphas, _ = rasterization(
+                means=means,
+                quats=quats,
+                scales=scales,
+                opacities=opacities,
+                colors=features,
+                viewmats=viewmat,
+                Ks=K,
+                width=width,
+                height=height,
+                sh_degree=None,
+                packed=False,
+                with_ut=True,
+                with_eval3d=True,
+                nht_params=NHTParams(enabled=True, ray_dir_scale=ray_dir_scale),
+                render_mode="RGB",
+            )
+            feat_ray = render_colors[0].reshape(-1, render_colors.shape[-1])
+            rgb_ref = self._emulate_mlp(params, feat_ray, n_feat, hidden, n_layers)
+            rgb_ref = rgb_ref.view(height, width, 3)
+
+            # Fused kernel
+            ts = 16
+            tw, th = (width + ts - 1) // ts, (height + ts - 1) // ts
+            radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+                means=means, quats=quats, scales=scales, opacities=opacities,
+                viewmats=viewmat, Ks=K, width=width, height=height,
+                eps2d=0.3, near_plane=0.01, far_plane=1e10,
+                calc_compensations=False, camera_model="pinhole",
+                ut_params=UnscentedTransformParameters(),
+                rolling_shutter=RollingShutterType.GLOBAL,
+                viewmats_rs=None, global_z_order=True,
+            )
+            _, isect_ids, flatten_ids = isect_tiles(
+                means2d, radii, depths, tile_size=ts,
+                tile_width=tw, tile_height=th, packed=False, n_images=1,
+            )
+            tile_offsets = isect_offset_encode(isect_ids, 1, tw, th)
+
+            params_native = convert_mlp_params_to_fused_native(
+                params, n_feat_in=n_feat,
+                mlp_hidden_dim=hidden, mlp_num_layers=n_layers,
+            )
+            rgb_fused, alpha_fused, _, _ = rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+                means=means[None, None],
+                quats=quats[None, None],
+                scales=scales[None, None],
+                colors=features[None, None],
+                opacities=opacities[None, None],
+                image_width=width, image_height=height, tile_size=ts,
+                viewmats0=viewmat[None], viewmats1=None, Ks=K[None],
+                camera_model=_make_lazy_cuda_obj("CameraModelType.PINHOLE"),
+                ut_params=UnscentedTransformParameters(),
+                rs_type=int(RollingShutterType.GLOBAL),
+                radial_coeffs=None, tangential_coeffs=None,
+                thin_prism_coeffs=None,
+                ftheta_coeffs=FThetaCameraDistortionParameters(),
+                lidar_coeffs=None, external_distortion_params=None,
+                tile_offsets=tile_offsets, flatten_ids=flatten_ids,
+                center_ray_mode=False, ray_dir_scale=ray_dir_scale,
+                mlp_params=params_native,
+                mlp_hidden_dim=hidden, mlp_num_layers=n_layers,
+            )
+
+        rgb_fused = rgb_fused.reshape(height, width, 3).float()
+        alpha_fused = alpha_fused.reshape(height, width)
+
+        rgb_err = (rgb_fused - rgb_ref).abs()
+        assert rgb_err.mean().item() < 2e-3, f"mean rgb err {rgb_err.mean().item()}"
+        assert rgb_err.max().item() < 3e-2, f"max rgb err {rgb_err.max().item()}"
+
+        alpha_ref = render_alphas[0, :, :, 0]
+        alpha_err = (alpha_fused - alpha_ref).abs()
+        assert alpha_err.max().item() < 1e-4, f"max alpha err {alpha_err.max().item()}"
+
+    @pytest.mark.skipif(not _nht_ok, reason="NHT rasterizer unavailable")
+    @pytest.mark.parametrize(
+        "feature_dim,hidden,n_layers",
+        [(48, 128, 3), (16, 64, 2)],
+    )
+    def test_fused_backward_matches_reference(self, feature_dim, hidden, n_layers):
+        """Fused fwd+bwd gradients vs training rasterizer + fp32 MLP autograd."""
+        from gsplat.rendering import rasterization
+        from gsplat.nht import nht_fused_render
+
+        torch.manual_seed(3)
+        N = 512
+        W_img, H_img = 64, 48
+        ray_dir_scale = 1.0
+
+        means_raw = torch.randn(N, 3, device=device) * 0.3
+        quats_raw = F.normalize(torch.randn(N, 4, device=device), dim=-1)
+        scales_raw = torch.rand(N, 3, device=device) * 0.5 - 2.0
+        opac_raw = torch.logit(torch.full((N,), 0.5, device=device))
+        feats_raw = (torch.randn(N, feature_dim, device=device) * 0.5).half().float()
+
+        n_feat = (feature_dim // 4) * 2
+        enc_dim = (n_feat + 9 + 15) // 16 * 16
+        n_params = enc_dim * hidden + (n_layers - 1) * hidden * hidden + hidden * 16
+        params_raw = (torch.randn(n_params, device=device) * 0.2).half().float()
+
+        Kmat = torch.tensor(
+            [[100.0, 0., W_img / 2], [0., 100.0, H_img / 2], [0., 0., 1.]],
+            device=device)
+        c2w = torch.eye(4, device=device)
+        c2w[2, 3] = -3.0
+        viewmat = torch.linalg.inv(c2w)
+
+        w_rgb = torch.randn(H_img, W_img, 3, device=device) / (H_img * W_img * 3)
+        w_alpha = torch.randn(H_img, W_img, device=device) / (H_img * W_img)
+
+        def leaves():
+            t = [means_raw.clone(), quats_raw.clone(), scales_raw.clone(),
+                 feats_raw.clone(), opac_raw.clone(), params_raw.clone()]
+            for x in t:
+                x.requires_grad_(True)
+            return t
+
+        def emulate_fp32(params, feat_ray):
+            pad = enc_dim - n_feat - 9
+            P = feat_ray.shape[0]
+            rd = feat_ray[:, n_feat:n_feat + 3] * 2.0 - 1.0
+            enc = torch.cat([feat_ray[:, :n_feat], self._sh3_basis(rd),
+                             torch.ones(P, pad, device=device)], dim=1)
+            sizes = ([enc_dim * hidden] + [hidden * hidden] * (n_layers - 1)
+                     + [hidden * 16])
+            shapes = ([(hidden, enc_dim)] + [(hidden, hidden)] * (n_layers - 1)
+                      + [(16, hidden)])
+            h, offset = enc, 0
+            for li, (sz, (o, i_)) in enumerate(zip(sizes, shapes)):
+                Wm = params[offset:offset + sz].view(o, i_)
+                offset += sz
+                h = h @ Wm.t()
+                if li < len(sizes) - 1:
+                    h = torch.relu(h)
+            return torch.sigmoid(h)[:, :3]
+
+        # Reference
+        m, q, s, f, o, p = leaves()
+        render_colors, render_alphas, _ = rasterization(
+            means=m, quats=F.normalize(q, dim=-1), scales=torch.exp(s),
+            opacities=torch.sigmoid(o), colors=f.half(),
+            viewmats=viewmat[None], Ks=Kmat[None],
+            width=W_img, height=H_img, sh_degree=None,
+            near_plane=0.01, far_plane=1e10, packed=False,
+            with_ut=True, with_eval3d=True,
+            nht_params=NHTParams(enabled=True, ray_dir_scale=ray_dir_scale),
+            render_mode="RGB",
+        )
+        feat_ray = render_colors[0].reshape(-1, render_colors.shape[-1]).float()
+        rgb_ref = emulate_fp32(p, feat_ray).view(H_img, W_img, 3)
+        loss_ref = (rgb_ref * w_rgb).sum() + (render_alphas[0, :, :, 0] * w_alpha).sum()
+        loss_ref.backward()
+        ref_grads = [m.grad, q.grad, s.grad, f.grad, o.grad, p.grad]
+
+        # Fused
+        m2, q2, s2, f2, o2, p2 = leaves()
+        rgb_fused, alpha_fused = nht_fused_render(
+            means=m2, quats=F.normalize(q2, dim=-1), scales=torch.exp(s2),
+            features=f2, opacities=torch.sigmoid(o2), mlp_params=p2,
+            viewmat=viewmat, K=Kmat, width=W_img, height=H_img,
+            tile_size=16, ray_dir_scale=ray_dir_scale,
+            mlp_hidden_dim=hidden, mlp_num_layers=n_layers,
+        )
+        loss_fused = (rgb_fused * w_rgb).sum() + (alpha_fused * w_alpha).sum()
+        loss_fused.backward()
+        fused_grads = [m2.grad, q2.grad, s2.grad, f2.grad, o2.grad, p2.grad]
+
+        names = ["means", "quats", "scales", "features", "opacities", "mlp_params"]
+        for nm, ga, gb in zip(names, ref_grads, fused_grads):
+            assert ga is not None and gb is not None, f"{nm}: missing grad"
+            ga, gb = ga.float().flatten(), gb.float().flatten()
+            rel = (ga - gb).norm().item() / max(ga.norm().item(), 1e-12)
+            cos = torch.dot(ga, gb).item() / max(
+                ga.norm().item() * gb.norm().item(), 1e-20)
+            assert rel < 0.08, f"{nm}: rel_err={rel}"
+            assert cos > 0.99, f"{nm}: cos={cos}"
+
+    @pytest.mark.skipif(not _nht_ok, reason="NHT rasterizer unavailable")
+    def test_convert_mlp_params_roundtrip_shape(self):
+        from gsplat.nht._wrapper import convert_mlp_params_to_fused_native
+
+        n_feat, hidden, n_layers = 24, 128, 3
+        enc_dim = 48
+        n_params = enc_dim * hidden + (n_layers - 1) * hidden * hidden + hidden * 16
+        params = torch.randn(n_params, device=device).half()
+        out = convert_mlp_params_to_fused_native(params, n_feat, hidden, n_layers)
+        assert out.shape == params.shape
+        assert out.dtype == torch.float16
+        # The conversion is a permutation: same multiset of values per layer.
+        assert torch.equal(
+            params.float().sort().values, out.float().sort().values
+        )
+
+        with pytest.raises(ValueError):
+            convert_mlp_params_to_fused_native(params[:-1], n_feat, hidden, n_layers)

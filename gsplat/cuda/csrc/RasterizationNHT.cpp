@@ -309,6 +309,179 @@ rasterize_to_pixels_from_world_nht_3dgs_bwd(
         v_means, v_quats, v_scales, v_colors, v_opacities, v_depths_per_gauss_t);
 }
 
+// ── Fully-fused NHT inference (rasterization + encoding + MLP) ───────────────
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+    const at::Tensor &means, const at::Tensor &quats, const at::Tensor &scales,
+    const at::Tensor &colors, const at::Tensor &opacities,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &viewmats0, const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks, int64_t camera_model,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
+    bool center_ray_mode, double ray_dir_scale,
+    const at::Tensor &mlp_params,
+    int64_t mlp_hidden_dim,
+    int64_t mlp_num_layers,
+    bool save_state
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means); CHECK_INPUT(quats); CHECK_INPUT(scales);
+    CHECK_INPUT(colors); CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets); CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(mlp_params);
+    TORCH_CHECK(ut_params,     "ut_params intrusive_ptr is null");
+    TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
+    TORCH_CHECK(colors.scalar_type() == at::kHalf, "NHT inference: colors must be fp16");
+    TORCH_CHECK(mlp_params.scalar_type() == at::kHalf, "NHT inference: mlp_params must be fp16");
+    if (lidar_coeffs.has_value()) {
+        TORCH_CHECK(camera_model == (int64_t)CameraModelType::LIDAR,
+            "lidar_coeffs requires camera_model=LIDAR");
+        TORCH_CHECK(lidar_coeffs.value(), "lidar_coeffs intrusive_ptr is null");
+    }
+
+    auto opt = means.options();
+    at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
+    const uint32_t C_cam  = (uint32_t)viewmats0.size(-3);
+    const uint32_t im_h   = (uint32_t)image_height;
+    const uint32_t im_w   = (uint32_t)image_width;
+    const uint32_t channels = (uint32_t)colors.size(-1);
+
+    at::DimVector rgb_shape(batch_dims);
+    rgb_shape.append({C_cam, im_h, im_w, 3});
+    at::Tensor renders_rgb = at::empty(rgb_shape,
+        at::TensorOptions().dtype(at::kHalf).device(means.device()));
+
+    at::DimVector alpha_shape(batch_dims);
+    alpha_shape.append({C_cam, im_h, im_w});
+    at::Tensor alphas = at::zeros(alpha_shape, opt);
+
+    at::Tensor center_ray_dirs = viewmats0.select(-2, 2).narrow(-1, 0, 3).contiguous();
+
+    // Optional training-state outputs (saved for the fused backward).
+    const uint32_t feat_out = (channels / 4) * 2;  // OUT_CDIM * ENCF
+    at::Tensor render_feat, last_ids;
+    at::optional<at::Tensor> render_feat_opt, last_ids_opt;
+    if (save_state) {
+        at::DimVector feat_shape(batch_dims);
+        feat_shape.append({C_cam, im_h, im_w, (int64_t)feat_out});
+        render_feat = at::zeros(feat_shape, opt);
+        at::DimVector lid_shape(batch_dims);
+        lid_shape.append({C_cam, im_h, im_w});
+        last_ids = at::zeros(lid_shape, opt.dtype(at::kInt));
+        render_feat_opt = render_feat;
+        last_ids_opt = last_ids;
+    } else {
+        render_feat = at::empty({0}, opt);
+        last_ids = at::empty({0}, opt.dtype(at::kInt));
+    }
+
+    // All channel/hidden/layer dispatch is handled in the .cu file.
+    dispatch_rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(
+        means, quats, scales, colors, opacities,
+        im_w, im_h, (uint32_t)tile_size,
+        viewmats0, viewmats1, Ks,
+        (CameraModelType)camera_model, *ut_params, (ShutterType)rs_type,
+        radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        *ftheta_coeffs, lidar_coeffs, external_distortion_params,
+        tile_offsets, flatten_ids,
+        center_ray_mode, center_ray_dirs, (float)ray_dir_scale,
+        mlp_params,
+        (uint32_t)mlp_hidden_dim, (uint32_t)mlp_num_layers,
+        renders_rgb, alphas, render_feat_opt, last_ids_opt);
+
+    return {renders_rgb, alphas, render_feat, last_ids};
+}
+
+// ── Fused NHT training backward ──────────────────────────────────────────────
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
+    const at::Tensor &means, const at::Tensor &quats, const at::Tensor &scales,
+    const at::Tensor &colors, const at::Tensor &opacities,
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    const at::Tensor &viewmats0, const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks, int64_t camera_model,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
+    bool center_ray_mode, double ray_dir_scale,
+    const at::Tensor &mlp_params,
+    int64_t mlp_hidden_dim, int64_t mlp_num_layers,
+    double loss_scale,
+    const at::Tensor &render_feat,
+    const at::Tensor &render_alphas,
+    const at::Tensor &last_ids,
+    const at::Tensor &v_render_rgb,
+    const at::Tensor &v_render_alphas,
+    bool compute_mlp_grad
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means); CHECK_INPUT(quats); CHECK_INPUT(scales);
+    CHECK_INPUT(colors); CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets); CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(mlp_params);
+    CHECK_INPUT(render_feat); CHECK_INPUT(render_alphas); CHECK_INPUT(last_ids);
+    CHECK_INPUT(v_render_rgb); CHECK_INPUT(v_render_alphas);
+    TORCH_CHECK(ut_params,     "ut_params intrusive_ptr is null");
+    TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
+    TORCH_CHECK(colors.scalar_type() == at::kHalf, "NHT fused bwd: colors must be fp16");
+    TORCH_CHECK(mlp_params.scalar_type() == at::kHalf, "NHT fused bwd: mlp_params must be fp16");
+    TORCH_CHECK(render_feat.scalar_type() == at::kFloat, "render_feat must be fp32");
+    TORCH_CHECK(v_render_rgb.scalar_type() == at::kFloat, "v_render_rgb must be fp32");
+    TORCH_CHECK(v_render_alphas.scalar_type() == at::kFloat, "v_render_alphas must be fp32");
+    TORCH_CHECK(last_ids.scalar_type() == at::kInt, "last_ids must be int32");
+
+    const uint32_t im_h = (uint32_t)image_height;
+    const uint32_t im_w = (uint32_t)image_width;
+
+    at::Tensor v_means     = at::zeros_like(means);
+    at::Tensor v_quats     = at::zeros_like(quats);
+    at::Tensor v_scales    = at::zeros_like(scales);
+    at::Tensor v_colors    = at::zeros(colors.sizes(),
+        colors.options().dtype(at::kFloat));
+    at::Tensor v_opacities = at::zeros_like(opacities);
+    at::Tensor v_mlp_params = at::zeros(
+        {compute_mlp_grad ? mlp_params.numel() : 0},
+        mlp_params.options().dtype(at::kFloat));
+
+    at::Tensor center_ray_dirs = viewmats0.select(-2, 2).narrow(-1, 0, 3).contiguous();
+
+    dispatch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
+        means, quats, scales, colors, opacities,
+        im_w, im_h, (uint32_t)tile_size,
+        viewmats0, viewmats1, Ks,
+        (CameraModelType)camera_model, *ut_params, (ShutterType)rs_type,
+        radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        *ftheta_coeffs, lidar_coeffs, external_distortion_params,
+        tile_offsets, flatten_ids,
+        center_ray_mode, center_ray_dirs, (float)ray_dir_scale,
+        mlp_params,
+        (uint32_t)mlp_hidden_dim, (uint32_t)mlp_num_layers,
+        (float)loss_scale,
+        render_feat, render_alphas, last_ids,
+        v_render_rgb, v_render_alphas,
+        v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_params);
+
+    // v_mlp_params is still multiplied by loss_scale; the Python wrapper
+    // divides after the kernel (keeps the fp16 fragment path well-scaled).
+    return {v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_params};
+}
+
 } // namespace gsplat
 
 #endif // GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
