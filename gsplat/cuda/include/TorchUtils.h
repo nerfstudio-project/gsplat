@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <ATen/Functions.h> // at::zeros
 #include <ATen/core/List.h> // c10::List<at::Tensor> for is_tensor_list
 #include <ATen/core/Tensor.h>
 #include <ATen/core/dispatch/Dispatcher.h> // c10::Dispatcher for call_torch_op
@@ -234,6 +235,20 @@ inline at::optional<at::Tensor> contiguous_optional(const at::optional<at::Tenso
         return tensor.value().contiguous();
     }
     return c10::nullopt;
+}
+
+// Returns the gradient if present, otherwise a zero tensor of the requested
+// shape/options (or like `reference`). With set_materialize_grads(false) an
+// output whose gradient was not requested arrives as nullopt; callers use these
+// to substitute an explicit zero, and may `.contiguous()` the result inline.
+inline at::Tensor tensor_or_zeros(const at::optional<at::Tensor> &grad, at::IntArrayRef shape,
+                                  const at::TensorOptions &options) {
+    return grad.has_value() ? grad.value() : at::zeros(shape, options);
+}
+
+inline at::Tensor tensor_or_zeros_like(const at::optional<at::Tensor> &grad,
+                                       const at::Tensor &reference) {
+    return grad.has_value() ? grad.value() : at::zeros_like(reference);
 }
 
 inline at::Tensor make_sparse_coo_grad(const at::Tensor &indices, const at::Tensor &values,
