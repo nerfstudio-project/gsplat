@@ -71,6 +71,7 @@ gsplat/geometry/
       build.py
       ext.cpp
       csrc/
+        coordinate_conversions.cuh
         quaternion.cu
         quaternion.cuh
         pose.cu
@@ -198,6 +199,9 @@ basename). Each `.cu` file includes only its matching header; the header
 holds the device-side implementation that kernels need, and the translation unit
 holds launch helpers, `__global__` kernels, and the extension entry points
 (`*_cuda`, `*_bwd_cuda`) bound from C++/Python.
+
+Reusable device helpers live in the owning `.cuh` under `gsplat_geometry`;
+host exports stay in the `.cu` translation units.
 
 **`quaternion.cuh` / `quaternion.cu`**
 
@@ -336,7 +340,8 @@ The test suite verifies that:
 
 - Public geometry functions are defined in `functional/`.
 - Backend implementation details are defined in `kernels/`.
-- Shared implementation helpers are defined in `include/`.
+- Reserve `include/` for shared public or host-side headers; keep CUDA device
+  helpers with their owning sources under `kernels/cuda/csrc/`.
 - The package remains conceptually organized around geometry concepts first and
   implementation details second.
 - Directory structure should make it clear which code is public, which code is

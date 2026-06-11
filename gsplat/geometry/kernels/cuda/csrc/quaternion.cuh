@@ -26,6 +26,8 @@
 
 #include <cuda_runtime.h>
 
+namespace gsplat_geometry
+{
 // 3D cross product a × b.
 // Inputs: components of a and b. Outputs: *ox,*oy,*oz = result (same scalar type as inputs).
 template<typename scalar_t>
@@ -1493,3 +1495,4 @@ __device__ void quat_manifold_interp_bwd_device(
     grad_q2[o + 2] = static_cast<scalar_t>(gq2z);
     grad_q2[o + 3] = static_cast<scalar_t>(gq2w);
 }
+} // namespace gsplat_geometry

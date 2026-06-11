@@ -26,6 +26,8 @@
 
 #include <cuda_runtime.h>
 
+namespace gsplat_geometry
+{
 // sincos_t — one sincos call per angle (float -> sincosf, double -> sincos),
 // so the paired sin/cos of each angle issue a single special-function op
 // instead of two separate transcendentals.
@@ -64,3 +66,4 @@ __device__ __forceinline__ void cartesian_to_spherical(T x, T y, T z, T &out_ele
     out_elevation = atan2(z, xy_norm);
     out_azimuth   = atan2(y, x);
 }
+} // namespace gsplat_geometry

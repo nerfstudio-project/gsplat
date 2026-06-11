@@ -33,7 +33,6 @@
 using gsplat_sensors::kLidarThreads;
 using gsplat_sensors::normalize_angle;
 using gsplat_sensors::pi_const;
-using gsplat_sensors::slerp_pair_fwd;
 
 namespace
 {
@@ -163,7 +162,7 @@ __global__ void sensor_rays_to_sensor_angles_kernel(
     T z = sensor_rays[idx * 3 + 2];
     T elevation;
     T azimuth;
-    cartesian_to_spherical<T>(x, y, z, elevation, azimuth);
+    gsplat_geometry::cartesian_to_spherical<T>(x, y, z, elevation, azimuth);
     sensor_angles[idx * 2 + 0] = elevation;
     sensor_angles[idx * 2 + 1] = azimuth;
 }
@@ -183,7 +182,7 @@ __global__ void sensor_angles_to_sensor_rays_kernel(
     T rx;
     T ry;
     T rz;
-    spherical_to_cartesian<T>(elevation, azimuth, rx, ry, rz);
+    gsplat_geometry::spherical_to_cartesian<T>(elevation, azimuth, rx, ry, rz);
     sensor_rays[idx * 3 + 0] = rx;
     sensor_rays[idx * 3 + 1] = ry;
     sensor_rays[idx * 3 + 2] = rz;
@@ -308,12 +307,12 @@ __global__ void generate_spinning_lidar_rays_kernel(
     T trans_z  = om * t0z + alpha * t1z;
 
     T qix, qiy, qiz, qiw;
-    slerp_pair_fwd<T>(q0x, q0y, q0z, q0w, q1x, q1y, q1z, q1w, alpha, &qix, &qiy, &qiz, &qiw);
+    gsplat_geometry::quat_slerp_pair_fwd<T>(q0x, q0y, q0z, q0w, q1x, q1y, q1z, q1w, alpha, &qix, &qiy, &qiz, &qiw);
 
     T sx, sy, sz;
-    spherical_to_cartesian<T>(elevation, azimuth, sx, sy, sz);
+    gsplat_geometry::spherical_to_cartesian<T>(elevation, azimuth, sx, sy, sz);
     T wx, wy, wz;
-    quat_rotate_vector_fwd_impl<T>(qix, qiy, qiz, qiw, sx, sy, sz, &wx, &wy, &wz);
+    gsplat_geometry::quat_rotate_vector_fwd_impl<T>(qix, qiy, qiz, qiw, sx, sy, sz, &wx, &wy, &wz);
 
     if(!valid)
     {
@@ -423,7 +422,7 @@ __global__ void __launch_bounds__(kLidarThreads, 5) inverse_project_spinning_lid
         T trans_y  = om * t0y + alpha * t1y;
         T trans_z  = om * t0z + alpha * t1z;
         T qix, qiy, qiz, qiw;
-        slerp_pair_fwd<T>(q0x, q0y, q0z, q0w, q1x, q1y, q1z, q1w, alpha, &qix, &qiy, &qiz, &qiw);
+        gsplat_geometry::quat_slerp_pair_fwd<T>(q0x, q0y, q0z, q0w, q1x, q1y, q1z, q1w, alpha, &qix, &qiy, &qiz, &qiw);
 
         final_alpha   = alpha;
         final_trans_x = trans_x;
@@ -435,14 +434,16 @@ __global__ void __launch_bounds__(kLidarThreads, 5) inverse_project_spinning_lid
         final_qw      = qiw;
 
         T sx, sy, sz;
-        se3_inverse_transform_point<T>(qix, qiy, qiz, qiw, trans_x, trans_y, trans_z, px, py, pz, &sx, &sy, &sz);
+        gsplat_geometry::se3_inverse_transform_point<T>(
+            qix, qiy, qiz, qiw, trans_x, trans_y, trans_z, px, py, pz, &sx, &sy, &sz
+        );
         const T inv_n  = T(1) / sqrt(fmax(sx * sx + sy * sy + sz * sz, gsplat_sensors::normalize_normsq_floor<T>()));
         sx            *= inv_n;
         sy            *= inv_n;
         sz            *= inv_n;
 
         T elevation, azimuth;
-        cartesian_to_spherical<T>(sx, sy, sz, elevation, azimuth);
+        gsplat_geometry::cartesian_to_spherical<T>(sx, sy, sz, elevation, azimuth);
 
         if(!is_in_fov<T>(
                elevation,
