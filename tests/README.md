@@ -278,7 +278,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # 2. Run the test files separately so the allocator pool resets between them.
 pytest tests/test_basic.py -sv
 pytest tests/test_rasterization.py -sv
-pytest libs/geometry/functional -sv
+pytest tests/geometry/functional -sv
 ```
 
 These knobs are pure runtime hygiene — they do not deselect or shrink any

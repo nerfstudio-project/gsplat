@@ -88,12 +88,7 @@ code-format:
     - 'echo "ccache directory: ${CCACHE_DIR}"'
 
     - rm -f "$CCACHE_STATSLOG"
-    # Install shared libraries needed by the active test surface.
-    - libs/install.sh geometry
-    - libs/install.sh scene
-    - libs/install.sh sensors
-    - libs/install.sh stage
-    # pytest.ini testpaths covers tests/ and all colocated lib test directories.
+    # tests/ is the single test root (pytest.ini testpaths=tests)
     - pytest -sv
     - ccache --show-log-stats -v
 

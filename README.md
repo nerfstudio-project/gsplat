@@ -61,10 +61,9 @@ To build gsplat from source on Windows, please check [this instruction](docs/INS
 This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found in the [evaluation results](https://docs.gsplat.studio/main/tests/eval.html).
 
 ```bash
+python -m pip install -e .
 cd examples
-pip install -r requirements.txt
-# install the scene/stage helper libraries the example trainers import
-python -m pip install -e ../libs/scene -e ../libs/stage
+python -m pip install -r requirements.txt
 # download mipnerf_360 benchmark data
 python datasets/download_dataset.py
 # run batch evaluation
@@ -74,8 +73,7 @@ bash benchmarks/basic.sh
 ## Examples
 
 We provide a set of examples to get you started! Below you can find the details about
-the examples (requires installing some extra dependencies via `pip install -r examples/requirements.txt --no-build-isolation`, plus the scene/stage helper
-libraries the trainers import via `python -m pip install -e libs/scene -e libs/stage`)
+the examples (requires installing some extra dependencies via `pip install -r examples/requirements.txt --no-build-isolation`)
 
 - [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
 - [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
@@ -88,7 +86,7 @@ libraries the trainers import via `python -m pip install -e libs/scene -e libs/s
 gsplat includes an experimental inference-only rendering path based on HiGS (Hierarchically Tiled Gaussian Splatting) in the standalone `experimental` package, designed for low-latency rendering of pre-trained Gaussian scenes where training gradients are not needed. The inference path packs scene data into compact fp16 layouts and uses a macro-tile fused rasterization pipeline for fast single-camera rendering.
 
 ```python
-from experimental import render_scene, GaussianInferenceScene
+from gsplat.experimental import render_scene, GaussianInferenceScene
 ```
 
 The `simple_viewer.py` example supports the Inference path via the `--use_gaussian_render_inference_scene` flag. A standalone benchmark comparing Inference rendering against the default `rasterization()` path is available in [examples/benchmarks/gaussian_render_inference_scene/](examples/benchmarks/gaussian_render_inference_scene/); run [`gaussian_render_inference_scene_bench.py`](examples/benchmarks/gaussian_render_inference_scene/gaussian_render_inference_scene_bench.py) from the repo root. For more details, see the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/).

@@ -27,7 +27,7 @@ from .base import Strategy
 from .ops import inject_noise_to_position, relocate, sample_add
 
 if TYPE_CHECKING:
-    from gsplat_scene import Scene
+    from gsplat.scene import Scene
 
 
 @dataclass

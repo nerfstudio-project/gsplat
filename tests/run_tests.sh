@@ -303,21 +303,11 @@ elif $do_ssh; then
     # -e: log connections/disconnections to stderr instead of syslog
     shell_args+=(/usr/sbin/sshd -D -e)
 else
-    # libs that must be `pip install -e`'d into the venv before pytest runs.
-    # Listed once and joined into the bash -lc command string below; adding a
-    # new lib only needs an extra array entry.
-    install_libs=(
-        geometry
-        scene
-        stage
-    )
-    printf -v install_chain 'libs/install.sh %s && ' "${install_libs[@]}"
-
     if $do_sanitize; then
         shell_args+=(
             /bin/bash
             -lc
-            "${install_chain}"'exec /usr/local/cuda/bin/compute-sanitizer /usr/local/venv/bin/pytest "$@"'
+            'exec /usr/local/cuda/bin/compute-sanitizer /usr/local/venv/bin/pytest "$@"'
             bash
         )
         if $do_verbose; then
@@ -329,7 +319,7 @@ else
         shell_args+=(
             /bin/bash
             -lc
-            "${install_chain}"'exec pytest "$@"'
+            'exec pytest "$@"'
             bash
         )
         if $do_verbose; then
