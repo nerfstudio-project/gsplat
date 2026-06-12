@@ -19,6 +19,7 @@
 #pragma once
 
 #include <cstdint>
+#include <tuple>
 
 #include "Cameras.h"
 #include "Common.h"
@@ -31,6 +32,39 @@ class Tensor;
 }
 
 namespace gsplat {
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_ut_3dgs_fused(
+    const at::Tensor &means,
+    const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats0,
+    const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks,
+    int64_t image_width,
+    int64_t image_height,
+    double eps2d,
+    double near_plane,
+    double far_plane,
+    double radius_clip,
+    bool calc_compensations,
+    int64_t camera_model,
+    bool global_z_order,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
+);
 
 void launch_projection_ewa_simple_fwd_kernel(
     // inputs

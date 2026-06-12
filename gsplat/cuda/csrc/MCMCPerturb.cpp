@@ -13,10 +13,10 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/library.h>
 
 #include "MCMCPerturb.h" // where the launch function is declared
 #include "Common.h"      // where all the macros are defined
-#include "Ops.h"         // a collection of all gsplat operators
 
 namespace gsplat {
 
@@ -59,6 +59,10 @@ void mcmc_perturb_positions(
         noise,
         static_cast<float>(scaler)
     );
+}
+
+void register_mcmc_perturb_cuda_impl(torch::Library &m) {
+    m.impl("mcmc_perturb_positions", &mcmc_perturb_positions);
 }
 
 } // namespace gsplat
