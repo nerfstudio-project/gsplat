@@ -17,8 +17,8 @@
 
 #include <ATen/core/Tensor.h>
 #include <torch/types.h>
+#include "Common.h"
 #include "Lidars.cuh"
-#include "Ops.h"
 #include "TorchUtils.h"
 
 RowOffsetStructuredSpinningLidarModelParametersExtDevice::RowOffsetStructuredSpinningLidarModelParametersExtDevice(

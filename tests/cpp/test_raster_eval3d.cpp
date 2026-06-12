@@ -15,9 +15,10 @@
 
 #include "Config.h"
 #include "ExternalDistortion.h"
-#include "Ops.h"
+#include "Intersect.h"
 #include "PrimingChainEncoding.h"
 #include "PrimingChainEncoding.cuh"
+#include "Projection.h"
 #include "RasterizeCSR.cuh"
 #include "Rasterization.h"
 

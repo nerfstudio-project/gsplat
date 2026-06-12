@@ -18,16 +18,32 @@
 
 #include <torch/extension.h>
 
-#include "Ops.h"
 #include "Cameras.h"
 #include "ExternalDistortion.h"
 #include "csrc/Config.h"
+#include "csrc/Null.h"
 #include "csrc/Rasterization.h"
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
 #include "CameraWrappers.h"
 #include "ExternalDistortionWrappers.h"
 #endif
+
+namespace gsplat {
+
+void register_adam_cuda_impl(torch::Library &m);
+void register_external_distortion_wrappers_cuda_impl(torch::Library &m);
+void register_gaussian_losses_cuda_impl(torch::Library &m);
+void register_intersect_cuda_impl(torch::Library &m);
+void register_mcmc_perturb_cuda_impl(torch::Library &m);
+void register_projection_cuda_impl(torch::Library &m);
+void register_quat_scale_to_covar_cuda_impl(torch::Library &m);
+void register_rasterization_cuda_impl(torch::Library &m);
+void register_rasterization_autograd_cuda_impl(torch::Library &m);
+void register_relocation_cuda_impl(torch::Library &m);
+void register_spherical_harmonics_cuda_impl(torch::Library &m);
+
+} // namespace gsplat
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
@@ -973,9 +989,6 @@ TORCH_LIBRARY(gsplat, m) {
 #endif
 
     m.def("projection_ut_3dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor? opacities, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model, bool global_z_order, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    // Schema only: the CUDA and AutogradCUDA implementations are registered
-    // below, after custom-class registration, while their bodies remain in
-    // Rasterization.cpp.
     m.def("rasterize_to_pixels_from_world_3dgs(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool return_sample_counts, bool use_hit_distance, bool return_normals, int renderer_config, bool return_last_ids, bool unsafe_masked_tile_outputs=False) -> (Tensor, Tensor, Tensor?, Tensor?, Tensor?)");
 
 #if GSPLAT_BUILD_3DGS
@@ -995,70 +1008,35 @@ TORCH_LIBRARY(gsplat, m) {
 
 TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
 #if GSPLAT_BUILD_3DGS
-    m.impl("quat_scale_to_covar_preci_fwd", &gsplat::quat_scale_to_covar_preci_fwd);
-    m.impl("quat_scale_to_covar_preci_bwd", &gsplat::quat_scale_to_covar_preci_bwd);
+    gsplat::register_quat_scale_to_covar_cuda_impl(m);
 #endif
 
-    m.impl("intersect_tile", &gsplat::intersect_tile);
-    m.impl("intersect_offset", &gsplat::intersect_offset);
-
-    m.impl("spherical_harmonics_fwd", &gsplat::spherical_harmonics_fwd);
-    m.impl("spherical_harmonics_bwd", &gsplat::spherical_harmonics_bwd);
-
-#if GSPLAT_BUILD_3DGS
-    m.impl("projection_ewa_simple_fwd", &gsplat::projection_ewa_simple_fwd);
-    m.impl("projection_ewa_simple_bwd", &gsplat::projection_ewa_simple_bwd);
-    m.impl("projection_ewa_3dgs_fused_fwd", &gsplat::projection_ewa_3dgs_fused_fwd);
-    m.impl("projection_ewa_3dgs_fused_bwd", &gsplat::projection_ewa_3dgs_fused_bwd);
-    m.impl("projection_ewa_3dgs_packed_fwd", &gsplat::projection_ewa_3dgs_packed_fwd);
-    m.impl("projection_ewa_3dgs_packed_bwd", &gsplat::projection_ewa_3dgs_packed_bwd);
-    m.impl("rasterize_to_pixels_3dgs_fwd", &gsplat::rasterize_to_pixels_3dgs_fwd);
-    m.impl("rasterize_to_pixels_3dgs_bwd", &gsplat::rasterize_to_pixels_3dgs_bwd);
-    m.impl("rasterize_to_indices_3dgs", &gsplat::rasterize_to_indices_3dgs);
-    m.impl("rasterize_num_contributing_gaussians", &gsplat::rasterize_num_contributing_gaussians);
-    m.impl("rasterize_contributing_gaussian_ids", &gsplat::rasterize_contributing_gaussian_ids);
-    m.impl("rasterize_top_contributing_gaussian_ids", &gsplat::rasterize_top_contributing_gaussian_ids);
-#endif
-
-#if GSPLAT_BUILD_2DGS
-    m.impl("projection_2dgs_fused_fwd", &gsplat::projection_2dgs_fused_fwd);
-    m.impl("projection_2dgs_fused_bwd", &gsplat::projection_2dgs_fused_bwd);
-    m.impl("projection_2dgs_packed_fwd", &gsplat::projection_2dgs_packed_fwd);
-    m.impl("projection_2dgs_packed_bwd", &gsplat::projection_2dgs_packed_bwd);
-    m.impl("rasterize_to_pixels_2dgs_fwd", &gsplat::rasterize_to_pixels_2dgs_fwd);
-    m.impl("rasterize_to_pixels_2dgs_bwd", &gsplat::rasterize_to_pixels_2dgs_bwd);
-    m.impl("rasterize_to_indices_2dgs", &gsplat::rasterize_to_indices_2dgs);
-#endif
+    gsplat::register_intersect_cuda_impl(m);
+    gsplat::register_spherical_harmonics_cuda_impl(m);
+    gsplat::register_projection_cuda_impl(m);
+    gsplat::register_rasterization_cuda_impl(m);
 
 #if GSPLAT_BUILD_ADAM
-    m.impl("adam", &gsplat::adam);
+    gsplat::register_adam_cuda_impl(m);
 #endif
 
 #if GSPLAT_BUILD_RELOC
-    m.impl("relocation", &gsplat::relocation);
+    gsplat::register_relocation_cuda_impl(m);
 #endif
 
-    m.impl("projection_ut_3dgs_fused", &gsplat::projection_ut_3dgs_fused);
-    m.impl("intersect_tile_lidar", &gsplat::intersect_tile_lidar);
-    m.impl("rasterize_to_pixels_from_world_3dgs",
-           &gsplat::rasterize_to_pixels_from_world_3dgs);
-
 #if GSPLAT_BUILD_3DGS
-    m.impl("mcmc_perturb_positions", &gsplat::mcmc_perturb_positions);
+    gsplat::register_mcmc_perturb_cuda_impl(m);
 #endif
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
-    m.impl("distort_camera_rays", &gsplat::extdist::distort_camera_rays_torch_op);
-    m.impl("eval_bivariate_poly", &gsplat::extdist::eval_bivariate_poly_wrapper);
+    gsplat::register_external_distortion_wrappers_cuda_impl(m);
 #endif
 
 #if GSPLAT_BUILD_LOSSES
-    m.impl("gaussian_losses_fwd", &gsplat::gaussian_losses_fwd);
-    m.impl("gaussian_losses_bwd", &gsplat::gaussian_losses_bwd);
+    gsplat::register_gaussian_losses_cuda_impl(m);
 #endif
 }
 
 TORCH_LIBRARY_IMPL(gsplat, AutogradCUDA, m) {
-    m.impl("rasterize_to_pixels_from_world_3dgs",
-           &gsplat::rasterize_to_pixels_from_world_3dgs_autograd);
+    gsplat::register_rasterization_autograd_cuda_impl(m);
 }

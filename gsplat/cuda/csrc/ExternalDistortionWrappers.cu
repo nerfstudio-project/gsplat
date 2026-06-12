@@ -29,6 +29,7 @@
 #include "ExternalDistortionWrappers.h"
 #include "ExternalDistortion.cuh"
 #include <c10/cuda/CUDAStream.h>
+#include <torch/library.h>
 
 namespace gsplat::extdist {
 
@@ -174,5 +175,14 @@ torch::Tensor distort_camera_rays_torch_op(
 }
 
 } // namespace gsplat::extdist
+
+namespace gsplat {
+
+void register_external_distortion_wrappers_cuda_impl(torch::Library &m) {
+    m.impl("distort_camera_rays", &extdist::distort_camera_rays_torch_op);
+    m.impl("eval_bivariate_poly", &extdist::eval_bivariate_poly_wrapper);
+}
+
+} // namespace gsplat
 
 #endif // GSPLAT_BUILD_CAMERA_WRAPPERS

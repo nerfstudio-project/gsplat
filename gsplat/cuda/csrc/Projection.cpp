@@ -23,10 +23,10 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/library.h>
 #include <torch/torch.h>
 
 #include "Common.h"     // where all the macros are defined
-#include "Ops.h"        // a collection of all gsplat operators
 #include "Projection.h" // where the launch function is declared
 #include "Cameras.h"
 #include "Lidars.h"
@@ -1127,6 +1127,26 @@ projection_ut_3dgs_fused(
         external_distortion_params
     );
 #endif // !GSPLAT_BUILD_3DGUT
+}
+
+void register_projection_cuda_impl(torch::Library &m) {
+#if GSPLAT_BUILD_3DGS
+    m.impl("projection_ewa_simple_fwd", &projection_ewa_simple_fwd);
+    m.impl("projection_ewa_simple_bwd", &projection_ewa_simple_bwd);
+    m.impl("projection_ewa_3dgs_fused_fwd", &projection_ewa_3dgs_fused_fwd);
+    m.impl("projection_ewa_3dgs_fused_bwd", &projection_ewa_3dgs_fused_bwd);
+    m.impl("projection_ewa_3dgs_packed_fwd", &projection_ewa_3dgs_packed_fwd);
+    m.impl("projection_ewa_3dgs_packed_bwd", &projection_ewa_3dgs_packed_bwd);
+#endif
+
+#if GSPLAT_BUILD_2DGS
+    m.impl("projection_2dgs_fused_fwd", &projection_2dgs_fused_fwd);
+    m.impl("projection_2dgs_fused_bwd", &projection_2dgs_fused_bwd);
+    m.impl("projection_2dgs_packed_fwd", &projection_2dgs_packed_fwd);
+    m.impl("projection_2dgs_packed_bwd", &projection_2dgs_packed_bwd);
+#endif
+
+    m.impl("projection_ut_3dgs_fused", &projection_ut_3dgs_fused);
 }
 
 } // namespace gsplat

@@ -35,7 +35,6 @@
 #include "Lidars.cuh"
 #include "Sensors.cuh"
 #include "Dispatch.h"
-#include "Ops.h"
 
 namespace gsplat {
 
