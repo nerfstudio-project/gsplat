@@ -27,9 +27,9 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/library.h>
 
 #include "Common.h"     // where all the macros are defined
-#include "Ops.h"        // a collection of all gsplat operators
 #include "Relocation.h" // where the launch function is declared
 
 namespace gsplat {
@@ -53,6 +53,10 @@ std::tuple<at::Tensor, at::Tensor> relocation(
         opacities, scales, ratios, binoms, n_max, new_opacities, new_scales
     );
     return std::make_tuple(new_opacities, new_scales);
+}
+
+void register_relocation_cuda_impl(torch::Library &m) {
+    m.impl("relocation", &relocation);
 }
 
 } // namespace gsplat

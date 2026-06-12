@@ -29,9 +29,9 @@
 // https://github.com/pytorch/pytorch/blob/740ce0fa5f8c7e9e51422b614f8187ab93a60b8b/aten/src/ATen/native/cuda/ScanKernels.cpp#L8-L17
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/library.h>
 
 #include "Common.h"           // where all the macros are defined
-#include "Ops.h"              // a collection of all gsplat operators
 #include "QuatScaleToCovar.h" // where the launch function is declared
 
 namespace gsplat {
@@ -103,6 +103,11 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd(
     }
 
     return std::make_tuple(v_quats, v_scales);
+}
+
+void register_quat_scale_to_covar_cuda_impl(torch::Library &m) {
+    m.impl("quat_scale_to_covar_preci_fwd", &quat_scale_to_covar_preci_fwd);
+    m.impl("quat_scale_to_covar_preci_bwd", &quat_scale_to_covar_preci_bwd);
 }
 
 } // namespace gsplat
