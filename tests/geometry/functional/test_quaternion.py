@@ -26,6 +26,7 @@ import torch
 
 from gsplat._helper import assert_grad_reference_close
 import gsplat.geometry.functional as quat
+from gsplat.geometry.kernels.quaternion_ops import SLERP_SMALL_ANGLE_DOT_THRESHOLD
 
 
 if not torch.cuda.is_available():
@@ -573,7 +574,7 @@ class TestQuaternionOperations(unittest.TestCase):
         q2e = torch.where(d < 0, -q2, q2)
         c_raw = (q1 * q2e).sum(dim=-1, keepdim=True)
         c = c_raw.clamp(min=-1.0, max=1.0)
-        use_lerp = c > 0.9995
+        use_lerp = c > SLERP_SMALL_ANGLE_DOT_THRESHOLD
         om = 1.0 - t
         r = om * q1 + t * q2e
         y_lerp = r / r.norm(dim=-1, keepdim=True)

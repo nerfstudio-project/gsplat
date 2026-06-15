@@ -76,7 +76,7 @@ __global__ void se3pose_compose_fwd_kernel(
     {
         return;
     }
-    se3pose_compose_fwd_device(
+    gsplat_geometry::se3pose_compose_fwd_device(
         i, n, parent_translation, parent_rotation, child_translation, child_rotation, out_translation, out_rotation
     );
 }
@@ -102,7 +102,7 @@ __global__ void se3pose_compose_bwd_kernel(
     {
         return;
     }
-    se3pose_compose_bwd_device(
+    gsplat_geometry::se3pose_compose_bwd_device(
         i,
         n,
         parent_translation,
@@ -647,7 +647,7 @@ void se3pose_from_matrix_bwd_cuda(
 // 2-pose trajectories, float32 only.
 // -----------------------------------------------------------------------------
 
-namespace gsplat_geometry::trajectory_cuda
+namespace gsplat_geometry
 {
 // Grid-stride float: 2-keyframe trajectory point + OOB; strides st0,st1,sqt index time/query_time rows (see device).
 __global__ void trajectory_transform_point_2poses_fwd_kernel(
@@ -1199,9 +1199,9 @@ void launch_trajectory_get_rotation_2poses_bwd(
     );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
-} // namespace gsplat_geometry::trajectory_cuda
+} // namespace gsplat_geometry
 
-namespace packed_track_cuda
+namespace gsplat_geometry::packed_track_cuda
 {
 template<typename scalar_t, typename time_t>
 __global__ void se3_interpolate_tracks_fwd_kernel(
@@ -1376,7 +1376,7 @@ __global__ void se3_interpolate_tracks_bwd_kernel(
 
     const int64_t r4 = right * 4;
     scalar_t glqx, glqy, glqz, glqw, grqx, grqy, grqz, grqw, grad_alpha_q;
-    quat_slerp_pair_bwd(
+    quat_slerp_pair_bwd_with_time_grad(
         pose_rotations[l4 + 0],
         pose_rotations[l4 + 1],
         pose_rotations[l4 + 2],
@@ -1498,7 +1498,7 @@ void launch_se3_interpolate_tracks_bwd(
     );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
-} // namespace packed_track_cuda
+} // namespace gsplat_geometry::packed_track_cuda
 
 void se3_interpolate_tracks_cuda(
     const at::Tensor &pose_translations,
@@ -1518,7 +1518,7 @@ void se3_interpolate_tracks_cuda(
         {
             if(pose_times.scalar_type() == at::kLong)
             {
-                packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, int64_t>(
+                gsplat_geometry::packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, int64_t>(
                     pose_translations,
                     pose_rotations,
                     pose_times,
@@ -1531,7 +1531,7 @@ void se3_interpolate_tracks_cuda(
             }
             else if(pose_times.scalar_type() == at::kFloat)
             {
-                packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, float>(
+                gsplat_geometry::packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, float>(
                     pose_translations,
                     pose_rotations,
                     pose_times,
@@ -1544,7 +1544,7 @@ void se3_interpolate_tracks_cuda(
             }
             else if(pose_times.scalar_type() == at::kDouble)
             {
-                packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, double>(
+                gsplat_geometry::packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, double>(
                     pose_translations,
                     pose_rotations,
                     pose_times,
@@ -1586,7 +1586,7 @@ void se3_interpolate_tracks_bwd_cuda(
         {
             if(pose_times.scalar_type() == at::kLong)
             {
-                packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, int64_t>(
+                gsplat_geometry::packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, int64_t>(
                     pose_translations,
                     pose_rotations,
                     pose_times,
@@ -1604,7 +1604,7 @@ void se3_interpolate_tracks_bwd_cuda(
             }
             else if(pose_times.scalar_type() == at::kFloat)
             {
-                packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, float>(
+                gsplat_geometry::packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, float>(
                     pose_translations,
                     pose_rotations,
                     pose_times,
@@ -1622,7 +1622,7 @@ void se3_interpolate_tracks_bwd_cuda(
             }
             else if(pose_times.scalar_type() == at::kDouble)
             {
-                packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, double>(
+                gsplat_geometry::packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, double>(
                     pose_translations,
                     pose_rotations,
                     pose_times,
@@ -1663,7 +1663,7 @@ void trajectory_transform_point_2poses_cuda(
 )
 {
     TORCH_CHECK(trans0.scalar_type() == at::kFloat, "trajectory_transform_point_2poses_cuda: float32 only");
-    gsplat_geometry::trajectory_cuda::launch_trajectory_transform_point_2poses_fwd(
+    gsplat_geometry::launch_trajectory_transform_point_2poses_fwd(
         trans0, rot0, time0, trans1, rot1, time1, point, query_time, result_point, result_out_of_bounds
     );
 }
@@ -1692,7 +1692,7 @@ void trajectory_transform_point_2poses_bwd_cuda(
 )
 {
     TORCH_CHECK(trans0.scalar_type() == at::kFloat, "trajectory_transform_point_2poses_bwd_cuda: float32 only");
-    gsplat_geometry::trajectory_cuda::launch_trajectory_transform_point_2poses_bwd(
+    gsplat_geometry::launch_trajectory_transform_point_2poses_bwd(
         trans0,
         rot0,
         time0,
@@ -1729,7 +1729,7 @@ void trajectory_get_rotation_2poses_cuda(
 )
 {
     TORCH_CHECK(rot0.scalar_type() == at::kFloat, "trajectory_get_rotation_2poses_cuda: float32 only");
-    gsplat_geometry::trajectory_cuda::launch_trajectory_get_rotation_2poses_fwd(
+    gsplat_geometry::launch_trajectory_get_rotation_2poses_fwd(
         trans0, rot0, time0, trans1, rot1, time1, query_time, result_quat, result_out_of_bounds
     );
 }
@@ -1758,7 +1758,7 @@ void trajectory_get_rotation_2poses_bwd_cuda(
     (void)trans0;
     (void)trans1;
     TORCH_CHECK(rot0.scalar_type() == at::kFloat, "trajectory_get_rotation_2poses_bwd_cuda: float32 only");
-    gsplat_geometry::trajectory_cuda::launch_trajectory_get_rotation_2poses_bwd(
+    gsplat_geometry::launch_trajectory_get_rotation_2poses_bwd(
         time0,
         time1,
         query_time,
@@ -1787,7 +1787,7 @@ void trajectory_transform_point_1pose_cuda(
 )
 {
     TORCH_CHECK(trans.scalar_type() == at::kFloat, "trajectory_transform_point_1pose_cuda: float32 only");
-    gsplat_geometry::trajectory_cuda::launch_trajectory_transform_point_1pose_fwd(
+    gsplat_geometry::launch_trajectory_transform_point_1pose_fwd(
         trans, rot, time, point, query_time, result_point, result_out_of_bounds
     );
 }
@@ -1810,7 +1810,7 @@ void trajectory_transform_point_1pose_bwd_cuda(
 )
 {
     TORCH_CHECK(rot.scalar_type() == at::kFloat, "trajectory_transform_point_1pose_bwd_cuda: float32 only");
-    gsplat_geometry::trajectory_cuda::launch_trajectory_transform_point_1pose_bwd(
+    gsplat_geometry::launch_trajectory_transform_point_1pose_bwd(
         trans,
         rot,
         time,
@@ -1842,7 +1842,7 @@ void frame_transform_poses_tquat_cuda(
 )
 {
     TORCH_CHECK(input_poses.scalar_type() == at::kFloat, "frame_transform_poses_tquat_cuda: float32 only");
-    gsplat_geometry::trajectory_cuda::launch_frame_transform_poses_tquat_fwd(
+    gsplat_geometry::launch_frame_transform_poses_tquat_fwd(
         input_poses, frx, fry, frz, frw, ftx, fty, ftz, scale, output_poses
     );
 }

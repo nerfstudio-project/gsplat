@@ -206,7 +206,7 @@ host exports stay in the `.cu` translation units.
 **`quaternion.cuh` / `quaternion.cu`**
 
 - `quaternion.cuh`: template and small `__device__` helpers (e.g. `cross3`,
-  `quat_multiply_impl`, `quat_rotate_vector_*_impl`, `quat_to_matrix_fwd_write`,
+  `quat_multiply_impl`, `quat_rotate_vector_*_impl`, `quat_slerp_pair_*`, `quat_to_matrix_fwd_write`,
   `quat_normalize_safe_*_write`), per-row `*_fwd_device` / `*_bwd_device` bodies
   (which delegate to those scalars where applicable), and related constants/traits
   (`QuatNormEps`, etc.). Intended to be included from quaternion kernels and,
@@ -220,7 +220,7 @@ host exports stay in the `.cu` translation units.
 - `pose.cuh` includes `quaternion.cuh` so pose and trajectory kernels can reuse
   quaternion device math **without** introducing a third shared-only device
   header. It adds pose-specific device helpers (e.g. Shepperd matrix→quaternion,
-  SE3 transforms, `trajectory_cuda` orchestration using quaternion.cuh templates)
+  SE3 transforms, trajectory orchestration using quaternion.cuh templates)
   and the pose `*_device` entry bodies.
 - `pose.cu` mirrors the quaternion pattern: globals, launches, and exported
   pose/trajectory CUDA entry points.
