@@ -33,6 +33,7 @@ void launch_relocation_kernel(
     at::Tensor ratios,    // [N]
     at::Tensor binoms,    // [n_max, n_max]
     const int n_max,
+    float min_opacity,
     // outputs
     at::Tensor new_opacities, // [N]
     at::Tensor new_scales     // [N, 3]

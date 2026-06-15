@@ -26,7 +26,9 @@ void mcmc_perturb_positions(
     const at::Tensor &scales,    // [N, 3] log-scale
     const at::Tensor &opacities, // [N] logit
     const at::Tensor &noise,     // [N, 3] standard normal
-    double scaler
+    double noise_scale,
+    double t,
+    double k
 )
 {
     DEVICE_GUARD(positions);
@@ -49,7 +51,16 @@ void mcmc_perturb_positions(
     TORCH_CHECK(opacities.dim() == 1 && opacities.size(0) == N, "mcmc_perturb_positions: opacities must be [N]");
     TORCH_CHECK(noise.sizes() == at::IntArrayRef({N, 3}), "mcmc_perturb_positions: noise must be [N, 3]");
 
-    launch_mcmc_perturb_positions_kernel(positions, quats, scales, opacities, noise, static_cast<float>(scaler));
+    launch_mcmc_perturb_positions_kernel(
+        positions,
+        quats,
+        scales,
+        opacities,
+        noise,
+        static_cast<float>(noise_scale),
+        static_cast<float>(t),
+        static_cast<float>(k)
+    );
 }
 
 void register_mcmc_perturb_cuda_impl(torch::Library &m)

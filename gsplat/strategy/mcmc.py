@@ -24,7 +24,13 @@ import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add
+from .ops import (
+    DEFAULT_MCMC_OPACITY_K,
+    DEFAULT_MCMC_OPACITY_T,
+    inject_noise_to_position,
+    relocate,
+    sample_add,
+)
 
 if TYPE_CHECKING:
     from gsplat.scene import Scene
@@ -52,6 +58,10 @@ class MCMCStrategy(Strategy):
         refine_every (int): Refine GSs every this steps. Default to 100.
         min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.
         verbose (bool): Whether to print verbose information. Default to False.
+        noise_opacity_t (float): Opacity transition point for noise suppression.
+            Default to 0.005.
+        noise_opacity_k (float): Sharpness of the opacity noise-suppression gate.
+            Default to 100.
 
     Examples:
 
@@ -77,6 +87,8 @@ class MCMCStrategy(Strategy):
     refine_every: int = 100
     min_opacity: float = 0.005
     verbose: bool = False
+    noise_opacity_t: float = DEFAULT_MCMC_OPACITY_T
+    noise_opacity_k: float = DEFAULT_MCMC_OPACITY_K
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
@@ -175,7 +187,9 @@ class MCMCStrategy(Strategy):
                 params=params,
                 optimizers=optimizers,
                 state={},
-                scaler=lr * self.noise_lr,
+                noise_scale=lr * self.noise_lr,
+                t=self.noise_opacity_t,
+                k=self.noise_opacity_k,
             )
 
     @torch.no_grad()
