@@ -269,7 +269,7 @@ __device__ __forceinline__ void fisheye_load_meanpose_14(
 //
 // Feeds the UNNORMALIZED cam_pt straight into fisheye_project_ray_bwd (atan2
 // path, NO normalize3_bwd), then through
-// quat_inverse_rotate_bwd_xyzw_geom (mean rotation) and quat_slerp_pair_bwd to
+// quat_inverse_rotate_bwd_xyzw_geom (mean rotation) and quat_slerp_pair_bwd_no_time_grad to
 // world-point + start/end pose grads. The single mean rotation gradient is
 // stored in wxyz output order.
 // =============================================================================

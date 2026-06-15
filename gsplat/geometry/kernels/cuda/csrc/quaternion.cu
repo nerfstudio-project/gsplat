@@ -113,7 +113,7 @@ void launch_quat_multiply_bwd(
 void quat_multiply_cuda(const at::Tensor &q1, const at::Tensor &q2, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        q1.scalar_type(), "quat_multiply_cuda", [&] { launch_quat_multiply_fwd<scalar_t>(q1, q2, out); }
+        q1.scalar_type(), "quat_multiply_cuda", ([&] { launch_quat_multiply_fwd<scalar_t>(q1, q2, out); })
     );
 }
 
@@ -127,7 +127,7 @@ void quat_multiply_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_multiply_bwd_cuda",
-        [&] { launch_quat_multiply_bwd<scalar_t>(q1, q2, grad_out, grad_q1, grad_q2); }
+        ([&] { launch_quat_multiply_bwd<scalar_t>(q1, q2, grad_out, grad_q1, grad_q2); })
     );
 }
 
@@ -225,7 +225,9 @@ void launch_quat_rotate_vector_bwd(
 void quat_rotate_vector_cuda(const at::Tensor &quat, const at::Tensor &vec, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_rotate_vector_cuda", [&] { launch_quat_rotate_vector_fwd<scalar_t>(quat, vec, out); }
+        quat.scalar_type(),
+        "quat_rotate_vector_cuda",
+        ([&] { launch_quat_rotate_vector_fwd<scalar_t>(quat, vec, out); })
     );
 }
 
@@ -243,7 +245,7 @@ void quat_rotate_vector_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         quat.scalar_type(),
         "quat_rotate_vector_bwd_cuda",
-        [&] { launch_quat_rotate_vector_bwd<scalar_t>(quat, vec, grad_out, grad_quat, grad_vec); }
+        ([&] { launch_quat_rotate_vector_bwd<scalar_t>(quat, vec, grad_out, grad_quat, grad_vec); })
     );
 }
 
@@ -321,7 +323,7 @@ void launch_quat_to_matrix_bwd(const at::Tensor &quat, const at::Tensor &grad_fl
 void quat_to_matrix_cuda(const at::Tensor &quat, at::Tensor &out_flat)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_to_matrix_cuda", [&] { launch_quat_to_matrix_fwd<scalar_t>(quat, out_flat); }
+        quat.scalar_type(), "quat_to_matrix_cuda", ([&] { launch_quat_to_matrix_fwd<scalar_t>(quat, out_flat); })
     );
 }
 
@@ -333,7 +335,7 @@ void quat_to_matrix_bwd_cuda(const at::Tensor &quat, const at::Tensor &grad_matr
     AT_DISPATCH_FLOATING_TYPES(
         quat.scalar_type(),
         "quat_to_matrix_bwd_cuda",
-        [&] { launch_quat_to_matrix_bwd<scalar_t>(quat, grad_matrix_flat, grad_quat); }
+        ([&] { launch_quat_to_matrix_bwd<scalar_t>(quat, grad_matrix_flat, grad_quat); })
     );
 }
 
@@ -415,7 +417,7 @@ void launch_quat_normalize_safe_bwd(const at::Tensor &quat, const at::Tensor &gr
 void quat_normalize_safe_cuda(const at::Tensor &quat, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_normalize_safe_cuda", [&] { launch_quat_normalize_safe_fwd<scalar_t>(quat, out); }
+        quat.scalar_type(), "quat_normalize_safe_cuda", ([&] { launch_quat_normalize_safe_fwd<scalar_t>(quat, out); })
     );
 }
 
@@ -427,7 +429,7 @@ void quat_normalize_safe_bwd_cuda(const at::Tensor &quat, const at::Tensor &grad
     AT_DISPATCH_FLOATING_TYPES(
         quat.scalar_type(),
         "quat_normalize_safe_bwd_cuda",
-        [&] { launch_quat_normalize_safe_bwd<scalar_t>(quat, grad_out, grad_quat); }
+        ([&] { launch_quat_normalize_safe_bwd<scalar_t>(quat, grad_out, grad_quat); })
     );
 }
 
@@ -505,7 +507,7 @@ void launch_quat_conjugate_bwd(const at::Tensor &grad_out, at::Tensor &grad_quat
 void quat_conjugate_cuda(const at::Tensor &quat, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_conjugate_cuda", [&] { launch_quat_conjugate_fwd<scalar_t>(quat, out); }
+        quat.scalar_type(), "quat_conjugate_cuda", ([&] { launch_quat_conjugate_fwd<scalar_t>(quat, out); })
     );
 }
 
@@ -515,7 +517,9 @@ void quat_conjugate_cuda(const at::Tensor &quat, at::Tensor &out)
 void quat_conjugate_bwd_cuda(const at::Tensor &quat, const at::Tensor &grad_out, at::Tensor &grad_quat)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_conjugate_bwd_cuda", [&] { launch_quat_conjugate_bwd<scalar_t>(grad_out, grad_quat); }
+        quat.scalar_type(),
+        "quat_conjugate_bwd_cuda",
+        ([&] { launch_quat_conjugate_bwd<scalar_t>(grad_out, grad_quat); })
     );
 }
 
@@ -616,7 +620,7 @@ void quat_from_axis_angle_cuda(const at::Tensor &axis, const at::Tensor &angle, 
     AT_DISPATCH_FLOATING_TYPES(
         axis.scalar_type(),
         "quat_from_axis_angle_cuda",
-        [&] { launch_quat_from_axis_angle_fwd<scalar_t>(axis, angle, quat); }
+        ([&] { launch_quat_from_axis_angle_fwd<scalar_t>(axis, angle, quat); })
     );
 }
 
@@ -634,7 +638,7 @@ void quat_from_axis_angle_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         axis.scalar_type(),
         "quat_from_axis_angle_bwd_cuda",
-        [&] { launch_quat_from_axis_angle_bwd<scalar_t>(axis, angle, grad_quat, grad_axis, grad_angle); }
+        ([&] { launch_quat_from_axis_angle_bwd<scalar_t>(axis, angle, grad_quat, grad_axis, grad_angle); })
     );
 }
 
@@ -740,7 +744,7 @@ void launch_quat_lerp_bwd(
 void quat_lerp_cuda(const at::Tensor &q1, const at::Tensor &q2, double t, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        q1.scalar_type(), "quat_lerp_cuda", [&] { launch_quat_lerp_fwd<scalar_t>(q1, q2, t, out); }
+        q1.scalar_type(), "quat_lerp_cuda", ([&] { launch_quat_lerp_fwd<scalar_t>(q1, q2, t, out); })
     );
 }
 
@@ -760,7 +764,7 @@ void quat_lerp_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_lerp_bwd_cuda",
-        [&] { launch_quat_lerp_bwd<scalar_t>(q1, q2, result, grad_out, t, grad_q1, grad_q2); }
+        ([&] { launch_quat_lerp_bwd<scalar_t>(q1, q2, result, grad_out, t, grad_q1, grad_q2); })
     );
 }
 
@@ -864,10 +868,16 @@ void launch_quat_slerp_batched_bwd(
 // Public CUDA entrypoint for batched SLERP.
 // Inputs: q1 (N,4), q2 (N,4), and per-row interpolation parameters t.
 // Output: out (N,4) with one SLERP result per row.
+// Host accessor for the SLERP small-angle dot threshold, bound to Python in ext.cpp.
+double slerp_small_angle_dot_threshold()
+{
+    return gsplat_geometry::kSlerpSmallAngleDotThreshold;
+}
+
 void quat_slerp_batched_cuda(const at::Tensor &q1, const at::Tensor &q2, const at::Tensor &t, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        q1.scalar_type(), "quat_slerp_batched_cuda", [&] { launch_quat_slerp_batched_fwd<scalar_t>(q1, q2, t, out); }
+        q1.scalar_type(), "quat_slerp_batched_cuda", ([&] { launch_quat_slerp_batched_fwd<scalar_t>(q1, q2, t, out); })
     );
 }
 
@@ -888,7 +898,7 @@ void quat_slerp_batched_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_slerp_batched_bwd_cuda",
-        [&] { launch_quat_slerp_batched_bwd<scalar_t>(q1, q2, t, result, grad_out, grad_q1, grad_q2, grad_t); }
+        ([&] { launch_quat_slerp_batched_bwd<scalar_t>(q1, q2, t, result, grad_out, grad_q1, grad_q2, grad_t); })
     );
 }
 
@@ -977,7 +987,9 @@ void launch_quat_angular_distance_bwd(
 void quat_angular_distance_cuda(const at::Tensor &q1, const at::Tensor &q2, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        q1.scalar_type(), "quat_angular_distance_cuda", [&] { launch_quat_angular_distance_fwd<scalar_t>(q1, q2, out); }
+        q1.scalar_type(),
+        "quat_angular_distance_cuda",
+        ([&] { launch_quat_angular_distance_fwd<scalar_t>(q1, q2, out); })
     );
 }
 
@@ -991,7 +1003,7 @@ void quat_angular_distance_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_angular_distance_bwd_cuda",
-        [&] { launch_quat_angular_distance_bwd<scalar_t>(q1, q2, grad_dist, grad_q1, grad_q2); }
+        ([&] { launch_quat_angular_distance_bwd<scalar_t>(q1, q2, grad_dist, grad_q1, grad_q2); })
     );
 }
 
@@ -1105,7 +1117,7 @@ void quat_manifold_interp_cuda(const at::Tensor &q1, const at::Tensor &q2, const
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_manifold_interp_cuda",
-        [&] { launch_quat_manifold_interp_fwd<scalar_t>(q1, q2, t, out); }
+        ([&] { launch_quat_manifold_interp_fwd<scalar_t>(q1, q2, t, out); })
     );
 }
 
@@ -1125,6 +1137,6 @@ void quat_manifold_interp_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_manifold_interp_bwd_cuda",
-        [&] { launch_quat_manifold_interp_bwd<scalar_t>(q1, q2, t, grad_out, grad_q1, grad_q2, grad_t); }
+        ([&] { launch_quat_manifold_interp_bwd<scalar_t>(q1, q2, t, grad_out, grad_q1, grad_q2, grad_t); })
     );
 }

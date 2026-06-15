@@ -317,7 +317,7 @@ __forceinline__ __device__ void quat_normalize_safe_bwd_write(
 
 // -----------------------------------------------------------------------------
 // quat_slerp_batched with hemisphere handling and lerp fallback.
-// Hemisphere flip, clamp(dot), small-angle lerp fallback (dot > 0.9995), per-row t (N,1).
+// Hemisphere flip, clamp(dot), small-angle lerp fallback (dot above the threshold), per-row t (N,1).
 // -----------------------------------------------------------------------------
 
 // Clamp dot product to [-1, 1] before acos in SLERP (avoids NaNs from slight overshoot).
@@ -335,11 +335,14 @@ __forceinline__ __device__ scalar_t quat_slerp_clamp_dot(scalar_t x)
     return x;
 }
 
-// Dot threshold above which SLERP uses normalized linear blend instead of sin/acos path (~0.9995).
+// Dot threshold above which SLERP uses normalized linear blend instead of sin/acos path.
+// Host+device constant; also exposed to Python via the extension (see ext.cpp).
+inline constexpr double kSlerpSmallAngleDotThreshold = 0.9995;
+
 template<typename scalar_t>
 __forceinline__ __device__ scalar_t quat_slerp_small_angle_dot_threshold()
 {
-    return scalar_t(0.9995);
+    return scalar_t(kSlerpSmallAngleDotThreshold);
 }
 
 // Scalar SLERP(q1, q2, t) in xyzw order. Used by batched quaternion, trajectory,
@@ -394,10 +397,9 @@ __forceinline__ __device__ void quat_slerp_pair_fwd(
     *ow                      = w1s * w1 + w2s * sw;
 }
 
-// VJP for quat_slerp_pair_fwd. `rx..rw` are the forward outputs and
-// `gx..gw` is upstream dL/dout.
-template<typename scalar_t>
-__forceinline__ __device__ void quat_slerp_pair_bwd(
+// Shared VJP body; EmitGradT removes dL/dti work from no-time-grad callers.
+template<typename scalar_t, bool EmitGradT>
+__forceinline__ __device__ void quat_slerp_pair_bwd_impl(
     scalar_t x1,
     scalar_t y1,
     scalar_t z1,
@@ -459,7 +461,10 @@ __forceinline__ __device__ void quat_slerp_pair_bwd(
         *gq2z = s * ti * grz;
         *gq2w = s * ti * grw;
 
-        *grad_t = grx * (sx - x1) + gry * (sy - y1) + grz * (sz - z1) + grw * (sw - w1);
+        if constexpr(EmitGradT)
+        {
+            *grad_t = grx * (sx - x1) + gry * (sy - y1) + grz * (sz - z1) + grw * (sw - w1);
+        }
         return;
     }
 
@@ -492,9 +497,131 @@ __forceinline__ __device__ void quat_slerp_pair_bwd(
     *gq2z                = s * gq2ez;
     *gq2w                = s * gq2ew;
 
-    const scalar_t dw1_dt = -theta * cos((scalar_t(1) - ti) * theta) / sin_theta;
-    const scalar_t dw2_dt = theta * cos(ti * theta) / sin_theta;
-    *grad_t               = G1 * dw1_dt + G2 * dw2_dt;
+    if constexpr(EmitGradT)
+    {
+        const scalar_t dw1_dt = -theta * cos((scalar_t(1) - ti) * theta) / sin_theta;
+        const scalar_t dw2_dt = theta * cos(ti * theta) / sin_theta;
+        *grad_t               = G1 * dw1_dt + G2 * dw2_dt;
+    }
+}
+
+template<typename scalar_t>
+__forceinline__ __device__ void quat_slerp_pair_bwd_no_time_grad(
+    scalar_t x1,
+    scalar_t y1,
+    scalar_t z1,
+    scalar_t w1,
+    scalar_t x2,
+    scalar_t y2,
+    scalar_t z2,
+    scalar_t w2,
+    scalar_t ti,
+    scalar_t rx,
+    scalar_t ry,
+    scalar_t rz,
+    scalar_t rw,
+    scalar_t gx,
+    scalar_t gy,
+    scalar_t gz,
+    scalar_t gw,
+    scalar_t *gq1x,
+    scalar_t *gq1y,
+    scalar_t *gq1z,
+    scalar_t *gq1w,
+    scalar_t *gq2x,
+    scalar_t *gq2y,
+    scalar_t *gq2z,
+    scalar_t *gq2w
+)
+{
+    quat_slerp_pair_bwd_impl<scalar_t, false>(
+        x1,
+        y1,
+        z1,
+        w1,
+        x2,
+        y2,
+        z2,
+        w2,
+        ti,
+        rx,
+        ry,
+        rz,
+        rw,
+        gx,
+        gy,
+        gz,
+        gw,
+        gq1x,
+        gq1y,
+        gq1z,
+        gq1w,
+        gq2x,
+        gq2y,
+        gq2z,
+        gq2w,
+        nullptr
+    );
+}
+
+template<typename scalar_t>
+__forceinline__ __device__ void quat_slerp_pair_bwd_with_time_grad(
+    scalar_t x1,
+    scalar_t y1,
+    scalar_t z1,
+    scalar_t w1,
+    scalar_t x2,
+    scalar_t y2,
+    scalar_t z2,
+    scalar_t w2,
+    scalar_t ti,
+    scalar_t rx,
+    scalar_t ry,
+    scalar_t rz,
+    scalar_t rw,
+    scalar_t gx,
+    scalar_t gy,
+    scalar_t gz,
+    scalar_t gw,
+    scalar_t *gq1x,
+    scalar_t *gq1y,
+    scalar_t *gq1z,
+    scalar_t *gq1w,
+    scalar_t *gq2x,
+    scalar_t *gq2y,
+    scalar_t *gq2z,
+    scalar_t *gq2w,
+    scalar_t *grad_t
+)
+{
+    quat_slerp_pair_bwd_impl<scalar_t, true>(
+        x1,
+        y1,
+        z1,
+        w1,
+        x2,
+        y2,
+        z2,
+        w2,
+        ti,
+        rx,
+        ry,
+        rz,
+        rw,
+        gx,
+        gy,
+        gz,
+        gw,
+        gq1x,
+        gq1y,
+        gq1z,
+        gq1w,
+        gq2x,
+        gq2y,
+        gq2z,
+        gq2w,
+        grad_t
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -1235,7 +1362,7 @@ __device__ void quat_slerp_batched_bwd_device(
     const scalar_t x1 = q1[o + 0], y1 = q1[o + 1], z1 = q1[o + 2], w1 = q1[o + 3];
     const scalar_t x2 = q2[o + 0], y2 = q2[o + 1], z2 = q2[o + 2], w2 = q2[o + 3];
     const scalar_t gx = grad_out[o + 0], gy = grad_out[o + 1], gz = grad_out[o + 2], gw = grad_out[o + 3];
-    quat_slerp_pair_bwd(
+    quat_slerp_pair_bwd_with_time_grad(
         x1,
         y1,
         z1,

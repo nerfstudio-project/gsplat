@@ -290,7 +290,11 @@ by the functional layer for downstream tools that still want a `(N, 4, 4)`
 representation.
 
 Pose interpolation runs on device using geometry-owned SLERP helpers in
-`gsplat/geometry/kernels/cuda/csrc/pose.cuh`.
+`gsplat/geometry/kernels/cuda/csrc/quaternion.cuh`. Sensor backward kernels call the
+`quat_slerp_pair_bwd_no_time_grad` variant because the per-frame interpolation
+time is a fixed (non-differentiable) timestamp; the `with_time_grad` variant,
+which also emits the time gradient, is used only by `gsplat/geometry`'s
+trajectory backward path where query time is differentiable.
 
 ## File-level reference
 
@@ -314,7 +318,7 @@ Pose interpolation runs on device using geometry-owned SLERP helpers in
 | `kernels/cuda/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
 | `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter and Newton-iteration bounds. Forward-declared `cudaStream_t`. |
 | `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters` (empty) + `BivariateWindshieldDistortion_KernelParameters`. |
-| `csrc/camera_kernel.cuh` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/cuda/csrc/pose.cuh`. |
+| `csrc/camera_kernel.cuh` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/cuda/csrc/quaternion.cuh`. |
 | `csrc/ftheta_kernel.cuh` / `.cu` / `_backward.cu` | FTheta device math, forward kernels, and backward kernels. |
 | `csrc/fisheye_kernel.cuh` / `.cu` / `_backward.cu` | OpenCV fisheye device math, forward kernels, and backward kernels. |
 | `csrc/external_distortion_kernel.cuh` | `BivariateWindshieldParams` + `NoExternalDistortion_Parameters` no-op tag + header-only bivariate distortion math (no companion `.cu`). |

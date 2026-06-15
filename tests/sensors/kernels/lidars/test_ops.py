@@ -42,6 +42,7 @@ import pytest
 import torch
 
 from gsplat._helper import expect_grad_reference_close, expect_group
+from gsplat.geometry.kernels.quaternion_ops import SLERP_SMALL_ANGLE_DOT_THRESHOLD
 from gsplat.sensors.kernels.common import DynamicPose, Pose
 from gsplat.sensors.kernels.lidars.ops import (
     _GenerateSpinningLidarRays,
@@ -218,13 +219,13 @@ def _assert_slerp_branch_predicate(control_rotations, branch):
     hemisphere_dot = abs(dot)
     if branch == "hemisphere_flip":
         assert dot < 0.0
-        assert hemisphere_dot <= 0.9995
+        assert hemisphere_dot <= SLERP_SMALL_ANGLE_DOT_THRESHOLD
     elif branch == "full_theta":
         assert dot >= 0.0
-        assert hemisphere_dot <= 0.9995
+        assert hemisphere_dot <= SLERP_SMALL_ANGLE_DOT_THRESHOLD
     elif branch in ("nlerp", "coincident_identity"):
         assert dot >= 0.0
-        assert hemisphere_dot > 0.9995
+        assert hemisphere_dot > SLERP_SMALL_ANGLE_DOT_THRESHOLD
     else:
         raise ValueError(f"unknown SLERP branch case: {branch}")
 
@@ -235,7 +236,7 @@ def _slerp_wxyz_torch(q0, q1, alpha):
     sign = torch.where(dot < 0, q0.new_tensor(-1.0), q0.new_tensor(1.0))
     q1e = sign * q1
     c = (q0 * q1e).sum().clamp(-1.0, 1.0)
-    if bool(c > 0.9995):
+    if bool(c > SLERP_SMALL_ANGLE_DOT_THRESHOLD):
         out = (1 - alpha) * q0 + alpha * q1e
         return out / out.norm()
     theta = torch.acos(c)
@@ -893,7 +894,7 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
         s = torch.where(dot < 0, -1.0, 1.0)
         sx, sy, sz, sw = s * x1, s * y1, s * z1, s * w1
         c = (x0 * sx + y0 * sy + z0 * sz + w0 * sw).clamp(-1.0, 1.0)
-        if float(c) > 0.9995:
+        if float(c) > SLERP_SMALL_ANGLE_DOT_THRESHOLD:
             om = 1 - alpha
             rx, ry, rz, rw = (
                 om * x0 + alpha * sx,

@@ -231,639 +231,569 @@ __device__ void shepperd_from_matrix_bwd(
     }
 }
 
-// SLERP q1 -> q2 at ti (xyzw, unit-quaternion inputs).
-template<typename T>
-__device__ __forceinline__ void quat_slerp_pair_fwd(
-    T x1, T y1, T z1, T w1, T x2, T y2, T z2, T w2, T ti, T *ox, T *oy, T *oz, T *ow
-);
-
-// VJP for quat_slerp_pair_fwd when interpolation time is non-differentiable.
-template<typename T>
-__device__ __forceinline__ void quat_slerp_pair_bwd_no_time_grad(
-    T x1,
-    T y1,
-    T z1,
-    T w1,
-    T x2,
-    T y2,
-    T z2,
-    T w2,
-    T ti,
-    T rx,
-    T ry,
-    T rz,
-    T rw,
-    T gx,
-    T gy,
-    T gz,
-    T gw,
-    T *gq1x,
-    T *gq1y,
-    T *gq1z,
-    T *gq1w,
-    T *gq2x,
-    T *gq2y,
-    T *gq2z,
-    T *gq2w
-);
-
-// VJP variant for differentiable interpolation time; grad_t must be non-null.
-template<typename T>
-__device__ __forceinline__ void quat_slerp_pair_bwd_with_time_grad(
-    T x1,
-    T y1,
-    T z1,
-    T w1,
-    T x2,
-    T y2,
-    T z2,
-    T w2,
-    T ti,
-    T rx,
-    T ry,
-    T rz,
-    T rw,
-    T gx,
-    T gy,
-    T gz,
-    T gw,
-    T *gq1x,
-    T *gq1y,
-    T *gq1z,
-    T *gq1w,
-    T *gq2x,
-    T *gq2y,
-    T *gq2z,
-    T *gq2w,
-    T *grad_t
-);
-
-namespace trajectory_cuda
+// Time-interpolation chain rule: grad_alpha = ∂L/∂α with α=(qt-t_min)/(t_max-t_min), d=t_max-t_min.
+// Outputs *g_t0,*g_t1,*g_qt for ∂L/∂time0, ∂L/∂time1, ∂L/∂query_time (handles t0>t1 swap).
+__forceinline__ __device__ void trajectory_alpha_time_grads_f(
+    float t0s, float t1s, float qt, float d, float grad_alpha, float *g_t0, float *g_t1, float *g_qt
+)
 {
-    // Time-interpolation chain rule: grad_alpha = ∂L/∂α with α=(qt-t_min)/(t_max-t_min), d=t_max-t_min.
-    // Outputs *g_t0,*g_t1,*g_qt for ∂L/∂time0, ∂L/∂time1, ∂L/∂query_time (handles t0>t1 swap).
-    __forceinline__ __device__ void trajectory_alpha_time_grads_f(
-        float t0s, float t1s, float qt, float d, float grad_alpha, float *g_t0, float *g_t1, float *g_qt
-    )
+    if(d <= 0.0f)
     {
-        if(d <= 0.0f)
-        {
-            *g_t0 = *g_t1 = *g_qt = 0.0f;
-            return;
-        }
-        const float inv_d = 1.0f / d;
-        *g_qt             = grad_alpha * inv_d;
-        if(t0s <= t1s)
-        {
-            const float d2 = d * d;
-            *g_t0          = grad_alpha * (qt - t1s) / d2;
-            *g_t1          = -grad_alpha * (qt - t0s) / d2;
-        }
-        else
-        {
-            const float d2 = d * d;
-            *g_t1          = grad_alpha * (qt - t0s) / d2;
-            *g_t0          = -grad_alpha * (qt - t1s) / d2;
-        }
+        *g_t0 = *g_t1 = *g_qt = 0.0f;
+        return;
+    }
+    const float inv_d = 1.0f / d;
+    *g_qt             = grad_alpha * inv_d;
+    if(t0s <= t1s)
+    {
+        const float d2 = d * d;
+        *g_t0          = grad_alpha * (qt - t1s) / d2;
+        *g_t1          = -grad_alpha * (qt - t0s) / d2;
+    }
+    else
+    {
+        const float d2 = d * d;
+        *g_t1          = grad_alpha * (qt - t0s) / d2;
+        *g_t0          = -grad_alpha * (qt - t1s) / d2;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Float32 trajectory: two-keyframe SLERP + helpers; OOB flags when query time leaves the span.
+// -----------------------------------------------------------------------------
+
+// Row i: interpolate pose between keyframes 0/1 at query_time. trans* (N,3), rot* xyzw (N,4), time* indexed by strides st0/st1; query_time stride sqt.
+// result_point (N,3) = R(qi)(point) + ti; result_oob[i]∈{0,1} if qt outside [min(t0,t1), max(t0,t1)].
+__forceinline__ __device__ void trajectory_transform_point_2poses_fwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st0,
+    int64_t st1,
+    int64_t sqt,
+    const float *__restrict__ trans0,
+    const float *__restrict__ rot0,
+    const float *__restrict__ time0,
+    const float *__restrict__ trans1,
+    const float *__restrict__ rot1,
+    const float *__restrict__ time1,
+    const float *__restrict__ point,
+    const float *__restrict__ query_time,
+    float *__restrict__ result_point,
+    float *__restrict__ result_oob
+)
+{
+    const int64_t o3  = i * 3;
+    const int64_t o4  = i * 4;
+    const float t0s   = time0[i * st0];
+    const float t1s   = time1[i * st1];
+    const float qt    = query_time[i * sqt];
+    const float t_min = fminf(t0s, t1s);
+    const float t_max = fmaxf(t0s, t1s);
+    const bool oob    = (qt < t_min) || (qt > t_max);
+    const float d     = t_max - t_min;
+    const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
+
+    float tx0 = trans0[o3 + 0], ty0 = trans0[o3 + 1], tz0 = trans0[o3 + 2];
+    float tx1 = trans1[o3 + 0], ty1 = trans1[o3 + 1], tz1 = trans1[o3 + 2];
+    float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
+    float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
+    float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
+
+    float tix, tiy, tiz;
+    float qix, qiy, qiz, qiw;
+    if(t0s <= t1s)
+    {
+        const float om = 1.0f - alpha;
+        tix            = om * tx0 + alpha * tx1;
+        tiy            = om * ty0 + alpha * ty1;
+        tiz            = om * tz0 + alpha * tz1;
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+    else
+    {
+        const float om = 1.0f - alpha;
+        tix            = om * tx1 + alpha * tx0;
+        tiy            = om * ty1 + alpha * ty0;
+        tiz            = om * tz1 + alpha * tz0;
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+    float rx, ry, rz;
+    quat_rotate_vector_fwd_impl<float>(qix, qiy, qiz, qiw, px, py, pz, &rx, &ry, &rz);
+    result_point[o3 + 0] = rx + tix;
+    result_point[o3 + 1] = ry + tiy;
+    result_point[o3 + 2] = rz + tiz;
+    result_oob[i]        = oob ? 1.0f : 0.0f;
+}
+
+// VJP for 2-pose point transform: grad_result_point (N,3) → grads for trans0/1, rot0/1 (xyzw), time strides, point, query_time.
+__forceinline__ __device__ void trajectory_transform_point_2poses_bwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st0,
+    int64_t st1,
+    int64_t sqt,
+    const float *__restrict__ trans0,
+    const float *__restrict__ rot0,
+    const float *__restrict__ time0,
+    const float *__restrict__ trans1,
+    const float *__restrict__ rot1,
+    const float *__restrict__ time1,
+    const float *__restrict__ point,
+    const float *__restrict__ query_time,
+    const float *__restrict__ grad_result_point,
+    float *__restrict__ grad_trans0,
+    float *__restrict__ grad_rot0,
+    float *__restrict__ grad_time0,
+    float *__restrict__ grad_trans1,
+    float *__restrict__ grad_rot1,
+    float *__restrict__ grad_time1,
+    float *__restrict__ grad_point,
+    float *__restrict__ grad_query_time
+)
+{
+    const int64_t o3  = i * 3;
+    const int64_t o4  = i * 4;
+    const float t0s   = time0[i * st0];
+    const float t1s   = time1[i * st1];
+    const float qt    = query_time[i * sqt];
+    const float t_min = fminf(t0s, t1s);
+    const float t_max = fmaxf(t0s, t1s);
+    const float d     = t_max - t_min;
+    const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
+
+    float tx0 = trans0[o3 + 0], ty0 = trans0[o3 + 1], tz0 = trans0[o3 + 2];
+    float tx1 = trans1[o3 + 0], ty1 = trans1[o3 + 1], tz1 = trans1[o3 + 2];
+    float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
+    float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
+    float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
+
+    float qix, qiy, qiz, qiw;
+    if(t0s <= t1s)
+    {
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+    else
+    {
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
     }
 
-    // -----------------------------------------------------------------------------
-    // Float32 trajectory: two-keyframe SLERP + helpers; OOB flags when query time leaves the span.
-    // -----------------------------------------------------------------------------
+    const float gtx = grad_result_point[o3 + 0];
+    const float gty = grad_result_point[o3 + 1];
+    const float gtz = grad_result_point[o3 + 2];
 
-    // Row i: interpolate pose between keyframes 0/1 at query_time. trans* (N,3), rot* xyzw (N,4), time* indexed by strides st0/st1; query_time stride sqt.
-    // result_point (N,3) = R(qi)(point) + ti; result_oob[i]∈{0,1} if qt outside [min(t0,t1), max(t0,t1)].
-    __forceinline__ __device__ void trajectory_transform_point_2poses_fwd_device(
-        int64_t i,
-        int64_t n,
-        int64_t st0,
-        int64_t st1,
-        int64_t sqt,
-        const float *__restrict__ trans0,
-        const float *__restrict__ rot0,
-        const float *__restrict__ time0,
-        const float *__restrict__ trans1,
-        const float *__restrict__ rot1,
-        const float *__restrict__ time1,
-        const float *__restrict__ point,
-        const float *__restrict__ query_time,
-        float *__restrict__ result_point,
-        float *__restrict__ result_oob
-    )
+    float gqix, gqiy, gqiz, gqiw;
+    float gpx, gpy, gpz;
+    quat_rotate_vector_bwd_impl<float>(
+        qix, qiy, qiz, qiw, px, py, pz, gtx, gty, gtz, &gqix, &gqiy, &gqiz, &gqiw, &gpx, &gpy, &gpz
+    );
+
+    grad_point[o3 + 0] = gpx;
+    grad_point[o3 + 1] = gpy;
+    grad_point[o3 + 2] = gpz;
+
+    float grad_alpha = 0.0f;
+
+    if(t0s <= t1s)
     {
-        const int64_t o3  = i * 3;
-        const int64_t o4  = i * 4;
-        const float t0s   = time0[i * st0];
-        const float t1s   = time1[i * st1];
-        const float qt    = query_time[i * sqt];
-        const float t_min = fminf(t0s, t1s);
-        const float t_max = fmaxf(t0s, t1s);
-        const bool oob    = (qt < t_min) || (qt > t_max);
-        const float d     = t_max - t_min;
-        const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
-
-        float tx0 = trans0[o3 + 0], ty0 = trans0[o3 + 1], tz0 = trans0[o3 + 2];
-        float tx1 = trans1[o3 + 0], ty1 = trans1[o3 + 1], tz1 = trans1[o3 + 2];
-        float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
-        float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
-        float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
-
-        float tix, tiy, tiz;
-        float qix, qiy, qiz, qiw;
-        if(t0s <= t1s)
-        {
-            const float om = 1.0f - alpha;
-            tix            = om * tx0 + alpha * tx1;
-            tiy            = om * ty0 + alpha * ty1;
-            tiz            = om * tz0 + alpha * tz1;
-            quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
-        }
-        else
-        {
-            const float om = 1.0f - alpha;
-            tix            = om * tx1 + alpha * tx0;
-            tiy            = om * ty1 + alpha * ty0;
-            tiz            = om * tz1 + alpha * tz0;
-            quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
-        }
-        float rx, ry, rz;
-        quat_rotate_vector_fwd_impl<float>(qix, qiy, qiz, qiw, px, py, pz, &rx, &ry, &rz);
-        result_point[o3 + 0] = rx + tix;
-        result_point[o3 + 1] = ry + tiy;
-        result_point[o3 + 2] = rz + tiz;
-        result_oob[i]        = oob ? 1.0f : 0.0f;
+        grad_trans0[o3 + 0]  = (1.0f - alpha) * gtx;
+        grad_trans0[o3 + 1]  = (1.0f - alpha) * gty;
+        grad_trans0[o3 + 2]  = (1.0f - alpha) * gtz;
+        grad_trans1[o3 + 0]  = alpha * gtx;
+        grad_trans1[o3 + 1]  = alpha * gty;
+        grad_trans1[o3 + 2]  = alpha * gtz;
+        grad_alpha          += gtx * (tx1 - tx0) + gty * (ty1 - ty0) + gtz * (tz1 - tz0);
+    }
+    else
+    {
+        grad_trans1[o3 + 0]  = (1.0f - alpha) * gtx;
+        grad_trans1[o3 + 1]  = (1.0f - alpha) * gty;
+        grad_trans1[o3 + 2]  = (1.0f - alpha) * gtz;
+        grad_trans0[o3 + 0]  = alpha * gtx;
+        grad_trans0[o3 + 1]  = alpha * gty;
+        grad_trans0[o3 + 2]  = alpha * gtz;
+        grad_alpha          += gtx * (tx0 - tx1) + gty * (ty0 - ty1) + gtz * (tz0 - tz1);
     }
 
-    // VJP for 2-pose point transform: grad_result_point (N,3) → grads for trans0/1, rot0/1 (xyzw), time strides, point, query_time.
-    __forceinline__ __device__ void trajectory_transform_point_2poses_bwd_device(
-        int64_t i,
-        int64_t n,
-        int64_t st0,
-        int64_t st1,
-        int64_t sqt,
-        const float *__restrict__ trans0,
-        const float *__restrict__ rot0,
-        const float *__restrict__ time0,
-        const float *__restrict__ trans1,
-        const float *__restrict__ rot1,
-        const float *__restrict__ time1,
-        const float *__restrict__ point,
-        const float *__restrict__ query_time,
-        const float *__restrict__ grad_result_point,
-        float *__restrict__ grad_trans0,
-        float *__restrict__ grad_rot0,
-        float *__restrict__ grad_time0,
-        float *__restrict__ grad_trans1,
-        float *__restrict__ grad_rot1,
-        float *__restrict__ grad_time1,
-        float *__restrict__ grad_point,
-        float *__restrict__ grad_query_time
-    )
+    float gq1x, gq1y, gq1z, gq1w, gq2x, gq2y, gq2z, gq2w, ga_slerp = 0.0f;
+    if(t0s <= t1s)
     {
-        const int64_t o3  = i * 3;
-        const int64_t o4  = i * 4;
-        const float t0s   = time0[i * st0];
-        const float t1s   = time1[i * st1];
-        const float qt    = query_time[i * sqt];
-        const float t_min = fminf(t0s, t1s);
-        const float t_max = fmaxf(t0s, t1s);
-        const float d     = t_max - t_min;
-        const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
-
-        float tx0 = trans0[o3 + 0], ty0 = trans0[o3 + 1], tz0 = trans0[o3 + 2];
-        float tx1 = trans1[o3 + 0], ty1 = trans1[o3 + 1], tz1 = trans1[o3 + 2];
-        float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
-        float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
-        float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
-
-        float qix, qiy, qiz, qiw;
-        if(t0s <= t1s)
-        {
-            quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
-        }
-        else
-        {
-            quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
-        }
-
-        const float gtx = grad_result_point[o3 + 0];
-        const float gty = grad_result_point[o3 + 1];
-        const float gtz = grad_result_point[o3 + 2];
-
-        float gqix, gqiy, gqiz, gqiw;
-        float gpx, gpy, gpz;
-        quat_rotate_vector_bwd_impl<float>(
-            qix, qiy, qiz, qiw, px, py, pz, gtx, gty, gtz, &gqix, &gqiy, &gqiz, &gqiw, &gpx, &gpy, &gpz
+        quat_slerp_pair_bwd_with_time_grad<float>(
+            qx0,
+            qy0,
+            qz0,
+            qw0,
+            qx1,
+            qy1,
+            qz1,
+            qw1,
+            alpha,
+            qix,
+            qiy,
+            qiz,
+            qiw,
+            gqix,
+            gqiy,
+            gqiz,
+            gqiw,
+            &gq1x,
+            &gq1y,
+            &gq1z,
+            &gq1w,
+            &gq2x,
+            &gq2y,
+            &gq2z,
+            &gq2w,
+            &ga_slerp
         );
-
-        grad_point[o3 + 0] = gpx;
-        grad_point[o3 + 1] = gpy;
-        grad_point[o3 + 2] = gpz;
-
-        float grad_alpha = 0.0f;
-
-        if(t0s <= t1s)
-        {
-            grad_trans0[o3 + 0]  = (1.0f - alpha) * gtx;
-            grad_trans0[o3 + 1]  = (1.0f - alpha) * gty;
-            grad_trans0[o3 + 2]  = (1.0f - alpha) * gtz;
-            grad_trans1[o3 + 0]  = alpha * gtx;
-            grad_trans1[o3 + 1]  = alpha * gty;
-            grad_trans1[o3 + 2]  = alpha * gtz;
-            grad_alpha          += gtx * (tx1 - tx0) + gty * (ty1 - ty0) + gtz * (tz1 - tz0);
-        }
-        else
-        {
-            grad_trans1[o3 + 0]  = (1.0f - alpha) * gtx;
-            grad_trans1[o3 + 1]  = (1.0f - alpha) * gty;
-            grad_trans1[o3 + 2]  = (1.0f - alpha) * gtz;
-            grad_trans0[o3 + 0]  = alpha * gtx;
-            grad_trans0[o3 + 1]  = alpha * gty;
-            grad_trans0[o3 + 2]  = alpha * gtz;
-            grad_alpha          += gtx * (tx0 - tx1) + gty * (ty0 - ty1) + gtz * (tz0 - tz1);
-        }
-
-        float gq1x, gq1y, gq1z, gq1w, gq2x, gq2y, gq2z, gq2w, ga_slerp = 0.0f;
-        if(t0s <= t1s)
-        {
-            quat_slerp_pair_bwd_with_time_grad<float>(
-                qx0,
-                qy0,
-                qz0,
-                qw0,
-                qx1,
-                qy1,
-                qz1,
-                qw1,
-                alpha,
-                qix,
-                qiy,
-                qiz,
-                qiw,
-                gqix,
-                gqiy,
-                gqiz,
-                gqiw,
-                &gq1x,
-                &gq1y,
-                &gq1z,
-                &gq1w,
-                &gq2x,
-                &gq2y,
-                &gq2z,
-                &gq2w,
-                &ga_slerp
-            );
-            grad_rot0[o4 + 0] = gq1x;
-            grad_rot0[o4 + 1] = gq1y;
-            grad_rot0[o4 + 2] = gq1z;
-            grad_rot0[o4 + 3] = gq1w;
-            grad_rot1[o4 + 0] = gq2x;
-            grad_rot1[o4 + 1] = gq2y;
-            grad_rot1[o4 + 2] = gq2z;
-            grad_rot1[o4 + 3] = gq2w;
-        }
-        else
-        {
-            quat_slerp_pair_bwd_with_time_grad<float>(
-                qx1,
-                qy1,
-                qz1,
-                qw1,
-                qx0,
-                qy0,
-                qz0,
-                qw0,
-                alpha,
-                qix,
-                qiy,
-                qiz,
-                qiw,
-                gqix,
-                gqiy,
-                gqiz,
-                gqiw,
-                &gq1x,
-                &gq1y,
-                &gq1z,
-                &gq1w,
-                &gq2x,
-                &gq2y,
-                &gq2z,
-                &gq2w,
-                &ga_slerp
-            );
-            grad_rot1[o4 + 0] = gq1x;
-            grad_rot1[o4 + 1] = gq1y;
-            grad_rot1[o4 + 2] = gq1z;
-            grad_rot1[o4 + 3] = gq1w;
-            grad_rot0[o4 + 0] = gq2x;
-            grad_rot0[o4 + 1] = gq2y;
-            grad_rot0[o4 + 2] = gq2z;
-            grad_rot0[o4 + 3] = gq2w;
-        }
-        grad_alpha += ga_slerp;
-
-        float g_t0 = 0.0f, g_t1 = 0.0f, g_qt = 0.0f;
-        trajectory_alpha_time_grads_f(t0s, t1s, qt, d, grad_alpha, &g_t0, &g_t1, &g_qt);
-        grad_time0[i * st0]      = g_t0;
-        grad_time1[i * st1]      = g_t1;
-        grad_query_time[i * sqt] = g_qt;
+        grad_rot0[o4 + 0] = gq1x;
+        grad_rot0[o4 + 1] = gq1y;
+        grad_rot0[o4 + 2] = gq1z;
+        grad_rot0[o4 + 3] = gq1w;
+        grad_rot1[o4 + 0] = gq2x;
+        grad_rot1[o4 + 1] = gq2y;
+        grad_rot1[o4 + 2] = gq2z;
+        grad_rot1[o4 + 3] = gq2w;
     }
-
-    // Row i: SLERP rot0/rot1 at query_time (same α and OOB semantics as 2-pose point); result_quat (N,4) xyzw.
-    __forceinline__ __device__ void trajectory_get_rotation_2poses_fwd_device(
-        int64_t i,
-        int64_t n,
-        int64_t st0,
-        int64_t st1,
-        int64_t sqt,
-        const float *__restrict__ time0,
-        const float *__restrict__ time1,
-        const float *__restrict__ query_time,
-        const float *__restrict__ rot0,
-        const float *__restrict__ rot1,
-        float *__restrict__ result_quat,
-        float *__restrict__ result_oob
-    )
+    else
     {
-        const int64_t o4  = i * 4;
-        const float t0s   = time0[i * st0];
-        const float t1s   = time1[i * st1];
-        const float qt    = query_time[i * sqt];
-        const float t_min = fminf(t0s, t1s);
-        const float t_max = fmaxf(t0s, t1s);
-        const bool oob    = (qt < t_min) || (qt > t_max);
-        const float d     = t_max - t_min;
-        const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
-        float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
-        float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
-        float ox, oy, oz, ow;
-        if(t0s <= t1s)
-        {
-            quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &ox, &oy, &oz, &ow);
-        }
-        else
-        {
-            quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &ox, &oy, &oz, &ow);
-        }
-        result_quat[o4 + 0] = ox;
-        result_quat[o4 + 1] = oy;
-        result_quat[o4 + 2] = oz;
-        result_quat[o4 + 3] = ow;
-        result_oob[i]       = oob ? 1.0f : 0.0f;
-    }
-
-    // VJP: grad_result_quat (N,4) → grad_rot0, grad_rot1; time grads via trajectory_alpha_time_grads_f on SLERP ∂L/∂α.
-    __forceinline__ __device__ void trajectory_get_rotation_2poses_bwd_device(
-        int64_t i,
-        int64_t n,
-        int64_t st0,
-        int64_t st1,
-        int64_t sqt,
-        const float *__restrict__ time0,
-        const float *__restrict__ time1,
-        const float *__restrict__ query_time,
-        const float *__restrict__ rot0,
-        const float *__restrict__ rot1,
-        const float *__restrict__ grad_result_quat,
-        float *__restrict__ grad_rot0,
-        float *__restrict__ grad_rot1,
-        float *__restrict__ grad_time0,
-        float *__restrict__ grad_time1,
-        float *__restrict__ grad_query_time
-    )
-    {
-        const int64_t o4  = i * 4;
-        const float t0s   = time0[i * st0];
-        const float t1s   = time1[i * st1];
-        const float qt    = query_time[i * sqt];
-        const float t_min = fminf(t0s, t1s);
-        const float t_max = fmaxf(t0s, t1s);
-        const float d     = t_max - t_min;
-        const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
-
-        float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
-        float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
-
-        float qix, qiy, qiz, qiw;
-        if(t0s <= t1s)
-        {
-            quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
-        }
-        else
-        {
-            quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
-        }
-
-        const float gx = grad_result_quat[o4 + 0];
-        const float gy = grad_result_quat[o4 + 1];
-        const float gz = grad_result_quat[o4 + 2];
-        const float gw = grad_result_quat[o4 + 3];
-
-        float gq1x, gq1y, gq1z, gq1w, gq2x, gq2y, gq2z, gq2w, ga_slerp = 0.0f;
-        if(t0s <= t1s)
-        {
-            quat_slerp_pair_bwd_with_time_grad<float>(
-                qx0,
-                qy0,
-                qz0,
-                qw0,
-                qx1,
-                qy1,
-                qz1,
-                qw1,
-                alpha,
-                qix,
-                qiy,
-                qiz,
-                qiw,
-                gx,
-                gy,
-                gz,
-                gw,
-                &gq1x,
-                &gq1y,
-                &gq1z,
-                &gq1w,
-                &gq2x,
-                &gq2y,
-                &gq2z,
-                &gq2w,
-                &ga_slerp
-            );
-            grad_rot0[o4 + 0] = gq1x;
-            grad_rot0[o4 + 1] = gq1y;
-            grad_rot0[o4 + 2] = gq1z;
-            grad_rot0[o4 + 3] = gq1w;
-            grad_rot1[o4 + 0] = gq2x;
-            grad_rot1[o4 + 1] = gq2y;
-            grad_rot1[o4 + 2] = gq2z;
-            grad_rot1[o4 + 3] = gq2w;
-        }
-        else
-        {
-            quat_slerp_pair_bwd_with_time_grad<float>(
-                qx1,
-                qy1,
-                qz1,
-                qw1,
-                qx0,
-                qy0,
-                qz0,
-                qw0,
-                alpha,
-                qix,
-                qiy,
-                qiz,
-                qiw,
-                gx,
-                gy,
-                gz,
-                gw,
-                &gq1x,
-                &gq1y,
-                &gq1z,
-                &gq1w,
-                &gq2x,
-                &gq2y,
-                &gq2z,
-                &gq2w,
-                &ga_slerp
-            );
-            grad_rot1[o4 + 0] = gq1x;
-            grad_rot1[o4 + 1] = gq1y;
-            grad_rot1[o4 + 2] = gq1z;
-            grad_rot1[o4 + 3] = gq1w;
-            grad_rot0[o4 + 0] = gq2x;
-            grad_rot0[o4 + 1] = gq2y;
-            grad_rot0[o4 + 2] = gq2z;
-            grad_rot0[o4 + 3] = gq2w;
-        }
-
-        float g_t0 = 0.0f, g_t1 = 0.0f, g_qt = 0.0f;
-        trajectory_alpha_time_grads_f(t0s, t1s, qt, d, ga_slerp, &g_t0, &g_t1, &g_qt);
-        grad_time0[i * st0]      = g_t0;
-        grad_time1[i * st1]      = g_t1;
-        grad_query_time[i * sqt] = g_qt;
-    }
-
-    // -----------------------------------------------------------------------------
-    // Single-keyframe trajectory (float32): OOB = (query_time != keyframe time), transform still applied.
-    // -----------------------------------------------------------------------------
-
-    // Row i: result = R(rot_i) point_i + trans_i; result_oob[i]=1 if query_time[i*sqt] != time[i*st] (exact float compare).
-    __forceinline__ __device__ void trajectory_transform_point_1pose_fwd_device(
-        int64_t i,
-        int64_t n,
-        int64_t st,
-        int64_t sqt,
-        const float *__restrict__ trans,
-        const float *__restrict__ rot,
-        const float *__restrict__ time,
-        const float *__restrict__ point,
-        const float *__restrict__ query_time,
-        float *__restrict__ result_point,
-        float *__restrict__ result_oob
-    )
-    {
-        const int64_t o3 = i * 3;
-        const int64_t o4 = i * 4;
-        const float tt   = time[i * st];
-        const float qt   = query_time[i * sqt];
-        const bool oob   = (qt != tt);
-
-        const float qx = rot[o4 + 0], qy = rot[o4 + 1], qz = rot[o4 + 2], qw = rot[o4 + 3];
-        const float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
-        const float tx = trans[o3 + 0], ty = trans[o3 + 1], tz = trans[o3 + 2];
-        float rx = 0, ry = 0, rz = 0;
-        quat_rotate_vector_fwd_impl<float>(qx, qy, qz, qw, px, py, pz, &rx, &ry, &rz);
-        result_point[o3 + 0] = rx + tx;
-        result_point[o3 + 1] = ry + ty;
-        result_point[o3 + 2] = rz + tz;
-        result_oob[i]        = oob ? 1.0f : 0.0f;
-    }
-
-    // VJP: grad_result_point → grad_trans, grad_rot (xyzw), grad_point; grad_time/grad_query_time not populated by device body (kernel may ignore).
-    __forceinline__ __device__ void trajectory_transform_point_1pose_bwd_device(
-        int64_t i,
-        int64_t n,
-        const float *__restrict__ trans,
-        const float *__restrict__ rot,
-        const float *__restrict__ time,
-        const float *__restrict__ point,
-        const float *__restrict__ query_time,
-        const float *__restrict__ grad_result_point,
-        float *__restrict__ grad_trans,
-        float *__restrict__ grad_rot,
-        float *__restrict__ grad_time,
-        float *__restrict__ grad_point,
-        float *__restrict__ grad_query_time
-    )
-    {
-        const int64_t o3 = i * 3;
-        const int64_t o4 = i * 4;
-        const float qx = rot[o4 + 0], qy = rot[o4 + 1], qz = rot[o4 + 2], qw = rot[o4 + 3];
-        const float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
-
-        const float gtx = grad_result_point[o3 + 0];
-        const float gty = grad_result_point[o3 + 1];
-        const float gtz = grad_result_point[o3 + 2];
-
-        float gqix, gqiy, gqiz, gqiw;
-        float gpx, gpy, gpz;
-        quat_rotate_vector_bwd_impl<float>(
-            qx, qy, qz, qw, px, py, pz, gtx, gty, gtz, &gqix, &gqiy, &gqiz, &gqiw, &gpx, &gpy, &gpz
+        quat_slerp_pair_bwd_with_time_grad<float>(
+            qx1,
+            qy1,
+            qz1,
+            qw1,
+            qx0,
+            qy0,
+            qz0,
+            qw0,
+            alpha,
+            qix,
+            qiy,
+            qiz,
+            qiw,
+            gqix,
+            gqiy,
+            gqiz,
+            gqiw,
+            &gq1x,
+            &gq1y,
+            &gq1z,
+            &gq1w,
+            &gq2x,
+            &gq2y,
+            &gq2z,
+            &gq2w,
+            &ga_slerp
         );
-
-        grad_trans[o3 + 0] = gtx;
-        grad_trans[o3 + 1] = gty;
-        grad_trans[o3 + 2] = gtz;
-        grad_rot[o4 + 0]   = gqix;
-        grad_rot[o4 + 1]   = gqiy;
-        grad_rot[o4 + 2]   = gqiz;
-        grad_rot[o4 + 3]   = gqiw;
-        grad_point[o3 + 0] = gpx;
-        grad_point[o3 + 1] = gpy;
-        grad_point[o3 + 2] = gpz;
+        grad_rot1[o4 + 0] = gq1x;
+        grad_rot1[o4 + 1] = gq1y;
+        grad_rot1[o4 + 2] = gq1z;
+        grad_rot1[o4 + 3] = gq1w;
+        grad_rot0[o4 + 0] = gq2x;
+        grad_rot0[o4 + 1] = gq2y;
+        grad_rot0[o4 + 2] = gq2z;
+        grad_rot0[o4 + 3] = gq2w;
     }
+    grad_alpha += ga_slerp;
 
-    // Row i: 7-D pose (tx,ty,tz, qx,qy,qz,qw) → new_q = fr⊗iq, new_t = scale * (R(fr)*it + fxyz); frame quat fr is xyzw.
-    __forceinline__ __device__ void frame_transform_poses_tquat_fwd_device(
-        int64_t i,
-        int64_t n,
-        float frx,
-        float fry,
-        float frz,
-        float frw,
-        float ftx,
-        float fty,
-        float ftz,
-        float scale,
-        const float *__restrict__ input_poses,
-        float *__restrict__ output_poses
-    )
+    float g_t0 = 0.0f, g_t1 = 0.0f, g_qt = 0.0f;
+    trajectory_alpha_time_grads_f(t0s, t1s, qt, d, grad_alpha, &g_t0, &g_t1, &g_qt);
+    grad_time0[i * st0]      = g_t0;
+    grad_time1[i * st1]      = g_t1;
+    grad_query_time[i * sqt] = g_qt;
+}
+
+// Row i: SLERP rot0/rot1 at query_time (same α and OOB semantics as 2-pose point); result_quat (N,4) xyzw.
+__forceinline__ __device__ void trajectory_get_rotation_2poses_fwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st0,
+    int64_t st1,
+    int64_t sqt,
+    const float *__restrict__ time0,
+    const float *__restrict__ time1,
+    const float *__restrict__ query_time,
+    const float *__restrict__ rot0,
+    const float *__restrict__ rot1,
+    float *__restrict__ result_quat,
+    float *__restrict__ result_oob
+)
+{
+    const int64_t o4  = i * 4;
+    const float t0s   = time0[i * st0];
+    const float t1s   = time1[i * st1];
+    const float qt    = query_time[i * sqt];
+    const float t_min = fminf(t0s, t1s);
+    const float t_max = fmaxf(t0s, t1s);
+    const bool oob    = (qt < t_min) || (qt > t_max);
+    const float d     = t_max - t_min;
+    const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
+    float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
+    float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
+    float ox, oy, oz, ow;
+    if(t0s <= t1s)
     {
-        const int64_t o7 = i * 7;
-        const float itx = input_poses[o7 + 0], ity = input_poses[o7 + 1], itz = input_poses[o7 + 2];
-        const float iqx = input_poses[o7 + 3], iqy = input_poses[o7 + 4], iqz = input_poses[o7 + 5],
-                    iqw = input_poses[o7 + 6];
-        float nqx = 0, nqy = 0, nqz = 0, nqw = 0;
-        quat_multiply_impl<float>(frx, fry, frz, frw, iqx, iqy, iqz, iqw, &nqx, &nqy, &nqz, &nqw);
-        float rtx = 0, rty = 0, rtz = 0;
-        quat_rotate_vector_fwd_impl<float>(frx, fry, frz, frw, itx, ity, itz, &rtx, &rty, &rtz);
-        const float ntx      = scale * (rtx + ftx);
-        const float nty      = scale * (rty + fty);
-        const float ntz      = scale * (rtz + ftz);
-        output_poses[o7 + 0] = ntx;
-        output_poses[o7 + 1] = nty;
-        output_poses[o7 + 2] = ntz;
-        output_poses[o7 + 3] = nqx;
-        output_poses[o7 + 4] = nqy;
-        output_poses[o7 + 5] = nqz;
-        output_poses[o7 + 6] = nqw;
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &ox, &oy, &oz, &ow);
     }
-} // namespace trajectory_cuda
+    else
+    {
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &ox, &oy, &oz, &ow);
+    }
+    result_quat[o4 + 0] = ox;
+    result_quat[o4 + 1] = oy;
+    result_quat[o4 + 2] = oz;
+    result_quat[o4 + 3] = ow;
+    result_oob[i]       = oob ? 1.0f : 0.0f;
+}
+
+// VJP: grad_result_quat (N,4) → grad_rot0, grad_rot1; time grads via trajectory_alpha_time_grads_f on SLERP ∂L/∂α.
+__forceinline__ __device__ void trajectory_get_rotation_2poses_bwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st0,
+    int64_t st1,
+    int64_t sqt,
+    const float *__restrict__ time0,
+    const float *__restrict__ time1,
+    const float *__restrict__ query_time,
+    const float *__restrict__ rot0,
+    const float *__restrict__ rot1,
+    const float *__restrict__ grad_result_quat,
+    float *__restrict__ grad_rot0,
+    float *__restrict__ grad_rot1,
+    float *__restrict__ grad_time0,
+    float *__restrict__ grad_time1,
+    float *__restrict__ grad_query_time
+)
+{
+    const int64_t o4  = i * 4;
+    const float t0s   = time0[i * st0];
+    const float t1s   = time1[i * st1];
+    const float qt    = query_time[i * sqt];
+    const float t_min = fminf(t0s, t1s);
+    const float t_max = fmaxf(t0s, t1s);
+    const float d     = t_max - t_min;
+    const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
+
+    float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
+    float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
+
+    float qix, qiy, qiz, qiw;
+    if(t0s <= t1s)
+    {
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+    else
+    {
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+
+    const float gx = grad_result_quat[o4 + 0];
+    const float gy = grad_result_quat[o4 + 1];
+    const float gz = grad_result_quat[o4 + 2];
+    const float gw = grad_result_quat[o4 + 3];
+
+    float gq1x, gq1y, gq1z, gq1w, gq2x, gq2y, gq2z, gq2w, ga_slerp = 0.0f;
+    if(t0s <= t1s)
+    {
+        quat_slerp_pair_bwd_with_time_grad<float>(
+            qx0,
+            qy0,
+            qz0,
+            qw0,
+            qx1,
+            qy1,
+            qz1,
+            qw1,
+            alpha,
+            qix,
+            qiy,
+            qiz,
+            qiw,
+            gx,
+            gy,
+            gz,
+            gw,
+            &gq1x,
+            &gq1y,
+            &gq1z,
+            &gq1w,
+            &gq2x,
+            &gq2y,
+            &gq2z,
+            &gq2w,
+            &ga_slerp
+        );
+        grad_rot0[o4 + 0] = gq1x;
+        grad_rot0[o4 + 1] = gq1y;
+        grad_rot0[o4 + 2] = gq1z;
+        grad_rot0[o4 + 3] = gq1w;
+        grad_rot1[o4 + 0] = gq2x;
+        grad_rot1[o4 + 1] = gq2y;
+        grad_rot1[o4 + 2] = gq2z;
+        grad_rot1[o4 + 3] = gq2w;
+    }
+    else
+    {
+        quat_slerp_pair_bwd_with_time_grad<float>(
+            qx1,
+            qy1,
+            qz1,
+            qw1,
+            qx0,
+            qy0,
+            qz0,
+            qw0,
+            alpha,
+            qix,
+            qiy,
+            qiz,
+            qiw,
+            gx,
+            gy,
+            gz,
+            gw,
+            &gq1x,
+            &gq1y,
+            &gq1z,
+            &gq1w,
+            &gq2x,
+            &gq2y,
+            &gq2z,
+            &gq2w,
+            &ga_slerp
+        );
+        grad_rot1[o4 + 0] = gq1x;
+        grad_rot1[o4 + 1] = gq1y;
+        grad_rot1[o4 + 2] = gq1z;
+        grad_rot1[o4 + 3] = gq1w;
+        grad_rot0[o4 + 0] = gq2x;
+        grad_rot0[o4 + 1] = gq2y;
+        grad_rot0[o4 + 2] = gq2z;
+        grad_rot0[o4 + 3] = gq2w;
+    }
+
+    float g_t0 = 0.0f, g_t1 = 0.0f, g_qt = 0.0f;
+    trajectory_alpha_time_grads_f(t0s, t1s, qt, d, ga_slerp, &g_t0, &g_t1, &g_qt);
+    grad_time0[i * st0]      = g_t0;
+    grad_time1[i * st1]      = g_t1;
+    grad_query_time[i * sqt] = g_qt;
+}
+
+// -----------------------------------------------------------------------------
+// Single-keyframe trajectory (float32): OOB = (query_time != keyframe time), transform still applied.
+// -----------------------------------------------------------------------------
+
+// Row i: result = R(rot_i) point_i + trans_i; result_oob[i]=1 if query_time[i*sqt] != time[i*st] (exact float compare).
+__forceinline__ __device__ void trajectory_transform_point_1pose_fwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st,
+    int64_t sqt,
+    const float *__restrict__ trans,
+    const float *__restrict__ rot,
+    const float *__restrict__ time,
+    const float *__restrict__ point,
+    const float *__restrict__ query_time,
+    float *__restrict__ result_point,
+    float *__restrict__ result_oob
+)
+{
+    const int64_t o3 = i * 3;
+    const int64_t o4 = i * 4;
+    const float tt   = time[i * st];
+    const float qt   = query_time[i * sqt];
+    const bool oob   = (qt != tt);
+
+    const float qx = rot[o4 + 0], qy = rot[o4 + 1], qz = rot[o4 + 2], qw = rot[o4 + 3];
+    const float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
+    const float tx = trans[o3 + 0], ty = trans[o3 + 1], tz = trans[o3 + 2];
+    float rx = 0, ry = 0, rz = 0;
+    quat_rotate_vector_fwd_impl<float>(qx, qy, qz, qw, px, py, pz, &rx, &ry, &rz);
+    result_point[o3 + 0] = rx + tx;
+    result_point[o3 + 1] = ry + ty;
+    result_point[o3 + 2] = rz + tz;
+    result_oob[i]        = oob ? 1.0f : 0.0f;
+}
+
+// VJP: grad_result_point → grad_trans, grad_rot (xyzw), grad_point; grad_time/grad_query_time not populated by device body (kernel may ignore).
+__forceinline__ __device__ void trajectory_transform_point_1pose_bwd_device(
+    int64_t i,
+    int64_t n,
+    const float *__restrict__ trans,
+    const float *__restrict__ rot,
+    const float *__restrict__ time,
+    const float *__restrict__ point,
+    const float *__restrict__ query_time,
+    const float *__restrict__ grad_result_point,
+    float *__restrict__ grad_trans,
+    float *__restrict__ grad_rot,
+    float *__restrict__ grad_time,
+    float *__restrict__ grad_point,
+    float *__restrict__ grad_query_time
+)
+{
+    const int64_t o3 = i * 3;
+    const int64_t o4 = i * 4;
+    const float qx = rot[o4 + 0], qy = rot[o4 + 1], qz = rot[o4 + 2], qw = rot[o4 + 3];
+    const float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
+
+    const float gtx = grad_result_point[o3 + 0];
+    const float gty = grad_result_point[o3 + 1];
+    const float gtz = grad_result_point[o3 + 2];
+
+    float gqix, gqiy, gqiz, gqiw;
+    float gpx, gpy, gpz;
+    quat_rotate_vector_bwd_impl<float>(
+        qx, qy, qz, qw, px, py, pz, gtx, gty, gtz, &gqix, &gqiy, &gqiz, &gqiw, &gpx, &gpy, &gpz
+    );
+
+    grad_trans[o3 + 0] = gtx;
+    grad_trans[o3 + 1] = gty;
+    grad_trans[o3 + 2] = gtz;
+    grad_rot[o4 + 0]   = gqix;
+    grad_rot[o4 + 1]   = gqiy;
+    grad_rot[o4 + 2]   = gqiz;
+    grad_rot[o4 + 3]   = gqiw;
+    grad_point[o3 + 0] = gpx;
+    grad_point[o3 + 1] = gpy;
+    grad_point[o3 + 2] = gpz;
+}
+
+// Row i: 7-D pose (tx,ty,tz, qx,qy,qz,qw) → new_q = fr⊗iq, new_t = scale * (R(fr)*it + fxyz); frame quat fr is xyzw.
+__forceinline__ __device__ void frame_transform_poses_tquat_fwd_device(
+    int64_t i,
+    int64_t n,
+    float frx,
+    float fry,
+    float frz,
+    float frw,
+    float ftx,
+    float fty,
+    float ftz,
+    float scale,
+    const float *__restrict__ input_poses,
+    float *__restrict__ output_poses
+)
+{
+    const int64_t o7 = i * 7;
+    const float itx = input_poses[o7 + 0], ity = input_poses[o7 + 1], itz = input_poses[o7 + 2];
+    const float iqx = input_poses[o7 + 3], iqy = input_poses[o7 + 4], iqz = input_poses[o7 + 5],
+                iqw = input_poses[o7 + 6];
+    float nqx = 0, nqy = 0, nqz = 0, nqw = 0;
+    quat_multiply_impl<float>(frx, fry, frz, frw, iqx, iqy, iqz, iqw, &nqx, &nqy, &nqz, &nqw);
+    float rtx = 0, rty = 0, rtz = 0;
+    quat_rotate_vector_fwd_impl<float>(frx, fry, frz, frw, itx, ity, itz, &rtx, &rty, &rtz);
+    const float ntx      = scale * (rtx + ftx);
+    const float nty      = scale * (rty + fty);
+    const float ntz      = scale * (rtz + ftz);
+    output_poses[o7 + 0] = ntx;
+    output_poses[o7 + 1] = nty;
+    output_poses[o7 + 2] = ntz;
+    output_poses[o7 + 3] = nqx;
+    output_poses[o7 + 4] = nqy;
+    output_poses[o7 + 5] = nqz;
+    output_poses[o7 + 6] = nqw;
+}
 
 namespace packed_track_cuda
 {
@@ -1230,267 +1160,6 @@ __device__ __forceinline__ void se3_inverse_transform_point(
 )
 {
     quat_rotate_vector_fwd_impl<T>(-qx, -qy, -qz, qw, px - tx, py - ty, pz - tz, ox, oy, oz);
-}
-
-template<typename T>
-__device__ __forceinline__ void quat_slerp_pair_fwd(
-    T x1, T y1, T z1, T w1, T x2, T y2, T z2, T w2, T ti, T *ox, T *oy, T *oz, T *ow
-)
-{
-    const T dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
-    const T s   = dot < T(0) ? T(-1) : T(1);
-    const T sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
-    const T c_raw    = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
-    const T c        = quat_slerp_clamp_dot<T>(c_raw);
-    const T small_th = quat_slerp_small_angle_dot_threshold<T>();
-
-    if(c > small_th)
-    {
-        const T om      = T(1) - ti;
-        const T rx      = om * x1 + ti * sx;
-        const T ry      = om * y1 + ti * sy;
-        const T rz      = om * z1 + ti * sz;
-        const T rw      = om * w1 + ti * sw;
-        const T norm_sq = rx * rx + ry * ry + rz * rz + rw * rw;
-        const T inv_n   = T(1) / sqrt(norm_sq);
-        *ox             = rx * inv_n;
-        *oy             = ry * inv_n;
-        *oz             = rz * inv_n;
-        *ow             = rw * inv_n;
-        return;
-    }
-
-    const T theta     = acos(c);
-    const T sin_theta = sin(theta);
-    const T w1s       = sin((T(1) - ti) * theta) / sin_theta;
-    const T w2s       = sin(ti * theta) / sin_theta;
-    *ox               = w1s * x1 + w2s * sx;
-    *oy               = w1s * y1 + w2s * sy;
-    *oz               = w1s * z1 + w2s * sz;
-    *ow               = w1s * w1 + w2s * sw;
-}
-
-// Shared VJP body; EmitGradT removes dL/dti work from no-time-grad callers.
-template<typename T, bool EmitGradT>
-__device__ __forceinline__ void quat_slerp_pair_bwd_impl(
-    T x1,
-    T y1,
-    T z1,
-    T w1,
-    T x2,
-    T y2,
-    T z2,
-    T w2,
-    T ti,
-    T rx,
-    T ry,
-    T rz,
-    T rw,
-    T gx,
-    T gy,
-    T gz,
-    T gw,
-    T *gq1x,
-    T *gq1y,
-    T *gq1z,
-    T *gq1w,
-    T *gq2x,
-    T *gq2y,
-    T *gq2z,
-    T *gq2w,
-    T *grad_t
-)
-{
-    const T dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
-    const T s   = dot < T(0) ? T(-1) : T(1);
-    const T sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
-    const T c_raw         = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
-    const T c             = quat_slerp_clamp_dot<T>(c_raw);
-    const bool interior_c = (c_raw > T(-1)) && (c_raw < T(1));
-    const T c_mask        = interior_c ? T(1) : T(0);
-    const T small_th      = quat_slerp_small_angle_dot_threshold<T>();
-
-    if(c > small_th)
-    {
-        const T om      = T(1) - ti;
-        const T rrx     = om * x1 + ti * sx;
-        const T rry     = om * y1 + ti * sy;
-        const T rrz     = om * z1 + ti * sz;
-        const T rrw     = om * w1 + ti * sw;
-        const T norm_sq = rrx * rrx + rry * rry + rrz * rrz + rrw * rrw;
-        const T r_norm  = sqrt(norm_sq);
-        const T yx = rx, yy = ry, yz = rz, yw = rw;
-        const T ydotg = yx * gx + yy * gy + yz * gz + yw * gw;
-        const T scale = T(1) / r_norm;
-        const T grx   = (gx - yx * ydotg) * scale;
-        const T gry   = (gy - yy * ydotg) * scale;
-        const T grz   = (gz - yz * ydotg) * scale;
-        const T grw   = (gw - yw * ydotg) * scale;
-        *gq1x         = om * grx;
-        *gq1y         = om * gry;
-        *gq1z         = om * grz;
-        *gq1w         = om * grw;
-        *gq2x         = s * ti * grx;
-        *gq2y         = s * ti * gry;
-        *gq2z         = s * ti * grz;
-        *gq2w         = s * ti * grw;
-        if constexpr(EmitGradT)
-        {
-            const T dq2m_dq1x = sx - x1, dq2m_dq1y = sy - y1, dq2m_dq1z = sz - z1, dq2m_dq1w = sw - w1;
-            *grad_t = grx * dq2m_dq1x + gry * dq2m_dq1y + grz * dq2m_dq1z + grw * dq2m_dq1w;
-        }
-        return;
-    }
-
-    const T theta      = acos(c);
-    const T sin_theta  = sin(theta);
-    const T w1s        = sin((T(1) - ti) * theta) / sin_theta;
-    const T w2s        = sin(ti * theta) / sin_theta;
-    const T G1         = gx * x1 + gy * y1 + gz * z1 + gw * w1;
-    const T G2         = gx * sx + gy * sy + gz * sz + gw * sw;
-    const T den        = sin_theta * sin_theta;
-    const T dw1_dtheta = ((T(1) - ti) * cos((T(1) - ti) * theta) * sin_theta - sin((T(1) - ti) * theta) * c) / den;
-    const T dw2_dtheta = (ti * cos(ti * theta) * sin_theta - sin(ti * theta) * c) / den;
-    const T dw1_dc     = sin_theta > T(1e-20) ? (-dw1_dtheta / sin_theta) * c_mask : T(0);
-    const T dw2_dc     = sin_theta > T(1e-20) ? (-dw2_dtheta / sin_theta) * c_mask : T(0);
-    const T K          = G1 * dw1_dc + G2 * dw2_dc;
-    *gq1x              = w1s * gx + K * sx;
-    *gq1y              = w1s * gy + K * sy;
-    *gq1z              = w1s * gz + K * sz;
-    *gq1w              = w1s * gw + K * sw;
-    const T gq2ex      = w2s * gx + K * x1;
-    const T gq2ey      = w2s * gy + K * y1;
-    const T gq2ez      = w2s * gz + K * z1;
-    const T gq2ew      = w2s * gw + K * w1;
-    *gq2x              = s * gq2ex;
-    *gq2y              = s * gq2ey;
-    *gq2z              = s * gq2ez;
-    *gq2w              = s * gq2ew;
-    if constexpr(EmitGradT)
-    {
-        const T dw1_dt = -theta * cos((T(1) - ti) * theta) / sin_theta;
-        const T dw2_dt = theta * cos(ti * theta) / sin_theta;
-        *grad_t        = G1 * dw1_dt + G2 * dw2_dt;
-    }
-}
-
-template<typename T>
-__device__ __forceinline__ void quat_slerp_pair_bwd_no_time_grad(
-    T x1,
-    T y1,
-    T z1,
-    T w1,
-    T x2,
-    T y2,
-    T z2,
-    T w2,
-    T ti,
-    T rx,
-    T ry,
-    T rz,
-    T rw,
-    T gx,
-    T gy,
-    T gz,
-    T gw,
-    T *gq1x,
-    T *gq1y,
-    T *gq1z,
-    T *gq1w,
-    T *gq2x,
-    T *gq2y,
-    T *gq2z,
-    T *gq2w
-)
-{
-    quat_slerp_pair_bwd_impl<T, false>(
-        x1,
-        y1,
-        z1,
-        w1,
-        x2,
-        y2,
-        z2,
-        w2,
-        ti,
-        rx,
-        ry,
-        rz,
-        rw,
-        gx,
-        gy,
-        gz,
-        gw,
-        gq1x,
-        gq1y,
-        gq1z,
-        gq1w,
-        gq2x,
-        gq2y,
-        gq2z,
-        gq2w,
-        nullptr
-    );
-}
-
-template<typename T>
-__device__ __forceinline__ void quat_slerp_pair_bwd_with_time_grad(
-    T x1,
-    T y1,
-    T z1,
-    T w1,
-    T x2,
-    T y2,
-    T z2,
-    T w2,
-    T ti,
-    T rx,
-    T ry,
-    T rz,
-    T rw,
-    T gx,
-    T gy,
-    T gz,
-    T gw,
-    T *gq1x,
-    T *gq1y,
-    T *gq1z,
-    T *gq1w,
-    T *gq2x,
-    T *gq2y,
-    T *gq2z,
-    T *gq2w,
-    T *grad_t
-)
-{
-    quat_slerp_pair_bwd_impl<T, true>(
-        x1,
-        y1,
-        z1,
-        w1,
-        x2,
-        y2,
-        z2,
-        w2,
-        ti,
-        rx,
-        ry,
-        rz,
-        rw,
-        gx,
-        gy,
-        gz,
-        gw,
-        gq1x,
-        gq1y,
-        gq1z,
-        gq1w,
-        gq2x,
-        gq2y,
-        gq2z,
-        gq2w,
-        grad_t
-    );
 }
 
 // Batch row i: out = R(q)^T d (same conjugate trick as inverse point, without translation).
