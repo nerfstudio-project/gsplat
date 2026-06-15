@@ -15,8 +15,9 @@
 
 """Camera models and rolling shutter utilities for GSplat.
 
-This module contains camera model implementations including perfect pinhole, OpenCV pinhole,
-OpenCV fisheye, and FTheta models, along with rolling shutter support.
+This module contains camera model implementations including perfect pinhole,
+orthographic, OpenCV pinhole, OpenCV fisheye, and FTheta models, along with
+rolling shutter support.
 """
 
 import math
@@ -270,9 +271,9 @@ class _BaseCameraModel(ABC):
             Args:
             width: Image width (required for non-lidar models)
             height: Image height (required for non-lidar models)
-            camera_model: "pinhole", "fisheye", "ftheta", or "lidar"
+            camera_model: "pinhole", "ortho", "fisheye", "ftheta", or "lidar"
             principal_points: Principal points [B, 2] (cx, cy) - required for non-lidar models
-            focal_lengths: Focal lengths [B, 2] (fx, fy) - required for pinhole and fisheye
+            focal_lengths: Focal lengths [B, 2] (fx, fy) - required for pinhole, ortho, and fisheye
             radial_coeffs: [B, 6] or [B, 4] radial distortion coefficients (pinhole/fisheye)
             tangential_coeffs: [B, 2] tangential distortion coefficients (pinhole only)
             thin_prism_coeffs: [B, 4] thin prism distortion coefficients (pinhole only)
@@ -344,6 +345,30 @@ class _BaseCameraModel(ABC):
                     rs_type=rs_type,
                 )
 
+        elif camera_model == "ortho":
+            if ftheta_coeffs is not None:
+                raise ValueError(
+                    "ortho camera model does not support ftheta_coeffs parameter"
+                )
+            if (
+                radial_coeffs is not None
+                or tangential_coeffs is not None
+                or thin_prism_coeffs is not None
+            ):
+                raise ValueError(
+                    "ortho camera model does not support radial_coeffs, tangential_coeffs, or thin_prism_coeffs parameters"
+                )
+            if focal_lengths is None:
+                raise ValueError("focal_lengths is required for ortho camera model")
+
+            return _OrthographicCameraModel(
+                focal_lengths=focal_lengths,
+                principal_points=principal_points,
+                width=width,
+                height=height,
+                rs_type=rs_type,
+            )
+
         elif camera_model == "fisheye":
             if ftheta_coeffs is not None:
                 raise ValueError(
@@ -393,7 +418,7 @@ class _BaseCameraModel(ABC):
         else:
             raise ValueError(
                 f"Unsupported camera model: {camera_model}. "
-                f"Supported: pinhole, fisheye, ftheta, lidar"
+                f"Supported: pinhole, ortho, fisheye, ftheta, lidar"
             )
 
     def shutter_relative_frame_time(
@@ -763,6 +788,140 @@ class _PerfectPinholeCameraModel(_BaseCameraModel):
         assert_shape("result", result, M + (3,))
         assert_shape("valid", valid, M)
         return result, valid
+
+
+class _OrthographicCameraModel(_BaseCameraModel):
+    def __init__(
+        self,
+        focal_lengths: Tensor,  # [B, 2]
+        principal_points: Tensor,  # [B, 2]
+        width: int,
+        height: int,
+        rs_type: RollingShutterType,
+    ):
+        # Preconditions
+        B = focal_lengths.shape[:-1]
+        assert_shape("focal_lengths", focal_lengths, B + (2,))
+        assert_shape("principal_points", principal_points, B + (2,))
+
+        super().__init__(width, height, rs_type)
+        self._focal_lengths = focal_lengths
+        self._principal_points = principal_points
+
+    @property
+    def focal_lengths(self) -> Tensor:
+        return self._focal_lengths
+
+    @property
+    def principal_points(self) -> Tensor:
+        return self._principal_points
+
+    def camera_ray_to_image_point(
+        self,
+        cam_point: Tensor,
+        margin_factor: float,
+    ) -> Tuple[Tensor, Tensor]:
+        # Preconditions
+        M = cam_point.shape[:-1]
+        assert_shape("cam_point", cam_point, M + (3,))
+
+        valid_depth = cam_point[..., 2] > 0.0
+
+        image_point = _project_to_image(
+            cam_point[..., :2],
+            self.focal_lengths[..., None, :],
+            self.principal_points[..., None, :],
+        )
+
+        image_point = torch.where(
+            valid_depth[..., None], image_point, torch.zeros_like(image_point)
+        )
+
+        valid_bounds = self.check_image_bounds(image_point, margin_factor)
+        valid = valid_depth & valid_bounds
+
+        # Postconditions
+        assert_shape("image_point", image_point, M + (2,))
+        assert_shape("valid", valid, M)
+
+        return image_point, valid
+
+    def image_point_to_camera_ray(
+        self,
+        image_point: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        # Preconditions
+        M = image_point.shape[:-1]
+        assert_shape("image_point", image_point, M + (2,))
+
+        camera_ray = torch.cat(
+            [
+                torch.zeros_like(image_point[..., :1]),
+                torch.zeros_like(image_point[..., :1]),
+                torch.ones_like(image_point[..., :1]),
+            ],
+            dim=-1,
+        )
+        valid = torch.full_like(image_point[..., 0], True, dtype=torch.bool)
+
+        # Postconditions
+        assert_shape("camera_ray", camera_ray, M + (3,))
+        assert_shape("valid", valid, M)
+
+        return camera_ray, valid
+
+    def image_point_to_world_ray_shutter_pose(
+        self,
+        image_point: Tensor,  # [B, M, 2]
+        shutter_pose_start: Tensor,  # [B, 7]
+        shutter_pose_end: Tensor,  # [B, 7]
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        # Preconditions
+        B = shutter_pose_start.shape[:-1]
+        M = (
+            (image_point.shape[-2],)
+            if image_point.ndim == shutter_pose_start.ndim + 1
+            else ()
+        )
+        assert_shape("image_point", image_point, B + M + (2,))
+        assert_shape("shutter_pose_start", shutter_pose_start, B + (7,))
+        assert_shape("shutter_pose_end", shutter_pose_end, B + (7,))
+
+        uv = _unproject_from_image(
+            image_point,
+            self.focal_lengths[..., None, :],
+            self.principal_points[..., None, :],
+        )
+
+        relative_time = self.shutter_relative_frame_time(image_point)
+        interpolated_pose = _interpolate_shutter_pose(
+            shutter_pose_start[..., None, :],
+            shutter_pose_end[..., None, :],
+            relative_time,
+        )
+
+        origin_cam = torch.cat([uv, torch.zeros_like(uv[..., :1])], dim=-1)
+        direction_cam = torch.cat(
+            [
+                torch.zeros_like(uv[..., :1]),
+                torch.zeros_like(uv[..., :1]),
+                torch.ones_like(uv[..., :1]),
+            ],
+            dim=-1,
+        )
+
+        t = interpolated_pose[..., :3]
+        q_inv = _quat_inverse(interpolated_pose[..., 3:])
+        world_ray_org = _quat_rotate(q_inv, origin_cam - t)
+        world_ray_dir = _quat_rotate(q_inv, direction_cam)
+        valid = torch.full_like(image_point[..., 0], True, dtype=torch.bool)
+
+        # Postconditions
+        assert_shape("world_ray_org", world_ray_org, B + M + (3,))
+        assert_shape("world_ray_dir", world_ray_dir, B + M + (3,))
+        assert_shape("valid", valid, B + M)
+
+        return world_ray_org, world_ray_dir, valid
 
 
 class _OpenCVPinholeCameraModel(_BaseCameraModel):
