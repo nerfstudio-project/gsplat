@@ -24,11 +24,6 @@ inline __device__ float sigmoid_standard(float x)
     return 1.f / (1.f + expf(-x));
 }
 
-inline __device__ float sigmoid_steep(float x, float k, float x0)
-{
-    return 1.f / (1.f + expf(-k * (x - x0)));
-}
-
 __global__ void mcmc_perturb_positions_kernel(
     const uint32_t N,
     float *__restrict__ positions,
@@ -36,7 +31,9 @@ __global__ void mcmc_perturb_positions_kernel(
     const float *__restrict__ scales_log,
     const float *__restrict__ opacities_logit,
     const float *__restrict__ noise,
-    const float scaler
+    const float noise_scale,
+    const float t,
+    const float k
 )
 {
     const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -53,7 +50,7 @@ __global__ void mcmc_perturb_positions_kernel(
     quat_scale_to_covar_preci(quat, scale, &covar, nullptr);
 
     const float density = sigmoid_standard(opacities_logit[idx]);
-    const float w       = sigmoid_steep(1.f - density, 100.f, 0.995f) * scaler;
+    const float w       = sigmoid_standard(-k * (density - t)) * noise_scale;
 
     vec3 n           = glm::make_vec3(noise + idx * 3) * w;
     vec3 transformed = covar * n;
@@ -69,7 +66,9 @@ void launch_mcmc_perturb_positions_kernel(
     const at::Tensor &scales,
     const at::Tensor &opacities,
     const at::Tensor &noise,
-    float scaler
+    float noise_scale,
+    float t,
+    float k
 )
 {
     const int64_t N = positions.size(0);
@@ -90,7 +89,9 @@ void launch_mcmc_perturb_positions_kernel(
         scales.const_data_ptr<float>(),
         opacities.const_data_ptr<float>(),
         noise.const_data_ptr<float>(),
-        scaler
+        noise_scale,
+        t,
+        k
     );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
