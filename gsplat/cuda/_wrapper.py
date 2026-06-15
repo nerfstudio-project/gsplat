@@ -2858,6 +2858,8 @@ def rasterize_to_pixels_2dgs(
     if backgrounds is not None:
         assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
         backgrounds = backgrounds.contiguous()
+    if masks is not None:
+        masks = masks.contiguous()
 
     tile_height, tile_width = isect_offsets.shape[-2:]
     assert (
