@@ -349,6 +349,14 @@ void launch_projection_ut_3dgs_fused_kernel(
                 );
             }
         }
+        else if(camera_model == CameraModelType::ORTHO)
+        {
+            return to_sensor_model_kernel_params(
+                get_camera_model_kernel_params<OrthographicCameraModel>(
+                    {image_width, image_height}, rs_type, external_distortion_kernel_params, Ks.const_data_ptr<float>()
+                )
+            );
+        }
         else if(camera_model == CameraModelType::FISHEYE)
         {
             return to_sensor_model_kernel_params(
@@ -382,7 +390,8 @@ void launch_projection_ut_3dgs_fused_kernel(
         else
         {
             TORCH_CHECK(
-                false, "Invalid camera model: only pinhole, fisheye, ftheta, and lidar camera models are supported"
+                false,
+                "Invalid camera model: only pinhole, ortho, fisheye, ftheta, and lidar camera models are supported"
             );
         }
     }();

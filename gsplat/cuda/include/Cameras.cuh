@@ -20,6 +20,7 @@
 // https://github.com/nv-tlabs/3dgrut
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -721,6 +722,167 @@ struct PerfectPinholeCameraModel
 
         // Make sure ray is normalized
         return {camera_ray / length(camera_ray), true};
+    }
+};
+
+template<typename ExternalDistortionModel>
+struct OrthographicCameraModel
+    : BaseCameraModel<OrthographicCameraModel<ExternalDistortionModel>, ExternalDistortionModel>
+{
+    using Base = BaseCameraModel<OrthographicCameraModel<ExternalDistortionModel>, ExternalDistortionModel>;
+
+    struct KernelParameters : Base::KernelParameters
+    {
+        const float *__restrict__ Ks;
+    };
+
+    struct Parameters : Base::Parameters
+    {
+        std::array<float, 2> principal_point;
+        std::array<float, 2> focal_length;
+
+        inline __device__ Parameters(const KernelParameters &kernel_parameters, int camera_index)
+            : Base::Parameters(kernel_parameters, camera_index)
+            , principal_point({kernel_parameters.Ks[camera_index * 9 + 2], kernel_parameters.Ks[camera_index * 9 + 5]})
+            , focal_length({kernel_parameters.Ks[camera_index * 9 + 0], kernel_parameters.Ks[camera_index * 9 + 4]})
+        {
+        }
+    };
+
+    inline __device__ OrthographicCameraModel(const KernelParameters &kernel_parameters, int camera_index)
+        : parameters(kernel_parameters, camera_index)
+    {
+    }
+
+    Parameters parameters;
+
+    // External distortion is defined on camera rays. Interpret orthographic
+    // image-plane x/y as homogeneous coordinates on the z=1 plane. The
+    // distortion model normalizes this ray internally.
+    inline __device__ auto orthographic_point_to_distortion_ray(const glm::fvec2 &xy) const -> glm::fvec3
+    {
+        return {xy.x, xy.y, 1.f};
+    }
+
+    // Map a forward-hemisphere distortion ray back to the orthographic plane.
+    // Together with orthographic_point_to_distortion_ray this is a bijection
+    // for every finite x/y, so identity external distortion remains a no-op.
+    inline __device__ auto distortion_ray_to_orthographic_point(const glm::fvec3 &ray) const ->
+        typename Base::ImagePointReturn
+    {
+        if(!(ray.z > 0.f))
+        {
+            return {
+                glm::fvec2{0.f, 0.f},
+                false
+            };
+        }
+
+        const auto point = glm::fvec2{ray.x, ray.y} / ray.z;
+        if(!std::isfinite(point.x) || !std::isfinite(point.y))
+        {
+            return {
+                glm::fvec2{0.f, 0.f},
+                false
+            };
+        }
+
+        return {point, true};
+    }
+
+    inline __device__ auto camera_ray_to_image_point(const glm::fvec3 &cam_point, float margin_factor) const ->
+        typename Base::ImagePointReturn
+    {
+        // Override the full forward hook, not just camera_ray_to_image_point_impl:
+        // the base hook treats its input as a perspective camera ray and applies
+        // external distortion before projection. Orthographic projection receives
+        // a camera-space point instead, so x/y must stay image-plane coordinates
+        // unless explicitly routed through the hemisphere proxy below.
+        // The z <= 0 rejection is for 3DGS Gaussian culling, not standard ortho math.
+        if constexpr(std::is_same_v<ExternalDistortionModel, gsplat::extdist::EmptyExternalDistortionModel>)
+        {
+            return camera_ray_to_image_point_impl(cam_point, margin_factor);
+        }
+        else
+        {
+            if(cam_point.z <= 0.f)
+            {
+                return {
+                    glm::fvec2{0.f, 0.f},
+                    false
+                };
+            }
+
+            const auto ortho_ray     = orthographic_point_to_distortion_ray({cam_point.x, cam_point.y});
+            const auto distorted_ray = parameters.external_distortion.distort_camera_ray(ortho_ray);
+            const auto [distorted_point, distortion_valid] = distortion_ray_to_orthographic_point(distorted_ray);
+            if(!distortion_valid)
+            {
+                return {
+                    glm::fvec2{0.f, 0.f},
+                    false
+                };
+            }
+
+            return camera_ray_to_image_point_impl({distorted_point.x, distorted_point.y, cam_point.z}, margin_factor);
+        }
+    }
+
+    inline __device__ auto camera_ray_to_image_point_impl(const glm::fvec3 &cam_point, float margin_factor) const ->
+        typename Base::ImagePointReturn
+    {
+        auto image_point = glm::fvec2{0.f, 0.f};
+
+        if(cam_point.z <= 0.f)
+        {
+            return {image_point, false};
+        }
+
+        image_point
+            = glm::fvec2(cam_point.x, cam_point.y) * glm::fvec2(parameters.focal_length[0], parameters.focal_length[1])
+            + glm::fvec2(parameters.principal_point[0], parameters.principal_point[1]);
+
+        auto valid  = true;
+        valid      &= image_point_in_image_bounds_margin(image_point, parameters.resolution, margin_factor);
+
+        return {image_point, valid};
+    }
+
+    // Curiously Recurring Template Pattern interface stub. In practice ortho
+    // uses image_point_to_world_ray_shutter_pose below, because a direction-only
+    // camera ray would lose the per-pixel x/y origin that defines ortho rays.
+    inline __device__ CameraRay image_point_to_camera_ray_impl(glm::fvec2) const
+    {
+        return {
+            glm::fvec3{0.f, 0.f, 1.f},
+            true
+        };
+    }
+
+    inline __device__ auto image_point_to_world_ray_shutter_pose(
+        const glm::fvec2 &image_point, const RollingShutterParameters &rolling_shutter_parameters
+    ) const -> WorldRay
+    {
+        const auto uv = (image_point - glm::fvec2{parameters.principal_point[0], parameters.principal_point[1]})
+                      / glm::fvec2{parameters.focal_length[0], parameters.focal_length[1]};
+
+        const auto distorted_ray = orthographic_point_to_distortion_ray(uv);
+        const auto camera_ray    = parameters.external_distortion.undistort_camera_ray(distorted_ray);
+        const auto [camera_point, distortion_valid] = distortion_ray_to_orthographic_point(camera_ray);
+        if(!distortion_valid)
+        {
+            return {glm::fvec3{}, glm::fvec3{}, false};
+        }
+
+        const auto shutter_pose
+            = interpolate_shutter_pose(this->shutter_relative_frame_time(image_point), rolling_shutter_parameters);
+        const auto R_inv      = glm::mat3_cast(glm::inverse(shutter_pose.q));
+        // z=0 is intentional: ortho rays start on the image plane at x/y,
+        // unlike perspective rays that all originate at the camera center.
+        const auto origin_cam = glm::fvec3{camera_point.x, camera_point.y, 0.f};
+        const auto dir_cam    = glm::fvec3{0.f, 0.f, 1.f};
+
+        return {R_inv * (origin_cam - shutter_pose.t), R_inv * dir_cam, true};
     }
 };
 
@@ -1787,6 +1949,7 @@ struct CameraModelWrapper
 
 using CameraModelWrappers = TypeList<
     CameraModelWrapper<PerfectPinholeCameraModel>,
+    CameraModelWrapper<OrthographicCameraModel>,
     CameraModelWrapper<OpenCVPinholeCameraModel>,
     CameraModelWrapper<OpenCVFisheyeCameraModel>,
     CameraModelWrapper<FThetaCameraModel>
