@@ -14,15 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, Union
+from typing import TYPE_CHECKING, Any, Dict, Union
 
 import torch
 from torch import Tensor
 
 from .base import Strategy
 from .ops import inject_noise_to_position, relocate, sample_add
+
+if TYPE_CHECKING:
+    from gsplat_scene import Scene
 
 
 @dataclass
@@ -127,6 +132,7 @@ class MCMCStrategy(Strategy):
         step: int,
         info: Dict[str, Any],
         lr: float,
+        scene: Scene | None = None,
     ):
         """Callback function to be executed after the `loss.backward()` call.
 
@@ -144,12 +150,12 @@ class MCMCStrategy(Strategy):
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
+            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, scene=scene)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
             # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, binoms)
+            n_new_gs = self._add_new_gs(params, optimizers, binoms, scene=scene)
             if self.verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
@@ -178,6 +184,7 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
+        scene: Scene | None = None,
     ) -> int:
         opacities = torch.sigmoid(params["opacities"].flatten())
         dead_mask = opacities <= self.min_opacity
@@ -190,6 +197,7 @@ class MCMCStrategy(Strategy):
                 mask=dead_mask,
                 binoms=binoms,
                 min_opacity=self.min_opacity,
+                scene=scene,
             )
         return n_gs
 
@@ -199,6 +207,7 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
+        scene: Scene | None = None,
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
@@ -211,5 +220,6 @@ class MCMCStrategy(Strategy):
                 n=n_gs,
                 binoms=binoms,
                 min_opacity=self.min_opacity,
+                scene=scene,
             )
         return n_gs

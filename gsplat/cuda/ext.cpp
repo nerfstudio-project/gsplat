@@ -763,9 +763,18 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("rasterize_to_pixels_from_world_3dgs_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor? v_render_normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)");
 #endif
 
+#if GSPLAT_BUILD_3DGS
+    m.def("mcmc_perturb_positions(Tensor(a!) positions, Tensor quats, Tensor scales, Tensor opacities, Tensor noise, float scaler) -> ()");
+#endif
+
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
     m.def("distort_camera_rays(Tensor rays, Tensor h_poly, Tensor v_poly, Tensor h_inv_poly, Tensor v_inv_poly, int reference_poly, bool inverse) -> Tensor");
     m.def("eval_bivariate_poly(Tensor x, Tensor y, Tensor poly_coeffs, int order) -> Tensor");
+#endif
+
+#if GSPLAT_BUILD_LOSSES
+    m.def("gaussian_losses_fwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, Tensor? visibility, float z_scale_threshold, Tensor(a!) loss_scale, Tensor(b!) loss_density, Tensor(c!) loss_z_scale, Tensor(d!) loss_oob) -> ()");
+    m.def("gaussian_losses_bwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, Tensor? visibility, float z_scale_threshold, Tensor v_loss_scale, Tensor v_loss_density, Tensor v_loss_z_scale, Tensor v_loss_oob, Tensor(a!) v_scales, Tensor(b!) v_densities, Tensor(c!) v_z_scales, Tensor(d!) v_positions) -> ()");
 #endif
 }
 
@@ -818,8 +827,17 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
     m.impl("intersect_tile_lidar", &gsplat::intersect_tile_lidar);
 #endif
 
+#if GSPLAT_BUILD_3DGS
+    m.impl("mcmc_perturb_positions", &gsplat::mcmc_perturb_positions);
+#endif
+
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
     m.impl("distort_camera_rays", &gsplat::extdist::distort_camera_rays_torch_op);
     m.impl("eval_bivariate_poly", &gsplat::extdist::eval_bivariate_poly_wrapper);
+#endif
+
+#if GSPLAT_BUILD_LOSSES
+    m.impl("gaussian_losses_fwd", &gsplat::gaussian_losses_fwd);
+    m.impl("gaussian_losses_bwd", &gsplat::gaussian_losses_bwd);
 #endif
 }

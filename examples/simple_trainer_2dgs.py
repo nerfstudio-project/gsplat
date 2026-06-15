@@ -32,6 +32,7 @@ import tyro
 import viser
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
+from gsplat.losses import depth_l1_loss, l1_loss, ssim_loss
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
@@ -47,6 +48,16 @@ from utils import (
 )
 from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
+
+try:
+    from gsplat_scene import GaussianScene
+    from gsplat_stage import Stage
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(
+        f"{e.name} is not installed. The example trainers require the local "
+        "scene/stage helper libraries. Install them with:\n"
+        "    python -m pip install -e libs/scene -e libs/stage"
+    ) from e
 from gsplat.strategy import DefaultStrategy
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
@@ -323,6 +334,12 @@ class Runner:
             device=self.device,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
+
+        self.scene = GaussianScene.from_splats(self.splats, id="scene")
+        self.splats = self.scene.splats
+        self.stage = Stage()
+        self.stage.add_scene(self.scene, self.rasterize_splats)
+
         self.model_type = cfg.model_type
 
         if self.model_type == "2dgs":
@@ -408,27 +425,29 @@ class Runner:
         Ks: Tensor,
         width: int,
         height: int,
+        splats: Optional[torch.nn.ParameterDict] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
-        means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+        splats = splats if splats is not None else self.splats
+        means = splats["means"]  # [N, 3]
+        # quats = F.normalize(splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
-        scales = torch.exp(self.splats["scales"])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+        quats = splats["quats"]  # [N, 4]
+        scales = torch.exp(splats["scales"])  # [N, 3]
+        opacities = torch.sigmoid(splats["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
-                features=self.splats["features"],
+                features=splats["features"],
                 embed_ids=image_ids,
                 dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
                 sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
             )
-            colors = colors + self.splats["colors"]
+            colors = colors + splats["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+            colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
 
         assert self.cfg.antialiased is False, "Antialiased is not supported for 2DGS"
 
@@ -570,7 +589,8 @@ class Runner:
                 render_distort,
                 render_median,
                 info,
-            ) = self.rasterize_splats(
+            ) = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -604,10 +624,8 @@ class Runner:
                 colors = colors * masks[..., None]
 
             # loss
-            l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - self.ssim(
-                pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
-            )
+            l1loss = l1_loss(colors, pixels).mean()
+            ssimloss = ssim_loss(colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2))
             loss = torch.lerp(l1loss, ssimloss, cfg.ssim_lambda)
             if cfg.depth_loss:
                 # query depths from depth map
@@ -624,9 +642,9 @@ class Runner:
                 )  # [1, 1, M, 1]
                 depths = depths.squeeze(3).squeeze(1)  # [1, M]
                 # calculate loss in disparity space
-                disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
-                disp_gt = 1.0 / depths_gt  # [1, M]
-                depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
+                depthloss = depth_l1_loss(
+                    depths, depths_gt, scene_scale=self.scene_scale
+                )
                 loss += depthloss * cfg.depth_lambda
 
             if cfg.normal_loss:
@@ -696,6 +714,7 @@ class Runner:
                 step=step,
                 info=info,
                 packed=cfg.packed,
+                scene=self.scene,
             )
 
             # Turn Gradients into Sparse Tensor before running optimizer
@@ -740,6 +759,7 @@ class Runner:
                 torch.save(
                     {
                         "step": step,
+                        "scene_id": self.scene.id,
                         "splats": self.splats.state_dict(),
                     },
                     f"{self.ckpt_dir}/ckpt_{step}.pt",
@@ -791,7 +811,8 @@ class Runner:
                 render_distort,
                 render_median,
                 _,
-            ) = self.rasterize_splats(
+            ) = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -915,7 +936,8 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _, surf_normals, _, _, _ = self.rasterize_splats(
+            renders, _, _, surf_normals, _, _, _ = self.stage.render(
+                self.scene.id,
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -973,7 +995,8 @@ class Runner:
             render_distort,
             render_median,
             info,
-        ) = self.rasterize_splats(
+        ) = self.stage.render(
+            self.scene.id,
             camtoworlds=c2w[None],
             Ks=K[None],
             width=width,
