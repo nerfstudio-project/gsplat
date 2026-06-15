@@ -403,7 +403,10 @@ def compare_render_quality(
         print("  SKIPPED -- --quality-frames=0.\n")
         return None
 
-    from experimental import GaussianInferenceScene, rasterize_gaussian_inference_scene
+    from gsplat.experimental import (
+        GaussianInferenceScene,
+        rasterize_gaussian_inference_scene,
+    )
     from gsplat import rasterization
 
     sh_deg_arg = sh_degree if (sh_degree is not None and sh_degree >= 0) else None
@@ -529,7 +532,7 @@ def bench_stateful(
         ``alloc_before``, ``alloc_after``, ``per_frame_allocs``,
         ``per_frame_delta``. All allocation values are in bytes.
     """
-    from experimental import GaussianInferenceScene, GaussianInferenceRenderer
+    from gsplat.experimental import GaussianInferenceScene, GaussianInferenceRenderer
 
     sh_deg_arg = sh_degree if (sh_degree is not None and sh_degree >= 0) else None
 
@@ -794,7 +797,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     if args.save_image is not None:
         from PIL import Image
-        from experimental import (
+        from gsplat.experimental import (
             GaussianInferenceScene,
             rasterize_gaussian_inference_scene,
         )
