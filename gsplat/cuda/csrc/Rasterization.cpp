@@ -1855,6 +1855,171 @@ allocate_eval3d_optional_outputs(
     };
 }
 
+// Gradients of the differentiable forward inputs. Slots the backward kernel
+// does not produce stay default (undefined Tensor / nullopt).
+struct RasterizeBwdResult {
+    at::Tensor v_means;
+    at::Tensor v_quats;
+    at::Tensor v_scales;
+    at::Tensor v_colors;
+    at::Tensor v_opacities;
+    at::Tensor v_backgrounds;
+    at::optional<at::Tensor> v_rays;
+};
+
+RasterizeBwdResult rasterize_to_pixels_from_world_3dgs_bwd(
+    const at::Tensor &means,
+    const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &colors,
+    const at::Tensor &opacities,
+    const at::optional<at::Tensor> &backgrounds,
+    const at::optional<at::Tensor> &masks,
+    const at::Tensor &viewmats0,
+    const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks,
+    const at::optional<at::Tensor> &rays,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
+    const at::Tensor &tile_offsets,
+    const at::Tensor &flatten_ids,
+    const at::Tensor &render_alphas,
+    const at::Tensor &last_ids,
+    const at::Tensor &batches_per_tile,
+    const at::Tensor &batch_offsets,
+    const at::Tensor &fwd_batch_state,
+    const at::Tensor &compose_c_stop,
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    CameraModelType camera_model,
+    ShutterType rs_type,
+    bool use_hit_distance,
+    bool return_normals,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const at::Tensor &v_render_colors_grad,
+    const at::Tensor &v_render_alphas_grad,
+    const at::Tensor &v_render_normals_grad,
+    bool needs_background_grad
+) {
+    // --- Materialize output gradients ---------------------------------
+    // set_materialize_grads is false and the CUDA kernel expects dense
+    // color/alpha gradients.
+    at::Tensor v_render_colors;
+    if (v_render_colors_grad.defined()) {
+        v_render_colors = v_render_colors_grad.contiguous();
+    } else {
+        at::DimVector color_grad_shape(render_alphas.sizes());
+        color_grad_shape[color_grad_shape.size() - 1] = colors.size(-1);
+        v_render_colors = at::zeros(color_grad_shape, colors.options());
+    }
+
+    at::Tensor v_render_alphas;
+    if (v_render_alphas_grad.defined()) {
+        v_render_alphas = v_render_alphas_grad.contiguous();
+    } else {
+        v_render_alphas = at::zeros_like(render_alphas);
+    }
+
+    at::optional<at::Tensor> v_render_normals = c10::nullopt;
+    if (v_render_normals_grad.defined()) {
+        v_render_normals = v_render_normals_grad.contiguous();
+    } else if (return_normals) {
+        at::DimVector normal_grad_shape(render_alphas.sizes());
+        normal_grad_shape[normal_grad_shape.size() - 1] = 3;
+        v_render_normals =
+            at::zeros(normal_grad_shape, means.options().dtype(at::kFloat));
+    }
+
+    // --- Validate restored CUDA inputs --------------------------------
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(render_alphas);
+    CHECK_INPUT(last_ids);
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(batches_per_tile);
+    CHECK_INPUT(batch_offsets);
+    CHECK_INPUT(fwd_batch_state);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+    if (rays.has_value()) {
+        CHECK_INPUT(rays.value());
+    }
+    if (v_render_normals.has_value()) {
+        CHECK_INPUT(v_render_normals.value());
+    }
+    if (compose_c_stop.defined()) {
+        CHECK_INPUT(compose_c_stop);
+    }
+
+    at::Tensor v_means = at::zeros_like(means);
+    at::Tensor v_quats = at::zeros_like(quats);
+    at::Tensor v_scales = at::zeros_like(scales);
+    at::Tensor v_colors = at::zeros_like(colors);
+    at::Tensor v_opacities = at::zeros_like(opacities);
+    at::optional<at::Tensor> v_rays =
+        rays.has_value() ? at::optional<at::Tensor>(at::zeros_like(rays.value()))
+                         : at::optional<at::Tensor>();
+
+    // --- Launch batch-parallel backward kernel ------------------------
+    launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
+        means, quats, scales, colors, opacities,
+        backgrounds, masks,
+        static_cast<uint32_t>(image_width), static_cast<uint32_t>(image_height),
+        static_cast<uint32_t>(tile_size),
+        viewmats0, viewmats1, Ks,
+        camera_model, ut_params, rs_type,
+        rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+        ftheta_coeffs, lidar_coeffs, external_distortion_params,
+        tile_offsets, flatten_ids,
+        use_hit_distance,
+        render_alphas, last_ids,
+        v_render_colors, v_render_alphas, v_render_normals,
+        batches_per_tile, batch_offsets,
+        fwd_batch_state.size(0), fwd_batch_state,
+        compose_c_stop,
+        v_means, v_quats, v_scales, v_colors, v_opacities, v_rays
+    );
+
+    // --- Compute background gradient ----------------------------------
+    // Background contribution is not produced by the CUDA backward kernel.
+    // It is the incoming color gradient weighted by the unoccluded alpha.
+    at::Tensor v_backgrounds = at::Tensor{};
+    if (backgrounds.has_value() && needs_background_grad) {
+        const at::Tensor one_minus_alpha =
+            at::sub(
+                at::ones_like(render_alphas).to(at::kFloat),
+                render_alphas.to(at::kFloat));
+        v_backgrounds =
+            at::mul(v_render_colors, one_minus_alpha).sum({-3, -2});
+    }
+
+    return {
+        .v_means = v_means,
+        .v_quats = v_quats,
+        .v_scales = v_scales,
+        .v_colors = v_colors,
+        .v_opacities = v_opacities,
+        .v_backgrounds = v_backgrounds,
+        .v_rays = v_rays,
+    };
+}
+
 class RasterizeToPixelsFromWorld3DGSAutograd
     : public torch::autograd::Function<RasterizeToPixelsFromWorld3DGSAutograd> {
 public:
@@ -2175,114 +2340,30 @@ public:
                 ext_it->second.toCustomClass<extdist::BivariateWindshieldModelParameters>();
         }
 
-        // --- Materialize output gradients ---------------------------------
-        // set_materialize_grads is false and the CUDA kernel expects dense
-        // color/alpha gradients.
-        at::Tensor v_render_colors;
-        if (grad_outputs[0].defined()) {
-            v_render_colors = grad_outputs[0].contiguous();
-        } else {
-            at::DimVector color_grad_shape(render_alphas.sizes());
-            color_grad_shape[color_grad_shape.size() - 1] = colors.size(-1);
-            v_render_colors = at::zeros(color_grad_shape, colors.options());
-        }
-
-        at::Tensor v_render_alphas;
-        if (grad_outputs[1].defined()) {
-            v_render_alphas = grad_outputs[1].contiguous();
-        } else {
-            v_render_alphas = at::zeros_like(render_alphas);
-        }
-
-        at::optional<at::Tensor> v_render_normals = c10::nullopt;
-        if (grad_outputs[4].defined()) {
-            v_render_normals = grad_outputs[4].contiguous();
-        } else if (return_normals) {
-            at::DimVector normal_grad_shape(render_alphas.sizes());
-            normal_grad_shape[normal_grad_shape.size() - 1] = 3;
-            v_render_normals =
-                at::zeros(normal_grad_shape, means.options().dtype(at::kFloat));
-        }
-
-        // --- Validate restored CUDA inputs --------------------------------
-        DEVICE_GUARD(means);
-        CHECK_INPUT(means);
-        CHECK_INPUT(quats);
-        CHECK_INPUT(scales);
-        CHECK_INPUT(colors);
-        CHECK_INPUT(opacities);
-        CHECK_INPUT(tile_offsets);
-        CHECK_INPUT(flatten_ids);
-        CHECK_INPUT(render_alphas);
-        CHECK_INPUT(last_ids);
-        CHECK_INPUT(v_render_colors);
-        CHECK_INPUT(v_render_alphas);
-        if (backgrounds.has_value()) {
-            CHECK_INPUT(backgrounds.value());
-        }
-        if (masks.has_value()) {
-            CHECK_INPUT(masks.value());
-        }
-        if (rays.has_value()) {
-            CHECK_INPUT(rays.value());
-        }
-        if (v_render_normals.has_value()) {
-            CHECK_INPUT(v_render_normals.value());
-        }
-
-        at::Tensor v_means = at::zeros_like(means);
-        at::Tensor v_quats = at::zeros_like(quats);
-        at::Tensor v_scales = at::zeros_like(scales);
-        at::Tensor v_colors = at::zeros_like(colors);
-        at::Tensor v_opacities = at::zeros_like(opacities);
-        at::optional<at::Tensor> v_rays =
-            rays.has_value() ? at::optional<at::Tensor>(at::zeros_like(rays.value()))
-                             : at::optional<at::Tensor>();
-
-        // --- Launch batch-parallel backward kernel ------------------------
+        // --- Restore batch-parallel state ---------------------------------
         const at::Tensor &batches_per_tile = saved[SAVED_BATCHES_PER_TILE];
         const at::Tensor &batch_offsets = saved[SAVED_BATCH_OFFSETS];
         const at::Tensor &fwd_batch_state = saved[SAVED_FWD_BATCH_STATE];
-        CHECK_INPUT(batches_per_tile);
-        CHECK_INPUT(batch_offsets);
-        CHECK_INPUT(fwd_batch_state);
         at::Tensor compose_c_stop;
         if (renderer_config == RendererConfig::PARALLEL_BATCH) {
             compose_c_stop = saved[SAVED_COMPOSE_C_STOP];
-            CHECK_INPUT(compose_c_stop);
         }
 
-        launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
+        // --- Run backward -------------------------------------------------
+        RasterizeBwdResult bwd = rasterize_to_pixels_from_world_3dgs_bwd(
             means, quats, scales, colors, opacities,
             backgrounds, masks,
-            static_cast<uint32_t>(image_width), static_cast<uint32_t>(image_height),
-            static_cast<uint32_t>(tile_size),
             viewmats0, viewmats1, Ks,
-            camera_model, ut_params, rs_type,
             rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-            ftheta_coeffs, lidar_coeffs, external_distortion_params,
             tile_offsets, flatten_ids,
-            use_hit_distance,
             render_alphas, last_ids,
-            v_render_colors, v_render_alphas, v_render_normals,
-            batches_per_tile, batch_offsets,
-            fwd_batch_state.size(0), fwd_batch_state,
-            compose_c_stop,
-            v_means, v_quats, v_scales, v_colors, v_opacities, v_rays
+            batches_per_tile, batch_offsets, fwd_batch_state, compose_c_stop,
+            image_width, image_height, tile_size,
+            camera_model, rs_type, use_hit_distance, return_normals,
+            ut_params, ftheta_coeffs, lidar_coeffs, external_distortion_params,
+            grad_outputs[0], grad_outputs[1], grad_outputs[4],
+            ctx->needs_input_grad(TENSOR_BACKGROUNDS)
         );
-
-        // --- Compute background gradient ----------------------------------
-        // Background contribution is not produced by the CUDA backward kernel.
-        // It is the incoming color gradient weighted by the unoccluded alpha.
-        at::Tensor v_backgrounds = at::Tensor{};
-        if (backgrounds.has_value() && ctx->needs_input_grad(TENSOR_BACKGROUNDS)) {
-            const at::Tensor one_minus_alpha =
-                at::sub(
-                    at::ones_like(render_alphas).to(at::kFloat),
-                    render_alphas.to(at::kFloat));
-            v_backgrounds =
-                at::mul(v_render_colors, one_minus_alpha).sum({-3, -2});
-        }
 
         // --- Return gradients in forward-input order ----------------------
         // The gradient list size matches the public op's forward arg count.
@@ -2290,13 +2371,13 @@ public:
         // scalar/config inputs); only differentiable Tensor inputs that the
         // backward kernel computes are populated.
         torch::autograd::variable_list grad_inputs(FWD_COUNT);
-        grad_inputs[FWD_MEANS]       = v_means;
-        grad_inputs[FWD_QUATS]       = v_quats;
-        grad_inputs[FWD_SCALES]      = v_scales;
-        grad_inputs[FWD_COLORS]      = v_colors;
-        grad_inputs[FWD_OPACITIES]   = v_opacities;
-        grad_inputs[FWD_BACKGROUNDS] = v_backgrounds;
-        grad_inputs[FWD_RAYS]        = as_tensor(v_rays);
+        grad_inputs[FWD_MEANS]       = bwd.v_means;
+        grad_inputs[FWD_QUATS]       = bwd.v_quats;
+        grad_inputs[FWD_SCALES]      = bwd.v_scales;
+        grad_inputs[FWD_COLORS]      = bwd.v_colors;
+        grad_inputs[FWD_OPACITIES]   = bwd.v_opacities;
+        grad_inputs[FWD_BACKGROUNDS] = bwd.v_backgrounds;
+        grad_inputs[FWD_RAYS]        = as_tensor(bwd.v_rays);
         return grad_inputs;
     }
 };
