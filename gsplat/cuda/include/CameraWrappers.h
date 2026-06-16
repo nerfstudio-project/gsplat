@@ -396,4 +396,3 @@ private:
 };
 
 } // namespace gsplat
-
