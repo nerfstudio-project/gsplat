@@ -143,11 +143,10 @@ __global__ void intersect_tile_kernel(
     const int64_t *__restrict__ image_ids,    // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
-    const scalar_t *__restrict__ means2d, // [..., N, 2] or [nnz, 2]
-    const int32_t *__restrict__ radii,    // [..., N, 2] or [nnz, 2]
-    const scalar_t *__restrict__ depths,  // [..., N] or [nnz]
-    const float
-        *__restrict__ conics, // [..., N, 3] or [nnz, 3]  (Sigma^{-1} upper tri)
+    const scalar_t *__restrict__ means2d,            // [..., N, 2] or [nnz, 2]
+    const int32_t *__restrict__ radii,               // [..., N, 2] or [nnz, 2]
+    const scalar_t *__restrict__ depths,             // [..., N] or [nnz]
+    const float *__restrict__ conics,                // [..., N, 3] or [nnz, 3]  (Sigma^{-1} upper tri)
     const float *__restrict__ opacities,             // [..., N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [..., N] or [nnz]
     const uint32_t tile_size,
@@ -155,7 +154,7 @@ __global__ void intersect_tile_kernel(
     const uint32_t tile_height,
     const uint32_t tile_n_bits,
     const uint32_t image_n_bits,
-    const bool *__restrict__ tile_mask, // [I, tile_height, tile_width] optional
+    const bool *__restrict__ tile_mask,    // [I, tile_height, tile_width] optional
     int32_t *__restrict__ tiles_per_gauss, // [..., N] or [nnz]
     int64_t *__restrict__ isect_ids,       // [n_isects]
     int32_t *__restrict__ flatten_ids      // [n_isects]
@@ -277,34 +276,32 @@ __global__ void intersect_tile_kernel(
         tile_max.x = min(max(0, (int32_t)ceil(tile_x + tile_radius_x)), tile_width);
         tile_max.y = min(max(0, (int32_t)ceil(tile_y + tile_radius_y)), tile_height);
 
-        // Sparse path: restrict to caller-active tiles. The same mask is
-        // applied in both passes so cum_tiles_per_gauss stays consistent with
-        // the emit. Dense callers pass tile_mask == nullptr and keep the
-        // original closed-form count and unfiltered emit, byte-for-byte
-        // unchanged.
+        // Sparse path: restrict to caller-active tiles. The same mask is applied
+        // in both passes so cum_tiles_per_gauss stays consistent with the emit.
+        // Dense callers pass tile_mask == nullptr and keep the original
+        // closed-form count and unfiltered emit, byte-for-byte unchanged.
         const bool *mask_img = nullptr;
         if (tile_mask != nullptr) {
             const int64_t iid_for_mask =
                 packed ? image_ids[idx] : static_cast<int64_t>(idx / N);
-            mask_img = tile_mask + iid_for_mask *
-                                       static_cast<int64_t>(tile_width) *
-                                       tile_height;
+            mask_img = tile_mask + iid_for_mask * static_cast<int64_t>(tile_width) * tile_height;
         }
 
         if (first_pass) {
-            int32_t count;
             if (mask_img == nullptr) {
-                count = (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x);
+                tiles_per_gauss[idx] = static_cast<int32_t>(
+                    (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
+                );
             } else {
-                count = 0;
+                int32_t count = 0;
                 for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
                     for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
                         if (mask_img[i * tile_width + j])
                             ++count;
                     }
                 }
+                tiles_per_gauss[idx] = count;
             }
-            tiles_per_gauss[idx] = count;
             return;
         }
 
@@ -327,13 +324,13 @@ __global__ void intersect_tile_kernel(
 
 void launch_intersect_tile_kernel(
     // inputs
-    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
-    const at::Tensor depths,                     // [..., N] or [nnz]
-    const at::optional<at::Tensor> conics,       // [..., N, 3] or [nnz, 3]
-    const at::optional<at::Tensor> opacities,    // [..., N] or [nnz]
-    const at::optional<at::Tensor> image_ids,    // [nnz]
-    const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const at::Tensor means2d,                           // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                             // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                            // [..., N] or [nnz]
+    const at::optional<at::Tensor> conics,              // [..., N, 3] or [nnz, 3] 
+    const at::optional<at::Tensor> opacities,           // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,           // [nnz]
+    const at::optional<at::Tensor> gaussian_ids,        // [nnz]
     const uint32_t I,
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -382,7 +379,9 @@ void launch_intersect_tile_kernel(
     }
 
     AT_DISPATCH_FLOATING_TYPES(
-        means2d.scalar_type(), "intersect_tile_kernel", [&]() {
+        means2d.scalar_type(),
+        "intersect_tile_kernel",
+        [&]() {
             intersect_tile_kernel<scalar_t>
                 <<<grid,
                    threads,
@@ -401,8 +400,9 @@ void launch_intersect_tile_kernel(
                     means2d.const_data_ptr<scalar_t>(),
                     radii.const_data_ptr<int32_t>(),
                     depths.const_data_ptr<scalar_t>(),
-                    conics.has_value() ? conics.value().const_data_ptr<float>()
-                                       : nullptr,
+                    conics.has_value()
+                        ? conics.value().const_data_ptr<float>()
+                        : nullptr,
                     opacities.has_value()
                         ? opacities.value().const_data_ptr<float>()
                         : nullptr,
