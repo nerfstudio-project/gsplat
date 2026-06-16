@@ -30,6 +30,7 @@ workflow:
 
 stages:
   - lint
+  - build
   - test
   - docs
   - deploy
@@ -92,18 +93,95 @@ code-format:
     - pytest -sv
     - ccache --show-log-stats -v
 
+.aot-base:
+  extends: .test-base
+
+  variables:
+    # Mirror pytest.ini env entries needed by the explicit AOT build.
+    BUILD_CAMERA_WRAPPERS: "1"
+    GSPLAT_DISABLE_JIT: "1"
+    NUM_CHANNELS: "1,3,4,6,8,21,23,24,32,128"
+
+.aot-build-base:
+  extends: .aot-base
+  stage: build
+
+  script:
+    # Load some envvars that depend on gitlab variables
+    - source ~/.profile
+    - 'echo "ccache directory: ${CCACHE_DIR}"'
+
+    - rm -f "$CCACHE_STATSLOG"
+    - pip wheel -v --no-build-isolation --no-deps --wheel-dir dist .
+    - ccache --show-log-stats -v
+
+  artifacts:
+    name: "aot-wheel-${CI_JOB_NAME}-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - dist/*.whl
+    expire_in: 1 week
+
+.aot-test-base:
+  extends: .aot-base
+
+  script:
+    # Load some envvars that depend on gitlab variables
+    - source ~/.profile
+    - 'echo "ccache directory: ${CCACHE_DIR}"'
+
+    - rm -f "$CCACHE_STATSLOG"
+    - pip install -v dist/*.whl
+    # Keep pytest.ini's `pythonpath = .` from shadowing the installed wheel
+    # while preserving checkout headers/source files used by tests.
+    - rm -f gsplat/__init__.py
+    - python -c "import gsplat; print('gsplat import:', gsplat.__file__)"
+    # pytest.ini testpaths covers tests/ and all colocated lib test directories.
+    - pytest -sv
+    - ccache --show-log-stats -v
+
+
 # Debug build: -O0, asserts enabled (NDEBUG undefined). Exercises the
 # assertion-rich path used to catch invariant violations during development.
-test-debug:
+jit-test-debug:
   extends: .test-base
+  needs:
+    - code-format
+  variables:
+    DEBUG: 1
+
+aot-build-debug:
+  extends: .aot-build-base
+  variables:
+    DEBUG: 1
+
+aot-test-debug:
+  extends: .aot-test-base
+  needs:
+    - job: aot-build-debug
+      artifacts: true
   variables:
     DEBUG: 1
 
 # Release build: -O3 -DNDEBUG. Mirrors what users actually run; the debug
 # job alone misses regressions that only surface with NDEBUG stripping
 # asserts.
-test-release:
+jit-test-release:
   extends: .test-base
+  needs:
+    - code-format
+  variables:
+    DEBUG: 0
+
+aot-build-release:
+  extends: .aot-build-base
+  variables:
+    DEBUG: 0
+
+aot-test-release:
+  extends: .aot-test-base
+  needs:
+    - job: aot-build-release
+      artifacts: true
   variables:
     DEBUG: 0
 
