@@ -1854,7 +1854,7 @@ def fully_fused_projection_with_ut(
     Args:
         global_z_order: Defines how Gaussians are sorted for depth ordering. If True (default),
             Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted
-            by their Euclidean distance from the camera origin.             The z-coordinate sorting is typically
+            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically
             faster and sufficient for most cases, while Euclidean distance can be useful for scenes
             with wide field-of-view or non-standard camera models. Default: True.
     """

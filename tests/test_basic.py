@@ -34,11 +34,6 @@ import torch
 from typing_extensions import Literal, Tuple, assert_never
 import torch.nn.functional as F
 
-from gsplat._helper import (
-    load_test_data,
-    get_inlier_abserror_mask,
-    assert_mismatch_ratio,
-)
 import gsplat
 
 from gsplat.cuda._backend import _C
@@ -690,7 +685,7 @@ def test_fully_fused_projection_packed(
     "rolling_shutter",
     [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM],
 )
-@pytest.mark.parametrize("global_z_order", [True, False])
+@pytest.mark.parametrize("global_z_order", [True, False], ids=["globalz", "distsensor"])
 def test_fully_fused_projection_ut(
     test_data,
     batch_dims: Tuple[int, ...],
