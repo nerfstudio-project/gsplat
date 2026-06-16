@@ -252,9 +252,7 @@ def gaussians(
     return gaussians
 
 
-# Only 3dgs is being tested as per default args with_ut==False and with_eval3d==False
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
     "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed,C,N,renderer_config,execution_mode",
     [
@@ -389,6 +387,7 @@ def test_rasterization(
     execution_mode: str,
     sensor_model: SimpleNamespace,
     gaussians: SimpleNamespace,
+    dist_init,
 ):
     if distributed and not torch.distributed.is_initialized():
         pytest.skip("distributed process group not initialized")

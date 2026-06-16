@@ -61,10 +61,10 @@ from .distributed import (
 )
 from .utils import depth_to_normal, get_projection_matrix
 
+
 # Gaussian depth modes (D/ED): use projection depth (controlled by global_z_order)
 # Hit distance modes (d/Ed): compute along-ray distance in rasterization
 RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"]
-
 RasterizeMode = Literal["classic", "antialiased"]
 
 
@@ -197,6 +197,52 @@ def _validate_nccl_process_group() -> None:
         )
 
 
+def normalize_features_layout(
+    features: Tensor,
+    batch_dims: tuple,
+    C: int,
+    trailing_dims: tuple,
+    batch_ids: Optional[Tensor] = None,
+    camera_ids: Optional[Tensor] = None,
+    feature_ids: Optional[Tensor] = None,
+) -> Tensor:
+    """Normalize per-view or per-gaussian feature tensor layout to (nnz, *trailing) or (*batch_dims, C, *trailing)."""
+    B = math.prod(batch_dims)
+    N = features.shape[-(len(trailing_dims) + 1)]
+
+    # per-view features?
+    if (
+        features.shape
+        == batch_dims
+        + (
+            C,
+            N,
+        )
+        + trailing_dims
+    ):
+        # packed?
+        if feature_ids is not None:
+            # [..., C, N, *trailing] -> [nnz, *trailing]
+            return features.view(B, C, N, *trailing_dims)[
+                batch_ids, camera_ids, feature_ids
+            ]
+        else:
+            # already (..., C, N, *trailing)
+            return features
+    # per-gaussian features?
+    else:
+        assert features.shape == (*batch_dims, N, *trailing_dims)
+        # packed?
+        if feature_ids is not None:
+            # [..., N, *trailing] -> [nnz, *trailing]
+            return features.view(B, N, *trailing_dims)[batch_ids, feature_ids]
+        else:
+            # (..., N, *trailing) -> (..., C, N, *trailing)
+            return torch.broadcast_to(
+                features.unsqueeze(len(batch_dims)), batch_dims + (C, N, *trailing_dims)
+            )
+
+
 def _compute_view_dirs_packed(
     means: Tensor,  # [..., N, 3]
     campos: Tensor,  # [..., C, 3]
@@ -272,52 +318,6 @@ def _compute_view_dirs_packed(
     return dirs
 
 
-def normalize_features_layout(
-    features: Tensor,
-    batch_dims: tuple,
-    C: int,
-    trailing_dims: tuple,
-    batch_ids: Optional[Tensor] = None,
-    camera_ids: Optional[Tensor] = None,
-    feature_ids: Optional[Tensor] = None,
-) -> Tensor:
-    """Normalize per-view or per-gaussian feature tensor layout to (nnz, *trailing) or (*batch_dims, C, *trailing)."""
-    B = math.prod(batch_dims)
-    N = features.shape[-(len(trailing_dims) + 1)]
-
-    # per-view features?
-    if (
-        features.shape
-        == batch_dims
-        + (
-            C,
-            N,
-        )
-        + trailing_dims
-    ):
-        # packed?
-        if feature_ids is not None:
-            # [..., C, N, *trailing] -> [nnz, *trailing]
-            return features.view(B, C, N, *trailing_dims)[
-                batch_ids, camera_ids, feature_ids
-            ]
-        else:
-            # already (..., C, N, *trailing)
-            return features
-    # per-gaussian features?
-    else:
-        assert features.shape == (*batch_dims, N, *trailing_dims)
-        # packed?
-        if feature_ids is not None:
-            # [..., N, *trailing] -> [nnz, *trailing]
-            return features.view(B, N, *trailing_dims)[batch_ids, feature_ids]
-        else:
-            # (..., N, *trailing) -> (..., C, N, *trailing)
-            return torch.broadcast_to(
-                features.unsqueeze(len(batch_dims)), batch_dims + (C, N, *trailing_dims)
-            )
-
-
 def viewmat_to_camera_position(viewmats: Tensor) -> Tensor:
     """Camera position in world from world-to-camera 4x4 matrix without full inverse.
 
@@ -348,13 +348,20 @@ def compute_directions(
         campos = 0.5 * (campos + campos_rs)
 
     # Compute the direction of each gaussian wrt. its camera
-    if gaussian_ids is None:
+    if gaussian_ids is None and camera_ids is None and batch_ids is None:
         dirs = means[..., None, :, :] - campos[..., None, :]
     else:
         B = math.prod(batch_dims)
         C = campos.shape[-2]
         dirs = _compute_view_dirs_packed(
-            means, campos, batch_ids, camera_ids, gaussian_ids, indptr, B, C
+            means,
+            campos,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            indptr,
+            B,
+            C,
         )  # [nnz, 3]
     return F.normalize(dirs, p=2, dim=-1)
 
@@ -2239,11 +2246,10 @@ def rasterization_2dgs(
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
         backgrounds: The background colors. [C, D]. Default is None.
-        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED",
-            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image.
-            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance
-            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)
-            are normalized by opacity. Default is "RGB".
+        render_mode: The rendering mode. Supported modes are "RGB", "Ed", "D", "ED",
+            "RGB+D", and "RGB+ED". "RGB" renders the colored image.
+            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth.
+            Expected modes (Ed, ED) are normalized by opacity. Default is "RGB".
         sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
