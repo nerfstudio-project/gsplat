@@ -2,7 +2,7 @@
 # Pin torch here so pip cannot silently downgrade it when resolving transitive
 # dependencies (e.g. torchvision from PyPI would pull a public torch build).
 torch==2.9.1
-nvidia-ncore==18.6.0
+nvidia-ncore>=19.0.0
 
 # Official COLMAP Python bindings for data parsing
 pycolmap>=3.10.0
