@@ -190,7 +190,7 @@ RUN --mount=type=tmpfs,target=/tmp \
     packages=(
         "nvidia-ncore==18.6.0"
         "torchvision==0.24.1"
-        "git+https://github.com/brandonyzhao/pycolmap@a2a5671b0f6ab641957dd4c5a78cabcf220c28ee"
+        "pycolmap==3.10.0"
         "viser==1.0.24"
         "git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787"
         "scipy==1.17.1"
@@ -250,6 +250,19 @@ RUN --mount=type=tmpfs,target=/tmp \
     rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
 
+# Test asset generation ------------------------------------------------
+# Runs prepare_pandaset.py at image-build time so CI test jobs get the
+# asset from the image instead of downloading from HuggingFace at runtime.
+FROM gsplat-deps AS gsplat-assets
+RUN --mount=type=tmpfs,target=/tmp \
+    --mount=type=bind,from=gsplatrepo,source=examples/prepare_pandaset.py,target=/tmp/prepare_pandaset.py \
+<<EOS
+    mkdir -p /opt/gsplat-assets
+    python /tmp/prepare_pandaset.py \
+        --download --scene 019 --resolution 240x135 \
+        --output /opt/gsplat-assets/test_pandaset.npz
+EOS
+
 # Main image ============================================================
 # It combines the Python environment, development toolchain
 # and all gsplat dependencies into an image.
@@ -263,6 +276,7 @@ ARG IMAGE_VERSION
 # leave the inherited symlink intact.
 COPY --link --from=gsplat-deps /var/cache/venv-${IMAGE_VERSION}/ /var/cache/venv-${IMAGE_VERSION}/
 COPY --link --from=gsplat-deps /opt/dep-check/ /opt/dep-check/
+COPY --link --from=gsplat-assets /opt/gsplat-assets/ /opt/gsplat-assets/
 COPY --link --from=ccache ccache /usr/local/bin/ccache
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 
