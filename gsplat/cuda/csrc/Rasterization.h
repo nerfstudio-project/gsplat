@@ -28,6 +28,7 @@
 #include "Config.h"
 #include "Lidars.h"
 #include "ExternalDistortion.h"
+#include "TorchUtils.h"
 
 namespace at {
 class Tensor;
@@ -335,55 +336,30 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     bool unsafe_masked_tile_outputs
 );
 
-// Public op result type. The dispatcher entry points below return this and
-// the pybind binding TU resolves their symbols through this header.
-using RasterizeToPixelsFromWorld3DGSResult = std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::optional<at::Tensor>,
-    at::optional<at::Tensor>,
-    at::optional<at::Tensor>>;
+// Public op result type. The single dispatcher entry below returns this and the
+// pybind binding TU resolves its symbol through this header. last_ids is
+// optional because the caller can suppress it (return_last_ids=false).
+struct RasterizeToPixelsFromWorld3DGSResult {
+    at::Tensor renders;
+    at::Tensor alphas;
+    at::optional<at::Tensor> last_ids;
+    at::optional<at::Tensor> sample_counts;
+    at::optional<at::Tensor> normals;
+};
 
-// CUDA-key dispatcher entry for rasterize_to_pixels_from_world_3dgs.
-// Defined in Rasterization.cpp; bound to the public op in ext.cpp.
+template <> struct TorchArgDef<RasterizeToPixelsFromWorld3DGSResult> {
+    static auto to(const RasterizeToPixelsFromWorld3DGSResult &r) { return to_torch_args(
+        r.renders, r.alphas, r.last_ids, r.sample_counts, r.normals
+    ); }
+};
+
+// Dispatcher entry for rasterize_to_pixels_from_world_3dgs, registered for both
+// the CUDA and AutogradCUDA keys. It runs the state-light forward directly when
+// no tensor input requires grad (or under no-grad / inference); otherwise it
+// routes through the C++ custom autograd Function so backward is owned by the
+// extension. Defined in Rasterization.cpp; bound in ext.cpp.
 RasterizeToPixelsFromWorld3DGSResult
 rasterize_to_pixels_from_world_3dgs(
-    const at::Tensor &means,     // [..., N, 3]
-    const at::Tensor &quats,     // [..., N, 4]
-    const at::Tensor &scales,    // [..., N, 3]
-    const at::Tensor &colors,    // [..., C, N, channels] or [nnz, channels]
-    const at::Tensor &opacities, // [..., C, N] or [nnz]
-    const at::optional<at::Tensor> &backgrounds, // [..., C, channels]
-    const at::optional<at::Tensor> &masks,       // [..., C, tile_height, tile_width]
-    int64_t image_width, int64_t image_height, int64_t tile_size,
-    const at::Tensor &viewmats0,               // [..., C, 4, 4]
-    const at::optional<at::Tensor> &viewmats1, // [..., C, 4, 4] optional for rolling shutter
-    const at::Tensor &Ks,                      // [..., C, 3, 3]
-    int64_t camera_model,
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
-    int64_t rs_type,
-    const at::optional<at::Tensor> &rays,              // [..., C, H, W, 6]
-    const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
-    const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> &thin_prism_coeffs, // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
-    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
-    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
-    const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
-    const at::Tensor &flatten_ids,  // [n_isects]
-    bool return_sample_counts,
-    bool use_hit_distance,
-    bool return_normals,
-    int64_t renderer_config,
-    bool return_last_ids,
-    bool unsafe_masked_tile_outputs
-);
-
-// Autograd-key dispatcher entry for rasterize_to_pixels_from_world_3dgs.
-// Routes through the C++ custom autograd Function so backward is owned by
-// the extension. Defined in Rasterization.cpp; bound in ext.cpp.
-RasterizeToPixelsFromWorld3DGSResult
-rasterize_to_pixels_from_world_3dgs_autograd(
     const at::Tensor &means,     // [..., N, 3]
     const at::Tensor &quats,     // [..., N, 4]
     const at::Tensor &scales,    // [..., N, 3]
