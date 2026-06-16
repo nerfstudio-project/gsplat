@@ -16,9 +16,8 @@
 """Autograd.Function wrappers for fused CUDA loss kernels.
 
 Dedicated companion to :mod:`gsplat.losses_fused` — this module groups the
-autograd bridges (Tier 2 entry points) for all Phase 9 fused-loss CUDA
-kernels, mirroring the ``losses_*`` / ``cuda/_*_wrapper`` split used
-elsewhere in the package.
+autograd bridges for the fused-loss CUDA kernels, mirroring the
+``losses_*`` / ``cuda/_*_wrapper`` split used elsewhere in the package.
 """
 
 from typing import Optional, Tuple
@@ -45,8 +44,8 @@ class _FusedGaussianLosses(torch.autograd.Function):
         visibility: Optional[Tensor] = None,  # [N] float
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         # The CUDA backward does not compute d(oob)/d(cuboid_dims); failing loudly
-        # here is safer than silently returning a zero gradient that Tier 1 would
-        # have propagated.
+        # here is safer than silently returning a zero gradient that the
+        # pure-PyTorch path would have propagated.
         if cuboid_dims.requires_grad:
             raise ValueError(
                 "FusedGaussianLosses does not support grad w.r.t. cuboid_dims; "
@@ -58,8 +57,9 @@ class _FusedGaussianLosses(torch.autograd.Function):
         positions = positions.contiguous()
         cuboid_dims = cuboid_dims.contiguous()
         if visibility is not None:
-            # Tier 1 accepts visibility as [N] or [N, 1]; the CUDA kernel
-            # expects [N]. Reshape here so the public API matches Tier 1.
+            # The pure-PyTorch path accepts visibility as [N] or [N, 1]; the
+            # CUDA kernel expects [N]. Reshape here so the public API matches
+            # the pure-PyTorch path.
             visibility = visibility.reshape(-1).contiguous()
 
         # Pre-allocate outputs in Python so lifetimes are explicit and the
