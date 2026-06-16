@@ -870,6 +870,89 @@ def isect_offset_encode(
     )
 
 
+@torch.no_grad()
+@trace_function("isect-sparse")
+def isect_tiles_sparse(
+    means2d: Tensor,  # [I, N, 2] or [nnz, 2]
+    radii: Tensor,  # [I, N, 2] or [nnz, 2]
+    depths: Tensor,  # [I, N] or [nnz]
+    tile_mask: Tensor,  # [I, tile_height, tile_width] bool
+    active_tiles: Tensor,  # [num_active_tiles] int32
+    n_images: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+    image_ids: Optional[Tensor] = None,  # [nnz] int32, required in packed mode
+) -> Tuple[Tensor, Tensor]:
+    """Maps projected Gaussians to a caller-supplied set of *active* tiles.
+
+    The sparse counterpart of :func:`isect_tiles` + :func:`isect_offset_encode`:
+    it enumerates only the intersections that fall in tiles flagged active by
+    ``tile_mask`` and returns a compacted per-active-tile offset table.
+
+    Args:
+        means2d: Projected Gaussian means. [I, N, 2] (dense) or [nnz, 2] (packed).
+        radii: Per-axis pixel radii. [I, N, 2] (dense) or [nnz, 2] (packed).
+        depths: Z-depth of the projected Gaussians. [I, N] or [nnz].
+        tile_mask: Bool tile-activity mask. [n_images, tile_height, tile_width].
+        active_tiles: Ascending dense tile ids (``image_id * tile_height *
+            tile_width + y * tile_width + x``) of the active tiles. [num_active_tiles],
+            int32. Conventionally ``nonzero(tile_mask.flatten())``.
+        n_images: Number of images.
+        tile_size: Tile size in pixels.
+        tile_width: Number of tiles along the image width.
+        tile_height: Number of tiles along the image height.
+        image_ids: The image index of each Gaussian. [nnz], int32. Required (and
+            only used) in packed mode.
+
+    Returns:
+        A tuple:
+
+        - **Tile offsets**. Int32 [num_active_tiles + 1]. ``tile_offsets[i]`` is
+          the exclusive prefix-sum start of the flatten-id range for
+          ``active_tiles[i]``; the trailing sentinel ``tile_offsets[-1] ==
+          n_isects``.
+        - **Flatten ids**. Int32 [n_isects]. The global flatten indices in
+          [I * N] (dense) or [nnz] (packed), sorted by ``(image_id, tile_id,
+          depth)`` near-to-far.
+    """
+    packed = means2d.dim() == 2
+    if packed:
+        nnz = means2d.size(0)
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert radii.shape == (nnz, 2), radii.shape
+        assert depths.shape == (nnz,), depths.shape
+        assert image_ids is not None, "image_ids is required when packed ([nnz, 2])"
+        assert image_ids.shape == (nnz,), image_ids.shape
+    else:
+        I, N = means2d.shape[0], means2d.shape[1]
+        assert means2d.shape == (I, N, 2), means2d.shape
+        assert radii.shape == (I, N, 2), radii.shape
+        assert depths.shape == (I, N), depths.shape
+        assert I == n_images, (I, n_images)
+
+    assert tile_mask.shape == (n_images, tile_height, tile_width), tile_mask.shape
+    assert tile_mask.dtype == torch.bool, tile_mask.dtype
+    assert active_tiles.dim() == 1 and active_tiles.dtype == torch.int32, (
+        active_tiles.shape,
+        active_tiles.dtype,
+    )
+
+    tile_offsets, flatten_ids = _make_lazy_cuda_func("intersect_tile_sparse")(
+        means2d.contiguous(),
+        radii.contiguous(),
+        depths.contiguous(),
+        image_ids.contiguous() if image_ids is not None else None,
+        tile_mask.contiguous(),
+        active_tiles.contiguous(),
+        n_images,
+        tile_size,
+        tile_width,
+        tile_height,
+    )
+    return tile_offsets, flatten_ids
+
+
 @trace_function("render2D-fwd")
 def rasterize_to_pixels(
     means2d: Tensor,  # [..., N, 2] or [nnz, 2]
