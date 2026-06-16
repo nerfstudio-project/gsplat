@@ -153,7 +153,7 @@ def _isect_tiles_lidar(
     )
 
     device = means2d.device
-    I = math.prod(image_dims)  # image count
+    I = math.prod(image_dims)
 
     angles_pix = means2d.reshape(-1, 2)
     extent_pix = radii.reshape(-1, 2)
