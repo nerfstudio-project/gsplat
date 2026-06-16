@@ -67,15 +67,28 @@ at::Tensor intersect_offset(
     int64_t tile_height
 );
 
+std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
+    const at::Tensor &means2d,                 // [I, N, 2] or [nnz, 2]
+    const at::Tensor &radii,                   // [I, N, 2] or [nnz, 2]
+    const at::Tensor &depths,                  // [I, N] or [nnz]
+    const at::optional<at::Tensor> &image_ids, // [nnz] (packed mode)
+    const at::Tensor &tile_mask,               // [I, tile_height, tile_width] bool
+    const at::Tensor &active_tiles,            // [num_active_tiles] int32
+    int64_t I,
+    int64_t tile_size,
+    int64_t tile_width,
+    int64_t tile_height
+);
+
 void launch_intersect_tile_kernel(
     // inputs
-    const at::Tensor means2d,                           // [..., N, 2] or [nnz, 2]
-    const at::Tensor radii,                             // [..., N, 2] or [nnz, 2]
-    const at::Tensor depths,                            // [..., N] or [nnz]
-    const at::optional<at::Tensor> conics,              // [..., N, 3] or [nnz, 3]
-    const at::optional<at::Tensor> opacities,           // [..., N] or [nnz]      
-    const at::optional<at::Tensor> image_ids,           // [nnz]
-    const at::optional<at::Tensor> gaussian_ids,        // [nnz]
+    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> conics,       // [..., N, 3] or [nnz, 3]
+    const at::optional<at::Tensor> opacities,    // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,    // [nnz]
+    const at::optional<at::Tensor> gaussian_ids, // [nnz]
     const uint32_t I,
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -84,7 +97,10 @@ void launch_intersect_tile_kernel(
     // outputs
     at::optional<at::Tensor> tiles_per_gauss, // [..., N] or [nnz]
     at::optional<at::Tensor> isect_ids,       // [n_isects]
-    at::optional<at::Tensor> flatten_ids      // [n_isects]
+    at::optional<at::Tensor> flatten_ids,     // [n_isects]
+    // sparse-only: restrict enumeration to active tiles ([I, tile_height,
+    // tile_width] bool). nullopt keeps the original dense behavior.
+    const at::optional<at::Tensor> tile_mask = c10::nullopt
 );
 void launch_intersect_tile_lidar_kernel(
     // inputs
@@ -110,6 +126,21 @@ void launch_intersect_offset_kernel(
     const uint32_t tile_height,
     // outputs
     at::Tensor offsets // [..., tile_height, tile_width]
+);
+
+// Sparse offset encode: for each active tile (dense linear id
+// image_id * n_tiles + tile_id, ascending), find the start of its intersection
+// range in the sorted isect_ids via binary search on the (image, tile) key
+// prefix. Produces a compacted [num_active_tiles + 1] offset table whose
+// trailing sentinel equals n_isects.
+void launch_intersect_offset_sparse_kernel(
+    // inputs
+    const at::Tensor isect_ids,    // [n_isects], sorted
+    const at::Tensor active_tiles, // [num_active_tiles] int32, ascending
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    // outputs
+    at::Tensor offsets // [num_active_tiles + 1] int32
 );
 
 void radix_sort_double_buffer(

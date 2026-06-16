@@ -480,6 +480,130 @@ def _isect_offset_encode(
     return offsets.int()
 
 
+@torch.no_grad()
+def _isect_tiles_sparse(
+    means2d: Tensor,  # [I, N, 2] or [nnz, 2] (packed)
+    radii: Tensor,  # [I, N, 2] or [nnz, 2]
+    depths: Tensor,  # [I, N] or [nnz]
+    tile_mask: Tensor,  # [I, tile_height, tile_width] bool
+    active_tiles: Tensor,  # [num_active_tiles] int32, ascending dense tile ids
+    n_images: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+    image_ids: Optional[Tensor] = None,  # [nnz] int32, required in packed mode
+) -> Tuple[Tensor, Tensor]:
+    """Pytorch reference for ``gsplat.cuda._wrapper.isect_tiles_sparse()``.
+
+    Restricts the tile-intersection enumeration to the tiles flagged active in
+    ``tile_mask`` and returns the *compacted* per-active-tile offset table that
+    fvdb's ``intersect_gaussian_tiles_sparse`` produces:
+
+      * ``tile_offsets`` — int32 ``[num_active_tiles + 1]``. ``tile_offsets[i]``
+        is the exclusive prefix-sum start of the flatten-id range for
+        ``active_tiles[i]`` (active tiles in ascending dense-id order); the
+        trailing sentinel ``tile_offsets[-1] == n_isects``.
+      * ``flatten_ids`` — int32 ``[n_isects]``, the global flatten indices in
+        ``[I * N]`` (dense) or ``[nnz]`` (packed), sorted by
+        ``(image_id, tile_id, depth)`` near-to-far.
+
+    The dense tile id used by ``active_tiles`` is ``image_id * (tile_height *
+    tile_width) + (y * tile_width + x)``, matching fvdb. A Gaussian's tile AABB
+    is ``[mean - radius, mean + radius]`` in pixel space; tiles outside the mask
+    are skipped. Gaussians with a non-positive radius on either axis contribute
+    nothing. This is an obviously-correct (looped) reference, not optimized.
+    """
+    device = means2d.device
+    n_tiles = tile_width * tile_height
+    packed = means2d.dim() == 2
+
+    if packed:
+        nnz = means2d.shape[0]
+        assert image_ids is not None, "image_ids is required in packed mode"
+        image_of = image_ids.reshape(nnz).to(torch.int64)
+        flat_of = torch.arange(nnz, device=device, dtype=torch.int64)
+        means = means2d
+        rad = radii
+        dep = depths.reshape(nnz)
+    else:
+        I, N = means2d.shape[0], means2d.shape[1]
+        nnz = I * N
+        means = means2d.reshape(nnz, 2)
+        rad = radii.reshape(nnz, 2)
+        dep = depths.reshape(nnz)
+        image_of = torch.arange(I, device=device).repeat_interleave(N).to(torch.int64)
+        flat_of = torch.arange(nnz, device=device, dtype=torch.int64)
+
+    tile_mask = tile_mask.reshape(n_images, tile_height, tile_width)
+
+    # Per-Gaussian tile AABB (inclusive lower, exclusive upper), clamped to grid.
+    tmean = means / tile_size
+    trad = rad / tile_size
+    tmin = torch.floor(tmean - trad).to(torch.int64)
+    tmax = torch.ceil(tmean + trad).to(torch.int64)
+    tmin_x = tmin[:, 0].clamp(0, tile_width)
+    tmin_y = tmin[:, 1].clamp(0, tile_height)
+    tmax_x = tmax[:, 0].clamp(0, tile_width)
+    tmax_y = tmax[:, 1].clamp(0, tile_height)
+    valid = (rad[:, 0] > 0) & (rad[:, 1] > 0)
+
+    # Narrow depth to float32 bit pattern (matches the kernel's 32-bit sort key);
+    # for positive depths the bit pattern is order-preserving.
+    dep32 = dep.to(torch.float32)
+
+    # Pull loop scalars to CPU once to avoid per-element device syncs.
+    image_l = image_of.tolist()
+    flat_l = flat_of.tolist()
+    valid_l = valid.tolist()
+    tmin_x_l, tmin_y_l = tmin_x.tolist(), tmin_y.tolist()
+    tmax_x_l, tmax_y_l = tmax_x.tolist(), tmax_y.tolist()
+    mask_cpu = tile_mask.cpu()
+    dep32_cpu = dep32.cpu()
+
+    g_keys: list[int] = []  # global tile key: image_id * n_tiles + tile_id
+    d_keys: list[int] = []  # float32 depth bits (uint32)
+    f_ids: list[int] = []  # flatten index
+    for m in range(nnz):
+        if not valid_l[m]:
+            continue
+        image_id = image_l[m]
+        depth_bits = struct.unpack("I", struct.pack("f", float(dep32_cpu[m])))[0]
+        for y in range(tmin_y_l[m], tmax_y_l[m]):
+            for x in range(tmin_x_l[m], tmax_x_l[m]):
+                if not bool(mask_cpu[image_id, y, x]):
+                    continue
+                tile_id = y * tile_width + x
+                g_keys.append(image_id * n_tiles + tile_id)
+                d_keys.append(depth_bits)
+                f_ids.append(flat_l[m])
+
+    n_isects = len(f_ids)
+    if n_isects == 0:
+        tile_offsets = torch.zeros(
+            active_tiles.numel() + 1, dtype=torch.int32, device=device
+        )
+        flatten_ids = torch.empty(0, dtype=torch.int32, device=device)
+        return tile_offsets, flatten_ids
+
+    g_t = torch.tensor(g_keys, dtype=torch.int64, device=device)
+    d_t = torch.tensor(d_keys, dtype=torch.int64, device=device)
+    fid_t = torch.tensor(f_ids, dtype=torch.int32, device=device)
+
+    # Lexicographic sort by (global tile key, depth bits).
+    sort_key = (g_t << 32) | d_t
+    order = torch.argsort(sort_key)
+    g_sorted = g_t[order]
+    flatten_ids = fid_t[order].contiguous()
+
+    # Compacted offsets: first position of each active tile's range in g_sorted.
+    active = active_tiles.to(torch.int64)
+    starts = torch.searchsorted(g_sorted, active, right=False).to(torch.int32)
+    tile_offsets = torch.cat(
+        [starts, torch.tensor([n_isects], dtype=torch.int32, device=device)]
+    )
+    return tile_offsets, flatten_ids
+
+
 def accumulate(
     means2d: Tensor,  # [..., N, 2]
     conics: Tensor,  # [..., N, 3]
