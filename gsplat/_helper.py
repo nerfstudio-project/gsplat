@@ -150,10 +150,6 @@ def assert_shape(name: str, t: torch.Tensor, shape: tuple):
         t: Tensor to check
         shape: Shape to check against
     """
-    if t.ndim != len(shape):
-        raise ValueError(
-            f"{name} must have rank {len(shape)} like {shape}, got {t.shape}"
-        )
 
     try:
         torch.broadcast_shapes(t.shape, shape)
