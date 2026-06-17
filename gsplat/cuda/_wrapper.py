@@ -1899,28 +1899,7 @@ def rasterize_to_indices_in_range_2dgs(
         - **Batch ids**. Batch indices. A flattened list of shape [M].
     """
 
-    image_dims = means2d.shape[:-2]
-    tile_height, tile_width = isect_offsets.shape[-2:]
-    N = means2d.shape[-2]
-    assert transmittances.shape == image_dims + (
-        image_height,
-        image_width,
-    ), transmittances.shape
-    assert means2d.shape == image_dims + (N, 2), means2d.shape
-    assert ray_transforms.shape == image_dims + (N, 3, 3), ray_transforms.shape
-    assert opacities.shape == image_dims + (N,), opacities.shape
-    assert isect_offsets.shape == image_dims + (
-        tile_height,
-        tile_width,
-    ), isect_offsets.shape
-    assert (
-        tile_height * tile_size >= image_height
-    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-    assert (
-        tile_width * tile_size >= image_width
-    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
-
-    out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_2dgs")(
+    return _make_lazy_cuda_func("rasterize_to_indices_2dgs")(
         range_start,
         range_end,
         transmittances.contiguous(),
@@ -1933,6 +1912,3 @@ def rasterize_to_indices_in_range_2dgs(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
     )
-    out_pixel_ids = out_indices % (image_width * image_height)
-    out_image_ids = out_indices // (image_width * image_height)
-    return out_gauss_ids, out_pixel_ids, out_image_ids
