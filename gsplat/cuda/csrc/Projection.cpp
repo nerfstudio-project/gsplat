@@ -2106,6 +2106,92 @@ projection_ut_3dgs_fused_impl(
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
     uint32_t N = means.size(-2);    // number of gaussians
     uint32_t C = Ks.size(-3);       // number of cameras
+
+    // Validate inputs.
+    // Contiguity/device/dtype are already covered by the CHECK_INPUT calls above.
+    {
+        at::DimVector means_shape(batch_dims);
+        means_shape.append({N, 3});
+        TORCH_CHECK(
+            means.sizes() == means_shape,
+            "means must have shape [..., N, 3], got ", means.sizes()
+        );
+        at::DimVector quats_shape(batch_dims);
+        quats_shape.append({N, 4});
+        TORCH_CHECK(
+            quats.sizes() == quats_shape,
+            "quats must have shape [..., N, 4], got ", quats.sizes()
+        );
+        at::DimVector scales_shape(batch_dims);
+        scales_shape.append({N, 3});
+        TORCH_CHECK(
+            scales.sizes() == scales_shape,
+            "scales must have shape [..., N, 3], got ", scales.sizes()
+        );
+        if (opacities.has_value()) {
+            at::DimVector opacities_shape(batch_dims);
+            opacities_shape.append({N});
+            TORCH_CHECK(
+                opacities.value().sizes() == opacities_shape,
+                "opacities must have shape [..., N], got ", opacities.value().sizes()
+            );
+        }
+        at::DimVector viewmats_shape(batch_dims);
+        viewmats_shape.append({C, 4, 4});
+        TORCH_CHECK(
+            viewmats0.sizes() == viewmats_shape,
+            "viewmats must have shape [..., C, 4, 4], got ", viewmats0.sizes()
+        );
+        at::DimVector Ks_shape(batch_dims);
+        Ks_shape.append({C, 3, 3});
+        TORCH_CHECK(
+            Ks.sizes() == Ks_shape, "Ks must have shape [..., C, 3, 3], got ", Ks.sizes()
+        );
+        if (radial_coeffs.has_value()) {
+            const at::Tensor &radial = radial_coeffs.value();
+            at::DimVector radial_prefix(batch_dims);
+            radial_prefix.append({C});
+            // Guard the prefix slice on rank >= 1 so a sub-1-D radial fails this
+            // check cleanly instead of underflowing slice()'s size_t length.
+            const int64_t radial_ndim = radial.dim();
+            const int64_t radial_last = radial_ndim >= 1 ? radial.size(-1) : -1;
+            TORCH_CHECK(
+                radial_ndim >= 1 &&
+                    radial.sizes().slice(0, radial_ndim - 1) == radial_prefix &&
+                    (radial_last == 6 || radial_last == 4),
+                "radial_coeffs must have shape [..., C, 6] or [..., C, 4], got ",
+                radial.sizes()
+            );
+        }
+        if (tangential_coeffs.has_value()) {
+            at::DimVector tangential_shape(batch_dims);
+            tangential_shape.append({C, 2});
+            TORCH_CHECK(
+                tangential_coeffs.value().sizes() == tangential_shape,
+                "tangential_coeffs must have shape [..., C, 2], got ",
+                tangential_coeffs.value().sizes()
+            );
+        }
+        if (thin_prism_coeffs.has_value()) {
+            at::DimVector thin_prism_shape(batch_dims);
+            thin_prism_shape.append({C, 4});
+            TORCH_CHECK(
+                thin_prism_coeffs.value().sizes() == thin_prism_shape,
+                "thin_prism_coeffs must have shape [..., C, 4], got ",
+                thin_prism_coeffs.value().sizes()
+            );
+        }
+        if (viewmats1.has_value()) {
+            at::DimVector viewmats1_shape(batch_dims);
+            viewmats1_shape.append({C, 4, 4});
+            TORCH_CHECK(
+                viewmats1.value().sizes() == viewmats1_shape,
+                "viewmats_rs must have shape [..., C, 4, 4], got ",
+                viewmats1.value().sizes()
+            );
+        }
+    }
+
     auto opt = means.options();
 
     at::DimVector radii_shape(batch_dims);
