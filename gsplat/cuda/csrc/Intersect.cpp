@@ -502,11 +502,115 @@ std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
     return std::make_tuple(tile_offsets, flatten_ids_sorted);
 }
 
+static int64_t num_words_per_tile_bitmask(int64_t tile_size) {
+    return (tile_size * tile_size + 63) / 64;
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+build_sparse_tile_layout(
+    const at::Tensor &pixels,    // [P, 2] int, (row, col)
+    const at::Tensor &image_ids, // [P] int
+    int64_t n_images,
+    int64_t tile_size,
+    int64_t tile_width,
+    int64_t tile_height
+) {
+    DEVICE_GUARD(pixels);
+    CHECK_INPUT(pixels);
+    CHECK_INPUT(image_ids);
+    TORCH_CHECK(pixels.dim() == 2 && pixels.size(1) == 2, "pixels must be [P, 2]");
+
+    const int64_t P = pixels.size(0);
+    const int64_t n_tiles = tile_width * tile_height;
+    const int64_t words = num_words_per_tile_bitmask(tile_size);
+    const auto dev = pixels.device();
+    const auto i64 = at::TensorOptions().device(dev).dtype(at::kLong);
+    const auto i32 = at::TensorOptions().device(dev).dtype(at::kInt);
+    const auto bln = at::TensorOptions().device(dev).dtype(at::kBool);
+
+    if (P == 0 || n_images == 0) {
+        // Degenerate shapes (note tile_pixel_cumsum is [1] here).
+        return std::make_tuple(
+            at::empty({0}, i32),
+            at::zeros({n_images, tile_height, tile_width}, bln),
+            at::empty({0, words}, i64),
+            at::zeros({1}, i64),
+            at::empty({0}, i64)
+        );
+    }
+
+    // (image, tile) ids are packed into the high 32 bits of the int64 sort key,
+    // so the dense tile id must fit below 2^31 to keep the key positive.
+    TORCH_CHECK(
+        n_images * n_tiles < (int64_t(1) << 31),
+        "build_sparse_tile_layout: n_images * n_tiles (",
+        n_images * n_tiles,
+        ") must be < 2^31 to pack the tile id into the sort key."
+    );
+
+    const auto pix = pixels.to(at::kLong);
+    const auto rows = pix.select(1, 0);
+    const auto cols = pix.select(1, 1);
+    const auto img = image_ids.to(at::kLong).reshape({P});
+
+    // Dense tile id and raster-order position within the tile, per pixel.
+    const auto tile_id = img.mul(n_tiles)
+                             .add(rows.floor_divide(tile_size).mul(tile_width))
+                             .add(cols.floor_divide(tile_size));
+    const auto pix_in_tile = rows.remainder(tile_size)
+                                 .mul(tile_size)
+                                 .add(cols.remainder(tile_size));
+
+    // Per-tile activity mask over the dense [n_images, TH, TW] grid.
+    auto active_tile_mask = at::zeros({n_images * n_tiles}, bln);
+    active_tile_mask.index_fill_(0, tile_id, 1);
+    active_tile_mask = active_tile_mask.view({n_images, tile_height, tile_width});
+
+    // Sort pixels by (tile_id, in-tile position). pixel_map is the argsort; keys
+    // are unique under the no-duplicate precondition, so the order is stable.
+    const auto key = tile_id.bitwise_left_shift(32).bitwise_or(pix_in_tile);
+    const auto sorted = at::sort(
+        key, /*stable=*/c10::optional<bool>(true), /*dim=*/-1, /*descending=*/false
+    );
+    const auto sorted_key = std::get<0>(sorted);
+    const auto pixel_map = std::get<1>(sorted);
+    const auto tile_id_sorted = sorted_key.bitwise_right_shift(32);
+    const auto pix_in_tile_sorted =
+        pix_in_tile.index_select(0, pixel_map).contiguous();
+
+    // Run-length encode the sorted tile ids -> active tiles + per-tile counts.
+    const auto uc = at::unique_consecutive(
+        tile_id_sorted, /*return_inverse=*/false, /*return_counts=*/true
+    );
+    const auto active_tiles = std::get<0>(uc).to(at::kInt);
+    const auto counts = std::get<2>(uc);
+    const auto tile_pixel_cumsum = counts.cumsum(0); // inclusive
+
+    // Per-active-tile raster-order bitmask.
+    const int64_t AT = active_tiles.size(0);
+    auto tile_pixel_mask = at::zeros({AT, words}, i64);
+    launch_build_tile_bitmask_kernel(
+        pix_in_tile_sorted,
+        tile_pixel_cumsum,
+        static_cast<uint32_t>(words),
+        tile_pixel_mask
+    );
+
+    return std::make_tuple(
+        active_tiles,
+        active_tile_mask,
+        tile_pixel_mask,
+        tile_pixel_cumsum,
+        pixel_map
+    );
+}
+
 void register_intersect_cuda_impl(torch::Library &m) {
     m.impl("intersect_tile", &intersect_tile);
     m.impl("intersect_tile_lidar", &intersect_tile_lidar);
     m.impl("intersect_offset", &intersect_offset);
     m.impl("intersect_tile_sparse", &intersect_tile_sparse);
+    m.impl("build_sparse_tile_layout", &build_sparse_tile_layout);
 }
 
 } // namespace gsplat

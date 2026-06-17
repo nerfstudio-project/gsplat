@@ -80,6 +80,26 @@ std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
     int64_t tile_height
 );
 
+// Build the per-active-tile layout consumed by sparse rasterization. Pixels are
+// packed: a flat [P, 2] (row, col) tensor plus a [P] image_ids tensor (the
+// per-element batch index). Returns:
+//   active_tiles      [AT] int32, ascending dense tile ids with >=1 active pixel
+//   active_tile_mask  [n_images, tile_height, tile_width] bool
+//   tile_pixel_mask   [AT, words_per_tile] int64 raster-order bitmask of active
+//                     pixels per active tile (words_per_tile = ceil(T*T/64))
+//   tile_pixel_cumsum [AT] int64, inclusive per-active-tile active-pixel count
+//   pixel_map         [P] int64, argsort to (tile_id, in-tile) sorted order
+// PRECONDITION: no duplicate (image, row, col) pixels (caller deduplicates).
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+build_sparse_tile_layout(
+    const at::Tensor &pixels,    // [P, 2] int, (row, col)
+    const at::Tensor &image_ids, // [P] int
+    int64_t n_images,
+    int64_t tile_size,
+    int64_t tile_width,
+    int64_t tile_height
+);
+
 void launch_intersect_tile_kernel(
     // inputs
     const at::Tensor means2d,                           // [..., N, 2] or [nnz, 2]
@@ -141,6 +161,17 @@ void launch_intersect_offset_sparse_kernel(
     const uint32_t tile_height,
     // outputs
     at::Tensor offsets // [num_active_tiles + 1] int32
+);
+
+// Per-active-tile raster-order bitmask. One thread per active tile ORs its
+// pixels' in-tile positions into the tile's words. out_bitmask must be zeroed.
+void launch_build_tile_bitmask_kernel(
+    // inputs
+    const at::Tensor pix_in_tile_sorted, // [P] int64, sorted by (tile, in-tile)
+    const at::Tensor tile_pixel_cumsum,  // [num_active_tiles] int64, inclusive
+    const uint32_t words_per_tile,
+    // output
+    at::Tensor out_bitmask // [num_active_tiles, words_per_tile] int64 (zeroed)
 );
 
 void radix_sort_double_buffer(
