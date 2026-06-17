@@ -1952,6 +1952,162 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
         "request exact metadata instead"
     );
 
+    // Validate inputs.
+    // The leading `dim()` clauses short-circuit before the prefix slices, so a
+    // rank mismatch fails the check cleanly instead of underflowing slice().
+    TORCH_CHECK_VALUE(
+        means.dim() >= 2, "means must have at least 2 dims, got ", means.dim()
+    );
+    const auto vbatch_dims = means.sizes().slice(0, means.dim() - 2);
+    const int64_t vN = means.size(-2);
+    const int64_t vC = viewmats0.size(-3);
+    const int64_t vchannels = colors.size(-1);
+
+    TORCH_CHECK_VALUE(
+        means.size(-1) == 3, "means must have shape [*batch, N, 3], got ",
+        means.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        quats.dim() == means.dim() && quats.size(-1) == 4 &&
+            quats.size(-2) == vN &&
+            quats.sizes().slice(0, quats.dim() - 2) == vbatch_dims,
+        "quats must have shape [*batch, N, 4], got ", quats.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        scales.dim() == means.dim() && scales.size(-1) == 3 &&
+            scales.size(-2) == vN &&
+            scales.sizes().slice(0, scales.dim() - 2) == vbatch_dims,
+        "scales must have shape [*batch, N, 3], got ", scales.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        viewmats0.dim() == means.dim() + 1 && viewmats0.size(-1) == 4 &&
+            viewmats0.size(-2) == 4 &&
+            viewmats0.sizes().slice(0, viewmats0.dim() - 3) == vbatch_dims,
+        "viewmats0 must have shape [*batch, C, 4, 4], got ", viewmats0.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        Ks.dim() == means.dim() + 1 && Ks.size(-1) == 3 && Ks.size(-2) == 3 &&
+            Ks.sizes().slice(0, Ks.dim() - 3) == vbatch_dims,
+        "Ks must have shape [*batch, C, 3, 3], got ", Ks.sizes()
+    );
+    // colors: packed mode (rank == means.dim()) is NotImplemented in the wrapper;
+    // only the unpacked [*batch, C, N, channels] layout is accepted here.
+    TORCH_CHECK_VALUE(
+        colors.dim() == means.dim() + 1 && colors.size(-3) == vC &&
+            colors.size(-2) == vN &&
+            colors.sizes().slice(0, colors.dim() - 3) == vbatch_dims,
+        "colors must have shape [*batch, C, N, channels], got ", colors.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        opacities.dim() == colors.dim() - 1 &&
+            opacities.sizes() == colors.sizes().slice(0, colors.dim() - 1),
+        "opacities must have shape colors.shape[:-1] = [*batch, C, N], got ",
+        opacities.sizes()
+    );
+
+    if (backgrounds.has_value()) {
+        const auto &bg = backgrounds.value();
+        TORCH_CHECK_VALUE(
+            bg.dim() == means.dim() && bg.size(-1) == vchannels &&
+                bg.size(-2) == vC &&
+                bg.sizes().slice(0, bg.dim() - 2) == vbatch_dims,
+            "backgrounds must have shape [*batch, C, channels], got ", bg.sizes()
+        );
+    }
+    if (masks.has_value()) {
+        TORCH_CHECK_VALUE(
+            masks.value().sizes() == tile_offsets.sizes(),
+            "masks must have shape tile_offsets.shape, got ",
+            masks.value().sizes()
+        );
+    }
+    if (radial_coeffs.has_value()) {
+        const auto &rc = radial_coeffs.value();
+        TORCH_CHECK_VALUE(
+            rc.dim() == means.dim() && (rc.size(-1) == 6 || rc.size(-1) == 4) &&
+                rc.size(-2) == vC &&
+                rc.sizes().slice(0, rc.dim() - 2) == vbatch_dims,
+            "radial_coeffs must have shape [*batch, C, 6 or 4], got ", rc.sizes()
+        );
+    }
+    if (tangential_coeffs.has_value()) {
+        const auto &tc = tangential_coeffs.value();
+        TORCH_CHECK_VALUE(
+            tc.dim() == means.dim() && tc.size(-1) == 2 && tc.size(-2) == vC &&
+                tc.sizes().slice(0, tc.dim() - 2) == vbatch_dims,
+            "tangential_coeffs must have shape [*batch, C, 2], got ", tc.sizes()
+        );
+    }
+    if (thin_prism_coeffs.has_value()) {
+        const auto &pc = thin_prism_coeffs.value();
+        TORCH_CHECK_VALUE(
+            pc.dim() == means.dim() && pc.size(-1) == 4 && pc.size(-2) == vC &&
+                pc.sizes().slice(0, pc.dim() - 2) == vbatch_dims,
+            "thin_prism_coeffs must have shape [*batch, C, 4], got ", pc.sizes()
+        );
+    }
+    if (viewmats1.has_value()) {
+        const auto &vm1 = viewmats1.value();
+        TORCH_CHECK_VALUE(
+            vm1.dim() == means.dim() + 1 && vm1.size(-1) == 4 &&
+                vm1.size(-2) == 4 &&
+                vm1.sizes().slice(0, vm1.dim() - 3) == vbatch_dims,
+            "viewmats1 (viewmats_rs) must have shape [*batch, C, 4, 4], got ",
+            vm1.sizes()
+        );
+    }
+    if (rays.has_value()) {
+        // rays broadcast against the camera dims, so only the last dim and dtype
+        // are load-bearing; an exact prefix check would reject valid shapes.
+        TORCH_CHECK_VALUE(
+            rays.value().size(-1) == 6,
+            "rays must have shape [*batch, C, P, 6], got ", rays.value().sizes()
+        );
+        TORCH_CHECK_VALUE(
+            rays.value().scalar_type() == at::kFloat,
+            "rays must be torch.float32, got ", rays.value().scalar_type()
+        );
+    }
+
+    TORCH_CHECK_VALUE(
+        tile_size == 8u || tile_size == 16u,
+        "3DGUT rasterization requires tile_size in (8, 16), got ", tile_size
+    );
+
+    const int64_t v_tile_height = tile_offsets.size(-2);
+    const int64_t v_tile_width = tile_offsets.size(-1);
+    if (camera_model == CameraModelType::LIDAR) {
+        TORCH_CHECK_VALUE(
+            lidar_coeffs.has_value(),
+            "lidar camera_model requires lidar_coeffs"
+        );
+        TORCH_CHECK_VALUE(
+            v_tile_width ==
+                static_cast<int64_t>(lidar_coeffs.value()->n_bins_azimuth),
+            "tile_width must equal lidar n_bins_azimuth, got ", v_tile_width,
+            " vs ", lidar_coeffs.value()->n_bins_azimuth
+        );
+        TORCH_CHECK_VALUE(
+            v_tile_height ==
+                static_cast<int64_t>(lidar_coeffs.value()->n_bins_elevation),
+            "tile_height must equal lidar n_bins_elevation, got ", v_tile_height,
+            " vs ", lidar_coeffs.value()->n_bins_elevation
+        );
+    } else {
+        TORCH_CHECK_VALUE(
+            v_tile_height * static_cast<int64_t>(tile_size) >=
+                static_cast<int64_t>(image_height),
+            "Assert Failed: ", v_tile_height, " * ", tile_size, " >= ",
+            image_height
+        );
+        TORCH_CHECK_VALUE(
+            v_tile_width * static_cast<int64_t>(tile_size) >=
+                static_cast<int64_t>(image_width),
+            "Assert Failed: ", v_tile_width, " * ", tile_size, " >= ",
+            image_width
+        );
+    }
+
     // --- Allocate public forward outputs ----------------------------------
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
