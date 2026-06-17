@@ -1004,34 +1004,6 @@ def rasterize_num_contributing_gaussians(
         - **Number of contributing Gaussians**. [..., image_height, image_width]
         - **Rendered alphas**. [..., image_height, image_width]
     """
-    assert tile_size in (
-        4,
-        16,
-    ), f"Only tile_size in {{4, 16}} is supported for 3DGS rasterization, got {tile_size}"
-
-    tile_height, tile_width = tile_offsets.shape[-2:]
-    if means2d.dim() == 2:
-        nnz = means2d.shape[0]
-        assert means2d.shape == (nnz, 2), means2d.shape
-        assert conics.shape == (nnz, 3), conics.shape
-        assert opacities.shape == (nnz,), opacities.shape
-    else:
-        image_dims = means2d.shape[:-2]
-        N = means2d.shape[-2]
-        assert means2d.shape == image_dims + (N, 2), means2d.shape
-        assert conics.shape == image_dims + (N, 3), conics.shape
-        assert opacities.shape == image_dims + (N,), opacities.shape
-        assert tile_offsets.shape == image_dims + (
-            tile_height,
-            tile_width,
-        ), tile_offsets.shape
-    assert (
-        tile_height * tile_size >= image_height
-    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-    assert (
-        tile_width * tile_size >= image_width
-    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
-
     return _make_lazy_cuda_func("rasterize_num_contributing_gaussians")(
         means2d.contiguous(),
         conics.contiguous(),
