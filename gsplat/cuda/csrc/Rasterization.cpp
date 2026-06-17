@@ -1518,12 +1518,13 @@ RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
 struct RasterizeToIndices2DGSResult {
     at::Tensor gaussian_ids;
     at::Tensor pixel_ids;
+    at::Tensor image_ids;
 };
 
 template <>
 struct TorchArgDef<RasterizeToIndices2DGSResult> {
     static auto to(const RasterizeToIndices2DGSResult &r) {
-        return to_torch_args(r.gaussian_ids, r.pixel_ids);
+        return to_torch_args(r.gaussian_ids, r.pixel_ids, r.image_ids);
     }
 };
 
@@ -1550,8 +1551,57 @@ RasterizeToIndices2DGSResult rasterize_to_indices_2dgs(
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
 
+    // Validate inputs.
+    // The leading `dim()` clauses short-circuit before the prefix slices, so a
+    // rank mismatch fails the check cleanly instead of underflowing slice().
+    TORCH_CHECK_VALUE(
+        means2d.dim() >= 2, "means2d must have at least 2 dims, got ", means2d.dim()
+    );
+    const auto image_dims = means2d.sizes().slice(0, means2d.dim() - 2);
+    const int64_t N = means2d.size(-2); // number of gaussians
+    TORCH_CHECK_VALUE(
+        transmittances.dim() == means2d.dim() &&
+            transmittances.sizes().slice(0, transmittances.dim() - 2) == image_dims &&
+            transmittances.size(-2) == image_height &&
+            transmittances.size(-1) == image_width,
+        "transmittances must have shape [*image_dims, image_height, image_width], got ",
+        transmittances.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        means2d.size(-1) == 2,
+        "means2d must have shape [*image_dims, N, 2], got ", means2d.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        ray_transforms.dim() == means2d.dim() + 1 &&
+            ray_transforms.size(-1) == 3 && ray_transforms.size(-2) == 3 &&
+            ray_transforms.size(-3) == N &&
+            ray_transforms.sizes().slice(0, ray_transforms.dim() - 3) == image_dims,
+        "ray_transforms must have shape [*image_dims, N, 3, 3], got ",
+        ray_transforms.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        opacities.dim() == means2d.dim() - 1 && opacities.size(-1) == N &&
+            opacities.sizes().slice(0, opacities.dim() - 1) == image_dims,
+        "opacities must have shape [*image_dims, N], got ", opacities.sizes()
+    );
+    const int64_t tile_height = tile_offsets.size(-2);
+    const int64_t tile_width = tile_offsets.size(-1);
+    TORCH_CHECK_VALUE(
+        tile_offsets.dim() == means2d.dim() &&
+            tile_offsets.sizes().slice(0, tile_offsets.dim() - 2) == image_dims,
+        "tile_offsets must have shape [*image_dims, tile_height, tile_width], got ",
+        tile_offsets.sizes()
+    );
+    TORCH_CHECK_VALUE(
+        tile_height * tile_size >= image_height,
+        "Assert Failed: ", tile_height, " * ", tile_size, " >= ", image_height
+    );
+    TORCH_CHECK_VALUE(
+        tile_width * tile_size >= image_width,
+        "Assert Failed: ", tile_width, " * ", tile_size, " >= ", image_width
+    );
+
     auto opt = means2d.options();
-    uint32_t N = means2d.size(-2); // number of gaussians
     uint32_t I = (N == 0) ? 0 : means2d.numel() / (2 * N); // number of images
 
     uint32_t n_isects = flatten_ids.size(0);
@@ -1587,9 +1637,10 @@ RasterizeToIndices2DGSResult rasterize_to_indices_2dgs(
         n_elems = 0;
     }
 
-    // Second pass: allocate memory and write out the gaussian and pixel ids.
+    // Second pass: allocate memory and write out the gaussian ids and the
+    // kernel's combined index (pix_id + image_id * image_height * image_width).
     at::Tensor gaussian_ids = at::empty({n_elems}, opt.dtype(at::kLong));
-    at::Tensor pixel_ids = at::empty({n_elems}, opt.dtype(at::kLong));
+    at::Tensor combined_ids = at::empty({n_elems}, opt.dtype(at::kLong));
     if (n_elems) {
         launch_rasterize_to_indices_2dgs_kernel(
             range_start,
@@ -1606,10 +1657,22 @@ RasterizeToIndices2DGSResult rasterize_to_indices_2dgs(
             at::optional<at::Tensor>(chunk_starts),
             c10::nullopt, // chunk_cnts
             at::optional<at::Tensor>(gaussian_ids),
-            at::optional<at::Tensor>(pixel_ids)
+            at::optional<at::Tensor>(combined_ids)
         );
     }
-    return {.gaussian_ids = gaussian_ids, .pixel_ids = pixel_ids};
+
+    // Split the combined index into per-image pixel and image ids. The divisor
+    // image_height * image_width matches the kernel encoding
+    // pix_id + image_id * image_height * image_width.
+    const int64_t pix_per_image = image_height * image_width;
+    at::Tensor pixel_ids = at::remainder(combined_ids, pix_per_image);
+    at::Tensor image_ids = at::floor_divide(combined_ids, pix_per_image);
+
+    return {
+        .gaussian_ids = gaussian_ids,
+        .pixel_ids = pixel_ids,
+        .image_ids = image_ids
+    };
 }
 
 #endif
