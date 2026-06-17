@@ -162,12 +162,12 @@ projection_ut_3dgs_fused(
     bool calc_compensations,
     CameraModelType camera_model,
     bool global_z_order,
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    const at::optional<c10::intrusive_ptr<UnscentedTransformParameters>> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> &radial_coeffs,
     const at::optional<at::Tensor> &tangential_coeffs,
     const at::optional<at::Tensor> &thin_prism_coeffs,
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 );
@@ -430,12 +430,12 @@ void launch_projection_ut_3dgs_fused_kernel(
     const CameraModelType camera_model,
     const bool global_z_order,
     // uncented transform
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    const at::optional<c10::intrusive_ptr<UnscentedTransformParameters>> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs, // shared parameters for all cameras
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params, // external distortion parameters
     // outputs

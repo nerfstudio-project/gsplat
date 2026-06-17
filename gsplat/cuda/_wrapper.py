@@ -1419,20 +1419,12 @@ def fully_fused_projection_with_ut(
             faster and sufficient for most cases, while Euclidean distance can be useful for scenes
             with wide field-of-view or non-standard camera models. Default: True.
     """
-    if ut_params is None:
-        ut_params = UnscentedTransformParameters()
-
     if lidar_coeffs is not None:
         assert isinstance(
             lidar_coeffs, RowOffsetStructuredSpinningLidarModelParametersExt
         )
 
     camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
-    ftheta_coeffs = (
-        ftheta_coeffs
-        if ftheta_coeffs is not None
-        else FThetaCameraDistortionParameters()
-    )
 
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
         "projection_ut_3dgs_fused"
