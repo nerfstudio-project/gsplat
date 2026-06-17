@@ -26,7 +26,6 @@ from typing import Any, Callable, Mapping, Optional, Tuple
 import torch
 from torch import Tensor
 from typing_extensions import Literal
-from gsplat._helper import assert_shape
 from gsplat.trace import trace_function
 from gsplat.cuda._lidar import (
     SpinningDirection,
@@ -1279,84 +1278,9 @@ def rasterize_to_pixels_eval3d_extra(
         ut_params = UnscentedTransformParameters()
     renderer_config = _renderer_config_to_cuda(renderer_config)
 
-    batch_dims = means.shape[:-2]
-    num_batch_dims = len(batch_dims)
-    N = means.size(-2)
-    C = viewmats.size(-3)
-    P = rays.shape[-2] if rays is not None else 0
-    channels = colors.shape[-1]
-
-    assert means.shape == batch_dims + (N, 3), means.shape
-    assert quats.shape == batch_dims + (N, 4), quats.shape
-    assert scales.shape == batch_dims + (N, 3), scales.shape
-    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    if rays is not None:
-        assert_shape("rays", rays, batch_dims + (C, P, 6))
-        assert (
-            rays.dtype == torch.float32
-        ), f"rays must be torch.float32, got {rays.dtype}"
-
-    assert colors.ndim in (num_batch_dims + 2, num_batch_dims + 3), colors.shape
-    if colors.ndim == num_batch_dims + 2:
+    # Packed colors (colors.ndim == means.ndim) are not supported yet.
+    if colors.ndim == means.ndim:
         raise NotImplementedError("packed mode is not supported yet")
-        assert (
-            colors.shape[:-2] == batch_dims and colors.shape[-1] == channels
-        ), colors.shape
-    else:
-        assert colors.shape == batch_dims + (C, N, channels), colors.shape
-    assert opacities.shape == colors.shape[:-1], opacities.shape
-
-    if backgrounds is not None:
-        assert backgrounds.shape == batch_dims + (C, channels), backgrounds.shape
-        backgrounds = backgrounds.contiguous()
-
-    if masks is not None:
-        assert masks.shape == isect_offsets.shape, masks.shape
-        masks = masks.contiguous()
-
-    if radial_coeffs is not None:
-        assert radial_coeffs.shape[:-1] == batch_dims + (C,) and radial_coeffs.shape[
-            -1
-        ] in (6, 4), radial_coeffs.shape
-        radial_coeffs = radial_coeffs.contiguous()
-
-    if tangential_coeffs is not None:
-        assert tangential_coeffs.shape == batch_dims + (C, 2), tangential_coeffs.shape
-        tangential_coeffs = tangential_coeffs.contiguous()
-
-    if thin_prism_coeffs is not None:
-        assert thin_prism_coeffs.shape == batch_dims + (C, 4), thin_prism_coeffs.shape
-        thin_prism_coeffs = thin_prism_coeffs.contiguous()
-
-    if viewmats_rs is not None:
-        assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
-        viewmats_rs = viewmats_rs.contiguous()
-
-    # The 3DGUT fwd launcher dispatches at on tile_size:
-    #   tile_size=8  -> kernel<CDIM, 8,  32 > (compact CTA, PPT=2)
-    #   tile_size=16 -> kernel<CDIM, 16, 256> (one thread per pixel, PPT=1)
-    # tile_size must match the launcher dispatch or the tile grid will be
-    # misaligned with the kernel's TILE_SIZE constexpr.
-    assert tile_size in (
-        8,
-        16,
-    ), f"3DGUT rasterization requires tile_size in (8, 16), got {tile_size}"
-
-    tile_height, tile_width = isect_offsets.shape[-2:]
-    if camera_model == "lidar":
-        assert tile_width == lidar_coeffs.tiling.n_bins_azimuth
-        assert tile_height == lidar_coeffs.tiling.n_bins_elevation
-        # TODO: improve checks. Right now we don't have access to max_pts_per_tile used,
-        # hence this assert needs to be commented out.
-        # assert tile_width*tile_height*lidar_coeffs.tiling.max_pts_per_tile >= lidar_coeffs.n_rows*lidar_coeffs.n_columns
-    else:
-        assert (
-            tile_height * tile_size >= image_height
-        ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-        assert (
-            tile_width * tile_size >= image_width
-        ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
     camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
     ftheta_coeffs = (
