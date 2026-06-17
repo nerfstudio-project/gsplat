@@ -188,7 +188,7 @@ RUN --mount=type=tmpfs,target=/tmp \
 
     # Examples
     packages=(
-        "nvidia-ncore==18.6.0"
+        "nvidia-ncore==19.0.0"
         "torchvision==0.24.1"
         "pycolmap==3.10.0"
         "viser==1.0.24"
