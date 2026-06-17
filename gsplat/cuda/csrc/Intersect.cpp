@@ -102,6 +102,46 @@ void check_intersect_tile_inputs(
     }
 }
 
+#if GSPLAT_BUILD_3DGUT
+// Validates intersect_tile_lidar inputs. Each checked assumption is a
+// precondition of the lidar tile-intersection kernel.
+void check_intersect_tile_lidar_inputs(
+    const at::Tensor &means2d,
+    const at::Tensor &radii,
+    const at::Tensor &depths,
+    const at::optional<at::Tensor> &image_ids,
+    const at::optional<at::Tensor> &gaussian_ids,
+    bool packed
+) {
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(depths);
+    if (packed) {
+        int64_t nnz = means2d.size(0);
+        TORCH_CHECK(means2d.size(1) == 2,
+                    "means2d must be [nnz, 2], got ", means2d.sizes());
+        TORCH_CHECK(radii.dim() == 2 && radii.size(0) == nnz && radii.size(1) == 2,
+                    "radii must be [nnz, 2], got ", radii.sizes());
+        TORCH_CHECK(depths.dim() == 1 && depths.size(0) == nnz,
+                    "depths must be [nnz], got ", depths.sizes());
+        TORCH_CHECK(
+            image_ids.has_value() && gaussian_ids.has_value(),
+            "When packed is set, image_ids and gaussian_ids must be provided."
+        );
+        CHECK_INPUT(image_ids.value());
+        CHECK_INPUT(gaussian_ids.value());
+    } else {
+        TORCH_CHECK(means2d.dim() >= 2 && means2d.size(-1) == 2,
+                    "means2d must be [..., N, 2], got ", means2d.sizes());
+        auto lead = means2d.sizes().slice(0, means2d.dim() - 1);
+        TORCH_CHECK(radii.sizes() == means2d.sizes(),
+                    "radii must be [..., N, 2] matching means2d, got ", radii.sizes());
+        TORCH_CHECK(depths.sizes() == lead,
+                    "depths must be [..., N], got ", depths.sizes());
+    }
+}
+#endif
+
 } // namespace
 
 TileIntersectResult intersect_tile(
@@ -272,7 +312,7 @@ TileIntersectResult intersect_tile_lidar(
     const at::Tensor depths,                     // [..., N] or [nnz]
     const at::optional<at::Tensor> image_ids,    // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
-    const int64_t I,
+    std::optional<int64_t> n_images,
     const bool sort,
     const bool segmented
 ) {
@@ -281,20 +321,24 @@ TileIntersectResult intersect_tile_lidar(
     return {};
 #else
     DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(radii);
-    CHECK_INPUT(depths);
 
     auto opt = depths.options();
     uint32_t n_elements = means2d.numel() / 2;
     bool packed = means2d.dim() == 2;
+    check_intersect_tile_lidar_inputs(
+        means2d, radii, depths, image_ids, gaussian_ids, packed
+    );
+
+    // Flattened image count. For the non-packed [..., N, 2] layout it is the
+    // product of the leading image dims; the packed [nnz, 2] layout flattens
+    // those dims away, so the caller must supply it.
+    int64_t I;
     if (packed) {
-        TORCH_CHECK(
-            image_ids.has_value() && gaussian_ids.has_value(),
-            "When packed is set, image_ids and gaussian_ids must be provided."
-        );
-        CHECK_INPUT(image_ids.value());
-        CHECK_INPUT(gaussian_ids.value());
+        TORCH_CHECK(n_images.has_value(),
+                    "n_images is required when means2d is packed ([nnz, 2]).");
+        I = n_images.value();
+    } else {
+        I = c10::multiply_integers(means2d.sizes().slice(0, means2d.dim() - 2));
     }
 
     // packed-mode `offsets` (below) reduce a 1-D [nnz] tiles_per_gauss and

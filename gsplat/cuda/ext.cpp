@@ -952,7 +952,7 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? conics, Tensor? opacities, Tensor? image_ids, Tensor? gaussian_ids, int? n_images, int tile_size, int tile_width, int tile_height, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
     m.def("intersect_offset(Tensor isect_ids, int I, int tile_width, int tile_height) -> Tensor");
     m.def("intersect_tile_sparse(Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor tile_mask, Tensor active_tiles, int I, int tile_size, int tile_width, int tile_height) -> (Tensor, Tensor)");
-    m.def("intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int I, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
+    m.def("intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int? n_images, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
 
 #if GSPLAT_BUILD_3DGS
     m.def("projection_ewa_simple(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> (Tensor, Tensor)");

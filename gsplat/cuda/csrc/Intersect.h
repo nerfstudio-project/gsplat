@@ -64,7 +64,7 @@ TileIntersectResult intersect_tile_lidar(
     const at::Tensor depths,
     const at::optional<at::Tensor> image_ids,
     const at::optional<at::Tensor> gaussian_ids,
-    int64_t I,
+    std::optional<int64_t> n_images,
     bool sort,
     bool segmented
 );
