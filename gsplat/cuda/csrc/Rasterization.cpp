@@ -981,6 +981,68 @@ std::tuple<at::Tensor, at::Tensor> rasterize_top_contributing_gaussian_ids(
         num_depth_samples > 0, "num_depth_samples must be greater than 0"
     );
 
+    // Validate inputs. The leading `dim()`
+    // clauses short-circuit before the prefix slices so a rank mismatch fails
+    // cleanly instead of underflowing slice().
+    TORCH_CHECK_VALUE(
+        tile_size == 4 || tile_size == 16,
+        "Only tile_size in {4, 16} is supported for 3DGS rasterization, got ",
+        tile_size
+    );
+    const int64_t tile_height = tile_offsets.size(-2);
+    const int64_t tile_width = tile_offsets.size(-1);
+    if (means2d.dim() == 2) {
+        const int64_t nnz = means2d.size(0);
+        TORCH_CHECK_VALUE(
+            means2d.size(-1) == 2,
+            "means2d must have shape [nnz, 2], got ", means2d.sizes()
+        );
+        TORCH_CHECK_VALUE(
+            conics.dim() == 2 && conics.size(0) == nnz && conics.size(1) == 3,
+            "conics must have shape [nnz, 3], got ", conics.sizes()
+        );
+        TORCH_CHECK_VALUE(
+            opacities.dim() == 1 && opacities.size(0) == nnz,
+            "opacities must have shape [nnz], got ", opacities.sizes()
+        );
+    } else {
+        TORCH_CHECK_VALUE(
+            means2d.dim() >= 2,
+            "means2d must have at least 2 dims, got ", means2d.dim()
+        );
+        const auto image_dims = means2d.sizes().slice(0, means2d.dim() - 2);
+        const int64_t N = means2d.size(-2); // number of gaussians
+        TORCH_CHECK_VALUE(
+            means2d.size(-1) == 2,
+            "means2d must have shape [*image_dims, N, 2], got ", means2d.sizes()
+        );
+        TORCH_CHECK_VALUE(
+            conics.dim() == means2d.dim() && conics.size(-1) == 3 &&
+                conics.size(-2) == N &&
+                conics.sizes().slice(0, conics.dim() - 2) == image_dims,
+            "conics must have shape [*image_dims, N, 3], got ", conics.sizes()
+        );
+        TORCH_CHECK_VALUE(
+            opacities.dim() == means2d.dim() - 1 && opacities.size(-1) == N &&
+                opacities.sizes().slice(0, opacities.dim() - 1) == image_dims,
+            "opacities must have shape [*image_dims, N], got ", opacities.sizes()
+        );
+        TORCH_CHECK_VALUE(
+            tile_offsets.dim() == means2d.dim() &&
+                tile_offsets.sizes().slice(0, tile_offsets.dim() - 2) == image_dims,
+            "tile_offsets must have shape [*image_dims, tile_height, tile_width], got ",
+            tile_offsets.sizes()
+        );
+    }
+    TORCH_CHECK_VALUE(
+        tile_height * tile_size >= image_height,
+        "Assert Failed: ", tile_height, " * ", tile_size, " >= ", image_height
+    );
+    TORCH_CHECK_VALUE(
+        tile_width * tile_size >= image_width,
+        "Assert Failed: ", tile_width, " * ", tile_size, " >= ", image_width
+    );
+
     auto opt = means2d.options();
     at::DimVector out_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
     out_dims.append({image_height, image_width, num_depth_samples});
