@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import functools
-import math
 import types
 import warnings
 from dataclasses import dataclass
@@ -762,25 +761,8 @@ def isect_tiles_lidar(
         - **Flatten ids**. The global flatten indices in [I * N] or [nnz] (packed). [n_isects]
     """
     if packed:
-        nnz = means2d.size(0)
-        assert means2d.shape == (nnz, 2), means2d.shape
-        assert radii.shape == (nnz, 2), radii.shape
-        assert depths.shape == (nnz,), depths.shape
-        assert image_ids is not None, "image_ids is required if packed is True"
-        assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
-        assert n_images is not None, "n_images is required if packed is True"
         image_ids = image_ids.contiguous()
         gaussian_ids = gaussian_ids.contiguous()
-        I = n_images
-
-    else:
-        image_dims = means2d.shape[:-2]
-        I = math.prod(image_dims)
-        N = means2d.shape[-2]
-        assert means2d.shape == (*image_dims, N, 2), means2d.shape
-        assert radii.shape == (*image_dims, N, 2), radii.shape
-        assert depths.shape == (*image_dims, N), depths.shape
-
     tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func(
         "intersect_tile_lidar"
     )(
@@ -790,7 +772,7 @@ def isect_tiles_lidar(
         depths.contiguous(),
         image_ids,
         gaussian_ids,
-        I,
+        n_images,
         sort,
         segmented,
     )
