@@ -910,7 +910,9 @@ Rasterization3DGSResult rasterization_3dgs(
         means2d = projection.means2d;
         depths = projection.depths;
         conics = projection.conics;
-        compensations = projection.compensations;
+        if (projection.compensations.has_value()) {
+            compensations = projection.compensations.value();
+        }
         batch_ids = empty_like_indices(means);
         camera_ids = empty_like_indices(means);
         gaussian_ids = empty_like_indices(means);
