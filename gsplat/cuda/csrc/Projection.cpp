@@ -2257,7 +2257,8 @@ projection_ut_3dgs_fused_impl(
         .means2d = means2d,
         .depths = depths,
         .conics = conics,
-        .compensations = compensations
+        .compensations = calc_compensations ? at::optional<at::Tensor>(compensations)
+                                            : at::nullopt
     };
 }
 
