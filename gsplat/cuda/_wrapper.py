@@ -1462,8 +1462,6 @@ def fully_fused_projection_with_ut(
         lidar_coeffs.to_cpp() if lidar_coeffs is not None else None,
         external_distortion_coeffs,
     )
-    if not calc_compensations:
-        compensations = None
     return radii, means2d, depths, conics, compensations
 
 

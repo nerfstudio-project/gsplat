@@ -141,7 +141,7 @@ struct ProjectionUT3DGSFusedResult {
     at::Tensor means2d;
     at::Tensor depths;
     at::Tensor conics;
-    at::Tensor compensations;
+    at::optional<at::Tensor> compensations;
 };
 
 ProjectionUT3DGSFusedResult
