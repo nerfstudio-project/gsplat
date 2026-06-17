@@ -1606,27 +1606,6 @@ def fully_fused_projection_with_ut(
     if ut_params is None:
         ut_params = UnscentedTransformParameters()
 
-    batch_dims = means.shape[:-2]
-    N = means.shape[-2]
-    C = viewmats.shape[-3]
-    assert means.shape == batch_dims + (N, 3), means.shape
-    assert quats.shape == batch_dims + (N, 4), quats.shape
-    assert scales.shape == batch_dims + (N, 3), scales.shape
-    if opacities is not None:
-        assert opacities.shape == batch_dims + (N,), opacities.shape
-    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    if radial_coeffs is not None:
-        assert radial_coeffs.shape[:-1] == batch_dims + (C,) and radial_coeffs.shape[
-            -1
-        ] in [6, 4], radial_coeffs.shape
-    if tangential_coeffs is not None:
-        assert tangential_coeffs.shape == batch_dims + (C, 2), tangential_coeffs.shape
-    if thin_prism_coeffs is not None:
-        assert thin_prism_coeffs.shape == batch_dims + (C, 4), thin_prism_coeffs.shape
-    if viewmats_rs is not None:
-        assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
-
     if lidar_coeffs is not None:
         assert isinstance(
             lidar_coeffs, RowOffsetStructuredSpinningLidarModelParametersExt
