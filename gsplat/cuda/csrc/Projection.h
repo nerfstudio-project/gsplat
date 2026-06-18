@@ -21,6 +21,8 @@
 #include <cstdint>
 #include <tuple>
 
+#include <ATen/core/Tensor.h>
+
 #include "Cameras.h"
 #include "Common.h"
 #include "Lidars.h"
@@ -33,12 +35,116 @@ class Tensor;
 
 namespace gsplat {
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+struct Projection2DGSFusedResult {
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor ray_transforms;
+    at::Tensor normals;
+};
+
+Projection2DGSFusedResult projection_2dgs_fused(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip
+);
+
+struct Projection2DGSPackedResult {
+    at::Tensor batch_ids;
+    at::Tensor camera_ids;
+    at::Tensor gaussian_ids;
+    at::Tensor indptr;
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor ray_transforms;
+    at::Tensor normals;
+};
+
+Projection2DGSPackedResult projection_2dgs_packed(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double near_plane, double far_plane, double radius_clip,
+    bool sparse_grad
+);
+
+struct ProjectionEWA3DGSFusedFwdResult {
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor conics;
+    at::optional<at::Tensor> compensations;
+};
+using ProjectionEWA3DGSFusedResult = ProjectionEWA3DGSFusedFwdResult;
+
+ProjectionEWA3DGSFusedFwdResult projection_ewa_3dgs_fused_fwd(
+    const at::Tensor &means, const at::optional<at::Tensor> &covars,
+    const at::optional<at::Tensor> &quats,
+    const at::optional<at::Tensor> &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip,
+    bool calc_compensations, CameraModelType camera_model
+);
+ProjectionEWA3DGSFusedResult projection_ewa_3dgs_fused(
+    const at::Tensor &means, const at::optional<at::Tensor> &covars,
+    const at::optional<at::Tensor> &quats,
+    const at::optional<at::Tensor> &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip,
+    bool calc_compensations, CameraModelType camera_model
+);
+
+struct ProjectionEWA3DGSPackedFwdResult {
+    at::Tensor batch_ids;
+    at::Tensor camera_ids;
+    at::Tensor gaussian_ids;
+    at::Tensor indptr;
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor conics;
+    at::optional<at::Tensor> compensations;
+};
+using ProjectionEWA3DGSPackedResult = ProjectionEWA3DGSPackedFwdResult;
+
+ProjectionEWA3DGSPackedFwdResult projection_ewa_3dgs_packed_fwd(
+    const at::Tensor &means, const at::optional<at::Tensor> &covars,
+    const at::optional<at::Tensor> &quats,
+    const at::optional<at::Tensor> &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip,
+    bool sparse_grad, bool calc_compensations, CameraModelType camera_model
+);
+ProjectionEWA3DGSPackedResult projection_ewa_3dgs_packed(
+    const at::Tensor &means, const at::optional<at::Tensor> &covars,
+    const at::optional<at::Tensor> &quats,
+    const at::optional<at::Tensor> &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip,
+    bool sparse_grad, bool calc_compensations, CameraModelType camera_model
+);
+
+struct ProjectionUT3DGSFusedResult {
+    at::Tensor radii;
+    at::Tensor means2d;
+    at::Tensor depths;
+    at::Tensor conics;
+    at::optional<at::Tensor> compensations;
+};
+
+ProjectionUT3DGSFusedResult
 projection_ut_3dgs_fused(
     const at::Tensor &means,
     const at::Tensor &quats,
@@ -54,14 +160,14 @@ projection_ut_3dgs_fused(
     double far_plane,
     double radius_clip,
     bool calc_compensations,
-    int64_t camera_model,
+    CameraModelType camera_model,
     bool global_z_order,
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
-    int64_t rs_type,
+    const at::optional<c10::intrusive_ptr<UnscentedTransformParameters>> &ut_params,
+    ShutterType rs_type,
     const at::optional<at::Tensor> &radial_coeffs,
     const at::optional<at::Tensor> &tangential_coeffs,
     const at::optional<at::Tensor> &thin_prism_coeffs,
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 );
@@ -324,12 +430,12 @@ void launch_projection_ut_3dgs_fused_kernel(
     const CameraModelType camera_model,
     const bool global_z_order,
     // uncented transform
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    const at::optional<c10::intrusive_ptr<UnscentedTransformParameters>> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs, // shared parameters for all cameras
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params, // external distortion parameters
     // outputs

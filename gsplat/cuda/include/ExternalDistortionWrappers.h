@@ -29,6 +29,7 @@
 
 #include <torch/extension.h>
 #include "ExternalDistortion.h"
+#include "TorchUtils.h"
 
 namespace gsplat::extdist {
 
@@ -65,30 +66,33 @@ torch::Tensor eval_bivariate_poly_wrapper(
     const torch::Tensor& poly_coeffs,
     int64_t order);
 
-/**
- * @brief Torch-op-compatible wrapper for distort_camera_rays.
- *
- * Accepts individual polynomial tensors instead of the BivariateWindshieldModelParameters
- * struct, allowing registration as a torch custom op via TORCH_LIBRARY.
- *
- * @param rays Input rays [N, 3] (float32, CUDA)
- * @param h_poly Horizontal forward polynomial coefficients (float32, CUDA)
- * @param v_poly Vertical forward polynomial coefficients (float32, CUDA)
- * @param h_inv_poly Horizontal inverse polynomial coefficients (float32, CUDA)
- * @param v_inv_poly Vertical inverse polynomial coefficients (float32, CUDA)
- * @param reference_poly Reference polynomial type (int cast of ReferencePolynomialType)
- * @param inverse If false, apply forward distortion. If true, apply inverse (undistort).
- * @return Distorted rays [N, 3] (float32, CUDA)
- */
-torch::Tensor distort_camera_rays_torch_op(
-    const torch::Tensor& rays,
-    const torch::Tensor& h_poly,
-    const torch::Tensor& v_poly,
-    const torch::Tensor& h_inv_poly,
-    const torch::Tensor& v_inv_poly,
-    int64_t reference_poly,
-    bool inverse);
-
 } // namespace gsplat::extdist
+
+namespace gsplat {
+
+// Marshal the windshield distortion params across the dispatcher so the op takes
+// the struct directly: it crosses as its four polynomial tensors plus the
+// reference-polynomial enum, matching the registered schema.
+template <>
+struct TorchArgDef<extdist::BivariateWindshieldModelParameters> {
+    static auto to(const extdist::BivariateWindshieldModelParameters &p) {
+        return to_torch_args(p.horizontal_poly, p.vertical_poly,
+                             p.horizontal_poly_inverse, p.vertical_poly_inverse,
+                             p.reference_poly);
+    }
+    template <class... Ts>
+    static extdist::BivariateWindshieldModelParameters from(std::tuple<Ts...> d) {
+        extdist::BivariateWindshieldModelParameters params;
+        params.horizontal_poly = std::get<0>(d);
+        params.vertical_poly = std::get<1>(d);
+        params.horizontal_poly_inverse = std::get<2>(d);
+        params.vertical_poly_inverse = std::get<3>(d);
+        params.reference_poly =
+            static_cast<extdist::ReferencePolynomialType>(std::get<4>(d));
+        return params;
+    }
+};
+
+} // namespace gsplat
 
 #endif // GSPLAT_BUILD_CAMERA_WRAPPERS

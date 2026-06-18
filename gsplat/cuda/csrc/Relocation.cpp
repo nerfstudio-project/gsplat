@@ -31,10 +31,23 @@
 
 #include "Common.h"     // where all the macros are defined
 #include "Relocation.h" // where the launch function is declared
+#include "TorchUtils.h"
 
 namespace gsplat {
 
-std::tuple<at::Tensor, at::Tensor> relocation(
+struct RelocationResult {
+    at::Tensor new_opacities;
+    at::Tensor new_scales;
+};
+
+template <>
+struct TorchArgDef<RelocationResult> {
+    static auto to(const RelocationResult &r) {
+        return to_torch_args(r.new_opacities, r.new_scales);
+    }
+};
+
+RelocationResult relocation(
     const at::Tensor &opacities, // [N]
     const at::Tensor &scales,    // [N, 3]
     const at::Tensor &ratios,    // [N]
@@ -52,11 +65,11 @@ std::tuple<at::Tensor, at::Tensor> relocation(
     launch_relocation_kernel(
         opacities, scales, ratios, binoms, n_max, new_opacities, new_scales
     );
-    return std::make_tuple(new_opacities, new_scales);
+    return {.new_opacities = new_opacities, .new_scales = new_scales};
 }
 
 void register_relocation_cuda_impl(torch::Library &m) {
-    m.impl("relocation", &relocation);
+    m.impl("relocation", to_torch_op<&relocation>);
 }
 
 } // namespace gsplat
