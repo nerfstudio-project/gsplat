@@ -37,6 +37,13 @@ from gsplat.cuda._lidar import (
 ExternalDistortionModelMeta = Literal["bivariate-windshield"]
 CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar"]
 
+# Autograd for the migrated ops is attached in Python (torch.library.register_autograd)
+# rather than C++. The C++ module exports only each op's `<op>_fwd` and `<op>_bwd`; the
+# backward is wired to the forward op when this module is imported (the call at the end
+# of the file), so direct torch.ops.gsplat.* callers get autograd too, not only the
+# Python wrappers.
+_AUTOGRAD_REGISTRATIONS_DONE = False
+
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
@@ -48,9 +55,60 @@ def _make_lazy_cuda_func(name: str) -> Callable:
         # pylint: disable=import-outside-toplevel
         from ._backend import _C
 
+        if _C is not None:
+            _ensure_autograd_registrations()
         return getattr(torch.ops.gsplat, name)(*args, **kwargs)
 
     return call_cuda
+
+
+def _has_schema(op_name: str) -> bool:
+    """Whether `gsplat::<op_name>` is registered (it may be compiled out by build flags)."""
+    try:
+        torch._C._dispatch_find_schema_or_throw(f"gsplat::{op_name}", "")
+    except RuntimeError:
+        return False
+    return True
+
+
+def _dense_contiguous(t: Optional[Tensor]) -> Optional[Tensor]:
+    """Materialize an incoming output gradient as a dense, contiguous tensor.
+
+    Backward CUDA ops index raw dense storage and require contiguous inputs, so a
+    sparse gradient is densified and any gradient is made contiguous. ``None`` (a
+    disabled or non-differentiable output) passes through unchanged.
+    """
+    if t is None:
+        return None
+    return (t.to_dense() if t.is_sparse else t).contiguous()
+
+
+def _register_autograd(register: type) -> None:
+    """Attach a Python autograd backward to the C++ forward op ``gsplat::<base>``.
+
+    ``register`` is a per-op class grouping the op's hooks: its ``base`` op name and
+    static ``setup_context`` / ``backward`` methods. Registering autograd on the
+    forward op makes the op itself differentiable through the dispatcher, so its
+    backward is recorded whenever it runs under autograd; ``backward`` invokes
+    ``torch.ops.gsplat.<base>_bwd``. No-op if either op was compiled out.
+    """
+    base = register.base
+    if not (_has_schema(base) and _has_schema(f"{base}_bwd")):
+        return
+    torch.library.register_autograd(
+        f"gsplat::{base}", register.backward, setup_context=register.setup_context
+    )
+
+
+def _ensure_autograd_registrations() -> None:
+    """Install the Python autograd backends for the migrated ops, exactly once.
+
+    Populated one op at a time as each C++ autograd Function is ported to Python.
+    """
+    global _AUTOGRAD_REGISTRATIONS_DONE
+    if _AUTOGRAD_REGISTRATIONS_DONE:
+        return
+    _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
 def _make_lazy_cuda_cls(name: str) -> Any:
@@ -1697,3 +1755,9 @@ def rasterize_to_indices_in_range_2dgs(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
     )
+
+
+# Wire the Python autograd backends now, at import time. The module-level handles above
+# already load the C extension, so by here the op schemas exist; _register_autograd is a
+# no-op for any op whose schema is absent, and the whole pass is idempotent.
+_ensure_autograd_registrations()
