@@ -114,6 +114,7 @@ def _ensure_autograd_registrations() -> None:
     _register_autograd(RegisterProjectionEWA3DGSFused)
     _register_autograd(RegisterProjectionEWA3DGSPacked)
     _register_autograd(RegisterProjection2DGSFused)
+    _register_autograd(RegisterProjection2DGSPacked)
     _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
@@ -2023,6 +2024,115 @@ class RegisterProjection2DGSFused:
             None,  # near_plane
             None,  # far_plane
             None,  # radius_clip
+        )
+
+
+class RegisterProjection2DGSPacked:
+    """Python autograd hooks for the gsplat::projection_2dgs_packed op."""
+
+    base = "projection_2dgs_packed"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            _near_plane,
+            _far_plane,
+            _radius_clip,
+            sparse_grad,
+        ) = inputs
+        (
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            _indptr,
+            _radii,
+            _means2d,
+            _depths,
+            ray_transforms,
+            _normals,
+        ) = output
+        ctx.width = width
+        ctx.height = height
+        ctx.sparse_grad = sparse_grad
+        ctx.save_for_backward(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            ray_transforms,
+        )
+
+    @classmethod
+    def backward(
+        cls,
+        ctx,
+        v_batch_ids,
+        v_camera_ids,
+        v_gaussian_ids,
+        v_indptr,
+        v_radii,
+        v_means2d,
+        v_depths,
+        v_ray_transforms,
+        v_normals,
+    ):
+        (
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            ray_transforms,
+        ) = ctx.saved_tensors
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            f"{cls.base}_bwd"
+        )(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            ctx.width,
+            ctx.height,
+            ctx.sparse_grad,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            ray_transforms,
+            _dense_contiguous(v_means2d),
+            _dense_contiguous(v_depths),
+            _dense_contiguous(v_ray_transforms),
+            _dense_contiguous(v_normals),
+            ctx.needs_input_grad[
+                3
+            ],  # viewmats_requires_grad (viewmats is input index 3)
+        )
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_viewmats,
+            None,  # Ks
+            None,  # image_width
+            None,  # image_height
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # sparse_grad
         )
 
 
