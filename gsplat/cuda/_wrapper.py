@@ -115,6 +115,7 @@ def _ensure_autograd_registrations() -> None:
     _register_autograd(RegisterProjectionEWA3DGSPacked)
     _register_autograd(RegisterProjection2DGSFused)
     _register_autograd(RegisterProjection2DGSPacked)
+    _register_autograd(RegisterRasterizeToPixels3DGS)
     _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
@@ -1325,7 +1326,7 @@ def rasterize_to_pixels(
     if masks is not None:
         masks = masks.contiguous()
 
-    render_colors, render_alphas, means2d_absgrad = _make_lazy_cuda_func(
+    render_colors, render_alphas, means2d_absgrad, _last_ids = _make_lazy_cuda_func(
         "rasterize_to_pixels_3dgs"
     )(
         means2d.contiguous(),
@@ -1485,6 +1486,116 @@ def rasterize_top_contributing_gaussian_ids(
         tile_size,
         num_depth_samples,
     )
+
+
+class RegisterRasterizeToPixels3DGS:
+    """Python autograd hooks for the gsplat::rasterize_to_pixels_3dgs op."""
+
+    base = "rasterize_to_pixels_3dgs"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            _packed,
+            absgrad,
+        ) = inputs
+        _render_colors, render_alphas, means2d_absgrad, last_ids = output
+        # last_ids and the absgrad holder are forward-internal; the backward fills the
+        # holder in place (it must not be tracked by autograd).
+        ctx.mark_non_differentiable(last_ids, means2d_absgrad)
+        ctx.width = image_width
+        ctx.height = image_height
+        ctx.tile_size = tile_size
+        ctx.absgrad = absgrad
+        ctx.save_for_backward(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            means2d_absgrad,
+        )
+
+    @classmethod
+    def backward(
+        cls, ctx, v_render_colors, v_render_alphas, v_means2d_absgrad, v_last_ids
+    ):
+        (
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            means2d_absgrad,
+        ) = ctx.saved_tensors
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+        ) = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            ctx.width,
+            ctx.height,
+            ctx.tile_size,
+            ctx.absgrad,
+            _dense_contiguous(v_render_colors),
+            _dense_contiguous(v_render_alphas),
+            ctx.needs_input_grad[
+                4
+            ],  # compute_v_backgrounds (backgrounds is input index 4)
+        )
+        # The abs gradient is not a returned input grad; surface it by filling the
+        # saved means2d.absgrad holder in place.
+        if ctx.absgrad and v_means2d_abs is not None:
+            means2d_absgrad.copy_(v_means2d_abs)
+        return (
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            None,  # masks
+            None,  # image_width
+            None,  # image_height
+            None,  # tile_size
+            None,  # isect_offsets
+            None,  # flatten_ids
+            None,  # packed
+            None,  # absgrad
+        )
 
 
 def rasterize_to_pixels_eval3d(

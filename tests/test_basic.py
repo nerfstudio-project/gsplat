@@ -6859,9 +6859,10 @@ def test_backward_high_opacity_no_nan(tile_size):
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
     # A masked-out tile takes the forward rasterizer's early-return branch.
-    # The public op allocates its outputs with at::empty, so render_colors and
-    # render_alphas must still be explicitly initialized before returning. The
-    # internal last_ids buffer is intentionally not part of the public schema.
+    # The op allocates its outputs with at::empty, so render_colors and
+    # render_alphas must still be explicitly initialized before returning.
+    # last_ids is the op's 4th output (saved by the Python autograd's
+    # setup_context); the public rasterize_to_pixels_3dgs wrapper drops it.
 
     tile_size = 16
     width = height = tile_size  # single tile
@@ -6881,6 +6882,7 @@ def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
         render_colors,
         render_alphas,
         means2d_absgrad,
+        _last_ids,
     ) = torch.ops.gsplat.rasterize_to_pixels_3dgs(
         means2d,
         conics,
