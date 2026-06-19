@@ -108,6 +108,7 @@ def _ensure_autograd_registrations() -> None:
     global _AUTOGRAD_REGISTRATIONS_DONE
     if _AUTOGRAD_REGISTRATIONS_DONE:
         return
+    _register_autograd(RegisterSphericalHarmonics)
     _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
@@ -461,6 +462,39 @@ def spherical_harmonics(
     return _make_lazy_cuda_func("spherical_harmonics")(
         degrees_to_use, dirs.contiguous(), coeffs.contiguous(), masks
     )
+
+
+class RegisterSphericalHarmonics:
+    """Python autograd hooks for the gsplat::spherical_harmonics op."""
+
+    base = "spherical_harmonics"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        degrees_to_use, dirs, coeffs, masks = inputs
+        ctx.degrees_to_use = degrees_to_use
+        # save_for_backward round-trips None as None, so the optional masks save directly.
+        ctx.save_for_backward(dirs, coeffs, masks)
+
+    @classmethod
+    def backward(cls, ctx, v_colors: Tensor):
+        dirs, coeffs, masks = ctx.saved_tensors
+        # dirs is forward input index 1; its gradient is wanted only when requested.
+        compute_v_dirs = ctx.needs_input_grad[1]
+        v_coeffs, v_dirs = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            ctx.degrees_to_use,
+            dirs,
+            coeffs,
+            masks,
+            _dense_contiguous(v_colors),
+            compute_v_dirs,
+        )
+        return (
+            None,  # degrees_to_use
+            v_dirs,
+            v_coeffs,
+            None,  # masks
+        )
 
 
 def quat_scale_to_covar_preci(

@@ -46,7 +46,6 @@ void register_rendering_cuda_impl(torch::Library &m);
 void register_rendering_autograd_cuda_impl(torch::Library &m);
 void register_relocation_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_cuda_impl(torch::Library &m);
-void register_spherical_harmonics_autograd_cuda_impl(torch::Library &m);
 
 } // namespace gsplat
 
@@ -948,6 +947,7 @@ TORCH_LIBRARY(gsplat, m) {
 #endif
 
     m.def("spherical_harmonics(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks) -> Tensor");
+    m.def("spherical_harmonics_bwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks, Tensor v_colors, bool compute_v_dirs) -> (Tensor, Tensor?)");
 
     m.def("intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? conics, Tensor? opacities, Tensor? image_ids, Tensor? gaussian_ids, int? n_images, int tile_size, int tile_width, int tile_height, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
     m.def("intersect_offset(Tensor isect_ids, int I, int tile_width, int tile_height) -> Tensor");
@@ -1044,7 +1044,6 @@ TORCH_LIBRARY_IMPL(gsplat, AutogradCUDA, m) {
 #if GSPLAT_BUILD_3DGS
     gsplat::register_quat_scale_to_covar_autograd_cuda_impl(m);
 #endif
-    gsplat::register_spherical_harmonics_autograd_cuda_impl(m);
     gsplat::register_projection_autograd_cuda_impl(m);
     gsplat::register_rasterization_autograd_cuda_impl(m);
     gsplat::register_rendering_autograd_cuda_impl(m);

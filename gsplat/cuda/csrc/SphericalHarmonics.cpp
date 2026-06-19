@@ -92,17 +92,33 @@ struct SphericalHarmonicsFwdResult {
 };
 template <> struct TorchArgDef<SphericalHarmonicsFwdResult> {
     static auto to(const SphericalHarmonicsFwdResult &r) { return to_torch_args(r.colors); }
+    template <class TT>
+    static SphericalHarmonicsFwdResult from(TT &&t) {
+        return {.colors = t};
+    }
 };
 
 struct SphericalHarmonicsBwdResult {
     at::Tensor v_coeffs;
-    at::Tensor v_dirs;
+    at::optional<at::Tensor> v_dirs;
+};
+template <> struct TorchArgDef<SphericalHarmonicsBwdResult> {
+    static auto to(const SphericalHarmonicsBwdResult &r) {
+        return to_torch_args(r.v_coeffs, r.v_dirs);
+    }
 };
 
 // Gradients of the differentiable forward outputs.
 struct SphericalHarmonicsGrad {
     static constexpr bool is_grad_bundle = true;
     at::Tensor colors; // [..., N, D]
+};
+template <> struct TorchArgDef<SphericalHarmonicsGrad> {
+    static auto to(const SphericalHarmonicsGrad &g) { return to_torch_args(g.colors); }
+    template <class TT>
+    static SphericalHarmonicsGrad from(TT &&t) {
+        return {.colors = t};
+    }
 };
 
 SphericalHarmonicsFwdResult spherical_harmonics_fwd(
@@ -127,16 +143,22 @@ SphericalHarmonicsFwdResult spherical_harmonics_fwd(
     };
 }
 
+// Full backward for spherical_harmonics.
+// `compute_v_dirs` selects whether to compute the direction gradient. It is an
+// explicit argument rather than something inferred from a tensor's
+// requires_grad, so this functional op's behavior follows only from its inputs.
 SphericalHarmonicsBwdResult spherical_harmonics_bwd(
     int64_t degrees_to_use,
     const at::Tensor &dirs,                // [..., N, 3]
     const at::Tensor &coeffs,              // [N, K, D]
     const at::optional<at::Tensor> &masks, // [..., N]
-    const SphericalHarmonicsGrad &grad
+    const SphericalHarmonicsGrad &grad,
+    bool compute_v_dirs
 ) {
     DEVICE_GUARD(dirs);
     check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
     TORCH_INTERNAL_ASSERT(grad.colors.defined());
+    CHECK_DENSE(grad.colors);
     CHECK_INPUT(grad.colors);
     TORCH_CHECK(
         grad.colors.size(-1) == coeffs.size(-1),
@@ -146,9 +168,6 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
         coeffs.size(-1),
         ")"
     );
-
-    // dirs gradients are only computed when the saved dirs tensor requires them.
-    const bool compute_v_dirs = dirs.requires_grad();
 
     // Always accumulate v_coeffs in fp32 to avoid precision loss when multiple
     // (batch, gaussian) elements atomic-add into the same slot. For fp32
@@ -167,7 +186,7 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
         masks,
         grad.colors,
         v_coeffs_accum,
-        v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
+        as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_coeffs = (coeffs.scalar_type() == at::kFloat)
@@ -175,100 +194,26 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
         : v_coeffs_accum.to(coeffs.scalar_type());
     return SphericalHarmonicsBwdResult{
         .v_coeffs = v_coeffs,
-        .v_dirs = v_dirs,
+        .v_dirs = as_optional_tensor(v_dirs),
     };
 }
 
-namespace {
-
-class SphericalHarmonicsAutograd
-    : public torch::autograd::Function<SphericalHarmonicsAutograd> {
-public:
-    // Forward-input positions; COUNT sizes the returned grad list.
-    struct FwdInput {
-        enum {
-            DEGREES_TO_USE,
-            DIRS, COEFFS, MASKS,
-            COUNT,
-        };
-    };
-
-    // Forward-output positions, in forward()'s return order.
-    struct FwdOutput {
-        enum { COLORS, COUNT };
-    };
-
-    static torch::autograd::variable_list forward(
-        torch::autograd::AutogradContext *ctx,
-        int64_t degrees_to_use,
-        const at::Tensor &dirs, const at::Tensor &coeffs,
-        const at::optional<at::Tensor> &masks
-    ) {
-        static_assert(
-            FwdInput::COUNT == fwd_input_count<&forward>(),
-            "FwdInput must have one enumerator per forward input"
-        );
-
-        // --- Run forward --------------------------------------------------
-        SphericalHarmonicsFwdResult outputs = spherical_harmonics_fwd(
-            degrees_to_use, dirs, coeffs, masks
-        );
-
-        // --- Save state for backward --------------------------------------
-        ctx_save<&spherical_harmonics_bwd>(
-            ctx, degrees_to_use, dirs, coeffs, masks
-        );
-
-        torch::autograd::variable_list out(FwdOutput::COUNT);
-        out[FwdOutput::COLORS] = outputs.colors;
-        return out;
-    }
-
-    static torch::autograd::variable_list backward(
-        torch::autograd::AutogradContext *ctx,
-        torch::autograd::variable_list grad_outputs
-    ) {
-        SphericalHarmonicsGrad grad{
-            .colors = grad_outputs[FwdOutput::COLORS].contiguous(),
-        };
-        SphericalHarmonicsBwdResult g = apply_bwd<&spherical_harmonics_bwd>(ctx, grad);
-
-        torch::autograd::variable_list grads(FwdInput::COUNT);
-        grads[FwdInput::DIRS]   = g.v_dirs;
-        grads[FwdInput::COEFFS] = g.v_coeffs;
-        return grads;
-    }
-
-    // Forwards to apply() and unpacks the single color output.
-    static at::Tensor call(
-        int64_t degrees_to_use,
-        const at::Tensor &dirs, const at::Tensor &coeffs,
-        const at::optional<at::Tensor> &masks
-    ) {
-        torch::autograd::variable_list outputs =
-            apply(degrees_to_use, dirs, coeffs, masks);
-        return outputs[FwdOutput::COLORS];
-    }
-};
-
-} // namespace
-
+// The C++ autograd operator. Dispatches through the registered
+// `gsplat::spherical_harmonics` op so the Python-side register_autograd kernel
+// makes it differentiable.
 at::Tensor spherical_harmonics(
     int64_t degrees_to_use,
     const at::Tensor &dirs, const at::Tensor &coeffs,
     const at::optional<at::Tensor> &masks
 ) {
-    // No fwd-only guard here: the custom forward is light, and apply() already
-    // avoids recording a backward node when autograd is inactive.
-    return SphericalHarmonicsAutograd::call(degrees_to_use, dirs, coeffs, masks);
+    return call_torch_op<&spherical_harmonics_fwd>(
+        "gsplat::spherical_harmonics", degrees_to_use, dirs, coeffs, masks
+    ).colors;
 }
 
 void register_spherical_harmonics_cuda_impl(torch::Library &m) {
     m.impl("spherical_harmonics", to_torch_op<&spherical_harmonics_fwd>);
-}
-
-void register_spherical_harmonics_autograd_cuda_impl(torch::Library &m) {
-    m.impl("spherical_harmonics", to_torch_op<&spherical_harmonics>);
+    m.impl("spherical_harmonics_bwd", to_torch_op<&spherical_harmonics_bwd>);
 }
 
 } // namespace gsplat
