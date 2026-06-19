@@ -104,7 +104,6 @@ template <> struct TorchArgDef<ProjectionEWASimpleFwdResult> {
     static auto to(const ProjectionEWASimpleFwdResult &r) { return to_torch_args(r.means2d, r.covars2d); }
 };
 
-using ProjectionEWASimpleResult = ProjectionEWASimpleFwdResult;
 
 ProjectionEWASimpleFwdResult projection_ewa_simple_fwd(
     const at::Tensor &means,  // [..., C, N, 3]
@@ -166,12 +165,27 @@ struct ProjectionEWASimpleBwdResult {
     at::Tensor v_means;
     at::Tensor v_covars;
 };
+template <> struct TorchArgDef<ProjectionEWASimpleBwdResult> {
+    static auto to(const ProjectionEWASimpleBwdResult &r) {
+        return to_torch_args(r.v_means, r.v_covars);
+    }
+};
 
 // Gradients of the differentiable forward outputs.
 struct ProjectionEWASimpleGrad {
     static constexpr bool is_grad_bundle = true;
     at::Tensor means2d;  // [..., C, N, 2]
     at::Tensor covars2d; // [..., C, N, 2, 2]
+};
+template <> struct TorchArgDef<ProjectionEWASimpleGrad> {
+    static auto to(const ProjectionEWASimpleGrad &g) { return to_torch_args(g.means2d, g.covars2d); }
+    template <class TT>
+    static ProjectionEWASimpleGrad from(TT &&t) {
+        return {
+            .means2d = std::get<0>(t),
+            .covars2d = std::get<1>(t),
+        };
+    }
 };
 
 // Full backward for projection_ewa_simple.
@@ -188,7 +202,9 @@ ProjectionEWASimpleBwdResult projection_ewa_simple_bwd(
     CHECK_INPUT(means);
     CHECK_INPUT(covars);
     CHECK_INPUT(Ks);
+    CHECK_DENSE(grad.means2d);
     CHECK_INPUT(grad.means2d);
+    CHECK_DENSE(grad.covars2d);
     CHECK_INPUT(grad.covars2d);
 
     auto opt = means.options();
@@ -222,94 +238,6 @@ ProjectionEWASimpleBwdResult projection_ewa_simple_bwd(
         .v_means = v_means,
         .v_covars = v_covars,
     };
-}
-
-namespace {
-
-class ProjectionEWASimpleAutograd
-    : public torch::autograd::Function<ProjectionEWASimpleAutograd> {
-public:
-    // Forward-input positions; COUNT sizes the returned grad list.
-    struct FwdInput {
-        enum {
-            MEANS, COVARS, KS,
-            WIDTH, HEIGHT, CAMERA_MODEL,
-            COUNT,
-        };
-    };
-
-    // Forward-output positions, in forward()'s return order.
-    struct FwdOutput {
-        enum { MEANS2D, COVARS2D, COUNT };
-    };
-
-    static torch::autograd::variable_list forward(
-        torch::autograd::AutogradContext *ctx,
-        const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
-        int64_t width, int64_t height, CameraModelType camera_model
-    ) {
-        static_assert(
-            FwdInput::COUNT == fwd_input_count<&forward>(),
-            "FwdInput must have one enumerator per forward input"
-        );
-
-        // --- Run forward --------------------------------------------------
-        ProjectionEWASimpleFwdResult outputs = projection_ewa_simple_fwd(
-            means, covars, Ks, width, height, camera_model
-        );
-
-        // --- Save state for backward --------------------------------------
-        ctx_save<&projection_ewa_simple_bwd>(
-            ctx, means, covars, Ks, width, height, camera_model
-        );
-
-        torch::autograd::variable_list out(FwdOutput::COUNT);
-        out[FwdOutput::MEANS2D]  = outputs.means2d;
-        out[FwdOutput::COVARS2D] = outputs.covars2d;
-        return out;
-    }
-
-    static torch::autograd::variable_list backward(
-        torch::autograd::AutogradContext *ctx,
-        torch::autograd::variable_list grad_outputs
-    ) {
-        ProjectionEWASimpleGrad grad{
-            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
-            .covars2d = grad_outputs[FwdOutput::COVARS2D].contiguous(),
-        };
-        ProjectionEWASimpleBwdResult g = apply_bwd<&projection_ewa_simple_bwd>(ctx, grad);
-
-        torch::autograd::variable_list grads(FwdInput::COUNT);
-        grads[FwdInput::MEANS]  = g.v_means;
-        grads[FwdInput::COVARS] = g.v_covars;
-        return grads;
-    }
-
-    // Forwards to apply() and packs the variable_list into the typed result.
-    static ProjectionEWASimpleResult call(
-        const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
-        int64_t width, int64_t height, CameraModelType camera_model
-    ) {
-        torch::autograd::variable_list outputs =
-            apply(means, covars, Ks, width, height, camera_model);
-        return {
-            .means2d = outputs[FwdOutput::MEANS2D],
-            .covars2d = outputs[FwdOutput::COVARS2D],
-        };
-    }
-};
-
-} // namespace
-
-ProjectionEWASimpleResult projection_ewa_simple(
-    const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
-    int64_t width, int64_t height, CameraModelType camera_model
-) {
-    // No fwd-only guard here: the custom forward is light, and apply() already
-    // avoids recording a backward node when autograd is inactive.
-    return ProjectionEWASimpleAutograd::call(
-        means, covars, Ks, width, height, camera_model
-    );
 }
 
 namespace {
@@ -2330,6 +2258,7 @@ projection_ut_3dgs_fused(
 void register_projection_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_3DGS
     m.impl("projection_ewa_simple", to_torch_op<&projection_ewa_simple_fwd>);
+    m.impl("projection_ewa_simple_bwd", to_torch_op<&projection_ewa_simple_bwd>);
     m.impl("projection_ewa_3dgs_fused", to_torch_op<&projection_ewa_3dgs_fused_fwd>);
     m.impl("projection_ewa_3dgs_packed", to_torch_op<&projection_ewa_3dgs_packed_fwd>);
 #endif
@@ -2344,7 +2273,6 @@ void register_projection_cuda_impl(torch::Library &m) {
 
 void register_projection_autograd_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_3DGS
-    m.impl("projection_ewa_simple", to_torch_op<&projection_ewa_simple>);
     m.impl("projection_ewa_3dgs_fused", to_torch_op<&projection_ewa_3dgs_fused>);
     m.impl("projection_ewa_3dgs_packed", to_torch_op<&projection_ewa_3dgs_packed>);
 #endif
