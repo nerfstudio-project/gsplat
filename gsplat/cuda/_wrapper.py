@@ -116,6 +116,7 @@ def _ensure_autograd_registrations() -> None:
     _register_autograd(RegisterProjection2DGSFused)
     _register_autograd(RegisterProjection2DGSPacked)
     _register_autograd(RegisterRasterizeToPixels3DGS)
+    _register_autograd(RegisterRasterizeToPixels2DGS)
     _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
@@ -2307,6 +2308,8 @@ def rasterize_to_pixels_2dgs(
         render_distort,
         render_median,
         means2d_absgrad,
+        _last_ids,
+        _median_ids,
     ) = _make_lazy_cuda_func("rasterize_to_pixels_2dgs")(
         means2d.contiguous(),
         ray_transforms.contiguous(),
@@ -2329,6 +2332,155 @@ def rasterize_to_pixels_2dgs(
         means2d.absgrad = means2d_absgrad
 
     return render_colors, render_alphas, render_normals, render_distort, render_median
+
+
+class RegisterRasterizeToPixels2DGS:
+    """Python autograd hooks for the gsplat::rasterize_to_pixels_2dgs op."""
+
+    base = "rasterize_to_pixels_2dgs"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means2d,
+            ray_transforms,
+            colors,
+            opacities,
+            normals,
+            densify,
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            tile_offsets,
+            flatten_ids,
+            _packed,
+            absgrad,
+            _distloss,
+        ) = inputs
+        (
+            render_colors,
+            render_alphas,
+            _render_normals,
+            _render_distort,
+            _render_median,
+            means2d_absgrad,
+            last_ids,
+            median_ids,
+        ) = output
+        # last_ids / median_ids and the absgrad holder are forward-internal; the
+        # backward fills the holder in place (it must not be tracked by autograd).
+        ctx.mark_non_differentiable(last_ids, median_ids, means2d_absgrad)
+        ctx.width = image_width
+        ctx.height = image_height
+        ctx.tile_size = tile_size
+        ctx.absgrad = absgrad
+        ctx.save_for_backward(
+            means2d,
+            ray_transforms,
+            colors,
+            opacities,
+            normals,
+            densify,
+            backgrounds,
+            masks,
+            tile_offsets,
+            flatten_ids,
+            render_colors,
+            render_alphas,
+            last_ids,
+            median_ids,
+            means2d_absgrad,
+        )
+
+    @classmethod
+    def backward(
+        cls,
+        ctx,
+        v_render_colors,
+        v_render_alphas,
+        v_render_normals,
+        v_render_distort,
+        v_render_median,
+        v_means2d_absgrad,
+        v_last_ids,
+        v_median_ids,
+    ):
+        (
+            means2d,
+            ray_transforms,
+            colors,
+            opacities,
+            normals,
+            densify,
+            backgrounds,
+            masks,
+            tile_offsets,
+            flatten_ids,
+            render_colors,
+            render_alphas,
+            last_ids,
+            median_ids,
+            means2d_absgrad,
+        ) = ctx.saved_tensors
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_ray_transforms,
+            v_colors,
+            v_opacities,
+            v_normals,
+            v_densify,
+            v_backgrounds,
+        ) = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            means2d,
+            ray_transforms,
+            colors,
+            opacities,
+            normals,
+            densify,
+            backgrounds,
+            masks,
+            tile_offsets,
+            flatten_ids,
+            render_colors,
+            render_alphas,
+            last_ids,
+            median_ids,
+            ctx.width,
+            ctx.height,
+            ctx.tile_size,
+            ctx.absgrad,
+            _dense_contiguous(v_render_colors),
+            _dense_contiguous(v_render_alphas),
+            _dense_contiguous(v_render_normals),
+            _dense_contiguous(v_render_distort),
+            _dense_contiguous(v_render_median),
+            ctx.needs_input_grad[
+                6
+            ],  # compute_v_backgrounds (backgrounds is input index 6)
+        )
+        if ctx.absgrad and v_means2d_abs is not None:
+            means2d_absgrad.copy_(v_means2d_abs)
+        return (
+            v_means2d,
+            v_ray_transforms,
+            v_colors,
+            v_opacities,
+            v_normals,
+            v_densify,
+            v_backgrounds,
+            None,  # masks
+            None,  # image_width
+            None,  # image_height
+            None,  # tile_size
+            None,  # tile_offsets
+            None,  # flatten_ids
+            None,  # packed
+            None,  # absgrad
+            None,  # distloss
+        )
 
 
 @torch.no_grad()
