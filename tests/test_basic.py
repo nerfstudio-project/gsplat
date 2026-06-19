@@ -5390,6 +5390,57 @@ def test_rasterization_cpp_classic_backward_matches_python_reference(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("packed", [True, False])
+def test_rasterization_cpp_classic_sh_backward_matches_python_reference(packed: bool):
+    from gsplat.rendering import _rasterization
+
+    torch.manual_seed(18)
+    scene = _make_cpp_classic_rasterization_scene(use_color_sh=True)
+    # The Python reference differentiates viewdirs through inverse(viewmats),
+    # while C++ uses the rigid-camera formula -R^T t. Compare means to exercise
+    # the SH direction-gradient path without using a non-equivalent viewmats VJP.
+    grad_names = ("means", "colors")
+    _set_rasterization_scene_requires_grad(scene, grad_names)
+
+    public_colors, public_alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        rasterize_mode="classic",
+        packed=packed,
+        channel_chunk=3,
+    )
+    v_colors, v_alphas = _classic_rasterization_loss_terms(public_colors, public_alphas)
+    public_inputs = tuple(scene[name] for name in grad_names)
+    public_grads = torch.autograd.grad(
+        (public_colors * v_colors).sum() + (public_alphas * v_alphas).sum(),
+        public_inputs,
+    )
+
+    ref_colors, ref_alphas, _ = _rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        rasterize_mode="classic",
+        channel_chunk=3,
+    )
+    ref_inputs = tuple(scene[name] for name in grad_names)
+    ref_grads = torch.autograd.grad(
+        (ref_colors * v_colors).sum() + (ref_alphas * v_alphas).sum(),
+        ref_inputs,
+    )
+
+    for name, actual, expected in zip(grad_names, public_grads, ref_grads):
+        assert expected.abs().sum() > 0, f"{name}: reference gradient is zero"
+        _assert_public_rasterization_grad_close(actual, expected, name=name)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_cpp_classic_sparse_grad_layout():
     torch.manual_seed(19)
     scene = _make_cpp_classic_rasterization_scene(n_cameras=1)
