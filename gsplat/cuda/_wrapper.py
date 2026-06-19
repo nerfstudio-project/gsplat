@@ -111,6 +111,7 @@ def _ensure_autograd_registrations() -> None:
     _register_autograd(RegisterSphericalHarmonics)
     _register_autograd(RegisterQuatScaleToCovarPreci)
     _register_autograd(RegisterProjectionEWASimple)
+    _register_autograd(RegisterProjectionEWA3DGSFused)
     _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
@@ -805,6 +806,105 @@ def fully_fused_projection(
             radius_clip,
             calc_compensations,
             camera_model_type,
+        )
+
+
+class RegisterProjectionEWA3DGSFused:
+    """Python autograd hooks for the gsplat::projection_ewa_3dgs_fused op."""
+
+    base = "projection_ewa_3dgs_fused"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means,
+            covars,
+            quats,
+            scales,
+            _opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            _near_plane,
+            _far_plane,
+            _radius_clip,
+            _calc_compensations,
+            camera_model,
+        ) = inputs
+        radii, _means2d, _depths, conics, compensations = output
+        ctx.width = width
+        ctx.height = height
+        ctx.eps2d = eps2d
+        ctx.camera_model = camera_model
+        # covars / quats / scales / compensations may be None; save_for_backward
+        # round-trips None as None.
+        ctx.save_for_backward(
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            conics,
+            compensations,
+        )
+
+    @classmethod
+    def backward(cls, ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+        (
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            conics,
+            compensations,
+        ) = ctx.saved_tensors
+        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            f"{cls.base}_bwd"
+        )(
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            ctx.width,
+            ctx.height,
+            ctx.eps2d,
+            ctx.camera_model,
+            radii,
+            conics,
+            compensations,
+            _dense_contiguous(v_means2d),
+            _dense_contiguous(v_depths),
+            _dense_contiguous(v_conics),
+            _dense_contiguous(v_compensations),
+            ctx.needs_input_grad[
+                5
+            ],  # viewmats_requires_grad (viewmats is input index 5)
+        )
+        return (
+            v_means,
+            v_covars,
+            v_quats,
+            v_scales,
+            None,  # opacities
+            v_viewmats,
+            None,  # Ks
+            None,  # image_width
+            None,  # image_height
+            None,  # eps2d
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # calc_compensations
+            None,  # camera_model
         )
 
 

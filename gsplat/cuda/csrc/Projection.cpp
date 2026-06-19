@@ -152,6 +152,16 @@ template <> struct TorchArgDef<ProjectionEWA3DGSFusedFwdResult> {
     static auto to(const ProjectionEWA3DGSFusedFwdResult &r) { return to_torch_args(
         r.radii, r.means2d, r.depths, r.conics, r.compensations
     ); }
+    template <class TT>
+    static ProjectionEWA3DGSFusedFwdResult from(TT &&t) {
+        return {
+            .radii = std::get<0>(t),
+            .means2d = std::get<1>(t),
+            .depths = std::get<2>(t),
+            .conics = std::get<3>(t),
+            .compensations = std::get<4>(t),
+        };
+    }
 };
 
 template <> struct TorchArgDef<ProjectionEWA3DGSPackedFwdResult> {
@@ -440,6 +450,11 @@ struct ProjectionEWA3DGSFusedBwdResult {
     at::optional<at::Tensor> v_scales;
     at::optional<at::Tensor> v_viewmats;
 };
+template <> struct TorchArgDef<ProjectionEWA3DGSFusedBwdResult> {
+    static auto to(const ProjectionEWA3DGSFusedBwdResult &r) {
+        return to_torch_args(r.v_means, r.v_covars, r.v_quats, r.v_scales, r.v_viewmats);
+    }
+};
 
 // Gradients of the differentiable forward outputs.
 struct ProjectionEWA3DGSFusedGrad {
@@ -449,8 +464,25 @@ struct ProjectionEWA3DGSFusedGrad {
     at::Tensor conics;  // [..., C, N, 3]
     at::optional<at::Tensor> compensations; // [..., C, N]
 };
+template <> struct TorchArgDef<ProjectionEWA3DGSFusedGrad> {
+    static auto to(const ProjectionEWA3DGSFusedGrad &g) {
+        return to_torch_args(g.means2d, g.depths, g.conics, g.compensations);
+    }
+    template <class TT>
+    static ProjectionEWA3DGSFusedGrad from(TT &&t) {
+        return {
+            .means2d = std::get<0>(t),
+            .depths = std::get<1>(t),
+            .conics = std::get<2>(t),
+            .compensations = std::get<3>(t),
+        };
+    }
+};
 
 // Full backward for projection_ewa_3dgs_fused.
+// `viewmats_requires_grad` selects whether to compute the viewmats gradient. It
+// is an explicit argument rather than something inferred from a tensor's
+// requires_grad, so this functional op's behavior follows only from its inputs.
 ProjectionEWA3DGSFusedBwdResult
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
@@ -468,7 +500,8 @@ projection_ewa_3dgs_fused_bwd(
     const at::Tensor &radii,                       // [..., C, N, 2]
     const at::Tensor &conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> &compensations, // [..., C, N] optional
-    const ProjectionEWA3DGSFusedGrad &grad
+    const ProjectionEWA3DGSFusedGrad &grad,
+    bool viewmats_requires_grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -483,8 +516,11 @@ projection_ewa_3dgs_fused_bwd(
     CHECK_INPUT(Ks);
     CHECK_INPUT(radii);
     CHECK_INPUT(conics);
+    CHECK_DENSE(grad.means2d);
     CHECK_INPUT(grad.means2d);
+    CHECK_DENSE(grad.depths);
     CHECK_INPUT(grad.depths);
+    CHECK_DENSE(grad.conics);
     CHECK_INPUT(grad.conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
@@ -494,6 +530,7 @@ projection_ewa_3dgs_fused_bwd(
     // requested can still receive a zero gradient, which is ignored here.
     at::optional<at::Tensor> compensation_grad;
     if (compensations.has_value() && grad.compensations.has_value()) {
+        CHECK_DENSE(grad.compensations.value());
         CHECK_INPUT(grad.compensations.value());
         compensation_grad = grad.compensations;
     }
@@ -507,7 +544,7 @@ projection_ewa_3dgs_fused_bwd(
         v_scales = at::zeros_like(scales.value());
     }
     at::Tensor v_viewmats;
-    if (viewmats.requires_grad()) {
+    if (viewmats_requires_grad) {
         v_viewmats = at::zeros_like(viewmats);
     }
 
@@ -530,7 +567,7 @@ projection_ewa_3dgs_fused_bwd(
         grad.depths,
         grad.conics,
         compensation_grad,
-        viewmats.requires_grad(),
+        viewmats_requires_grad,
         // outputs
         v_means,
         v_covars,
@@ -548,135 +585,6 @@ projection_ewa_3dgs_fused_bwd(
     };
 }
 
-namespace {
-
-class ProjectionEWA3DGSFusedAutograd
-    : public torch::autograd::Function<ProjectionEWA3DGSFusedAutograd> {
-public:
-    // Forward-input positions; COUNT sizes the returned grad list.
-    struct FwdInput {
-        enum {
-            MEANS, COVARS, QUATS, SCALES, OPACITIES,
-            VIEWMATS, KS,
-            IMAGE_WIDTH, IMAGE_HEIGHT,
-            EPS2D, NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,
-            CALC_COMPENSATIONS, CAMERA_MODEL,
-            COUNT,
-        };
-    };
-
-    // Forward-output positions, in forward()'s return order.
-    struct FwdOutput {
-        enum { RADII, MEANS2D, DEPTHS, CONICS, COMPENSATIONS, COUNT };
-    };
-
-    static torch::autograd::variable_list forward(
-        torch::autograd::AutogradContext *ctx,
-        const at::Tensor &means, const at::optional<at::Tensor> &covars,
-        const at::optional<at::Tensor> &quats,
-        const at::optional<at::Tensor> &scales,
-        const at::optional<at::Tensor> &opacities,
-        const at::Tensor &viewmats, const at::Tensor &Ks,
-        int64_t image_width, int64_t image_height,
-        double eps2d, double near_plane, double far_plane, double radius_clip,
-        bool calc_compensations, CameraModelType camera_model
-    ) {
-        static_assert(
-            FwdInput::COUNT == fwd_input_count<&forward>(),
-            "FwdInput must have one enumerator per forward input"
-        );
-
-        // --- Run forward --------------------------------------------------
-        ProjectionEWA3DGSFusedFwdResult outputs = projection_ewa_3dgs_fused_fwd(
-            means, covars, quats, scales, opacities,
-            viewmats, Ks,
-            image_width, image_height,
-            eps2d, near_plane, far_plane, radius_clip,
-            calc_compensations, camera_model
-        );
-
-        // --- Save state for backward --------------------------------------
-        ctx_save<&projection_ewa_3dgs_fused_bwd>(
-            ctx, means, covars, quats, scales, viewmats, Ks,
-            image_width, image_height, eps2d, camera_model,
-            outputs.radii, outputs.conics, outputs.compensations
-        );
-
-        // --- Normalize optional outputs for autograd ----------------------
-        // C++ custom autograd functions cannot return an undefined Tensor
-        // output. Use a defined, zero-length sentinel for the non-compensation
-        // case; the Python wrapper turns this slot back into None based on the
-        // original calc_compensations flag. The non-differentiable mark makes
-        // its grad arrive undefined in backward, which the bwd reads as "no
-        // compensation gradient".
-        at::Tensor compensations_output = as_tensor(outputs.compensations);
-        if (!compensations_output.defined()) {
-            compensations_output = at::empty({0}, means.options());
-            ctx->mark_non_differentiable({compensations_output});
-        }
-
-        torch::autograd::variable_list out(FwdOutput::COUNT);
-        out[FwdOutput::RADII]         = outputs.radii;
-        out[FwdOutput::MEANS2D]       = outputs.means2d;
-        out[FwdOutput::DEPTHS]        = outputs.depths;
-        out[FwdOutput::CONICS]        = outputs.conics;
-        out[FwdOutput::COMPENSATIONS] = compensations_output;
-        return out;
-    }
-
-    static torch::autograd::variable_list backward(
-        torch::autograd::AutogradContext *ctx,
-        torch::autograd::variable_list grad_outputs
-    ) {
-        ProjectionEWA3DGSFusedGrad grad{
-            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
-            .depths = grad_outputs[FwdOutput::DEPTHS].contiguous(),
-            .conics = grad_outputs[FwdOutput::CONICS].contiguous(),
-            .compensations = contiguous_optional(as_optional_tensor(grad_outputs[FwdOutput::COMPENSATIONS])),
-        };
-        ProjectionEWA3DGSFusedBwdResult g = apply_bwd<&projection_ewa_3dgs_fused_bwd>(ctx, grad);
-
-        torch::autograd::variable_list grads(FwdInput::COUNT);
-        grads[FwdInput::MEANS]    = g.v_means;
-        grads[FwdInput::COVARS]   = as_tensor(g.v_covars);
-        grads[FwdInput::QUATS]    = as_tensor(g.v_quats);
-        grads[FwdInput::SCALES]   = as_tensor(g.v_scales);
-        grads[FwdInput::VIEWMATS] = as_tensor(g.v_viewmats);
-        return grads;
-    }
-
-    // Forwards to apply() and packs the variable_list into the typed result.
-    static ProjectionEWA3DGSFusedResult call(
-        const at::Tensor &means, const at::optional<at::Tensor> &covars,
-        const at::optional<at::Tensor> &quats,
-        const at::optional<at::Tensor> &scales,
-        const at::optional<at::Tensor> &opacities,
-        const at::Tensor &viewmats, const at::Tensor &Ks,
-        int64_t image_width, int64_t image_height,
-        double eps2d, double near_plane, double far_plane, double radius_clip,
-        bool calc_compensations, CameraModelType camera_model
-    ) {
-        torch::autograd::variable_list outputs = apply(
-            means, covars, quats, scales, opacities,
-            viewmats, Ks,
-            image_width, image_height,
-            eps2d, near_plane, far_plane, radius_clip,
-            calc_compensations, camera_model
-        );
-        return {
-            .radii = outputs[FwdOutput::RADII],
-            .means2d = outputs[FwdOutput::MEANS2D],
-            .depths = outputs[FwdOutput::DEPTHS],
-            .conics = outputs[FwdOutput::CONICS],
-            .compensations = as_optional_tensor(
-                calc_compensations ? outputs[FwdOutput::COMPENSATIONS] : at::Tensor{}
-            ),
-        };
-    }
-};
-
-} // namespace
-
 ProjectionEWA3DGSFusedResult projection_ewa_3dgs_fused(
     const at::Tensor &means, const at::optional<at::Tensor> &covars,
     const at::optional<at::Tensor> &quats,
@@ -687,22 +595,12 @@ ProjectionEWA3DGSFusedResult projection_ewa_3dgs_fused(
     double eps2d, double near_plane, double far_plane, double radius_clip,
     bool calc_compensations, CameraModelType camera_model
 ) {
-    const bool use_custom_autograd = needs_custom_autograd(
-        means, covars, quats, scales, opacities, viewmats, Ks
-    );
-    if (!use_custom_autograd) {
-        return projection_ewa_3dgs_fused_fwd(
-            means, covars, quats, scales, opacities,
-            viewmats, Ks,
-            image_width, image_height,
-            eps2d, near_plane, far_plane, radius_clip,
-            calc_compensations, camera_model
-        );
-    }
-
-    return ProjectionEWA3DGSFusedAutograd::call(
-        means, covars, quats, scales, opacities,
-        viewmats, Ks,
+    // Dispatch through the registered op so the Python-side register_autograd
+    // kernel makes it differentiable. Args are passed in the forward op's
+    // parameter order.
+    return call_torch_op<&projection_ewa_3dgs_fused_fwd>(
+        "gsplat::projection_ewa_3dgs_fused",
+        means, covars, quats, scales, opacities, viewmats, Ks,
         image_width, image_height,
         eps2d, near_plane, far_plane, radius_clip,
         calc_compensations, camera_model
@@ -2260,6 +2158,7 @@ void register_projection_cuda_impl(torch::Library &m) {
     m.impl("projection_ewa_simple", to_torch_op<&projection_ewa_simple_fwd>);
     m.impl("projection_ewa_simple_bwd", to_torch_op<&projection_ewa_simple_bwd>);
     m.impl("projection_ewa_3dgs_fused", to_torch_op<&projection_ewa_3dgs_fused_fwd>);
+    m.impl("projection_ewa_3dgs_fused_bwd", to_torch_op<&projection_ewa_3dgs_fused_bwd>);
     m.impl("projection_ewa_3dgs_packed", to_torch_op<&projection_ewa_3dgs_packed_fwd>);
 #endif
 
@@ -2273,7 +2172,6 @@ void register_projection_cuda_impl(torch::Library &m) {
 
 void register_projection_autograd_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_3DGS
-    m.impl("projection_ewa_3dgs_fused", to_torch_op<&projection_ewa_3dgs_fused>);
     m.impl("projection_ewa_3dgs_packed", to_torch_op<&projection_ewa_3dgs_packed>);
 #endif
 #if GSPLAT_BUILD_2DGS
