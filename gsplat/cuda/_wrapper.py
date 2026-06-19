@@ -110,6 +110,7 @@ def _ensure_autograd_registrations() -> None:
         return
     _register_autograd(RegisterSphericalHarmonics)
     _register_autograd(RegisterQuatScaleToCovarPreci)
+    _register_autograd(RegisterProjectionEWASimple)
     _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
@@ -621,6 +622,42 @@ def proj(
     return _make_lazy_cuda_func("projection_ewa_simple")(
         means, covars, Ks, width, height, camera_model_type
     )
+
+
+class RegisterProjectionEWASimple:
+    """Python autograd hooks for the gsplat::projection_ewa_simple op."""
+
+    base = "projection_ewa_simple"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        means, covars, Ks, width, height, camera_model = inputs
+        ctx.width = width
+        ctx.height = height
+        ctx.camera_model = camera_model
+        ctx.save_for_backward(means, covars, Ks)
+
+    @classmethod
+    def backward(cls, ctx, v_means2d, v_covars2d):
+        means, covars, Ks = ctx.saved_tensors
+        v_means, v_covars = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            means,
+            covars,
+            Ks,
+            ctx.width,
+            ctx.height,
+            ctx.camera_model,
+            _dense_contiguous(v_means2d),
+            _dense_contiguous(v_covars2d),
+        )
+        return (
+            v_means,
+            v_covars,
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # camera_model
+        )
 
 
 @trace_function("project-fwd")
