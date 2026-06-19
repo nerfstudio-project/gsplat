@@ -109,6 +109,7 @@ def _ensure_autograd_registrations() -> None:
     if _AUTOGRAD_REGISTRATIONS_DONE:
         return
     _register_autograd(RegisterSphericalHarmonics)
+    _register_autograd(RegisterQuatScaleToCovarPreci)
     _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
@@ -526,6 +527,37 @@ def quat_scale_to_covar_preci(
     return _make_lazy_cuda_func("quat_scale_to_covar_preci")(
         quats, scales, compute_covar, compute_preci, triu
     )
+
+
+class RegisterQuatScaleToCovarPreci:
+    """Python autograd hooks for the gsplat::quat_scale_to_covar_preci op."""
+
+    base = "quat_scale_to_covar_preci"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        quats, scales, _compute_covar, _compute_preci, triu = inputs
+        ctx.triu = triu
+        ctx.save_for_backward(quats, scales)
+
+    @classmethod
+    def backward(cls, ctx, v_covars, v_precis):
+        quats, scales = ctx.saved_tensors
+        # A disabled output has a None grad, which passes through unchanged.
+        v_quats, v_scales = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            quats,
+            scales,
+            ctx.triu,
+            _dense_contiguous(v_covars),
+            _dense_contiguous(v_precis),
+        )
+        return (
+            v_quats,
+            v_scales,
+            None,  # compute_covar
+            None,  # compute_preci
+            None,  # triu
+        )
 
 
 def persp_proj(
