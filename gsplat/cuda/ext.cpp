@@ -37,7 +37,6 @@ void register_gaussian_losses_cuda_impl(torch::Library &m);
 void register_intersect_cuda_impl(torch::Library &m);
 void register_mcmc_perturb_cuda_impl(torch::Library &m);
 void register_projection_cuda_impl(torch::Library &m);
-void register_projection_autograd_cuda_impl(torch::Library &m);
 void register_quat_scale_to_covar_cuda_impl(torch::Library &m);
 void register_rasterization_cuda_impl(torch::Library &m);
 void register_rasterization_autograd_cuda_impl(torch::Library &m);
@@ -980,6 +979,7 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("projection_2dgs_fused_bwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, Tensor radii, Tensor ray_transforms, Tensor v_means2d, Tensor v_depths, Tensor v_ray_transforms, Tensor v_normals, bool viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor?)");
 
     m.def("projection_2dgs_packed(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float near_plane, float far_plane, float radius_clip, bool sparse_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def("projection_2dgs_packed_bwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, bool sparse_grad, Tensor batch_ids, Tensor camera_ids, Tensor gaussian_ids, Tensor ray_transforms, Tensor v_means2d, Tensor v_depths, Tensor v_ray_transforms, Tensor v_normals, bool viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor?)");
 
     m.def("rasterize_to_pixels_2dgs(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor normals, Tensor densify, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids, bool packed, bool absgrad, bool distloss) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
     m.def("rasterize_to_indices_2dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor ray_transforms, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor)");
@@ -1045,7 +1045,6 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
 }
 
 TORCH_LIBRARY_IMPL(gsplat, AutogradCUDA, m) {
-    gsplat::register_projection_autograd_cuda_impl(m);
     gsplat::register_rasterization_autograd_cuda_impl(m);
     gsplat::register_rendering_autograd_cuda_impl(m);
 }
