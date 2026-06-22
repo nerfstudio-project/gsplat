@@ -108,7 +108,7 @@ __global__ void distort_camera_rays_kernel(
     glm::fvec3 ray(rays[idx * 3 + 0], rays[idx * 3 + 1], rays[idx * 3 + 2]);
 
     glm::fvec3 distorted = inverse
-        ? BivariateWindshieldModel::undistort_camera_ray(
+        ? BivariateWindshieldModel::distort_camera_ray(
             ray, params.horizontal_poly_inverse.data(), params.vertical_poly_inverse.data())
         : BivariateWindshieldModel::distort_camera_ray(
             ray, params.horizontal_poly.data(), params.vertical_poly.data());
