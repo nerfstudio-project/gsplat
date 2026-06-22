@@ -451,9 +451,11 @@ void launch_spherical_harmonics_fwd_kernel(
                     N,
                     K,
                     degrees_to_use,
-                    reinterpret_cast<vec3 *>(dirs.data_ptr<scalar_t>()),
-                    coeffs.data_ptr<scalar_t>(),
-                    masks.has_value() ? masks.value().data_ptr<bool>()
+                    reinterpret_cast<const vec3 *>(
+                        dirs.const_data_ptr<scalar_t>()
+                    ),
+                    coeffs.const_data_ptr<scalar_t>(),
+                    masks.has_value() ? masks.value().const_data_ptr<bool>()
                                       : nullptr,
                     colors.data_ptr<scalar_t>()
                 );
@@ -538,11 +540,13 @@ void launch_spherical_harmonics_bwd_kernel(
                     N,
                     K,
                     degrees_to_use,
-                    reinterpret_cast<vec3 *>(dirs.data_ptr<scalar_t>()),
-                    coeffs.data_ptr<scalar_t>(),
-                    masks.has_value() ? masks.value().data_ptr<bool>()
+                    reinterpret_cast<const vec3 *>(
+                        dirs.const_data_ptr<scalar_t>()
+                    ),
+                    coeffs.const_data_ptr<scalar_t>(),
+                    masks.has_value() ? masks.value().const_data_ptr<bool>()
                                       : nullptr,
-                    v_colors.data_ptr<scalar_t>(),
+                    v_colors.const_data_ptr<scalar_t>(),
                     v_coeffs.data_ptr<scalar_t>(),
                     v_dirs.has_value() ? v_dirs.value().data_ptr<scalar_t>()
                                        : nullptr

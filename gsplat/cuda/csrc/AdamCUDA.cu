@@ -99,10 +99,11 @@ void launch_adam_kernel(
                 N,
                 D,
                 param.data_ptr<scalar_t>(),
-                param_grad.data_ptr<scalar_t>(),
+                param_grad.const_data_ptr<scalar_t>(),
                 exp_avg.data_ptr<scalar_t>(),
                 exp_avg_sq.data_ptr<scalar_t>(),
-                valid.has_value() ? valid.value().data_ptr<bool>() : nullptr,
+                valid.has_value() ? valid.value().const_data_ptr<bool>()
+                                  : nullptr,
                 lr,
                 b1,
                 b2,

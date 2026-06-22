@@ -136,8 +136,8 @@ void launch_quat_scale_to_covar_preci_fwd_kernel(
                    shmem_size,
                    at::cuda::getCurrentCUDAStream()>>>(
                     N,
-                    quats.data_ptr<scalar_t>(),
-                    scales.data_ptr<scalar_t>(),
+                    quats.const_data_ptr<scalar_t>(),
+                    scales.const_data_ptr<scalar_t>(),
                     triu,
                     covars.has_value() ? covars.value().data_ptr<scalar_t>()
                                        : nullptr,
@@ -273,12 +273,12 @@ void launch_quat_scale_to_covar_preci_bwd_kernel(
                    shmem_size,
                    at::cuda::getCurrentCUDAStream()>>>(
                     N,
-                    quats.data_ptr<scalar_t>(),
-                    scales.data_ptr<scalar_t>(),
+                    quats.const_data_ptr<scalar_t>(),
+                    scales.const_data_ptr<scalar_t>(),
                     triu,
-                    v_covars.has_value() ? v_covars.value().data_ptr<scalar_t>()
+                    v_covars.has_value() ? v_covars.value().const_data_ptr<scalar_t>()
                                          : nullptr,
-                    v_precis.has_value() ? v_precis.value().data_ptr<scalar_t>()
+                    v_precis.has_value() ? v_precis.value().const_data_ptr<scalar_t>()
                                          : nullptr,
                     v_quats.data_ptr<scalar_t>(),
                     v_scales.data_ptr<scalar_t>()

@@ -383,13 +383,15 @@ void launch_projection_ut_3dgs_fused_kernel(
             B,
             C,
             N,
-            means.data_ptr<float>(),
-            quats.data_ptr<float>(),
-            scales.data_ptr<float>(),
-            opacities.has_value() ? opacities.value().data_ptr<float>() : nullptr,
-            viewmats0.data_ptr<float>(),
-            viewmats1.has_value() ? viewmats1.value().data_ptr<float>() : nullptr,
-            Ks.data_ptr<float>(),
+            means.const_data_ptr<float>(),
+            quats.const_data_ptr<float>(),
+            scales.const_data_ptr<float>(),
+            opacities.has_value() ? opacities.value().const_data_ptr<float>()
+                                  : nullptr,
+            viewmats0.const_data_ptr<float>(),
+            viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
+                                  : nullptr,
+            Ks.const_data_ptr<float>(),
             image_width,
             image_height,
             eps2d,
@@ -402,13 +404,13 @@ void launch_projection_ut_3dgs_fused_kernel(
             *ut_params,
             rs_type,
             radial_coeffs.has_value()
-                ? radial_coeffs.value().data_ptr<float>()
+                ? radial_coeffs.value().const_data_ptr<float>()
                 : nullptr,
             tangential_coeffs.has_value()
-                ? tangential_coeffs.value().data_ptr<float>()
+                ? tangential_coeffs.value().const_data_ptr<float>()
                 : nullptr,
             thin_prism_coeffs.has_value()
-                ? thin_prism_coeffs.value().data_ptr<float>()
+                ? thin_prism_coeffs.value().const_data_ptr<float>()
                 : nullptr,
             ftheta_device_coeffs,
             lidar_device_coeffs,
@@ -417,9 +419,8 @@ void launch_projection_ut_3dgs_fused_kernel(
             means2d.data_ptr<float>(),
             depths.data_ptr<float>(),
             conics.data_ptr<float>(),
-            compensations.has_value()
-                ? compensations.value().data_ptr<float>()
-                : nullptr
+            compensations.has_value() ? compensations.value().data_ptr<float>()
+                                      : nullptr
         );
 }
 

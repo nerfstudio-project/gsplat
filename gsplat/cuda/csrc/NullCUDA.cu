@@ -74,7 +74,7 @@ void launch_null_kernel(const at::Tensor input, at::Tensor output) {
                    shmem_size,
                    at::cuda::getCurrentCUDAStream()>>>(
                     n_elements,
-                    input.data_ptr<scalar_t>(),
+                    input.const_data_ptr<scalar_t>(),
                     output.data_ptr<scalar_t>(),
                     unused
                 );

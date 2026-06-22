@@ -23,6 +23,7 @@ import torch
 import platform
 import json
 from types import SimpleNamespace
+from torch.utils.cpp_extension import CUDA_HOME
 
 try:
     import torch.utils.cpp_extension as jit
@@ -74,6 +75,11 @@ def get_build_parameters():
         os.path.join(PATH, "include/"),
         os.path.join(current_dir, "csrc", "third_party", "glm"),
     ]
+    # Fix for CUDA 12+ in conda environment
+    if CUDA_HOME and os.path.isdir(os.path.join(CUDA_HOME, "targets")):
+        for arch in os.listdir(os.path.join(CUDA_HOME, "targets")):
+            if os.path.isdir(p := os.path.join(CUDA_HOME, "targets", arch, "include")):
+                extra_include_paths.append(p)
 
     # Source files ------------------------------------
     sources = (
@@ -108,18 +114,12 @@ def get_build_parameters():
 
     # Debug/Release mode
     # MSVC (cl) does not support -O3/-O0; use -O2/-Od (torch converts - to /)
-    if sys.platform == "win32":
-        if DEBUG:
-            extra_cflags += ["/Zi", "/Od"]
-            extra_cuda_cflags += ["-Od"]
-        else:
-            extra_cflags += ["/O2", "-DNDEBUG"]
-            extra_cuda_cflags += ["-O2", "-DNDEBUG"]
-    else:
-        if DEBUG:
-            extra_cflags += ["-g", "-O0", "-Wall"]
+    if DEBUG:
+        extra_cflags += ["-g", "-O0"]
+        extra_cuda_cflags += ["-lineinfo"]
+        if sys.platform != "win32":  # MSVC equivalent (/W4 /WX) is untested
+            extra_cflags += ["-Wall"]
             extra_cuda_cflags += [
-                "-lineinfo",
                 # nvcc intercepts bare -Werror as its own --Werror flag, so
                 # pass it via -Xcompiler instead of --forward-unknown-opts.
                 "-Xcompiler=-Werror",
@@ -127,7 +127,15 @@ def get_build_parameters():
                 "all-warnings",
             ]
         else:
+            extra_cflags += ["/Zi", "/Od"]
+            extra_cuda_cflags += ["-Od"]
+    else:
+        if sys.platform != "win32":
             extra_cflags += ["-O3", "-DNDEBUG"]
+        else:
+            extra_cflags += ["/O2", "-DNDEBUG"]
+            extra_cuda_cflags += ["-O2", "-DNDEBUG"]
+
     extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
 
     # Silencing of warnings
