@@ -19,6 +19,7 @@
 #include <ATen/OpMathType.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 #include <type_traits>
@@ -712,6 +713,394 @@ void launch_spherical_harmonics_bwd_kernel(
         at::kFloat,
         at::kHalf
     );
+}
+
+// ===========================================================================
+// Fused proj_features assembly (forward)
+// ===========================================================================
+// Fused post-transform applied to each SH output element before it is written,
+// matching the per-feature adjustment the caller used to do as separate strided
+// elementwise kernels. 0: none; 1: shift (+0.5); 2: shift_relu (max(x+0.5, 0)).
+enum SHPostOp : uint32_t { SH_POST_NONE = 0, SH_POST_SHIFT = 1, SH_POST_SHIFT_RELU = 2 };
+
+template <typename T>
+__device__ __forceinline__ T apply_sh_post(T v, const uint32_t post_op) {
+    if (post_op == SH_POST_SHIFT) {
+        return v + T(0.5);
+    }
+    if (post_op == SH_POST_SHIFT_RELU) {
+        T s = v + T(0.5);
+        return s > T(0) ? s : T(0);
+    }
+    return v;
+}
+
+// K=16, D=3 SH evaluation for the RGB hot path: wide uint4 / ushort4 loads of a
+// single Gaussian's 48 coefficients, then evaluate all 3 channels. DEGREE is a
+// template parameter so sh_coeffs[] is sized to exactly what it needs. Shared by
+// the standalone SH kernel and the fused proj-features assembly kernel.
+template <typename scalar_t, typename opmath_t, int DEGREE>
+__device__ __forceinline__ void sh16_3channel_eval(
+    const scalar_t *__restrict__ coeffs_gaussian, // coeffs + gaussian_id * 16 * 3
+    const vec3 &dir,
+    opmath_t out_color[3]
+) {
+    constexpr bool COEFFS_FP32 = std::is_same_v<scalar_t, float>;
+
+    // Wide-load shape per (DEGREE, coeff dtype):
+    //  DEGREE 0/1 (small payload): ushort4 for fp16, uint4 for fp32, PACK_SIZE = 4.
+    //  DEGREE 2/3 (larger payload): always uint4, PACK_SIZE = 4 (fp32) or 8 (fp16).
+    constexpr int PACK_SIZE = (DEGREE <= 1) ? 4 : (COEFFS_FP32 ? 4 : 8);
+    constexpr int LOAD_COUNT =
+        (DEGREE == 0) ? 1 :
+        (DEGREE == 1) ? 3 :
+        (DEGREE == 2) ? (COEFFS_FP32 ? 7 : 4) :
+                        (COEFFS_FP32 ? 12 : 6);
+    constexpr int N_COEFFS = LOAD_COUNT * PACK_SIZE;
+
+    using V = std::conditional_t<(DEGREE <= 1) && !COEFFS_FP32, ushort4, uint4>;
+
+    opmath_t sh_coeffs[N_COEFFS];
+    #pragma unroll
+    for (int i = 0; i < LOAD_COUNT; ++i) {
+        alignas(alignof(V)) scalar_t mem[PACK_SIZE];
+        reinterpret_cast<V *>(mem)[0] = reinterpret_cast<const V *>(coeffs_gaussian)[i];
+        #pragma unroll
+        for (int j = 0; j < PACK_SIZE; ++j) {
+            sh_coeffs[i * PACK_SIZE + j] = static_cast<opmath_t>(mem[j]);
+        }
+    }
+
+    sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 0, dir, sh_coeffs, out_color);
+    sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 1, dir, sh_coeffs, out_color);
+    sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 2, dir, sh_coeffs, out_color);
+}
+
+// Unified fused assembler: proj_features = [SH colors | extra | (depth)] for the
+// unpacked rasterization path. A block stages TILE_ROWS consecutive Gaussians of
+// one (batch, camera) pair through shared memory so every global access is fully
+// coalesced. This single kernel subsumes the generic / k16 variants via
+// compile-time specialization:
+//   * K16FAST=true  -> wide-load RGB SH (sh16_3channel_eval), K==16, Dc==3.
+//   * K16FAST=false -> generic per-channel SH (sh_coeffs_to_color_fast), any K/Dc.
+// The optional tensors are lifted to compile-time "soft booleans" (HAS_DEPTH,
+// DEPTH_ZERO, HAS_MASK, EMIT_RELU) so an absent tensor's branch and its global
+// traffic vanish entirely from the corresponding instantiation. `scalar_t` is the
+// coeff dtype (fp16/fp32); means/campos/extra/depths/out are opmath_t (fp32).
+template <
+    typename scalar_t, typename opmath_t, int DEGREE, bool K16FAST,
+    bool HAS_DEPTH, bool DEPTH_ZERO, bool HAS_MASK, bool EMIT_RELU>
+__global__ void __launch_bounds__(256)
+assemble_proj_features_kernel(
+    const uint32_t B,
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t degrees_to_use,           // runtime SH degree (generic path only)
+    const uint32_t K,                        // SH bands (coeffs dim -2); 16 when K16FAST
+    const uint32_t Dc,                       // SH color channels; 3 when K16FAST
+    const uint32_t E,                        // extra-signal channels
+    const uint32_t width,                    // dc + E + (HAS_DEPTH ? 1 : 0)
+    const uint32_t color_post,               // SHPostOp applied to colors
+    const uint32_t extra_post,               // SHPostOp applied to extra
+    const bool extra_has_c,                  // extra indexed by (b,c,n) vs broadcast (b,n)
+    const float *__restrict__ means,         // [B, N, 3]
+    const float *__restrict__ campos,        // [B, C, 3]
+    const scalar_t *__restrict__ coeffs,     // [N, K, Dc]
+    const opmath_t *__restrict__ extra,      // [B, C, N, E] or [B, N, E]; null if E == 0
+    const opmath_t *__restrict__ depths,     // [B, C, N]; null when DEPTH_ZERO or !HAS_DEPTH
+    const bool *__restrict__ masks,          // [B, C, N]; null when !HAS_MASK
+    opmath_t *__restrict__ out,              // [B, C, N, width]
+    bool *__restrict__ relu_mask             // [B, C, N, dc]; null when !EMIT_RELU
+) {
+    constexpr uint32_t TILE_ROWS = 64;
+    constexpr uint32_t THREADS = 256;
+    // dc / cstride collapse to compile-time constants on the K16FAST path so the
+    // color loops fully unroll; on the generic path they track the runtime K/Dc.
+    const uint32_t dc = K16FAST ? 3u : Dc;
+    const uint32_t cstride = K16FAST ? 48u : (K * Dc);  // coeff elems per gaussian
+    const uint32_t tid = threadIdx.x;
+
+    // blockIdx.x -> n-tile within a (b,c); blockIdx.y -> flattened (b*C + c).
+    const uint32_t bc = blockIdx.y;
+    const uint32_t b = bc / C;
+    const uint32_t rowBase = blockIdx.x * TILE_ROWS;
+    if (rowBase >= N) {
+        return;
+    }
+    const uint32_t rows = (N - rowBase < TILE_ROWS) ? (N - rowBase) : TILE_ROWS;
+
+    // Dynamic shared layout (16B-aligned base; per-coeff-row alignment preserved):
+    //   [coeffs: TILE_ROWS*cstride scalar_t][means: TILE_ROWS*3 float][out: TILE_ROWS*width float]
+    extern __shared__ __align__(16) char smem_raw[];
+    scalar_t *smem_coeffs = reinterpret_cast<scalar_t *>(smem_raw);
+    float *smem_means =
+        reinterpret_cast<float *>(smem_coeffs + TILE_ROWS * cstride);
+    float *smem_out = smem_means + TILE_ROWS * 3;
+
+    // --- coalesced loads into shared ---
+    // coeffs are indexed by gaussian n only (shared across cameras).
+    for (uint32_t i = tid; i < rows * cstride; i += THREADS) {
+        smem_coeffs[i] = coeffs[static_cast<size_t>(rowBase) * cstride + i];
+    }
+    for (uint32_t i = tid; i < rows * 3u; i += THREADS) {
+        smem_means[i] = means[(static_cast<size_t>(b) * N + rowBase) * 3 + i];
+    }
+    if (E > 0) {
+        const opmath_t eshift =
+            (extra_post == SH_POST_SHIFT) ? opmath_t(0.5) : opmath_t(0);
+        const size_t ebase = extra_has_c
+            ? (static_cast<size_t>(bc) * N + rowBase) * E
+            : (static_cast<size_t>(b) * N + rowBase) * E;
+        for (uint32_t i = tid; i < rows * E; i += THREADS) {
+            const uint32_t lr = i / E;
+            const uint32_t e = i % E;
+            smem_out[lr * width + dc + e] = extra[ebase + i] + eshift;
+        }
+    }
+    if constexpr (HAS_DEPTH) {
+        for (uint32_t i = tid; i < rows; i += THREADS) {
+            opmath_t d;
+            if constexpr (DEPTH_ZERO) {
+                d = opmath_t(0);
+            } else {
+                d = depths[static_cast<size_t>(bc) * N + rowBase + i];
+            }
+            smem_out[i * width + dc + E] = d;
+        }
+    }
+    __syncthreads();
+
+    // --- per-row SH evaluation out of shared ---
+    const float cx = campos[static_cast<size_t>(bc) * 3 + 0];
+    const float cy = campos[static_cast<size_t>(bc) * 3 + 1];
+    const float cz = campos[static_cast<size_t>(bc) * 3 + 2];
+    for (uint32_t lr = tid; lr < rows; lr += THREADS) {
+        const uint32_t n = rowBase + lr;
+        const size_t gidx = static_cast<size_t>(bc) * N + n;
+        float *dst = smem_out + lr * width;
+        bool active = true;
+        if constexpr (HAS_MASK) {
+            active = masks[gidx];
+        }
+        if (active) {
+            // View direction = gaussian center - camera position (un-normalized;
+            // SH normalizes internally). Folds compute_directions in.
+            const float *mp = smem_means + lr * 3;
+            const vec3 dir = vec3(mp[0] - cx, mp[1] - cy, mp[2] - cz);
+            if constexpr (K16FAST) {
+                opmath_t col[3];
+                sh16_3channel_eval<scalar_t, opmath_t, DEGREE>(
+                    smem_coeffs + lr * 48, dir, col
+                );
+                dst[0] = apply_sh_post<opmath_t>(col[0], color_post);
+                dst[1] = apply_sh_post<opmath_t>(col[1], color_post);
+                dst[2] = apply_sh_post<opmath_t>(col[2], color_post);
+            } else {
+                const scalar_t *crow = smem_coeffs + lr * cstride;
+                for (uint32_t ch = 0; ch < dc; ++ch) {
+                    sh_coeffs_to_color_fast<scalar_t>(
+                        degrees_to_use, dc, ch, dir, crow, dst
+                    );
+                }
+                if (color_post != SH_POST_NONE) {
+                    for (uint32_t ch = 0; ch < dc; ++ch) {
+                        dst[ch] = apply_sh_post<opmath_t>(dst[ch], color_post);
+                    }
+                }
+            }
+            // Emit the relu Jacobian mask inline (clamped value already in a
+            // register), folding away the separate strided compare kernel.
+            if constexpr (EMIT_RELU) {
+                bool *m = relu_mask + gidx * dc;
+                for (uint32_t ch = 0; ch < dc; ++ch) {
+                    m[ch] = dst[ch] > opmath_t(0);
+                }
+            }
+        } else {
+            for (uint32_t ch = 0; ch < dc; ++ch) {
+                dst[ch] = opmath_t(0);
+            }
+        }
+    }
+    __syncthreads();
+
+    // --- coalesced bulk store ---
+    const size_t obase = (static_cast<size_t>(bc) * N + rowBase) * width;
+    for (uint32_t i = tid; i < rows * width; i += THREADS) {
+        out[obase + i] = smem_out[i];
+    }
+}
+
+void launch_assemble_proj_features_unpacked_fwd_kernel(
+    const uint32_t B,
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t degrees_to_use,
+    const uint32_t Dc,
+    const uint32_t E,
+    const uint32_t color_post,
+    const uint32_t extra_post,
+    const bool has_depth,
+    const bool depth_is_zero,
+    const bool extra_has_c,
+    const at::Tensor means,                // [B, N, 3]
+    const at::Tensor campos,               // [B, C, 3]
+    const at::Tensor coeffs,               // [N, K, Dc]
+    const at::optional<at::Tensor> extra,  // [B, C, N, E] or [B, N, E]
+    const at::optional<at::Tensor> depths, // [B, C, N]
+    const at::optional<at::Tensor> masks,  // [B, C, N]
+    at::Tensor out,                        // [B, C, N, width]
+    const at::optional<at::Tensor> relu_mask // [B, C, N, Dc]
+) {
+    const int64_t n_threads = static_cast<int64_t>(B) * C * N;
+    if (n_threads == 0) {
+        return;
+    }
+    const uint32_t K = coeffs.size(-2);
+    const uint32_t width = static_cast<uint32_t>(out.size(-1));
+    auto stream = at::cuda::getCurrentCUDAStream();
+
+    auto *masks_ptr =
+        masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
+    auto *extra_ptr =
+        extra.has_value() ? extra.value().const_data_ptr<float>() : nullptr;
+    auto *depths_ptr =
+        depths.has_value() ? depths.value().const_data_ptr<float>() : nullptr;
+    auto *means_ptr = means.const_data_ptr<float>();
+    auto *campos_ptr = campos.const_data_ptr<float>();
+    auto *out_ptr = out.data_ptr<float>();
+    auto *relu_mask_ptr =
+        relu_mask.has_value() ? relu_mask.value().data_ptr<bool>() : nullptr;
+
+    // Single tiled kernel for every shape: a block stages one (b,c) n-tile
+    // through shared memory, so global coeff alignment is irrelevant (the wide
+    // SH loads come from shared, which is always 16B aligned per row).
+    constexpr uint32_t TILE_ROWS = 64;
+    dim3 threads(256);
+    dim3 grid((N + TILE_ROWS - 1) / TILE_ROWS, B * C);
+
+    std::variant<float, at::Half> coeff_variant;
+    switch (coeffs.scalar_type()) {
+    case at::kFloat: coeff_variant.emplace<float>(); break;
+    case at::kHalf:  coeff_variant.emplace<at::Half>(); break;
+    default:
+        TORCH_CHECK(false, "assemble_proj_features: unsupported coeffs dtype ", coeffs.scalar_type());
+    }
+
+    // Lift the optional tensors to compile-time "soft booleans". depth_mode
+    // folds (has_depth, depth_is_zero) into one 3-state so the impossible
+    // (!has_depth && depth_is_zero) instantiation is never generated.
+    const int depth_mode = !has_depth ? 0 : (depth_is_zero ? 2 : 1);
+    const int mask_on = (masks_ptr != nullptr) ? 1 : 0;
+    const int relu_on = (relu_mask_ptr != nullptr) ? 1 : 0;
+    const bool k16 = (K == 16 && Dc == 3);
+
+    if (k16) {
+        // RGB SH hot path: DEGREE is specialized so the wide-load evaluator
+        // unrolls to exactly its coefficient count.
+        const int deg = std::min<int>(degrees_to_use, 3);
+        const bool dispatched = dispatch::dispatch(
+            dispatch::TypeParam<float, at::Half>{coeff_variant},
+            dispatch::IntParam<0, 1, 2, 3>{deg},
+            dispatch::IntParam<0, 1, 2>{depth_mode},
+            dispatch::IntParam<0, 1>{mask_on},
+            dispatch::IntParam<0, 1>{relu_on},
+            [&]<typename CoeffT, typename Deg, typename Dm, typename Mk, typename Rl>() {
+                constexpr int DEGREE = Deg::value;
+                constexpr bool HAS_DEPTH = Dm::value != 0;
+                constexpr bool DEPTH_ZERO = Dm::value == 2;
+                constexpr bool HAS_MASK = Mk::value != 0;
+                constexpr bool EMIT_RELU = Rl::value != 0;
+                const size_t smem =
+                    static_cast<size_t>(TILE_ROWS) * 48 * sizeof(CoeffT) +
+                    static_cast<size_t>(TILE_ROWS) * 3 * sizeof(float) +
+                    static_cast<size_t>(TILE_ROWS) * width * sizeof(float);
+                // Opt in to >48KB dynamic shared memory (and surface an actionable
+                // error if the shape exceeds the device budget). The attribute is
+                // set once per kernel specialization: the request only grows with
+                // width, which is constant across a run, so the per-launch driver
+                // roundtrip is amortized to a single call.
+                static int configured_smem = -1;
+                if (static_cast<int>(smem) > configured_smem) {
+                    if (cudaFuncSetAttribute(
+                            assemble_proj_features_kernel<
+                                CoeffT, float, DEGREE, /*K16FAST=*/true,
+                                HAS_DEPTH, DEPTH_ZERO, HAS_MASK, EMIT_RELU>,
+                            cudaFuncAttributeMaxDynamicSharedMemorySize,
+                            static_cast<int>(smem)
+                        ) != cudaSuccess) {
+                        AT_ERROR(
+                            "assemble_proj_features: failed to set dynamic shared "
+                            "memory (requested ", smem, " bytes; width=", width,
+                            "); shape exceeds this device's shared-memory budget."
+                        );
+                    }
+                    configured_smem = static_cast<int>(smem);
+                }
+                assemble_proj_features_kernel<
+                    CoeffT, float, DEGREE, /*K16FAST=*/true,
+                    HAS_DEPTH, DEPTH_ZERO, HAS_MASK, EMIT_RELU>
+                    <<<grid, threads, smem, stream>>>(
+                        B, C, N, degrees_to_use, K, Dc, E, width,
+                        color_post, extra_post, extra_has_c,
+                        means_ptr, campos_ptr, coeffs.const_data_ptr<CoeffT>(),
+                        extra_ptr, depths_ptr, masks_ptr, out_ptr, relu_mask_ptr
+                    );
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+        );
+        TORCH_CHECK(dispatched, "assemble_proj_features: dispatch failed for sh_degree=", degrees_to_use);
+    } else {
+        // Generic path: any K/Dc; the SH degree stays a runtime argument so this
+        // is not specialized per degree.
+        const bool dispatched = dispatch::dispatch(
+            dispatch::TypeParam<float, at::Half>{coeff_variant},
+            dispatch::IntParam<0, 1, 2>{depth_mode},
+            dispatch::IntParam<0, 1>{mask_on},
+            dispatch::IntParam<0, 1>{relu_on},
+            [&]<typename CoeffT, typename Dm, typename Mk, typename Rl>() {
+                constexpr bool HAS_DEPTH = Dm::value != 0;
+                constexpr bool DEPTH_ZERO = Dm::value == 2;
+                constexpr bool HAS_MASK = Mk::value != 0;
+                constexpr bool EMIT_RELU = Rl::value != 0;
+                const size_t smem =
+                    static_cast<size_t>(TILE_ROWS) * K * Dc * sizeof(CoeffT) +
+                    static_cast<size_t>(TILE_ROWS) * 3 * sizeof(float) +
+                    static_cast<size_t>(TILE_ROWS) * width * sizeof(float);
+                // Set the dynamic-smem opt-in once per kernel specialization
+                // (see the k16 branch above for the amortization rationale).
+                static int configured_smem = -1;
+                if (static_cast<int>(smem) > configured_smem) {
+                    if (cudaFuncSetAttribute(
+                            assemble_proj_features_kernel<
+                                CoeffT, float, /*DEGREE=*/0, /*K16FAST=*/false,
+                                HAS_DEPTH, DEPTH_ZERO, HAS_MASK, EMIT_RELU>,
+                            cudaFuncAttributeMaxDynamicSharedMemorySize,
+                            static_cast<int>(smem)
+                        ) != cudaSuccess) {
+                        AT_ERROR(
+                            "assemble_proj_features: failed to set dynamic shared "
+                            "memory (requested ", smem, " bytes; width=", width,
+                            ", K=", K, ", Dc=", Dc, "); shape exceeds this device's "
+                            "shared-memory budget."
+                        );
+                    }
+                    configured_smem = static_cast<int>(smem);
+                }
+                assemble_proj_features_kernel<
+                    CoeffT, float, /*DEGREE=*/0, /*K16FAST=*/false,
+                    HAS_DEPTH, DEPTH_ZERO, HAS_MASK, EMIT_RELU>
+                    <<<grid, threads, smem, stream>>>(
+                        B, C, N, degrees_to_use, K, Dc, E, width,
+                        color_post, extra_post, extra_has_c,
+                        means_ptr, campos_ptr, coeffs.const_data_ptr<CoeffT>(),
+                        extra_ptr, depths_ptr, masks_ptr, out_ptr, relu_mask_ptr
+                    );
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+        );
+        TORCH_CHECK(dispatched, "assemble_proj_features: dispatch failed for sh_degree=", degrees_to_use);
+    }
 }
 
 } // namespace gsplat
