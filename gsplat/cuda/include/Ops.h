@@ -272,6 +272,41 @@ void adam(
     double eps
 );
 
+// Fused Gaussian Regularization Losses (scale_reg, density_reg, z_scale_reg, out_of_bound)
+// Output tensors are pre-allocated by the caller and passed in as mutable
+// arguments — keeps buffer lifetime explicit on the Python side for cross-step
+// caching-allocator reuse.
+void gaussian_losses_fwd(
+    const at::Tensor &scales,                   // [N, 3]
+    const at::Tensor &densities,                // [N]
+    const at::Tensor &z_scales,                 // [N]
+    const at::Tensor &positions,                // [N, 3]
+    const at::Tensor &cuboid_dims,              // [N, 3]
+    const at::optional<at::Tensor> &visibility, // [N] float or nullopt
+    double z_scale_threshold,
+    at::Tensor loss_scale,                      // [N, 3] (out)
+    at::Tensor loss_density,                    // [N] (out)
+    at::Tensor loss_z_scale,                    // [N] (out)
+    at::Tensor loss_oob                         // [N, 3] (out)
+);
+void gaussian_losses_bwd(
+    const at::Tensor &scales,                   // [N, 3]
+    const at::Tensor &densities,                // [N]
+    const at::Tensor &z_scales,                 // [N]
+    const at::Tensor &positions,                // [N, 3]
+    const at::Tensor &cuboid_dims,              // [N, 3]
+    const at::optional<at::Tensor> &visibility, // [N] float or nullopt
+    double z_scale_threshold,
+    const at::Tensor &v_loss_scale,             // [N, 3]
+    const at::Tensor &v_loss_density,           // [N]
+    const at::Tensor &v_loss_z_scale,           // [N]
+    const at::Tensor &v_loss_oob,               // [N, 3]
+    at::Tensor v_scales,                        // [N, 3] (out)
+    at::Tensor v_densities,                     // [N] (out)
+    at::Tensor v_z_scales,                      // [N] (out)
+    at::Tensor v_positions                      // [N, 3] (out)
+);
+
 // GS Tile Intersection
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const at::Tensor &means2d,                           // [..., N, 2] or [nnz, 2]

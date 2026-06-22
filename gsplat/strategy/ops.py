@@ -13,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import os
 import numpy as np
-from typing import Callable, Dict, List, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Union
 
 import torch
 import torch.nn.functional as F
@@ -24,6 +26,9 @@ from torch import Tensor
 from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
 from gsplat.utils import normalized_quat_to_rotmat
+
+if TYPE_CHECKING:
+    from gsplat_scene import Scene
 
 _MCMC_BACKEND_TORCH = {"torch", "pytorch", "py"}
 _MCMC_BACKEND_CUDA = {"cuda", "native", ""}
@@ -124,6 +129,7 @@ def duplicate(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
+    scene: Scene | None = None,
 ):
     """Inplace duplicate the Gaussian with the given mask.
 
@@ -147,6 +153,8 @@ def duplicate(
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
             state[k] = torch.cat((v, v[sel]))
+    if scene is not None:
+        scene.on_duplicate(sel)
 
 
 @torch.no_grad()
@@ -156,6 +164,7 @@ def split(
     state: Dict[str, Tensor],
     mask: Tensor,
     revised_opacity: bool = False,
+    scene: Scene | None = None,
 ):
     """Inplace split the Gaussian with the given mask.
 
@@ -207,6 +216,8 @@ def split(
             repeats = [2] + [1] * (v.dim() - 1)
             v_new = v[sel].repeat(repeats)
             state[k] = torch.cat((v[rest], v_new))
+    if scene is not None:
+        scene.on_split(sel, rest)
 
 
 @torch.no_grad()
@@ -215,6 +226,7 @@ def remove(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
+    scene: Scene | None = None,
 ):
     """Inplace remove the Gaussian with the given mask.
 
@@ -237,6 +249,8 @@ def remove(
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
             state[k] = v[sel]
+    if scene is not None:
+        scene.on_remove(mask)
 
 
 @torch.no_grad()
@@ -278,6 +292,7 @@ def relocate(
     mask: Tensor,
     binoms: Tensor,
     min_opacity: float = 0.005,
+    scene: Scene | None = None,
 ):
     """Inplace relocate some dead Gaussians to the lives ones.
 
@@ -324,6 +339,8 @@ def relocate(
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
             v[sampled_idxs] = 0
+    if scene is not None:
+        scene.on_relocate(dead_indices, sampled_idxs)
 
 
 @torch.no_grad()
@@ -334,6 +351,7 @@ def sample_add(
     n: int,
     binoms: Tensor,
     min_opacity: float = 0.005,
+    scene: Scene | None = None,
 ):
     opacities = torch.sigmoid(params["opacities"])
 
@@ -367,6 +385,8 @@ def sample_add(
         v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
         if isinstance(v, torch.Tensor):
             state[k] = torch.cat((v, v_new))
+    if scene is not None:
+        scene.on_sample_add(sampled_idxs)
 
 
 @torch.no_grad()
