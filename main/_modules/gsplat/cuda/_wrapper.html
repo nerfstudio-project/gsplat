@@ -318,12 +318,14 @@
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
 
+<span class="kn">import</span><span class="w"> </span><span class="nn">functools</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">types</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">enum</span><span class="w"> </span><span class="kn">import</span> <span class="n">IntEnum</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ABC</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
@@ -466,54 +468,50 @@
         <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_cuda_cls</span><span class="p">()</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">has_camera_wrappers</span><span class="p">():</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
-
-    <span class="c1"># PyTorch will throw a RuntimeError if the class is not registered</span>
-    <span class="c1"># but that&#39;s okay in this case because we&#39;re just checking if it exists</span>
+<span class="nd">@functools</span><span class="o">.</span><span class="n">lru_cache</span><span class="p">(</span><span class="n">maxsize</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_build_config</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">bool</span><span class="p">]:</span>
     <span class="k">try</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">classes</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="s2">&quot;BaseCameraModel&quot;</span><span class="p">)</span>
-    <span class="k">except</span> <span class="ne">RuntimeError</span><span class="p">:</span>
-        <span class="k">return</span> <span class="kc">False</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
+
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">types</span><span class="o">.</span><span class="n">MappingProxyType</span><span class="p">(</span><span class="n">_C</span><span class="o">.</span><span class="n">build_config</span><span class="p">())</span>
+            <span class="k">if</span> <span class="n">_C</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">types</span><span class="o">.</span><span class="n">MappingProxyType</span><span class="p">({})</span>
+        <span class="p">)</span>
+    <span class="k">except</span> <span class="p">(</span><span class="ne">ImportError</span><span class="p">,</span> <span class="ne">AttributeError</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">types</span><span class="o">.</span><span class="n">MappingProxyType</span><span class="p">({})</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_has_build_feature</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">_build_config</span><span class="p">()</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">has_camera_wrappers</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;camera_wrappers&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_2dgs</span><span class="p">():</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
-
-    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="s2">&quot;projection_2dgs_fused_fwd&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;2dgs&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_3dgs</span><span class="p">():</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
-
-    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="s2">&quot;projection_ewa_simple_fwd&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;3dgs&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_3dgut</span><span class="p">():</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
-
-    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="s2">&quot;projection_ut_3dgs_fused&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;3dgut&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_adam</span><span class="p">():</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
-
-    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="s2">&quot;adam&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;adam&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_reloc</span><span class="p">():</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
-
-    <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="s2">&quot;relocation&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;reloc&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">has_losses</span><span class="p">():</span>
-    <span class="k">try</span><span class="p">:</span>
-        <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>  <span class="c1"># noqa: F401</span>
-
-        <span class="k">return</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="s2">&quot;gaussian_losses_fwd&quot;</span><span class="p">)</span>
-    <span class="k">except</span> <span class="p">(</span><span class="ne">ImportError</span><span class="p">,</span> <span class="ne">AttributeError</span><span class="p">):</span>
-        <span class="k">return</span> <span class="kc">False</span>
+    <span class="k">return</span> <span class="n">_has_build_feature</span><span class="p">(</span><span class="s2">&quot;losses&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">create_camera_model</span><span class="p">(</span>
@@ -1485,13 +1483,21 @@
             <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
         <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
 
+    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">ftheta_coeffs</span>
+        <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="p">()</span>
+    <span class="p">)</span>
+    <span class="n">lidar_coeffs</span> <span class="o">=</span> <span class="n">lidar_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span> <span class="k">if</span> <span class="n">lidar_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span>
+
     <span class="p">(</span>
         <span class="n">render_colors</span><span class="p">,</span>
         <span class="n">render_alphas</span><span class="p">,</span>
         <span class="n">last_ids</span><span class="p">,</span>
         <span class="n">sample_counts</span><span class="p">,</span>
         <span class="n">render_normals</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">=</span> <span class="n">_RasterizeToPixelsEval3D</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+    <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_from_world_3dgs&quot;</span><span class="p">)(</span>
         <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">scales</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1499,15 +1505,15 @@
         <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">image_width</span><span class="p">,</span>
         <span class="n">image_height</span><span class="p">,</span>
         <span class="n">tile_size</span><span class="p">,</span>
-        <span class="n">isect_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">camera_model</span><span class="p">,</span>
+        <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">camera_model_type</span><span class="p">,</span>
         <span class="n">ut_params</span><span class="p">,</span>
+        <span class="n">rolling_shutter</span><span class="p">,</span>
         <span class="n">rays</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="c1"># distortion</span>
         <span class="n">radial_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
@@ -1516,9 +1522,8 @@
         <span class="n">ftheta_coeffs</span><span class="p">,</span>
         <span class="n">lidar_coeffs</span><span class="p">,</span>
         <span class="n">external_distortion_coeffs</span><span class="p">,</span>
-        <span class="c1"># rolling shutter</span>
-        <span class="n">rolling_shutter</span><span class="p">,</span>
-        <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">isect_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="c1"># Forward is always collecting the last_ids for the backward pass,</span>
         <span class="c1"># no need to tell it to do it.</span>
         <span class="n">return_sample_counts</span><span class="p">,</span>  <span class="c1"># Pass flag to forward</span>
@@ -2098,304 +2103,6 @@
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># isect_offsets</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># flatten_ids</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># absgrad</span>
-        <span class="p">)</span>
-
-
-<span class="k">class</span><span class="w"> </span><span class="nc">_RasterizeToPixelsEval3D</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize gaussians&quot;&quot;&quot;</span>
-
-    <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
-        <span class="n">ctx</span><span class="p">,</span>
-        <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
-        <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
-        <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
-        <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, N, D] or [nnz, D]</span>
-        <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, N] or [nnz]</span>
-        <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, D], Optional</span>
-        <span class="n">masks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, tile_height, tile_width], Optional</span>
-        <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
-        <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3, 3]</span>
-        <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-        <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-        <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-        <span class="n">isect_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, tile_height, tile_width]</span>
-        <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., n_isects]</span>
-        <span class="n">camera_model</span><span class="p">:</span> <span class="n">CameraModel</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
-        <span class="n">ut_params</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">UnscentedTransformParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, P, 6]</span>
-        <span class="c1"># distortion</span>
-        <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
-        <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
-        <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
-        <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">lidar_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
-            <span class="n">RowOffsetStructuredSpinningLidarModelParametersExt</span>
-        <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">external_distortion_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BivariateWindshieldModelParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="c1"># rolling shutter</span>
-        <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
-        <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
-        <span class="n">return_sample_counts</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-        <span class="n">use_hit_distance</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-        <span class="n">return_normals</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
-        <span class="k">if</span> <span class="n">ut_params</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">ut_params</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">()</span>
-
-        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
-        <span class="p">)</span>
-        <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">ftheta_coeffs</span>
-            <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="p">()</span>
-        <span class="p">)</span>
-
-        <span class="n">lidar_coeffs</span> <span class="o">=</span> <span class="n">lidar_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span> <span class="k">if</span> <span class="n">lidar_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span>
-
-        <span class="c1"># Extract batch_dims for sample_counts allocation</span>
-        <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
-        <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">)</span>
-
-        <span class="c1"># Conditionally allocate sample_counts based on flag</span>
-        <span class="k">if</span> <span class="n">return_sample_counts</span><span class="p">:</span>
-            <span class="c1"># Allocate with correct final shape (batch_dims, C, H, W)</span>
-            <span class="n">sample_counts</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span>
-                <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">means</span><span class="o">.</span><span class="n">device</span>
-            <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">sample_counts</span> <span class="o">=</span> <span class="kc">None</span>
-
-        <span class="c1"># Conditionally allocate normals based on flag</span>
-        <span class="k">if</span> <span class="n">return_normals</span><span class="p">:</span>
-            <span class="n">render_normals</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span>
-                <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
-                <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-                <span class="n">device</span><span class="o">=</span><span class="n">means</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
-            <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">render_normals</span> <span class="o">=</span> <span class="kc">None</span>
-
-        <span class="c1"># Fwd emits the CSR chunk structure (chunks_per_tile, chunk_offsets)</span>
-        <span class="c1"># and the `fwd_chunk_state` tensor that bwd consumes. Computing CSR</span>
-        <span class="c1"># offsets once per forward — instead of once per backward — shares</span>
-        <span class="c1"># the one blocking `chunk_offsets[-1].item()` D2H across both passes,</span>
-        <span class="c1"># and exposes the persisted per-chunk cumulative state so the bwd</span>
-        <span class="c1"># kernel can skip rebuilding it.</span>
-        <span class="p">(</span>
-            <span class="n">render_colors</span><span class="p">,</span>
-            <span class="n">render_alphas</span><span class="p">,</span>
-            <span class="n">last_ids</span><span class="p">,</span>
-            <span class="n">chunks_per_tile</span><span class="p">,</span>
-            <span class="n">chunk_offsets</span><span class="p">,</span>
-            <span class="n">fwd_chunk_state</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_fwd&quot;</span><span class="p">)(</span>
-            <span class="n">means</span><span class="p">,</span>
-            <span class="n">quats</span><span class="p">,</span>
-            <span class="n">scales</span><span class="p">,</span>
-            <span class="n">colors</span><span class="p">,</span>
-            <span class="n">opacities</span><span class="p">,</span>
-            <span class="n">backgrounds</span><span class="p">,</span>
-            <span class="n">masks</span><span class="p">,</span>
-            <span class="n">width</span><span class="p">,</span>
-            <span class="n">height</span><span class="p">,</span>
-            <span class="n">tile_size</span><span class="p">,</span>
-            <span class="n">viewmats</span><span class="p">,</span>
-            <span class="n">viewmats_rs</span><span class="p">,</span>
-            <span class="n">Ks</span><span class="p">,</span>
-            <span class="n">camera_model_type</span><span class="p">,</span>
-            <span class="n">ut_params</span><span class="p">,</span>
-            <span class="n">rolling_shutter</span><span class="p">,</span>
-            <span class="n">rays</span><span class="p">,</span>
-            <span class="n">radial_coeffs</span><span class="p">,</span>
-            <span class="n">tangential_coeffs</span><span class="p">,</span>
-            <span class="n">thin_prism_coeffs</span><span class="p">,</span>
-            <span class="n">ftheta_coeffs</span><span class="p">,</span>
-            <span class="n">lidar_coeffs</span><span class="p">,</span>
-            <span class="n">external_distortion_coeffs</span><span class="p">,</span>
-            <span class="n">isect_offsets</span><span class="p">,</span>
-            <span class="n">flatten_ids</span><span class="p">,</span>
-            <span class="n">use_hit_distance</span><span class="p">,</span>
-            <span class="n">sample_counts</span><span class="p">,</span>
-            <span class="n">render_normals</span><span class="p">,</span>
-        <span class="p">)</span>
-
-        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
-            <span class="n">means</span><span class="p">,</span>
-            <span class="n">quats</span><span class="p">,</span>
-            <span class="n">scales</span><span class="p">,</span>
-            <span class="n">colors</span><span class="p">,</span>
-            <span class="n">opacities</span><span class="p">,</span>
-            <span class="n">backgrounds</span><span class="p">,</span>
-            <span class="n">masks</span><span class="p">,</span>
-            <span class="n">viewmats</span><span class="p">,</span>
-            <span class="n">viewmats_rs</span><span class="p">,</span>
-            <span class="n">Ks</span><span class="p">,</span>
-            <span class="n">rays</span><span class="p">,</span>
-            <span class="n">radial_coeffs</span><span class="p">,</span>
-            <span class="n">tangential_coeffs</span><span class="p">,</span>
-            <span class="n">thin_prism_coeffs</span><span class="p">,</span>
-            <span class="n">isect_offsets</span><span class="p">,</span>
-            <span class="n">flatten_ids</span><span class="p">,</span>
-            <span class="n">render_alphas</span><span class="p">,</span>
-            <span class="n">last_ids</span><span class="p">,</span>
-            <span class="n">chunks_per_tile</span><span class="p">,</span>
-            <span class="n">chunk_offsets</span><span class="p">,</span>
-            <span class="n">fwd_chunk_state</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="c1"># total_chunks is recoverable from the fwd_chunk_state leading dim</span>
-        <span class="c1"># (avoids a second D2H sync — fwd already read it to size this tensor).</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">total_chunks</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">fwd_chunk_state</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">ut_params</span> <span class="o">=</span> <span class="n">ut_params</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">rs_type</span> <span class="o">=</span> <span class="n">rolling_shutter</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">camera_model_type</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span> <span class="o">=</span> <span class="n">tile_size</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="n">ftheta_coeffs</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">lidar_coeffs</span> <span class="o">=</span> <span class="n">lidar_coeffs</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">external_distortion_coeffs</span> <span class="o">=</span> <span class="n">external_distortion_coeffs</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">use_hit_distance</span> <span class="o">=</span> <span class="n">use_hit_distance</span>
-
-        <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span><span class="p">,</span> <span class="n">sample_counts</span><span class="p">,</span> <span class="n">render_normals</span>
-
-    <span class="nd">@staticmethod</span>
-    <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;raster3D-bwd&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
-        <span class="n">ctx</span><span class="p">,</span>
-        <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 3]</span>
-        <span class="n">v_render_alphas</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 1]</span>
-        <span class="n">v_last_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span>  <span class="c1"># None - last_ids is integer (non-differentiable)</span>
-        <span class="n">v_sample_counts</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
-            <span class="n">Tensor</span>
-        <span class="p">],</span>  <span class="c1"># None - sample_counts is integer (non-differentiable)</span>
-        <span class="n">v_render_normals</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span>  <span class="c1"># [..., C, H, W, 3]</span>
-    <span class="p">):</span>
-        <span class="p">(</span>
-            <span class="n">means</span><span class="p">,</span>
-            <span class="n">quats</span><span class="p">,</span>
-            <span class="n">scales</span><span class="p">,</span>
-            <span class="n">colors</span><span class="p">,</span>
-            <span class="n">opacities</span><span class="p">,</span>
-            <span class="n">backgrounds</span><span class="p">,</span>
-            <span class="n">masks</span><span class="p">,</span>
-            <span class="n">viewmats</span><span class="p">,</span>
-            <span class="n">viewmats_rs</span><span class="p">,</span>
-            <span class="n">Ks</span><span class="p">,</span>
-            <span class="n">rays</span><span class="p">,</span>
-            <span class="n">radial_coeffs</span><span class="p">,</span>
-            <span class="n">tangential_coeffs</span><span class="p">,</span>
-            <span class="n">thin_prism_coeffs</span><span class="p">,</span>
-            <span class="n">isect_offsets</span><span class="p">,</span>
-            <span class="n">flatten_ids</span><span class="p">,</span>
-            <span class="n">render_alphas</span><span class="p">,</span>
-            <span class="n">last_ids</span><span class="p">,</span>
-            <span class="n">chunks_per_tile</span><span class="p">,</span>
-            <span class="n">chunk_offsets</span><span class="p">,</span>
-            <span class="n">fwd_chunk_state</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
-        <span class="c1"># Bwd consumes `fwd_chunk_state` directly in its preamble — no</span>
-        <span class="c1"># separate state-scan / prefix-scan kernels. The tensor carries</span>
-        <span class="c1"># per-chunk cumulative (T, pix_out, normal_out) from fwd at every</span>
-        <span class="c1"># CHUNK_BATCHES boundary.</span>
-        <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
-        <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
-        <span class="n">ut_params</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ut_params</span>
-        <span class="n">rs_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">rs_type</span>
-        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span>
-        <span class="n">tile_size</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span>
-        <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ftheta_coeffs</span>
-        <span class="n">lidar_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">lidar_coeffs</span>
-        <span class="n">external_distortion_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">external_distortion_coeffs</span>
-        <span class="n">use_hit_distance</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">use_hit_distance</span>
-        <span class="n">total_chunks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">total_chunks</span>
-
-        <span class="p">(</span>
-            <span class="n">v_means</span><span class="p">,</span>
-            <span class="n">v_quats</span><span class="p">,</span>
-            <span class="n">v_scales</span><span class="p">,</span>
-            <span class="n">v_colors</span><span class="p">,</span>
-            <span class="n">v_opacities</span><span class="p">,</span>
-            <span class="n">v_rays</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_bwd&quot;</span><span class="p">)(</span>
-            <span class="n">means</span><span class="p">,</span>
-            <span class="n">quats</span><span class="p">,</span>
-            <span class="n">scales</span><span class="p">,</span>
-            <span class="n">colors</span><span class="p">,</span>
-            <span class="n">opacities</span><span class="p">,</span>
-            <span class="n">backgrounds</span><span class="p">,</span>
-            <span class="n">masks</span><span class="p">,</span>
-            <span class="n">width</span><span class="p">,</span>
-            <span class="n">height</span><span class="p">,</span>
-            <span class="n">tile_size</span><span class="p">,</span>
-            <span class="n">viewmats</span><span class="p">,</span>
-            <span class="n">viewmats_rs</span><span class="p">,</span>
-            <span class="n">Ks</span><span class="p">,</span>
-            <span class="n">camera_model_type</span><span class="p">,</span>
-            <span class="n">ut_params</span><span class="p">,</span>
-            <span class="n">rs_type</span><span class="p">,</span>
-            <span class="n">rays</span><span class="p">,</span>
-            <span class="n">radial_coeffs</span><span class="p">,</span>
-            <span class="n">tangential_coeffs</span><span class="p">,</span>
-            <span class="n">thin_prism_coeffs</span><span class="p">,</span>
-            <span class="n">ftheta_coeffs</span><span class="p">,</span>
-            <span class="n">lidar_coeffs</span><span class="p">,</span>  <span class="c1"># already converted to C++ in forward</span>
-            <span class="n">external_distortion_coeffs</span><span class="p">,</span>
-            <span class="n">isect_offsets</span><span class="p">,</span>
-            <span class="n">flatten_ids</span><span class="p">,</span>
-            <span class="n">use_hit_distance</span><span class="p">,</span>
-            <span class="n">render_alphas</span><span class="p">,</span>
-            <span class="n">last_ids</span><span class="p">,</span>
-            <span class="n">v_render_colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-            <span class="n">v_render_alphas</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-            <span class="n">v_render_normals</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">v_render_normals</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">chunks_per_tile</span><span class="p">,</span>
-            <span class="n">chunk_offsets</span><span class="p">,</span>
-            <span class="n">total_chunks</span><span class="p">,</span>
-            <span class="n">fwd_chunk_state</span><span class="p">,</span>
-        <span class="p">)</span>
-
-        <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">5</span><span class="p">]:</span>  <span class="c1"># backgrounds</span>
-            <span class="n">v_backgrounds</span> <span class="o">=</span> <span class="p">(</span><span class="n">v_render_colors</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">render_alphas</span><span class="p">)</span><span class="o">.</span><span class="n">float</span><span class="p">())</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span>
-                <span class="n">dim</span><span class="o">=</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">)</span>
-            <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">v_backgrounds</span> <span class="o">=</span> <span class="kc">None</span>
-
-        <span class="c1"># Check not needed anymore because we return v_rays directly</span>
-        <span class="c1"># if ctx.needs_input_grad[7]:  # viewmats</span>
-        <span class="c1">#    raise NotImplementedError</span>
-
-        <span class="k">return</span> <span class="p">(</span>
-            <span class="n">v_means</span><span class="p">,</span>
-            <span class="n">v_quats</span><span class="p">,</span>
-            <span class="n">v_scales</span><span class="p">,</span>
-            <span class="n">v_colors</span><span class="p">,</span>
-            <span class="n">v_opacities</span><span class="p">,</span>
-            <span class="n">v_backgrounds</span><span class="p">,</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># masks</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># viewmats</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Ks</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># width</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># height</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_size</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># isect_offsets</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># flatten_ids</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># camera_model</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># ut_params</span>
-            <span class="n">v_rays</span><span class="p">,</span>  <span class="c1"># rays</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># radial_coeffs</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tangential_coeffs</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># thin_prism_coeffs</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># ftheta_coeffs</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># lidar_coeffs</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># external_distortion_coeffs</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># rolling_shutter</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># viewmats_rs</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># return_sample_counts (flag, no gradient)</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># use_hit_distance</span>
-            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># return_normals (flag, no gradient)</span>
         <span class="p">)</span>
 
 
