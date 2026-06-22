@@ -82,8 +82,6 @@ enum CameraModelType {
 #define MAX_ALPHA 0.99f
 #define TRANSMITTANCE_THRESHOLD 1e-4f
 
-#define MAX_KERNEL_DENSITY_CUTOFF 0.0113
-
 // Floor for the antialiased compensation factor (sqrt(det_orig / det_blur)).
 // Prevents compensation from reaching zero for extremely small Gaussians.
 #define MIN_COMPENSATION 0.005f

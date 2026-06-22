@@ -122,20 +122,6 @@ TensorView<T, SHAPE...> make_tensor_view(
         : TensorView<T, SHAPE...>{};
 }
 
-// CUDA error checking macro
-#define CUDA_CHECK(call) \
-    do \
-    { \
-        cudaError_t error = call; \
-        if (error != cudaSuccess) \
-        { \
-            throw std::runtime_error( \
-                std::string("CUDA error: ") + cudaGetErrorString(error) + \
-                " at " + __FILE__ + ":" + std::to_string(__LINE__) \
-            ); \
-        } \
-    } while(0)
-
 // Dimension tags for method kernels
 constexpr struct ray_tag_t {} RAY;
 constexpr struct coeff_tag_t {} COEFF;
@@ -246,7 +232,7 @@ c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
 template <typename CameraModel>
 void PyBaseCameraModel<CameraModel>::CudaDeleter::operator()(void* ptr) const
 {
-    CUDA_CHECK(cudaFree(ptr));
+    C10_CUDA_CHECK(cudaFree(ptr));
 }
 
 template <typename CameraModel>
@@ -260,7 +246,7 @@ PyBaseCameraModel<CameraModel>::PyBaseCameraModel(int num_cameras, int width, in
     , m_principal_points(principal_points)
 {
     CameraModel* d_cameras;
-    CUDA_CHECK(cudaMalloc(&d_cameras,num_cameras * sizeof(CameraModel)));
+    C10_CUDA_CHECK(cudaMalloc(&d_cameras,num_cameras * sizeof(CameraModel)));
     m_dev_cameras.reset(d_cameras);
 }
 
@@ -283,8 +269,8 @@ void PyBaseCameraModel<CameraModel>::init_external_distortion(
 
     // Allocate device memory and copy
     gsplat::extdist::BivariateWindshieldModelDeviceParams* d_params;
-    CUDA_CHECK(cudaMalloc(&d_params, sizeof(gsplat::extdist::BivariateWindshieldModelDeviceParams)));
-    CUDA_CHECK(cudaMemcpy(d_params, &host_params,
+    C10_CUDA_CHECK(cudaMalloc(&d_params, sizeof(gsplat::extdist::BivariateWindshieldModelDeviceParams)));
+    C10_CUDA_CHECK(cudaMemcpy(d_params, &host_params,
                           sizeof(gsplat::extdist::BivariateWindshieldModelDeviceParams),
                           cudaMemcpyHostToDevice));
     m_dev_ext_dist_params.reset(d_params);
@@ -366,7 +352,7 @@ std::tuple<torch::Tensor, torch::Tensor> PyBaseCameraModel<CameraModel>::camera_
         make_tensor_view<bool, CAMERA, RAY>(valid_result, m_num_cameras, "valid_result"),
         margin_factor
     );
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 
     return std::make_tuple(image_points, valid_result);
 }
@@ -432,7 +418,7 @@ std::tuple<torch::Tensor, torch::Tensor> PyBaseCameraModel<CameraModel>::image_p
         make_tensor_view<float, CAMERA, POINT, 3>(camera_rays, m_num_cameras, "camera_rays"),
         make_tensor_view<bool, CAMERA, POINT>(valid_result, m_num_cameras, "valid_result")
     );
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 
     return std::make_tuple(camera_rays, valid_result);
 }
@@ -487,7 +473,7 @@ torch::Tensor PyBaseCameraModel<CameraModel>::shutter_relative_frame_time(
         make_tensor_view<const float, CAMERA, POINT, 2>(image_points, m_num_cameras, "image_points"),
         make_tensor_view<float, CAMERA, POINT>(relative_times, m_num_cameras, "relative_times")
     );
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 
     return relative_times;
 }
@@ -579,7 +565,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> PyBaseCameraModel<Camera
         make_tensor_view<float, CAMERA, POINT, 3>(world_rays_dir, m_num_cameras, "world_rays_dir"),
         make_tensor_view<bool, CAMERA, POINT>(valid_result, m_num_cameras, "valid_result")
     );
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 
     return std::make_tuple(world_rays_org, world_rays_dir, valid_result);
 }
@@ -665,7 +651,7 @@ std::tuple<torch::Tensor, torch::Tensor> PyBaseCameraModel<CameraModel>::world_p
         make_tensor_view<bool, CAMERA, POINT>(valid_result, m_num_cameras, "valid_result"),
         margin_factor
     );
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 
     return std::make_tuple(image_points, valid_result);
 }
@@ -733,7 +719,7 @@ PyPerfectPinholeCameraModel::PyPerfectPinholeCameraModel(
         m_width, m_height, m_rs_type,
         dev_ext_dist_params()
     );
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 }
 
 // ====================== PyOpenCVPinholeCameraModel Implementation ========================
@@ -831,7 +817,7 @@ PyOpenCVPinholeCameraModel::PyOpenCVPinholeCameraModel(
         m_width, m_height, m_rs_type,
         dev_ext_dist_params()
     );
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 }
 
 // ================ PyOpenCVFisheye Implementation ==============================
@@ -903,7 +889,7 @@ PyOpenCVFisheyeCameraModel::PyOpenCVFisheyeCameraModel(
         m_width, m_height, m_rs_type,
         dev_ext_dist_params()
     );
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 }
 
 // ================================== FTheta Implementation ==================================
@@ -994,7 +980,7 @@ PyFThetaCameraModel::PyFThetaCameraModel(
         dev_ext_dist_params()
     );
 
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 }
 
 // ================================== Lidar Implementation ==================================
@@ -1032,7 +1018,7 @@ PyRowOffsetStructuredSpinningLidarModel::PyRowOffsetStructuredSpinningLidarModel
     construct_lidar_cameras_kernel<<<blocks, threads, 0, stream>>>(
         make_tensor_view<CAMERA>(this->dev_cameras(), {m_num_cameras}, {1}, "cameras"), m_params);
 
-    CUDA_CHECK(cudaGetLastError());
+    C10_CUDA_CHECK(cudaGetLastError());
 }
 
 } // namespace gsplat
