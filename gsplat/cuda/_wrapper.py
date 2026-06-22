@@ -350,31 +350,33 @@ def adam(
 @trace_function("sh-fwd")
 def spherical_harmonics(
     degrees_to_use: int,
-    dirs: Tensor,  # [..., 3]
-    coeffs: Tensor,  # [..., K, 3]
-    masks: Optional[Tensor] = None,  # [...,]
+    dirs: Tensor,  # [..., N, 3]
+    coeffs: Tensor,  # [N, K, D]
+    masks: Optional[Tensor] = None,  # [..., N]
 ) -> Tensor:
     """Computes spherical harmonics.
 
+    The output channel count ``D`` is taken from the last dim of ``coeffs`` and
+    can be any positive integer (e.g. 3 for RGB, 1 for scalar features).
+
+    In packed mode, callers pre-gather coeffs by ``gaussian_ids`` so ``N`` is
+    ``nnz`` and ``dirs`` has no leading dims.
+
     Args:
-        degrees_to_use: The degree to be used.
-        dirs: Directions. [..., 3]
-        coeffs: Coefficients. [..., K, 3]
-        masks: Optional boolen masks to skip some computation. [...,] Default: None.
+        degrees_to_use: SH degree to evaluate.
+        dirs: View directions. ``[..., N, 3]``; any leading shape, rank ≥ 2.
+        coeffs: SH coefficients. ``[N, K, D]``, with ``N`` matching ``dirs.shape[-2]``.
+        masks: Optional boolean masks. ``[..., N]`` matching ``dirs.shape[:-1]``.
 
     Returns:
-        Spherical harmonics. [..., 3]
+        Spherical harmonics. ``[..., N, D]``.
     """
+    assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
+    assert coeffs.dim() == 3 and coeffs.shape[-1] >= 1, coeffs.shape
+    assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
     assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
-    batch_dims = dirs.shape[:-1]
-    assert dirs.shape == batch_dims + (3,), dirs.shape
-    assert (
-        (len(coeffs.shape) == len(batch_dims) + 2)
-        and coeffs.shape[:-2] == batch_dims
-        and coeffs.shape[-1] == 3
-    ), coeffs.shape
     if masks is not None:
-        assert masks.shape == batch_dims, masks.shape
+        assert masks.shape == dirs.shape[:-1], (masks.shape, dirs.shape[:-1])
         masks = masks.contiguous()
     return _SphericalHarmonics.apply(
         degrees_to_use, dirs.contiguous(), coeffs.contiguous(), masks
@@ -2080,6 +2082,7 @@ def fully_fused_projection_2dgs(
         - **batch_ids**. The batch indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **camera_ids**. The camera indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **indptr**. CSR-style index pointer into gaussian_ids for batch-camera pairs. Int32 tensor of shape [B*C+1].
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].
         - **means**. Projected Gaussian means in 2D. [nnz, 2]
         - **depths**. The z-depth of the projected Gaussians. [nnz]
@@ -2309,6 +2312,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             batch_ids,
             camera_ids,
             gaussian_ids,
+            indptr,
             radii,
             means2d,
             depths,
@@ -2322,6 +2326,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         v_batch_ids,
         v_camera_ids,
         v_gaussian_ids,
+        v_indptr,
         v_radii,
         v_means2d,
         v_depths,

@@ -179,15 +179,15 @@ projection_ewa_3dgs_packed_bwd(
 at::Tensor spherical_harmonics_fwd(
     int64_t degrees_to_use,
     const at::Tensor &dirs,               // [..., 3]
-    const at::Tensor &coeffs,             // [..., K, 3]
+    const at::Tensor &coeffs,             // [..., K, D]
     const at::optional<at::Tensor> &masks // [...]
 );
 std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
     int64_t degrees_to_use,
     const at::Tensor &dirs,                // [..., 3]
-    const at::Tensor &coeffs,              // [..., K, 3]
+    const at::Tensor &coeffs,              // [..., K, D]
     const at::optional<at::Tensor> &masks, // [...]
-    const at::Tensor &v_colors,            // [..., 3]
+    const at::Tensor &v_colors,            // [..., D]
     bool compute_v_dirs
 );
 

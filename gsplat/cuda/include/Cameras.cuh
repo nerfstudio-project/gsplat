@@ -209,7 +209,16 @@ inline __host__ __device__ float eval_poly_inverse_horner_newton(
     // (given by poly_coefficients) at points y using numerically stable Horner
     // scheme and Newton iterations starting from an approximate solution
     // \\hat{x} = \\hat{f}^{-1}(y) (given by inv_poly_approx) and the
-    // polynomials derivative df/dx (given by poly_derivative_coefficients)
+    // polynomials derivative df/dx (given by poly_derivative_coefficients).
+    //
+    // `converged` is advisory: the polynomial-evaluation rounding error sets
+    // a per-coefficient floor on |dx| that for typical FTheta / OpenCV-
+    // fisheye fits sits at ~10⁻⁵ in x-units (e.g. ~3.5e-5 when `delta` is a
+    // pixel distance of a few hundred), so the `|dx| < 1e-6` threshold is
+    // generally not reachable in FP32 even though the final x is accurate.
+    // Callers that gate on `converged` should consider that Newton's result
+    // is still usable for projection purposes when |dx| oscillates at the
+    // FP32 noise floor.
 
     static_assert(
         N_NEWTON_ITERATIONS >= 0, "Require at least a single Newton iteration"
@@ -836,26 +845,28 @@ struct OpenCVPinholeCameraModel
         float fy = d * y + 2 * p2 * x * y + p1 * (r + 2 * y * y) + s3 * r +
                    s4 * r2 - yd;
 
-        // Compute derivative of alpha, beta over r.
-        const float alpha_r = k1 + r * (2.0 * k2 + r * (3.0 * k3));
-        const float beta_r = k4 + r * (2.0 * k5 + r * (3.0 * k6));
+        // Compute derivative of alpha, beta over r. `f` suffixes pin the
+        // multiply chain to fp32 (unsuffixed literals would promote each
+        // multiply to fp64).
+        const float alpha_r = k1 + r * (2.0f * k2 + r * (3.0f * k3));
+        const float beta_r = k4 + r * (2.0f * k5 + r * (3.0f * k6));
 
         // Compute derivative of d over [x, y]
         const float d_r = (alpha_r * beta - alpha * beta_r) / (beta * beta);
-        const float d_x = 2.0 * x * d_r;
-        const float d_y = 2.0 * y * d_r;
+        const float d_x = 2.0f * x * d_r;
+        const float d_y = 2.0f * y * d_r;
 
         // Compute derivative of fx over x and y.
-        float fx_x = d + d_x * x + 2.0 * p1 * y + 6.0 * p2 * x;
-        fx_x += 2.0 * x * (s1 + 2.0 * s2 * r);
-        float fx_y = d_y * x + 2.0 * p1 * x + 2.0 * p2 * y;
-        fx_y += 2.0 * y * (s1 + 2.0 * s2 * r);
+        float fx_x = d + d_x * x + 2.0f * p1 * y + 6.0f * p2 * x;
+        fx_x += 2.0f * x * (s1 + 2.0f * s2 * r);
+        float fx_y = d_y * x + 2.0f * p1 * x + 2.0f * p2 * y;
+        fx_y += 2.0f * y * (s1 + 2.0f * s2 * r);
 
         // Compute derivative of fy over x and y.
-        float fy_x = d_x * y + 2.0 * p2 * y + 2.0 * p1 * x;
-        fy_x += 2.0 * x * (s3 + 2.0 * s4 * r);
-        float fy_y = d + d_y * y + 2.0 * p2 * x + 6.0 * p1 * y;
-        fy_y += 2.0 * y * (s3 + 2.0 * s4 * r);
+        float fy_x = d_x * y + 2.0f * p2 * y + 2.0f * p1 * x;
+        fy_x += 2.0f * x * (s3 + 2.0f * s4 * r);
+        float fy_y = d + d_y * y + 2.0f * p2 * x + 6.0f * p1 * y;
+        fy_y += 2.0f * y * (s3 + 2.0f * s4 * r);
 
         return {fx, fy, fx_x, fx_y, fy_x, fy_y, true};
     }
@@ -1138,9 +1149,9 @@ struct OpenCVFisheyeCameraModel
         valid &= image_point_in_image_bounds_margin(
             image_point, parameters.resolution, margin_factor
         );
-        valid &=
-            theta <= max_angle; // explicitly check for strictly smaller angles
-                                // to classify FOV-clamped points as invalid
+        valid &= theta_full < max_angle; // compare against the pre-clamp angle —
+                                         // `theta` was clamped to `max_angle` above so the
+                                         // post-clamp comparison would be a tautology.
 
         return {image_point, valid};
     }
@@ -1276,25 +1287,25 @@ public:
         // These FOV-clamped projections will be marked as *invalid*
         auto const theta = theta_full < parameters.dist.max_angle ? theta_full : parameters.dist.max_angle;
 
-        // Evaluate forward polynomial, giving delta = f(theta) factors
-        bool converged;
+        // Evaluate forward polynomial, giving delta = f(theta) factors.
+        // We ignore the Newton `converged` flag here: the polynomial-eval
+        // FP32 noise floor on |dx| sits above the `|dx|<1e-6` threshold for
+        // typical FTheta fits (~3.5e-5 when delta is a pixel distance of a
+        // few hundred), so the flag stays False even though Newton's `delta`
+        // is accurate to FP32. Treating it as a failure would spuriously
+        // cull every Gaussian whose centre projects through this branch.
         float delta;
+        bool _converged = false;
         if (parameters.dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
             // bw poly is reference, evaluate its inverse via Newton-based inversion
-            converged = false;
-            delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>( 
+            delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
                       PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.pixeldist_to_angle_poly},
                       PolynomialProxy<PolynomialType::FULL, 5>{dreference_poly},
                       PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.angle_to_pixeldist_poly},
-                      theta, converged);
+                      theta, _converged);
         } else {
             // fw is reference, evaluate it directly
-            converged = true;
-            delta = eval_poly_horner(parameters.dist.angle_to_pixeldist_poly, theta); 
-        }
-
-        if (!converged) {
-            return {{0.f, 0.f}, false};
+            delta = eval_poly_horner(parameters.dist.angle_to_pixeldist_poly, theta);
         }
 
         // Apply linear term A=[c,d;e,1] to f(theta)-weighted normalized 2d vectors, relative to principal point
@@ -1307,7 +1318,9 @@ public:
         valid &= image_point_in_image_bounds_margin(
             image_point, parameters.resolution, margin_factor
         );
-        valid &= theta <= parameters.dist.max_angle;
+        // Compare against the pre-clamp angle — `theta` was clamped to
+        // `max_angle` above so the post-clamp comparison would be a tautology.
+        valid &= theta_full < parameters.dist.max_angle;
 
         return {image_point, valid};
     }

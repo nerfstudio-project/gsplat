@@ -3705,38 +3705,76 @@ def test_rasterization_explicit_tile_size_overrides_auto_3dgut(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_sh(sh_degree: int, batch_dims: Tuple[int, ...]):
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("D", [1, 3, 5])
+def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
+
+    if packed and batch_dims != ():
+        pytest.skip("packed inputs are always rank-2 dirs; batch_dims is irrelevant")
 
     torch.manual_seed(42)
 
     N = 1000
-    test_data = {
-        "coeffs": torch.randn(N, (4 + 1) ** 2, 3, device=device),
-        "dirs": torch.randn(N, 3, device=device),
-    }
-    test_data = expand(test_data, batch_dims)
-    coeffs = test_data["coeffs"]
-    dirs = test_data["dirs"]
-    coeffs.requires_grad = True
-    dirs.requires_grad = True
+    K = (4 + 1) ** 2
+    coeffs_src = torch.randn(N, K, D, device=device, requires_grad=True)
+
+    if packed:
+        # Mirror the packed call site (rendering.py): a [N, K, D] source of
+        # per-Gaussian coeffs is gathered into [nnz, K, D] via gaussian_ids
+        # (one row per visible (Gaussian, camera) pair), and dirs is [nnz, 3].
+        # nnz > N with random ids exercises the duplicate-gaussian regime that
+        # the unpacked broadcast path never hits.
+        nnz = 3000
+        gaussian_ids = torch.randint(0, N, (nnz,), device=device)
+        coeffs = coeffs_src[gaussian_ids]  # [nnz, K, D]
+        dirs = torch.randn(nnz, 3, device=device, requires_grad=True)
+        expected_colors_shape = (nnz, D)
+    else:
+        coeffs = coeffs_src
+        dirs = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
+        expected_colors_shape = (*batch_dims, N, D)
 
     colors = spherical_harmonics(sh_degree, dirs, coeffs)
     _colors = _spherical_harmonics(sh_degree, dirs, coeffs)
+    assert colors.shape == expected_colors_shape, colors.shape
     torch.testing.assert_close(colors, _colors, rtol=1e-4, atol=1e-4)
 
     v_colors = torch.randn_like(colors)
 
-    v_coeffs, v_dirs = torch.autograd.grad(
-        (colors * v_colors).sum(), (coeffs, dirs), retain_graph=True, allow_unused=True
+    # Take grads w.r.t. coeffs_src (the [N, K, D] leaf) so packed mode also
+    # exercises the gather VJP that accumulates duplicate-id rows back to source.
+    v_coeffs_src, v_dirs = torch.autograd.grad(
+        (colors * v_colors).sum(),
+        (coeffs_src, dirs),
+        retain_graph=True,
+        allow_unused=True,
     )
-    _v_coeffs, _v_dirs = torch.autograd.grad(
-        (_colors * v_colors).sum(), (coeffs, dirs), retain_graph=True, allow_unused=True
+    _v_coeffs_src, _v_dirs = torch.autograd.grad(
+        (_colors * v_colors).sum(),
+        (coeffs_src, dirs),
+        retain_graph=True,
+        allow_unused=True,
     )
-    torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
+    assert v_coeffs_src.shape == (N, K, D), v_coeffs_src.shape
+    torch.testing.assert_close(v_coeffs_src, _v_coeffs_src, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
+        assert v_dirs.shape == dirs.shape, v_dirs.shape
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_zero_channels():
+    """Test that an error is thrown when D = 0 (i.e. empty per-Gaussian feature)"""
+    from gsplat.cuda._wrapper import spherical_harmonics
+
+    N = 8
+    K = (4 + 1) ** 2
+    dirs = torch.randn(N, 3, device=device)
+    coeffs = torch.randn(N, K, 0, device=device)
+    with pytest.raises(AssertionError):
+        spherical_harmonics(0, dirs, coeffs)
 
 
 # ============================================================================

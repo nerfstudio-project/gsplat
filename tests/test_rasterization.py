@@ -96,23 +96,16 @@ def gaussians(
     gaussians.opacities = torch.rand(batch_dims + (N,), device=device)
 
     # Depth-only modes with no SH and no per_view_color pass colors=None.
-    # (per_view_color and sh_degree combos are already filtered by skipif above.)
+    # SH coefficients are deduplicated as (N, K, 3) — shared across batch and
+    # camera dims — so per_view_color/batch_dims do not apply when sh_degree is set.
     if not render_mode_has_color(render_mode):
         gaussians.colors = None
+    elif sh_degree is not None:
+        gaussians.colors = torch.rand((N, (sh_degree + 1) ** 2, 3), device=device)
     elif per_view_color:
-        if sh_degree is None:
-            gaussians.colors = torch.rand(batch_dims + (C, N, 3), device=device)
-        else:
-            gaussians.colors = torch.rand(
-                batch_dims + (C, N, (sh_degree + 1) ** 2, 3), device=device
-            )
+        gaussians.colors = torch.rand(batch_dims + (C, N, 3), device=device)
     else:
-        if sh_degree is None:
-            gaussians.colors = torch.rand(batch_dims + (N, 3), device=device)
-        else:
-            gaussians.colors = torch.rand(
-                batch_dims + (N, (sh_degree + 1) ** 2, 3), device=device
-            )
+        gaussians.colors = torch.rand(batch_dims + (N, 3), device=device)
 
     if extra_signals_info is None:
         gaussians.extra_signals_sh_degree = None
@@ -121,37 +114,23 @@ def gaussians(
         gaussians.extra_signals_sh_degree = extra_signals_info[0]
         extra_signals_size = extra_signals_info[1]
 
-        if per_view_color:
-            if gaussians.extra_signals_sh_degree is None:
-                gaussians.extra_signals = torch.rand(
-                    batch_dims + (C, N, extra_signals_size), device=device
-                )
-            else:
-                gaussians.extra_signals = torch.rand(
-                    batch_dims
-                    + (
-                        C,
-                        N,
-                        (gaussians.extra_signals_sh_degree + 1) ** 2,
-                        extra_signals_size,
-                    ),
-                    device=device,
-                )
+        if gaussians.extra_signals_sh_degree is not None:
+            gaussians.extra_signals = torch.rand(
+                (
+                    N,
+                    (gaussians.extra_signals_sh_degree + 1) ** 2,
+                    extra_signals_size,
+                ),
+                device=device,
+            )
+        elif per_view_color:
+            gaussians.extra_signals = torch.rand(
+                batch_dims + (C, N, extra_signals_size), device=device
+            )
         else:
-            if gaussians.extra_signals_sh_degree is None:
-                gaussians.extra_signals = torch.rand(
-                    batch_dims + (N, extra_signals_size), device=device
-                )
-            else:
-                gaussians.extra_signals = torch.rand(
-                    batch_dims
-                    + (
-                        N,
-                        (gaussians.extra_signals_sh_degree + 1) ** 2,
-                        extra_signals_size,
-                    ),
-                    device=device,
-                )
+            gaussians.extra_signals = torch.rand(
+                batch_dims + (N, extra_signals_size), device=device
+            )
 
     return gaussians
 
@@ -183,6 +162,10 @@ def gaussians(
                 pytest.mark.skipif(
                     params[0] == True and not render_mode_has_color(params[2]),
                     reason="per_view_color requires colors, invalid with depth-only render_mode",
+                ),
+                pytest.mark.skipif(
+                    params[0] == True and params[1] is not None,
+                    reason="per_view_color is a no-op when sh_degree is set; skip the duplicate",
                 ),
             ],
         )
