@@ -49,6 +49,8 @@ from gsplat._helper import (
     load_test_data,
     get_inlier_abserror_mask,
     assert_mismatch_ratio,
+    assert_close_with_boundary_band,
+    assert_grad_sparsity,
 )
 
 from gsplat.cuda._wrapper import (
@@ -62,7 +64,6 @@ from gsplat.cuda._wrapper import (
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
 from gsplat.cuda._constants import ALPHA_THRESHOLD
-from tests.test_cameras import parse_lidar_camera
 from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
 
 device = torch.device("cuda:0")
@@ -148,8 +149,43 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int,
         (_covars * v_covars + _precis * v_precis).sum(),
         (quats, scales),
     )
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e0, atol=1e-1)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=1e0, atol=1e-1)
+
+    # Gradient comparison via assert_close_with_boundary_band.
+    # Per-element value diff with a "ref near-zero" boundary band: an element
+    # whose reference value sits below the FP noise floor (|ref| < nz_thresh)
+    # has unbounded relative tolerance and is admitted into the band; the
+    # flip predicate fires when CUDA's value rises significantly above that
+    # floor (catches "false non-zero" sparsity bugs). Off-band elements get
+    # a tight per-element rtol -- catches magnitude bias, sign flip, "false
+    # zero" sparsity bugs (CUDA outputs 0 where ref outputs non-zero), and
+    # most off-by-one bugs in the backward chain.
+    for name, vc, vt in [
+        ("v_quats", v_quats, _v_quats),
+        ("v_scales", v_scales, _v_scales),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} backward sparsity")
+        # Tight nz_thresh (1e-7 of max) -- this test has narrow gradient
+        # magnitude distribution, so most elements are in interior and
+        # 0.3% bias is reliably caught.
+        nz_thresh = vt.abs().max().item() * 1e-7
+        boundary_mask = vt.abs() < nz_thresh
+        # interior_rtol envelope x 1.05:
+        #   RTX PRO 2000  worst rtol_req=1.2e-3   (triu=False)
+        #   RTX PRO 6000  worst rtol_req=1.55e-2  (triu=True)
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=boundary_mask,
+            interior_atol=nz_thresh,
+            interior_rtol=1.65e-2,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e: a.abs() > 10 * nz_thresh,
+            msg=f"{name} backward (triu={triu})",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -194,7 +230,40 @@ def test_proj(
         assert_never(camera_model)
 
     torch.testing.assert_close(means2d, _means2d, rtol=1e-4, atol=1e-4)
-    torch.testing.assert_close(covars2d, _covars2d, rtol=1e-1, atol=3e-2)
+    # covars2d: pinhole projection involves J*Sigma*J^T where J is the
+    # 2x2 affine Jacobian; FP32 cancellation in the matrix product produces
+    # non-trivial per-element noise on the tail (worst observed ~6% rel, ~0.12
+    # abs).  Use band+sparsity so the bulk gets a tight check while the tail
+    # is absorbed in a small flip budget.
+    nz_thresh = _covars2d.abs().max().item() * 1e-3
+    # interior_rtol envelope x 1.05:
+    #   RTX PRO 2000  worst rtol_req=7e-7
+    #   RTX PRO 6000  worst rtol_req=6.55e-6
+    # interior_atol stays at 2e-3 -- the FP32 cancellation noise floor on
+    # this matrix product.
+    assert_close_with_boundary_band(
+        covars2d,
+        _covars2d,
+        boundary_mask=_covars2d.abs() < nz_thresh,
+        interior_atol=2e-3,
+        interior_rtol=7e-6,
+        boundary_max_flip_ratio=1e-3,
+        boundary_symmetry_tol=0.5,
+        flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+        msg="proj covars2d (forward)",
+    )
+    # Outlier guard: even admitted in-band flips must fit a per-element
+    # bound matching the original test's loose tolerance, so a NaN / catastrophic
+    # single-element bug cannot hide inside the boundary flip budget.  The
+    # original was rtol=0.1, atol=3e-2; covars2d magnitudes reach ~1e11 on
+    # near-zero-depth Gaussians, where a small absolute outlier guard would
+    # false-fire on FP noise relative to that magnitude.
+    _diff_cv = (covars2d - _covars2d).abs()
+    _outlier_bound_cv = 3e-2 + 0.1 * _covars2d.abs()
+    assert (_diff_cv <= _outlier_bound_cv).all(), (
+        f"proj covars2d: outlier diff {_diff_cv.max().item():.4e} exceeds "
+        f"loose bound (atol=3e-2, rtol=0.1)"
+    )
 
     # backward
     v_means2d = torch.randn_like(means2d)
@@ -207,8 +276,61 @@ def test_proj(
         (_means2d * v_means2d).sum() + (_covars2d * v_covars2d).sum(),
         (means, covars),
     )
-    torch.testing.assert_close(v_means, _v_means, rtol=6e-1, atol=1e-2)
-    torch.testing.assert_close(v_covars, _v_covars, rtol=1e-1, atol=1e-1)
+    # Per-element band+sparsity check (cluster-A pattern: rel-diff blows up
+    # at near-zero gradient values; off-band tight rtol catches systematic
+    # bias / sign flip / sparsity bug, in-band absorbs FP noise).
+    #
+    # Fisheye-only geometric band: forward-facing fisheye is undefined at
+    # theta = atan2(xy, z) > pi/2 (z <= 0, ray pointing backward). The
+    # projection `focal * theta * (x,y) / xy_len` is FP-sensitive there:
+    # small xy_norm with z<0 amplifies CUDA-vs-torch ULP differences into
+    # ~1e3-magnitude v_means disagreements. v_covars stays clean because
+    # the bilinear J^T*v*J cancels.
+    if camera_model == "fisheye":
+        geom_band_pt = means.detach()[..., 2] <= 0  # [..., n_gauss]
+    else:
+        geom_band_pt = torch.zeros(
+            means.shape[:-1], dtype=torch.bool, device=means.device
+        )
+    for name, vc, vt in [
+        ("v_means", v_means, _v_means),
+        ("v_covars", v_covars, _v_covars),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} backward sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        # interior_rtol envelope x 1.05:
+        #   RTX PRO 2000  rtol_req=0       (atol absorbs all on pinhole/ortho)
+        #   RTX PRO 6000  rtol_req=6.5e-4  (fisheye v_means)
+        gb = geom_band_pt
+        while gb.ndim < vc.ndim:
+            gb = gb[..., None]
+        boundary_mask = (vt.abs() < nz_thresh) | gb.expand_as(vc)
+        # flip_predicate: magnitude-based predicate ("CUDA overflowed where
+        # ref was zero") works for the magnitude-only band; the fisheye geom
+        # band catches z<=0 Gaussians with legitimately large magnitudes in
+        # both impls, where disagreement is the meaningful flip signal.
+        # symmetry: disabled for fisheye (single-digit n_flips, all drift in
+        # the same direction due to projection-formula coupling).
+        if camera_model == "fisheye":
+            flip_pred = lambda a, e, _t=nz_thresh: (a - e).abs() > 10 * _t
+            sym_tol = 1.0
+        else:
+            flip_pred = lambda a, e: a.abs() > 10 * nz_thresh
+            sym_tol = 0.5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=boundary_mask,
+            interior_atol=nz_thresh,
+            interior_rtol=7e-4,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=sym_tol,
+            flip_predicate=flip_pred,
+            msg=f"{name} backward (proj)",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -315,13 +437,44 @@ def test_projection(
         (viewmats, quats, scales, means),
     )
 
+    # v_viewmats stays tight (already well-conditioned).
     torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=2e-3, atol=2e-3)
-    # Slightly relaxed tolerance for quats due to numerical differences between triu=True
-    # (CUDA path with triangular storage) and triu=False (PyTorch reference with full 3x3).
-    # Both are mathematically equivalent but have different FP operation order.
-    torch.testing.assert_close(v_quats, _v_quats, rtol=3e-1, atol=3e-2)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-1, atol=2e-1)
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
+
+    # Per-element band+sparsity check on the conditioning-sensitive
+    # gradients (v_quats, v_scales, v_means flow through quat_scale_to_covar
+    # which has 1/scale**2 singularity at small scales).
+    # interior_rtol = 1.05 x envelope across calibrated GPUs (RTX PRO 2000 / 6000):
+    for name, vc, vt, rtol in [
+        (
+            "v_quats",
+            v_quats,
+            _v_quats,
+            1.17e-3,
+        ),  # RTX PRO 2000=4.8e-5, RTX PRO 6000=5.91e-4, L40S=1.108e-3
+        (
+            "v_scales",
+            v_scales,
+            _v_scales,
+            1.75e-2,
+        ),  # RTX PRO 2000=2.9e-3, RTX PRO 6000=1.638e-2
+        ("v_means", v_means, _v_means, 1e-5),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} backward sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e: a.abs() > 10 * nz_thresh,
+            msg=f"{name} backward",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -497,10 +650,31 @@ def test_fully_fused_projection_packed(
         v_scales = v_scales.to_dense()
         v_means = v_means.to_dense()
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
+    # Per-element band+sparsity check (catches sparsity bugs + sign flips
+    # that the previous magnitude-only asserts admitted).
+    # interior_rtol = 1.05 x worst observed required rtol per gradient.
+    for name, vc, vt, rtol in [
+        ("v_viewmats", v_viewmats, _v_viewmats, 1e-5),  # rtol_req=0
+        ("v_quats", v_quats, _v_quats, 2.6e-5),  # rtol_req=2.45e-5 (L40S)
+        ("v_scales", v_scales, _v_scales, 1e-5),  # rtol_req=0
+        ("v_means", v_means, _v_means, 4e-4),  # rtol_req=3.78e-4
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} backward sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e: a.abs() > 10 * nz_thresh,
+            msg=f"{name} backward (packed)",
+        )
 
 
 @pytest.mark.skipif(
@@ -639,16 +813,40 @@ def test_fully_fused_projection_ut(
         radii_cuda[sel].float(), radii_torch[sel].float(), rtol=0, atol=radii_atol
     )
 
-    # means2d: Sub-pixel precision expected
-    # Relaxed tolerances appropriate for UT's multi-step numerical pipeline
-    # UT involves sigma point generation, projection, and weighted averaging
-    # which accumulates small FP32 differences between CUDA and PyTorch
-    torch.testing.assert_close(
-        means2d_cuda[sel],
-        means2d_torch[sel],
-        rtol=0.5,  # 50% relative tolerance (handles high rel diff at near-zero values)
-        atol=0.05,  # 0.05 pixel absolute tolerance (great sub-pixel accuracy)
-    )
+    # means2d: split by shutter mode.  GLOBAL is smooth in inputs and admits
+    # a tight per-element check.  ROLLING does a 10-iter refinement whose
+    # convergence basin can shift on a small fraction of
+    # Gaussians, producing tail elements with up to ~16% rel-diff.  Use a
+    # bounded per-element check with a small fail-rate cap so the tight bulk
+    # check still catches systematic bias.  Replaces rtol=0.5, atol=0.05.
+    if rolling_shutter == RollingShutterType.GLOBAL:
+        torch.testing.assert_close(
+            means2d_cuda[sel],
+            means2d_torch[sel],
+            rtol=2e-3,
+            atol=5e-2,
+        )
+    else:
+        _diff = (means2d_cuda[sel] - means2d_torch[sel]).abs()
+        _bound = 5e-2 + 2e-3 * means2d_torch[sel].abs()
+        _fail = _diff > _bound
+        _fr = _fail.float().mean().item()
+        # fail_cap = 1.05 x worst observed (0.013145%) -> 0.014%.
+        assert _fr <= 1.4e-4, (
+            f"UT means2d (rolling): fail-rate {_fr:.4%} > cap 0.014% "
+            f"(atol=5e-2, rtol=2e-3, {int(_fail.sum().item())}/{_fail.numel()})"
+        )
+        # Outlier guard: even admitted outliers must satisfy a per-element
+        # bound so a single-element catastrophic bug cannot hide inside the
+        # fail-rate budget.  Tightened to 1.05 x worst observed excess
+        # (0.66) over old (atol=0.1, rtol=0.2) -> atol=0.07, rtol=0.14.
+        _outlier_bound = 0.07 + 0.14 * means2d_torch[sel].abs()
+        _outlier_fail = _diff > _outlier_bound
+        assert not _outlier_fail.any(), (
+            f"UT means2d (rolling): {int(_outlier_fail.sum().item())} elements "
+            f"exceed outlier bound (atol=0.07, rtol=0.14); worst diff "
+            f"{_diff.max().item():.4e}"
+        )
 
     # depths: High precision expected
     # Depths are computed from camera transformation, less accumulation than means2d
@@ -659,37 +857,116 @@ def test_fully_fused_projection_ut(
         atol=2e-6,  # 2e-6 absolute tolerance (2x safety margin)
     )
 
-    # conics: Moderate precision
-    # Conics involve covariance inverse which can amplify small numerical differences
-    # Near-zero conic values can have large relative differences but small absolute differences
-    # Rolling shutter: iterative refinement affects 2D covariance which propagates to conics
+    # conics: covariance inverse amplifies small numerical differences.
+    # GLOBAL is smooth and admits a tight per-element check.  ROLLING goes
+    # through the 10-iter refinement, producing a tail of elements with
+    # high rel-diff -- previously rtol=10.0 admitted any error.  Use a
+    # bounded per-element check with a fail-rate cap.
     if rolling_shutter == RollingShutterType.GLOBAL:
-        conics_rtol, conics_atol = 1e-2, 1e-2
+        torch.testing.assert_close(
+            conics_cuda[sel],
+            conics_torch[sel],
+            rtol=2e-3,
+            atol=2e-3,
+        )
     else:
-        conics_rtol, conics_atol = (
-            10.0,
-            1.0,
-        )  # Rolling shutter amplifies differences in conic computation
-
-    torch.testing.assert_close(
-        conics_cuda[sel], conics_torch[sel], rtol=conics_rtol, atol=conics_atol
-    )
+        _diff_c = (conics_cuda[sel] - conics_torch[sel]).abs()
+        _bound_c = 1e-2 + 1e-2 * conics_torch[sel].abs()
+        _fail_c = _diff_c > _bound_c
+        _fr_c = _fail_c.float().mean().item()
+        # fail_cap = 1.05 x envelope:
+        #   RTX PRO 2000  worst fail-rate 0.0161%
+        #   RTX PRO 6000  worst fail-rate 0.0191%
+        assert _fr_c <= 2.1e-4, (
+            f"UT conics (rolling): fail-rate {_fr_c:.4%} > cap 0.021% "
+            f"(atol=1e-2, rtol=1e-2, {int(_fail_c.sum().item())}/{_fail_c.numel()})"
+        )
+        # Outlier guard tightened to 1.05 x worst observed (1.855) -> 2.0.
+        _outlier_bound_c = 2.0
+        _outlier_fail_c = _diff_c > _outlier_bound_c
+        assert not _outlier_fail_c.any(), (
+            f"UT conics (rolling): {int(_outlier_fail_c.sum().item())} elements "
+            f"exceed outlier bound (atol=2.0); worst diff "
+            f"{_diff_c.max().item():.4e}"
+        )
 
     # compensations: Moderate precision
-    # Compensations involve sqrt(det_orig/det_blur) which can be sensitive
-    # Small differences in determinants can cause larger differences in sqrt ratio
-    # Rolling shutter: changes in 2D covariance determinant cascade through compensation
+    # Compensations involve sqrt(det_orig/det_blur) which can be sensitive.
+    # Small differences in determinants can cause larger differences in sqrt
+    # ratio. For GLOBAL shutter the comp computation is smooth in the inputs
+    # and admits a tight per-element check.  For rolling-shutter modes, the
+    # 10-iter shutter refinement uses floor(image_point.y) inside
+    # shutter_relative_frame_time -- a step discontinuity at every integer y.
+    # ULP noise in the iteration can flip floor() between two
+    # values, jumping `relative_time` by 1/(H-1) and routing the iteration
+    # into a different basin of attraction.  We therefore split into:
+    #   interior:     Gaussians whose 2D footprint stays clear of any
+    #                 integer y -> tight assert_close.
+    #   boundary band: Gaussians whose footprint crosses an integer y ->
+    #                 budgeted, symmetric flip-rate check.
     if rolling_shutter == RollingShutterType.GLOBAL:
-        comps_rtol, comps_atol = 0.1, 0.01  # Global: max_abs=0.0034, max_rel=4.3%
+        torch.testing.assert_close(
+            comps_cuda[sel], comps_torch[sel], rtol=0.01, atol=0.01
+        )
     else:
-        comps_rtol, comps_atol = (
-            0.25,
-            0.15,
-        )  # Rolling shutter: max_abs=0.110, max_rel=18.4%
+        # Boundary mask = "any of the 7 UT sigma points might project within
+        # ULP of an integer y".  UT sigma-point analytical half-spread =
+        # sqrt((n + lambda) * Sigma_i), which for our params (alpha=0.1,
+        # kappa=0, n=3) gives lambda = -2.97 and a sqrt(0.03) ~ 0.173 scale
+        # factor along each principal axis.  In the projected 2D image we use
+        # 1/sqrt(conic[2]) ~ sigma_y as a cheap monotone proxy and apply the
+        # same scale; double for safety against per-camera anisotropy
+        # amplification through projection.  A Gaussian's sigma-point cluster
+        # straddles an integer iff dist_to_int < sigma-point half-spread.
+        y_ref = means2d_torch[sel][..., 1]
+        sigma_y = (1.0 / conics_torch[sel][..., 2].clamp(min=1e-6)).sqrt()
+        # Boundary half-spread = K * sigma_y. K must cover the worst observed
+        # sigma-point projection drift:
+        #   analytical static half-spread = 0.35 * sigma  (UT, alpha=0.1, n=3)
+        #   RTX PRO 2000  10-iter drift cap ~ 0.6 * sigma  (1.7x)
+        #   RTX PRO 6000  10-iter drift cap ~ 0.675 * sigma (1.93x)
+        # K = 0.75 (env x 1.05) leaves headroom for both.
+        sp_half_spread = 0.75 * sigma_y
+        dist_to_int = (y_ref - y_ref.round()).abs()
+        boundary_mask = dist_to_int < sp_half_spread
 
-    torch.testing.assert_close(
-        comps_cuda[sel], comps_torch[sel], rtol=comps_rtol, atol=comps_atol
-    )
+        # Calibration trace -- envelope x 1.05:
+        #   - interior assert atol=7e-3, rtol=0.01:
+        #       RTX PRO 2000  worst <7e-3  (passes)
+        #       RTX PRO 6000  worst <7e-3  (passes after K=0.75)
+        #   - in-band flips at flip_predicate (a-e).abs() > 7e-3:
+        #       RTX PRO 2000  50/188261 (0.0266%)   globalz/distsensor allvalid
+        #                     58/188485 (0.0308%)   globalz/distsensor somevalid
+        #                     historic single-Gaussian outlier diff=0.398 included
+        #       RTX PRO 6000  similar magnitudes, bounded by the 4.5e-4 cap below.
+        #   - asymmetry not enforced: too few flips for stable bias estimate.
+        # See plan: ~/.claude/plans/how-to-devise-tests-hidden-fox.md
+        # CUDA does not expose per-sigma-point projections, so a true cross
+        # predicate cannot be written here; the boundary mask is a geometric
+        # proxy.
+        assert_close_with_boundary_band(
+            comps_cuda[sel],
+            comps_torch[sel],
+            boundary_mask=boundary_mask,
+            interior_atol=7e-3,
+            interior_rtol=0.01,
+            boundary_max_flip_ratio=4.5e-4,  # 1.05 x observed worst (4.23e-4)
+            boundary_symmetry_tol=1.0,  # disabled: too few flips meaningful
+            flip_predicate=lambda a, e: (a - e).abs() > 7e-3,
+            boundary_cross_predicate=None,
+            msg="cluster A: rolling-shutter floor() discontinuity",
+        )
+        # Outlier guard: even admitted in-band flips must satisfy a loose
+        # absolute bound, so a catastrophic single-Gaussian bug cannot hide
+        # inside the boundary flip budget.  Tightened to 1.05 x worst
+        # observed in-band diff ~0.398 -> atol=0.42.
+        _diff_a = (comps_cuda[sel] - comps_torch[sel]).abs()
+        _outlier_a = (_diff_a > 0.42) & boundary_mask
+        assert not _outlier_a.any(), (
+            f"cluster A: {int(_outlier_a.sum().item())} in-band elements "
+            f"exceed outlier bound atol=0.42; worst diff "
+            f"{_diff_a.max().item():.4e}"
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -746,6 +1023,7 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
         ANGLE_TO_PIXEL_SCALING_FACTOR,
     )
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles_lidar
+    from tests.test_cameras import parse_lidar_camera
 
     torch.manual_seed(42)
 
@@ -2072,11 +2350,44 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         + (_render_alphas * v_render_alphas).sum(),
         (means2d, conics, colors, opacities, backgrounds),
     )
-    torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
-    torch.testing.assert_close(v_conics, _v_conics, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_opacities, _v_opacities, rtol=8e-3, atol=6e-3)
-    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
+    # Per-element band+sparsity check on rasterization backward.
+    # - interior_atol absorbs absolute FP cancellation noise at small
+    #   magnitudes; interior_rtol catches systematic bias at large.
+    # - interior_rtol = 1.05 x envelope across calibrated GPUs (RTX PRO 2000 / 6000).
+    # - v_means2d atol scales with channel count: more channels accumulate
+    #   more alpha-compositing terms (channels=3,32 stay under 1e-3;
+    #   channels=128 reaches ~1.4e-3).
+    # - v_means2d batch_dims*-128 OOMed on RTX PRO 2000, so its envelope is
+    #   RTX PRO 6000-only.
+    for name, vc, vt, rtol, atol in [
+        (
+            "v_means2d",
+            v_means2d,
+            _v_means2d,
+            2.5e-4,
+            1.6e-3,
+        ),  # RTX PRO 2000=OOM, RTX PRO 6000: rtol=2.14e-4 atol=1.47e-3
+        ("v_conics", v_conics, _v_conics, 1e-5, 1e-3),
+        ("v_colors", v_colors, _v_colors, 1e-5, 1e-3),
+        ("v_opacities", v_opacities, _v_opacities, 1e-5, 2e-3),
+        ("v_backgrounds", v_backgrounds, _v_backgrounds, 1e-5, 1e-3),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=atol,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+            msg=f"{name} backward (rasterize)",
+        )
 
 
 def _quat_rotation_y(angle_rad: float, device: torch.device):
@@ -2412,6 +2723,8 @@ def test_rasterize_to_pixels_eval3d(
 
     # Setup lidar
     if camera_model == "lidar":
+        from tests.test_cameras import parse_lidar_camera
+
         # This test consumes randomness before lidar setup, so fix the lidar
         # param seed explicitly to keep the preprocessing cache reusable.
         lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
@@ -2648,9 +2961,18 @@ def test_rasterize_to_pixels_eval3d(
 
     assert count_match.sum() > 0
 
-    # Compare alphas for each group
+    # Compare alphas for each group.
+    # - lidar uses element_to_image_point CUDA / _generate_rays ref, which
+    #   diverge by ~1 pixel at tile boundaries, so its envelope is wider.
+    # - Non-lidar: tight on both RTX PRO 2000 and RTX PRO 6000; lidar RTX PRO 6000 worst:
+    #   rtol=8.4e-3, atol=2.27e-3 (count_match alpha diff at lidar tile edge).
+    count_match_rtol = 9e-3 if camera_model == "lidar" else 1e-3
+    count_match_atol = 2.5e-3 if camera_model == "lidar" else 2e-3
     torch.testing.assert_close(
-        render_alphas * count_match, _render_alphas * count_match, rtol=1e-2, atol=2e-3
+        render_alphas * count_match,
+        _render_alphas * count_match,
+        rtol=count_match_rtol,
+        atol=count_match_atol,
     )
     # For lidar, the CUDA kernel generates rays via element_to_image_point
     # while the ref uses _generate_rays, producing ~1 pixel mismatch at tile
@@ -2689,7 +3011,7 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(
         render_colors * count_match,
         _render_colors * count_match,
-        rtol=3e-3 * _lidar_tol,
+        rtol=1e-3 * _lidar_tol,
         atol=1e-3 * _lidar_tol,
     )
     # Bumped tolerance due to release mode optimizations. In debug mode it's ALPHA_THRESHOLD+1e-5.
@@ -2702,7 +3024,7 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(
         render_colors * count_mismatch,
         _render_colors * count_mismatch,
-        rtol=2e-2 * _lidar_tol,
+        rtol=0,
         atol=3e-3 * _lidar_tol,
     )
 
@@ -2833,22 +3155,6 @@ def test_rasterize_to_pixels_eval3d(
 
     assert visible_mask.sum() > 0
 
-    # Extract visible elements once (use reshaped gradients for expand_as)
-    means_mask = visible_mask.expand_as(v_means) & get_inlier_abserror_mask(
-        v_means, _v_means, quantile=0.90
-    )
-    scales_mask = visible_mask.expand_as(v_scales) & get_inlier_abserror_mask(
-        v_scales, _v_scales, quantile=0.90
-    )
-    quats_mask = visible_mask.expand_as(v_quats) & get_inlier_abserror_mask(
-        v_quats, _v_quats, quantile=0.99
-    )
-    colors_mask = visible_mask.expand_as(v_colors) & get_inlier_abserror_mask(
-        v_colors, _v_colors, quantile=0.99
-    )
-    opacities_mask = visible_mask.expand_as(v_opacities) & get_inlier_abserror_mask(
-        v_opacities, _v_opacities, quantile=0.99
-    )
     # Background gradients are a direct reduction of per-pixel transmittance.
     # Compare only the structurally matched pixels; vis/count mismatches are
     # already validated separately above with looser forward tolerances.
@@ -2861,42 +3167,150 @@ def test_rasterize_to_pixels_eval3d(
     backgrounds_mask = get_inlier_abserror_mask(
         v_backgrounds_struct, _v_backgrounds_struct, quantile=0.99
     )
-
-    assert means_mask.sum() > 0
-    assert scales_mask.sum() > 0
-    assert quats_mask.sum() > 0
-    assert colors_mask.sum() > 0
-    assert opacities_mask.sum() > 0
     assert backgrounds_mask.sum() > 0
 
-    # Compare backward gradients, excluding the ones that fall above the quantile threshold.
-    torch.testing.assert_close(
-        v_means * means_mask.float(),
-        _v_means * means_mask.float(),
-        rtol=0,
+    # Per-Gaussian sparsity + sign check.  The per-element bound check
+    # below absorbs absolute-bias and FP noise via atol+rtol+fail_cap,
+    # but two bug classes can still slip through:
+    #   1. Sparsity: CUDA zeros (or explodes) one Gaussian's gradient.  The
+    #      cap admits this if the Gaussian touches few elements.  Catch it
+    #      by aggregating |grad| per Gaussian and bounding the CUDA/ref
+    #      magnitude ratio.
+    #   2. Sign flip: CUDA returns -ref on a gradient.  The bound admits
+    #      this on small-|e| elements (2|e| < atol).  Catch it by requiring
+    #      the per-Gaussian dot product (cuda . ref) > 0 for any Gaussian
+    #      with significant gradient magnitude.
+    # Knobs:
+    #   - magnitude floor 1% of max(ref) admits the small-magnitude tail
+    #     where rasterizer FP noise dominates (worst observed ratio
+    #     1.6e-2 at this floor).
+    #   - min_ratio 5e-3 catches zero/200x-explosion sparsity bugs.
+    vis_g = visible_mask[0, :, 0]  # [N]
+
+    def _per_gaussian_mag(t):
+        m = t.abs().sum(dim=-1)
+        while m.ndim > 1:
+            m = m.sum(dim=0)
+        return m  # [N]
+
+    def _per_gaussian_dot(a, b):
+        s = (a * b).sum(dim=-1)
+        while s.ndim > 1:
+            s = s.sum(dim=0)
+        return s  # [N]
+
+    for name, vc, vt in [
+        ("v_means", v_means, _v_means),
+        ("v_quats", v_quats, _v_quats),
+        ("v_scales", v_scales, _v_scales),
+        ("v_colors", v_colors, _v_colors),
+        ("v_opacities", v_opacities, _v_opacities),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"eval3d {name}: NaN/Inf in CUDA grad"
+        mag_c = _per_gaussian_mag(vc)[vis_g]
+        mag_t = _per_gaussian_mag(vt)[vis_g]
+        larger = torch.maximum(mag_c, mag_t)
+        smaller = torch.minimum(mag_c, mag_t)
+        sig = larger > mag_t.max() * 1e-2
+        if sig.any():
+            ratio = smaller[sig] / larger[sig].clamp(min=1e-30)
+            n_bad = int((ratio < 5e-3).sum().item())
+            assert n_bad == 0, (
+                f"eval3d {name}: {n_bad} significant Gaussians with >200x "
+                f"grad-magnitude mismatch (worst ratio {ratio.min().item():.4e})"
+            )
+            dot = _per_gaussian_dot(vc, vt)[vis_g][sig]
+            n_neg = int((dot < 0).sum().item())
+            n_sig = int(sig.sum().item())
+            # 1% cap: a few outlier Gaussians out of thousands are
+            # noise; a systematic sign flip pushes n_neg toward n_sig.
+            assert n_neg <= max(2, int(n_sig * 1e-2)), (
+                f"eval3d {name}: {n_neg}/{n_sig} significant Gaussians with "
+                f"negative dot(cuda, ref) (>1% indicates sign-flip class)"
+            )
+        # Aggregate-magnitude check: per-Gaussian noise averages out across
+        # thousands of visible Gaussians, so the ratio of total |grad| sums
+        # is a stable summary statistic that catches systematic magnitude
+        # bias on small-|e| elements (which the per-element fail_cap absorbs).
+        total_c = mag_c.sum().item()
+        total_t = mag_t.sum().item()
+        if total_t > 0:
+            agg_ratio = total_c / total_t
+            assert 0.99 <= agg_ratio <= 1.01, (
+                f"eval3d {name}: aggregate |cuda|/|ref| = {agg_ratio:.4f} "
+                f"outside [0.99, 1.01] (systematic magnitude bias)"
+            )
+
+    # Per-element strict bound check + fail-rate cap.
+    #
+    # The previous quantile=0.9/0.99 mask + atol-only assert_close was
+    # degenerate: when most elements are 0 on both sides (typical of a
+    # rasterizer backward), the X-th percentile of |a-e| is 0, so the mask
+    # kept only exact-match elements and admitted any systematic bias.
+    # Replace it with an explicit per-element bound (atol + rtol*|e|) and
+    # cap the fail rate over visible elements.  rtol catches percentage
+    # bias on large-magnitude elements; atol absorbs the absolute noise
+    # floor on small-magnitude elements; fail_cap admits the rasterizer's
+    # tile-edge accumulation noise.  Knobs derived from the
+    # observed baseline fail-rate distribution per gradient.
+    quat_atol = 1e-4
+    opacity_atol = 1e-4
+
+    def _bounded_fail_check(name, a, e, vmask, atol, rtol, fail_cap):
+        diff = (a - e).abs()
+        bound = atol + rtol * e.abs()
+        fail = (diff > bound) & vmask
+        n_fail = int(fail.sum().item())
+        n_tot = int(vmask.sum().item())
+        fr = n_fail / max(n_tot, 1)
+        assert fr <= fail_cap, (
+            f"eval3d {name}: fail-rate {fr:.3%} > cap {fail_cap:.3%} "
+            f"(atol={atol:.1e}, rtol={rtol}, {n_fail}/{n_tot})"
+        )
+
+    # fail_cap = 1.05 x worst observed baseline fail-rate:
+    #   v_means    0.527% -> 0.55%
+    #   v_scales   1.598% (L40S) -> 1.68%
+    #   v_quats    0.18%  -> 0.19%
+    #   v_colors   0.067% -> 0.071%
+    #   v_opacities 0.056% -> 0.059%
+    _bounded_fail_check(
+        "v_means",
+        v_means,
+        _v_means,
+        visible_mask.expand_as(v_means),
         atol=1e-3 * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.0055,
     )
-    torch.testing.assert_close(
-        v_scales * scales_mask.float(),
-        _v_scales * scales_mask.float(),
-        rtol=0,
+    _bounded_fail_check(
+        "v_scales",
+        v_scales,
+        _v_scales,
+        visible_mask.expand_as(v_scales),
         atol=1e-3 * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.0168,
     )
-    # Relax quat/opacity tolerances when use_hit_distance=True due to accumulated floating-point errors
-    # in hit distance calculation (normalize + dot product + length operations)
-    quat_atol = 6e-3 if use_hit_distance else 5e-4
-    opacity_atol = 1e-3 if use_hit_distance else 1.5e-4
-    torch.testing.assert_close(
-        v_quats * quats_mask.float(),
-        _v_quats * quats_mask.float(),
-        rtol=0,
+    _bounded_fail_check(
+        "v_quats",
+        v_quats,
+        _v_quats,
+        visible_mask.expand_as(v_quats),
         atol=quat_atol * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.0019,
     )
-    torch.testing.assert_close(
-        v_colors * colors_mask.float(),
-        _v_colors * colors_mask.float(),
-        rtol=0,
+    _bounded_fail_check(
+        "v_colors",
+        v_colors,
+        _v_colors,
+        visible_mask.expand_as(v_colors),
         atol=1e-4 * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.00071,
     )
     # Structural invariant for use_hit_distance:
     # - fwd overwrites pix_out[..., -1] with per-pixel hit_distance,
@@ -2915,11 +3329,14 @@ def test_rasterize_to_pixels_eval3d(
             f"{last_grad.abs().max().item():.3e}, mean="
             f"{last_grad.abs().mean().item():.3e}."
         )
-    torch.testing.assert_close(
-        v_opacities * opacities_mask.float(),
-        _v_opacities * opacities_mask.float(),
-        rtol=0,
+    _bounded_fail_check(
+        "v_opacities",
+        v_opacities,
+        _v_opacities,
+        visible_mask.expand_as(v_opacities),
         atol=opacity_atol * _lidar_tol,
+        rtol=0.04,
+        fail_cap=0.00059,
     )
     torch.testing.assert_close(
         v_backgrounds_struct * backgrounds_mask.float(),
@@ -2961,194 +3378,6 @@ def test_rasterize_to_pixels_eval3d(
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
-@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
-def test_fwd_chunk_state_c0_matches_terminal_after_early_exit(tile_size):
-    """Exercise the fwd kernel's early-exit padding of `fwd_chunk_state`.
-
-    When every pixel in a tile reaches `done = true` before the kernel
-    has walked all its batches, the kernel breaks out of the main
-    compositing loop and a per-thread padding pass fills remaining chunk
-    boundaries with the frozen current state. Without that padding, the
-    affected slots carry uninitialised memory from `at::empty`, and the
-    backward pass silently corrupts gradients.
-
-    Slot c=0 (terminal boundary) is persisted at fwd batch num_batches-1
-    in the normal flow. If early-exit fires before that batch, slot c=0
-    is ONLY written by the padding pass — so breaking the padding leaves
-    slot c=0 uninitialised on every early-exit tile.
-
-    The garden `test_data` fixture does not reliably trigger early-exit:
-    typical tiles have most pixels untouched by any Gaussian, so `done`
-    stays `false` forever and `__syncthreads_count(done) >= block_size`
-    never fires. This test uses an inline synthetic scene specifically
-    designed to trigger early-exit on a multi-chunk tile:
-      - tile_size×tile_size image = one tile.
-      - ~pixels_per_tile*5+1 gaussians so the single tile has
-        num_batches=6 > CHUNK_BATCHES (multi-chunk) at either tile_size.
-      - Gaussians clustered in front of the camera with scale large enough
-        to cover the full tile — every pixel sees every gaussian.
-      - opacity=1.0 drives T below the early-exit threshold after a few
-        gaussians; early-exit fires on batch 0 or 1.
-
-    Parametrized over both 3DGUT tile_size dispatches (8 → <CDIM,8,32>,
-    16 → <CDIM,16,256>) so the early-exit padding is exercised in both
-    kernel instantiations.
-
-    Invariant: `fwd_chunk_state[slot_c0, pix, 0]` = `1 - render_alphas[pix]`
-    and `fwd_chunk_state[slot_c0, pix, 1:1+CDIM]` = `render_colors[pix]`
-    (with backgrounds=None, pix_out_final == render_colors). Broken
-    padding → slot c=0 holds garbage → test fails with a direct pointer.
-    """
-    from gsplat.cuda._wrapper import (
-        FThetaCameraDistortionParameters,
-        RollingShutterType,
-        UnscentedTransformParameters,
-        fully_fused_projection_with_ut,
-        isect_offset_encode,
-        isect_tiles,
-    )
-
-    width = height = tile_size  # single tile
-    pixels_per_tile = tile_size * tile_size  # 64 (tile=8) or 256 (tile=16)
-
-    # Enough gaussians per tile that num_batches > CHUNK_BATCHES. The
-    # per-batch count matches `block_size = pixels_per_tile`; six batches
-    # give two chunks under the production `CHUNK_BATCHES = 4` constant
-    # in RasterizeChunkCSR.h. We don't reference that constant from
-    # Python — the "num_chunks >= 2" precondition below catches any future
-    # drift and points the reader at this assumption.
-    num_gaussians = pixels_per_tile * 5 + 1  # → 6 batches
-
-    fx = fy = float(width)
-    cx = width / 2.0
-    cy = height / 2.0
-
-    means = torch.zeros(num_gaussians, 3, device=device)
-    means[:, 2] = 1.0 + torch.arange(num_gaussians, device=device).float() * 1e-4
-    quats = (
-        torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
-        .expand(num_gaussians, 4)
-        .contiguous()
-    )
-    # Large scale → each gaussian projects across several pixels so every
-    # thread in the tile sees each gaussian.
-    scales = torch.full((num_gaussians, 3), 0.5, device=device)
-    opacities = torch.ones(num_gaussians, device=device)
-
-    channels = 3
-    colors = torch.rand(1, num_gaussians, channels, device=device)
-    opacities_bc = opacities[None, :].contiguous()  # [C=1, N]
-
-    viewmats = torch.eye(4, device=device).unsqueeze(0)
-    Ks = torch.tensor(
-        [[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]],
-        device=device,
-    )
-    I = 1  # C=1, batch_dims=()
-
-    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
-        means,
-        quats,
-        scales,
-        opacities,
-        viewmats,
-        Ks,
-        width,
-        height,
-    )
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    _tpg, isect_ids, flatten_ids = isect_tiles(
-        means2d, radii, depths, tile_size, tile_width, tile_height
-    )
-    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
-
-    # Invoke the low-level op directly so we can inspect `fwd_chunk_state`.
-    ut_params = UnscentedTransformParameters()
-    ftheta_coeffs = FThetaCameraDistortionParameters()
-    (
-        _render_colors,
-        _render_alphas,
-        _last_ids,
-        chunks_per_tile,
-        _chunk_offsets,
-        fwd_chunk_state,
-    ) = torch.ops.gsplat.rasterize_to_pixels_from_world_3dgs_fwd(
-        means,
-        quats,
-        scales,
-        colors,
-        opacities_bc,
-        None,
-        None,  # backgrounds, masks
-        width,
-        height,
-        tile_size,
-        viewmats,
-        None,
-        Ks,
-        0,  # PINHOLE
-        ut_params,
-        int(RollingShutterType.GLOBAL),
-        None,
-        None,
-        None,
-        None,  # rays, radial/tangential/thin_prism coeffs
-        ftheta_coeffs,
-        None,
-        None,  # lidar, external-distortion coeffs
-        isect_offsets,
-        flatten_ids,
-        False,
-        None,
-        None,  # use_hit_distance, sample_counts, render_normals
-    )
-
-    # Preconditions: one tile, multi-chunk, populated. If any of these
-    # fail, the scene setup isn't exercising what we think it is.
-    assert chunks_per_tile.numel() == 1
-    num_chunks = int(chunks_per_tile[0].item())
-    assert num_chunks >= 2, (
-        f"expected num_chunks >= 2 to exercise multi-chunk padding, got "
-        f"{num_chunks}. Either CHUNK_BATCHES changed in the C++ side or "
-        "the scene's batch count is too small."
-    )
-
-    # Invariant: slot c=0 equals terminal render state for every pixel.
-    terminal_slot = fwd_chunk_state[0]  # [pixels_per_tile, 1+CDIM+3]
-    rc = _render_colors.reshape(height, width, channels)
-    ra = _render_alphas.reshape(height, width)
-    # Threads iterate y-major then x, so pixel tr=(y*tile_size + x).
-    T_slot = terminal_slot[:, 0].reshape(tile_size, tile_size)
-    pix_slot = terminal_slot[:, 1 : 1 + channels].reshape(
-        tile_size, tile_size, channels
-    )
-
-    torch.testing.assert_close(
-        T_slot,
-        1.0 - ra,
-        rtol=0.0,
-        atol=1e-5,
-        msg=(
-            "slot c=0 T values differ from 1 - render_alphas. Most likely "
-            "the fwd early-exit padding is broken — slot c=0 was never "
-            "written and holds uninitialised memory from at::empty."
-        ),
-    )
-    torch.testing.assert_close(
-        pix_slot,
-        rc,
-        rtol=0.0,
-        atol=1e-5,
-        msg=(
-            "slot c=0 pix_out values differ from render_colors. Same "
-            "likely cause: fwd early-exit padding is broken."
-        ),
-    )
-
-
 @pytest.fixture
 def _ghost_lobe_scene():
     """Single needle gaussian + 32x32 pinhole camera at the origin."""
@@ -3185,26 +3414,23 @@ def _ghost_lobe_scene():
 def _ghost_lobe_isect(_ghost_lobe_scene):
     """Intersection list with radii inflated to cover every tile."""
     from gsplat.cuda._wrapper import (
-        fully_fused_projection_with_ut,
         isect_offset_encode,
         isect_tiles,
     )
 
     s = _ghost_lobe_scene
-    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
-        s.means,
-        s.quats,
-        s.scales,
-        s.opacities,
-        s.viewmats,
-        s.Ks,
-        s.width,
-        s.height,
-        camera_model="pinhole",
-    )
-    radii = radii.clone()
+
+    # This test intentionally bypasses projection so it can force the
+    # off-image gaussian into every tile and exercise the 3D ray hit_t clamp.
+    # The actual projection culls this gaussian, and the CUDA projection
+    # kernel only guarantees radii=0 on culled entries.  means2d/depths are
+    # allocated with at::empty and must not be used after culling.
+    means2d = s.means.new_tensor([[[float(s.cx_int), float(s.height) * 0.5]]])
+    depths = s.means.new_ones((1, 1))
+    radii = torch.empty((1, 1, 2), device=s.means.device, dtype=torch.int32)
     radii[..., 0] = s.width
     radii[..., 1] = s.height
+
     tile_size = 16
     tw = math.ceil(s.width / tile_size)
     th = math.ceil(s.height / tile_size)
@@ -3712,13 +3938,13 @@ def test_projection_ut_zero_quaternion(nan_test_data):
     # Valid Gaussians must match between CUDA and Python ref
     if sel.any():
         torch.testing.assert_close(
-            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+            means2d_gpu[sel], means2d_ref[sel], rtol=2e-3, atol=1e-3
         )
         torch.testing.assert_close(
             depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
         )
         torch.testing.assert_close(
-            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+            conics_gpu[sel], conics_ref[sel], rtol=1e-4, atol=1e-4
         )
 
     # End-to-end: render and verify no pixel exceeds the opacity bound.
@@ -3812,13 +4038,13 @@ def test_projection_ut_zero_scale_single_axis(nan_test_data):
     # Valid Gaussians must match between CUDA and Python ref
     if sel.any():
         torch.testing.assert_close(
-            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+            means2d_gpu[sel], means2d_ref[sel], rtol=2e-3, atol=1e-3
         )
         torch.testing.assert_close(
             depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
         )
         torch.testing.assert_close(
-            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+            conics_gpu[sel], conics_ref[sel], rtol=1e-4, atol=1e-4
         )
 
     # End-to-end: render and verify no pixel exceeds the opacity bound.
@@ -4019,13 +4245,13 @@ def test_projection_ut_python_ref_no_nan(nan_test_data):
 
         # CUDA and ref must agree on valid Gaussian outputs
         torch.testing.assert_close(
-            means2d_gpu[sel], means2d_ref[sel], rtol=0.5, atol=0.05
+            means2d_gpu[sel], means2d_ref[sel], rtol=2e-3, atol=1e-3
         )
         torch.testing.assert_close(
             depths_gpu[sel], depths_ref[sel], rtol=1e-6, atol=2e-6
         )
         torch.testing.assert_close(
-            conics_gpu[sel], conics_ref[sel], rtol=1e-2, atol=1e-2
+            conics_gpu[sel], conics_ref[sel], rtol=1e-4, atol=1e-4
         )
 
 

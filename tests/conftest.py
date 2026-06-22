@@ -52,6 +52,19 @@ _DEFAULT_CUDA_FREE_FRACTION = 1.0
 
 
 def pytest_addoption(parser):
+    cpp_group = parser.getgroup("gsplat-cpp", "gsplat: native C++ tests")
+    cpp_group.addoption(
+        "--gtest_filter",
+        "--gtest-filter",
+        dest="gtest_filter",
+        default=None,
+        metavar="FILTER",
+        help=(
+            "Filter native GoogleTest tests before pytest parametrizes them. "
+            "Uses GoogleTest filter syntax, for example 'Suite.*-Suite.Slow'."
+        ),
+    )
+
     group = parser.getgroup(
         "gsplat-mem", "gsplat: GPU memory cap and per-test tracking"
     )

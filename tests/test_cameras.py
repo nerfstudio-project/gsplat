@@ -57,7 +57,11 @@ from gsplat.cuda._torch_cameras import (  # PyTorch reference
 from gsplat.cuda._torch_lidars import (  # PyTorch reference
     _RowOffsetStructuredSpinningLidarModel,
 )
-from gsplat._helper import assert_mismatch_ratio, assert_close
+from gsplat._helper import (
+    assert_mismatch_ratio,
+    assert_close,
+    assert_close_with_boundary_band,
+)
 from gsplat.cuda._wrapper import (
     RollingShutterType,
     FThetaPolynomialType,
@@ -764,42 +768,91 @@ class TestCameraModels:
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
 
-        # Tolerances based on camera type (ordered by decreasing atol)
-        # Values set ~20% above observed maximums for tight margin
+        # Tolerances based on camera type, set to 1.05 x observed maximum.
         if isinstance(ref_camera, _OpenCVFisheyeCameraModel):
             # fisheye: observed atol=4.96e-05, rtol=1.45e-03
-            atol, rtol = 6e-05, 1.8e-03
+            atol, rtol = 5.2e-05, 1.52e-03
         elif isinstance(
             ref_camera, (_OpenCVPinholeCameraModel, _PerfectPinholeCameraModel)
         ):
             # OpenCV pinhole & perfect pinhole: observed atol=3.05e-05, rtol=2.47e-03
-            atol, rtol = 3.7e-05, 3e-03
+            atol, rtol = 3.2e-05, 2.6e-03
         elif isinstance(ref_camera, _FThetaCameraModel):
             # ftheta: observed atol=1.53e-05, rtol=1.69e-07
-            atol, rtol = 1.9e-05, 2.5e-07
+            atol, rtol = 1.6e-05, 1.8e-07
         elif isinstance(ref_camera, _RowOffsetStructuredSpinningLidarModel):
-            atol, rtol = 5e-03, 5e-03
+            atol, rtol = 5e-03, 2e-03  # not yet calibrated to observed
         else:  # Fallback
             atol, rtol = None, None
         assert_close(test_imgpt[all_valid], ref_imgpt[all_valid], atol=atol, rtol=rtol)
 
-        # Validity mismatch tolerance by camera type (ordered by decreasing tolerance)
-        # Values set ~20% above observed maximums for tight margin
-        if isinstance(
-            ref_camera, (_OpenCVPinholeCameraModel, _OpenCVFisheyeCameraModel)
-        ):
-            # OpenCV models: typically very low
-            validity_tol = 1e-03  # 0.1% for distortion models
-        elif isinstance(ref_camera, _FThetaCameraModel):
-            # FTheta: observed max 0.23% (release mode with aggressive compiler optimizations)
-            # Debug mode: 4e-04 (0.04%), Release mode bumped to handle numerical differences
-            validity_tol = 2.5e-03  # 0.25%
-        elif isinstance(ref_camera, _PerfectPinholeCameraModel):
-            validity_tol = 1e-05  # 0.001% for perfect pinhole
-        else:
-            validity_tol = 1e-03  # Fallback
+        # Validity mismatch handling.
+        #
+        # The validity flag is `not_behind_camera & converged & (theta <=
+        # max_angle) & valid_bounds`. Empirically, the FP-amplifier on this
+        # path is the Newton iteration that inverts the ftheta polynomial
+        # (`_eval_poly_inverse_horner_newton`); each iteration's residual is
+        # within ULP of the convergence threshold (|dx|<1e-6) for rays at
+        # high incidence (z near 0, theta near pi/2). ULP noise can
+        # flip the convergence flag, which then zeros image_point and flips
+        # validity. The flip is in INTERNAL Newton state -- not directly
+        # observable from outside the kernel -- so we cannot write a strict
+        # cross predicate ("a was just-converged, b was just-not-converged").
+        # We rely on:
+        #   interior assert (exact agreement off-band) -- regression catcher
+        #   band flip-rate cap                        -- absorb FP noise
+        #   symmetry guardrail                        -- catch directional bug
+        #
+        # The band classifier is geometric: rays at theta > some threshold
+        # (close to pi/2 or close to max_angle) where Newton convergence is
+        # FP-sensitive on this polynomial. Below the threshold all rays
+        # converge identically, so validity must agree exactly.
+        xy_norm = torch.linalg.norm(camera_rays[..., :2], dim=-1)
+        theta_full = torch.atan2(xy_norm, camera_rays[..., 2])
+        # FP-sensitive zone: theta > 1.3 rad (75 deg) or theta within 0.05
+        # of max_angle. The 1.3 cutoff captures the empirical [1.348, 1.570]
+        # range observed (RTX PRO 2000) with safety margin.
+        max_angle = (
+            ref_camera.max_angle.flatten()[0].item()
+            if hasattr(ref_camera, "max_angle")
+            else float("inf")
+        )
+        # FP-sensitive zone for Newton convergence flag flips:
+        #   - Real cause is the |dx| < 1e-6 stopping rule, not geometry.
+        #     Upstream sqrt/atan2/div drift (gsplat --use_fast_math vs
+        #     PyTorch IEEE) can push |dx| onto opposite sides at any well-
+        #     conditioned theta, not only near max_angle as first thought.
+        #   - Worst observed flips:
+        #       RTX PRO 2000  theta ~1.27
+        #       RTX PRO 6000  theta ~1.019
+        #   - Threshold 1.0 rad covers both with ~0.02 rad margin; plus
+        #     a 0.05 rad margin near max_angle.
+        boundary_mask = (theta_full > 1.0) | ((max_angle - theta_full).abs() < 5e-2)
 
-        assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
+        # Calibration trace (RTX PRO 2000):
+        #   - boundary band: rays at theta > 1.3 rad or within 0.05 of max_angle
+        #   - in-band flips:
+        #       * 493/N_band  (1.52% of total)  ftheta[pinhole+p2a] arms
+        #       * ~510/N_band (1.57% of total)  ftheta[p2a] arms
+        #     all geometrically inside image bounds (Newton convergence flip)
+        #   - asymmetry: 243 vs 250 (cuda-only-valid vs ref-only-valid)
+        #     -> |delta|/sum = 7/493 = 0.014, well under 0.5 cap
+        # RTX PRO 6000:
+        #   - in-band flips: ~0.23% of total (well under any budget)
+        # See plan: ~/.claude/plans/how-to-devise-tests-hidden-fox.md
+        # No cross predicate: the Newton residual is internal state.
+        assert_close_with_boundary_band(
+            test_valid,
+            ref_valid,
+            boundary_mask=boundary_mask,
+            interior_atol=0,  # exact agreement off-band
+            interior_rtol=0,
+            boundary_max_flip_ratio=0.10,  # 6x observed worst (1.57%)
+            boundary_symmetry_tol=0.5,  # 3:1 directional bias rejected
+            flip_predicate=None,  # default a != e for bool
+            boundary_cross_predicate=None,
+            msg="cluster B: ftheta Newton-convergence FP-sensitivity",
+        )
 
     def test_image_point_to_camera_ray(self, image_points, test_camera, ref_camera):
         test_rays, test_valid = test_camera.image_point_to_camera_ray(image_points)
@@ -808,41 +861,57 @@ class TestCameraModels:
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
 
-        # Tolerances based on camera type (ordered by decreasing atol)
-        # Values set ~20% above observed maximums for tight margin
-        # Note: Cannot distinguish between different distortion params by type alone
-        if isinstance(ref_camera, _FThetaCameraModel):
-            # ftheta (various): observed atol=1.37e-04, rtol=1.03
-            atol, rtol = 1.65e-04, 1.25
-        elif isinstance(ref_camera, _OpenCVFisheyeCameraModel):
-            # fisheye: observed atol=4.14e-06, rtol=4.80e-03
-            atol, rtol = 5e-06, 6e-03
-        elif isinstance(ref_camera, _OpenCVPinholeCameraModel):
-            # OpenCV pinhole (k4/k6/distortions): observed atol=2.38e-07, rtol=6.71e-05
-            atol, rtol = 3e-07, 8e-05
-        elif isinstance(ref_camera, _PerfectPinholeCameraModel):
-            # perfect pinhole: observed atol=1.19e-07, rtol=2.37e-07
-            atol, rtol = 1.5e-07, 3e-07
-        else:  # Fallback
-            atol, rtol = 1.65e-04, 1.25
-        assert_close(test_rays[all_valid], ref_rays[all_valid], atol=atol, rtol=rtol)
+        # Per-element band+sparsity check on the rays (3D unit vectors).
+        # Boundary band catches the two regions where the ftheta inverse-
+        # distortion Newton iteration is FP-sensitive:
+        #   xy_norm < 1e-2: rays near the optical axis (theta near 0).
+        #     ULP cancellation in (sin(theta) -> 0) plus the inverse
+        #     polynomial's behavior at theta=0.
+        #   xy_norm >= 0.999: rays near the lens "horizon" (theta near
+        #     pi/2).  The ftheta polynomial has a critical point there, so
+        #     Newton convergence is sensitive to FP order.
+        # Together these admit ~3.4% of rays in the worst arm; the remaining
+        # 96% interior rays get a tight rtol bound.
+        ray_xy_norm = torch.linalg.norm(test_rays[..., :2], dim=-1)
+        ref_xy_norm = torch.linalg.norm(ref_rays[..., :2], dim=-1)
+        near_axis = (ray_xy_norm < 1e-2) | (ref_xy_norm < 1e-2)
+        near_horizon = (ray_xy_norm >= 0.999) | (ref_xy_norm >= 0.999)
+        rays_band = ((near_axis | near_horizon)[all_valid])[..., None].expand(-1, 3)
+        rays_a = test_rays[all_valid]
+        rays_e = ref_rays[all_valid]
+        nz_thresh = rays_e.abs().max().item() * 1e-5
+        # ftheta interior rtol = 1.05 x worst observed in interior buckets
+        # (5.18e-3 in xy in [1e-2, 1e-1)) -> 5.5e-3.  Replaces 9.7e-2.
+        rays_rtol = 5.5e-3 if isinstance(ref_camera, _FThetaCameraModel) else 1e-3
+        assert_close_with_boundary_band(
+            rays_a,
+            rays_e,
+            boundary_mask=rays_band,
+            interior_atol=nz_thresh,
+            interior_rtol=rays_rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: (a - e).abs() > 100 * _t,
+            msg="image_point_to_camera_ray rays",
+        )
 
-        # Validity mismatch tolerance by camera type (ordered by decreasing tolerance)
-        # Values set ~20% above observed maximums for tight margin
+        # Per-type tol = ~5x worst observed mismatch rate:
+        #   - OpenCV pinhole (k4/k6/k6+tan/k6+thin):  0.0021% -> 1.1e-4 (50x)
+        #   - OpenCV fisheye:                         0.0015% -> 1e-4   (6.7x)
+        #   - ftheta:                                 0% to 0.77% (collapsed
+        #       to 1e-2 because the pinhole+a2p variant needs it; differentiate
+        #       once camera_model is plumbed in)
+        #   - PerfectPinhole:                         0%      -> 1e-5
         if isinstance(ref_camera, _OpenCVPinholeCameraModel):
-            # OpenCV Pinhole: high due to iterative undistortion process
-            validity_tol = 3e-02  # 3%
+            validity_tol = 1.1e-04
         elif isinstance(ref_camera, _FThetaCameraModel):
-            # FTheta: observed max 0.79% (release mode with aggressive compiler optimizations)
-            # Debug mode: 3e-03 (0.3%), Release mode bumped to handle numerical differences
-            validity_tol = 1e-02  # 1.0%
+            validity_tol = 1e-02
         elif isinstance(ref_camera, _OpenCVFisheyeCameraModel):
-            # Fisheye: observed max ~0.00%
-            validity_tol = 1e-04  # 0.01%
+            validity_tol = 1e-04
         elif isinstance(ref_camera, _PerfectPinholeCameraModel):
-            validity_tol = 1e-05  # 0.001% for perfect pinhole
+            validity_tol = 1e-05
         else:
-            validity_tol = 3e-02  # Fallback
+            validity_tol = 3e-02  # lidar / unknown fallback
         assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
 
     def test_shutter_relative_frame_time(
@@ -851,21 +920,50 @@ class TestCameraModels:
         test_times = test_camera.shutter_relative_frame_time(image_points)
         ref_times = ref_camera.shutter_relative_frame_time(image_points)
 
-        # Tolerances based on camera type
-        # Values set ~20% above observed maximums for tight margin
+        # LiDAR has an angle-wraparound boundary at 0 == 2*pi where the
+        # angles_to_columns_map covers the same angle twice; isolate that
+        # boundary into a band so the off-band tolerance can stay tight.
+        # Other cameras have no such discontinuity.
         if isinstance(ref_camera, _RowOffsetStructuredSpinningLidarModel):
-            # Only 1 mismatched element (out of 3252. It could be due to
-            # the angles_to_columns_map covering the angle 0 (==2*pi) twice
-            # The expectation is that once this is fixed, the atol can be set back to 5e-3.
-            atol, rtol = 3.5e-02, 3.5e-02
+            # 99.99% of rays are bit-exact between CUDA and ref. Worst arm has
+            # ~1 column-boundary outlier with ~3% rel-diff at an unrelated t.
+            # Use a tight per-element bound + outlier-magnitude guard, plus a
+            # band-flip-rate cap at the wraparound (t near 0 or 1).
+            diff = (test_times - ref_times).abs()
+            band = (ref_times.abs() < 5e-3) | ((ref_times - 1.0).abs() < 5e-3)
+            interior = ~band
+            # Tight bound: bit-exact baseline => any non-zero diff fires.
+            bound = 1e-6 + 1e-6 * ref_times.abs()
+            interior_fail = (diff > bound) & interior
+            fr = interior_fail.float().sum().item() / max(int(interior.sum().item()), 1)
+            # Cap = 1.05x worst observed (8/32196 = 2.48e-4).
+            assert fr <= 2.6e-4, (
+                f"shutter_relative_frame_time (lidar): interior fail-rate "
+                f"{fr:.4%} > cap 0.026% ({int(interior_fail.sum().item())} "
+                f"elements > 1e-6 + 1e-6*|ref|)"
+            )
+            # Outlier-magnitude guard: 1.05x worst observed (3.0e-2).
+            assert (diff <= 3.2e-2).all(), (
+                f"shutter_relative_frame_time (lidar): outlier diff "
+                f"{diff.max().item():.4e} > 3.2e-2"
+            )
+            # Band: 0 flips observed; cap is a guard.
+            band_diff = diff[band]
+            if band_diff.numel() > 0:
+                band_flips = (band_diff > 5e-3).sum().item()
+                band_n = band_diff.numel()
+                assert band_flips / max(band_n, 1) <= 1e-3, (
+                    f"shutter_relative_frame_time (lidar): band flip-rate "
+                    f"{band_flips}/{band_n} > 0.1%"
+                )
         else:
             # Other cameras: observed atol ~1e-06, rtol ~1e-06
-            atol, rtol = 2e-06, 2e-06
-
-        assert_close(test_times, ref_times, atol=atol, rtol=rtol)
+            assert_close(test_times, ref_times, atol=2e-06, rtol=2e-06)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+# Pinhole-only: shutter-pose composition is camera-type-agnostic (defined on
+# _BaseCameraModel); per-type projection is covered in TestCameraModels.
 @pytest.mark.parametrize("camera_model", ["pinhole"])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (2, 3)])
 @pytest.mark.parametrize("image_dims", [(127, 257)])
@@ -893,26 +991,19 @@ class TestCameraModelsShutterPose:
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
 
-        # Observed errors from shutter pose interpolation and projection
-        # Values set ~20% above observed maximums for tight margin
-        # rays_org: observed atol=3.34e-06, rtol=2.70e-06
-        # rays_dir: observed atol=7.75e-07, rtol varies (high due to small components)
+        # rays_org: observed atol=3.34e-06, rtol=2.70e-06 -> ~20% margin.
         assert_close(
             test_rays_org[all_valid], ref_rays_org[all_valid], atol=4e-06, rtol=3.5e-06
         )
+        # rays_dir is a unit 3-vector. Worst observed max_abs across all |e|
+        # buckets (FP32 noise floor is bounded): RTX PRO 6000=1.013e-6,
+        # L40S=1.1325e-6. atol carries it; rtol would only inflate at small
+        # |e| (near-axis rays) without constraining.
         assert_close(
-            test_rays_dir[all_valid], ref_rays_dir[all_valid], atol=1e-06, rtol=1e-03
+            test_rays_dir[all_valid], ref_rays_dir[all_valid], atol=1.2e-06, rtol=0
         )
 
-        # Tolerance for validity mismatches in shutter pose calculations
-        # Higher for OpenCV models with distortion
-        if isinstance(ref_camera, _OpenCVPinholeCameraModel):
-            validity_tol = 3e-02  # 3% for OpenCV pinhole models
-        elif isinstance(ref_camera, (_OpenCVFisheyeCameraModel, _FThetaCameraModel)):
-            validity_tol = 1e-03  # 0.1% for fisheye/ftheta
-        else:
-            validity_tol = 1e-05  # 0.001% for perfect pinhole
-        assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
+        assert_mismatch_ratio(test_valid, ref_valid, max=1e-05)
 
     def test_world_point_to_image_point_shutter_pose(
         self, world_points, pose_start, pose_end, test_camera, ref_camera
@@ -928,10 +1019,57 @@ class TestCameraModelsShutterPose:
         all_valid = test_valid & ref_valid
         assert all_valid.any(), "No valid points found"
 
-        # Relaxed tolerances to account for numerical precision in shutter pose calculations
-        # These tolerances handle accumulated errors from pose interpolation and projection
-        # Values set ~20% above observed maximums for tight margin
-        # Observed: atol=3.43e-03, rtol=0.717
-        assert_close(test_img[all_valid], ref_img[all_valid], atol=4.2e-03, rtol=0.87)
+        # Worst interior outlier (pre-redesign): rel=1.292e-2, abs=0.116 px at
+        # |e|=9 px (1 per ~9k rays). Root cause: 10-iter RS refinement uses
+        # floor(image_point[shutter_axis]); ULP shifts at integer flip floor()
+        # into a different basin -> ~0.1 px drift on the converged point.
+        # Band:
+        #   - |e_norm| < 1 px (principal-point FP cancellation)
+        #   - shutter-axis frac < 1e-2 (catches the floor() cross)
+        # Cross predicate verifies in-band disagreements are floor() straddles.
+        a = test_img[all_valid]
+        e = ref_img[all_valid]
+        e_norm = e.abs().max(dim=-1).values
+        rs_axis = {
+            RollingShutterType.GLOBAL: None,
+            RollingShutterType.ROLLING_LEFT_TO_RIGHT: 0,
+            RollingShutterType.ROLLING_RIGHT_TO_LEFT: 0,
+            RollingShutterType.ROLLING_TOP_TO_BOTTOM: 1,
+            RollingShutterType.ROLLING_BOTTOM_TO_TOP: 1,
+        }[ref_camera.shutter_type]
+        near_floor_pt = torch.zeros_like(e_norm, dtype=torch.bool)
+        if rs_axis is not None:
+            frac_t = (a[..., rs_axis] - a[..., rs_axis].round()).abs()
+            frac_r = (e[..., rs_axis] - e[..., rs_axis].round()).abs()
+            near_floor_pt = torch.minimum(frac_t, frac_r) < 1e-2
+        band = ((e_norm < 1.0) | near_floor_pt)[..., None].expand(-1, 2)
+        nz_thresh = e.abs().max().item() * 1e-5
+
+        def _is_true_cross(band_mask, _a=a, _e=e, _ax=rs_axis):
+            if _ax is None:
+                return torch.zeros(
+                    int(band_mask.sum().item()), dtype=torch.bool, device=_a.device
+                )
+            pt_cross = _a[..., _ax].floor() != _e[..., _ax].floor()
+            return pt_cross[..., None].expand(-1, 2)[band_mask]
+
+        # Knobs:
+        #   - interior_rtol=3e-3: 1.05x post-band worst (2.85e-3, atol-absorbed)
+        #   - max_flip_ratio=0.10: ~6x observed 1.75% on R2L bd1
+        #   - symmetry disabled: a cross drifts a point's x AND y in the same
+        #     direction (pose-interp coupling); n=2-4 makes |mean(sign)|~1
+        #     regardless of bug-vs-noise. Cross predicate is the stronger guard.
+        assert_close_with_boundary_band(
+            a,
+            e,
+            boundary_mask=band,
+            interior_atol=nz_thresh,
+            interior_rtol=3e-3,
+            boundary_max_flip_ratio=0.10,
+            boundary_symmetry_tol=1.0,
+            flip_predicate=None,  # default: |a - e| > interior_atol
+            boundary_cross_predicate=_is_true_cross if rs_axis is not None else None,
+            msg="world_point_to_image_point_shutter_pose imgpts",
+        )
 
         assert_mismatch_ratio(test_valid, ref_valid, max=1e-05)
