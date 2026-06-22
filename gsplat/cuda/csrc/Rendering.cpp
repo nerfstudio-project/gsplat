@@ -896,16 +896,36 @@ Rasterization3DGSResult rasterization_3dgs(
     // indices; the dense branch returns per-camera tensors and uses empty index
     // sentinels where the packed batch/camera/gaussian indices would go.
     if (with_ut) {
-        ProjectionUT3DGSFusedResult projection = projection_ut_3dgs_fused(
-            means, quats.value(), scales.value(), opacities,
-            viewmats, viewmats_rs, Ks,
-            image_width, image_height,
-            eps2d, near_plane, far_plane, radius_clip,
-            calc_compensations, camera_model, global_z_order,
-            ut_params, rolling_shutter,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-            ftheta_coeffs, lidar_coeffs, external_distortion_params
-        );
+        ProjectionUT3DGSFusedResult projection = [&]() {
+            at::AutoGradMode no_grad(false);
+            return call_torch_op<&projection_ut_3dgs_fused>(
+                "gsplat::projection_ut_3dgs_fused",
+                means,
+                quats.value(),
+                scales.value(),
+                opacities,
+                viewmats,
+                viewmats_rs,
+                Ks,
+                image_width,
+                image_height,
+                eps2d,
+                near_plane,
+                far_plane,
+                radius_clip,
+                calc_compensations,
+                camera_model,
+                global_z_order,
+                ut_params,
+                rolling_shutter,
+                radial_coeffs,
+                tangential_coeffs,
+                thin_prism_coeffs,
+                ftheta_coeffs,
+                lidar_coeffs,
+                external_distortion_params
+            );
+        }();
         radii = projection.radii;
         means2d = projection.means2d;
         depths = projection.depths;
@@ -1234,23 +1254,27 @@ Rasterization3DGSResult rasterization_3dgs(
         as_optional_tensor(with_ut ? at::Tensor{} : kernel_opacities);
     TileIntersectResult isects =
         lidar_coeffs.has_value()
-        ? intersect_tile_lidar(
+        ? call_torch_op<&intersect_tile_lidar>(
+              "gsplat::intersect_tile_lidar",
               lidar_coeffs.value(),
               kernel_means2d, kernel_radii, kernel_depths,
               kernel_image_ids, kernel_gaussian_ids,
-              I,
+              std::optional<int64_t>(I),
               true, // sort
               segmented)
-        : intersect_tile(
+        : call_torch_op<&intersect_tile>(
+              "gsplat::intersect_tile",
               kernel_means2d, kernel_radii, kernel_depths,
               intersect_conics, intersect_opacities,
               kernel_image_ids, kernel_gaussian_ids,
-              I, tile_size, tile_width, tile_height,
+              std::optional<int64_t>(I), tile_size, tile_width, tile_height,
               true, // sort
               segmented);
 
-    at::Tensor isect_offsets =
-        intersect_offset(isects.isect_ids, I, tile_width, tile_height);
+    at::Tensor isect_offsets = call_torch_op<&intersect_offset>(
+        "gsplat::intersect_offset",
+        isects.isect_ids, I, tile_width, tile_height
+    );
     std::vector<int64_t> isect_offsets_shape =
         batch_shape_with(means, {C, tile_height, tile_width});
     isect_offsets = isect_offsets.reshape(isect_offsets_shape);
@@ -1277,10 +1301,11 @@ Rasterization3DGSResult rasterization_3dgs(
 
         if (with_eval3d) {
             RasterizeToPixelsFromWorld3DGSResult raster =
-                rasterize_to_pixels_from_world_3dgs(
+                call_torch_op<&rasterize_to_pixels_from_world_3dgs>(
+                "gsplat::rasterize_to_pixels_from_world_3dgs",
                 means, quats.value(), scales.value(),
                 features_chunk, kernel_opacities, backgrounds_chunk,
-                c10::nullopt,
+                at::optional<at::Tensor>(),
                 image_width, image_height, tile_size,
                 viewmats, viewmats_rs, Ks,
                 static_cast<int64_t>(camera_model), ut_params,
@@ -1674,16 +1699,19 @@ Rasterization2DGSResult rasterization_2dgs(
     const int64_t tile_height = static_cast<int64_t>(
         std::ceil(image_height / static_cast<double>(tile_size))
     );
-    TileIntersectResult isects = intersect_tile(
+    TileIntersectResult isects = call_torch_op<&intersect_tile>(
+        "gsplat::intersect_tile",
         means2d.contiguous(), radii.contiguous(), depths.contiguous(),
-        c10::nullopt, c10::nullopt,
+        at::optional<at::Tensor>(), at::optional<at::Tensor>(),
         contiguous_optional(image_ids), contiguous_optional(gaussian_ids_opt),
-        I, tile_size, tile_width, tile_height,
+        std::optional<int64_t>(I), tile_size, tile_width, tile_height,
         true, // sort
         false // segmented
     );
-    at::Tensor isect_offsets =
-        intersect_offset(isects.isect_ids, I, tile_width, tile_height);
+    at::Tensor isect_offsets = call_torch_op<&intersect_offset>(
+        "gsplat::intersect_offset",
+        isects.isect_ids, I, tile_width, tile_height
+    );
     isect_offsets = isect_offsets.reshape(
         batch_shape_with_2dgs(means, {C, tile_height, tile_width})
     );
