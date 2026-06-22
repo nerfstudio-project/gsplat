@@ -329,6 +329,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing_extensions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">._helper</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_shape</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.trace</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace_function</span><span class="p">,</span> <span class="n">trace_pop</span><span class="p">,</span> <span class="n">trace_push</span><span class="p">,</span> <span class="n">trace_range</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.profile</span><span class="w"> </span><span class="kn">import</span> <span class="n">capture_inputs</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.cuda._wrapper</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">RollingShutterType</span><span class="p">,</span>
@@ -577,6 +578,7 @@
 <div class="viewcode-block" id="rasterization">
 <a class="viewcode-back" href="../../apis/rasterization.html#gsplat.rasterization">[docs]</a>
 <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render&quot;</span><span class="p">)</span>
+<span class="nd">@capture_inputs</span><span class="p">(</span><span class="n">envvar</span><span class="o">=</span><span class="s2">&quot;GSPLAT_INPUT_CAPTURE_RASTERIZATION&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterization</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>

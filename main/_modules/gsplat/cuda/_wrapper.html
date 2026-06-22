@@ -1207,6 +1207,10 @@
 <span class="sd">        - **Rendered colors**. [..., image_height, image_width, channels]</span>
 <span class="sd">        - **Rendered alphas**. [..., image_height, image_width, 1]</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="n">tile_size</span> <span class="ow">in</span> <span class="p">(</span>
+        <span class="mi">4</span><span class="p">,</span>
+        <span class="mi">16</span><span class="p">,</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Only tile_size in </span><span class="se">{{</span><span class="s2">4, 16</span><span class="se">}}</span><span class="s2"> is supported for 3DGS rasterization, got </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2">&quot;</span>
 
     <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">channels</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
@@ -1385,7 +1389,7 @@
     <span class="k">return</span> <span class="n">colors</span><span class="p">,</span> <span class="n">alphas</span>
 
 
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render3D-fwd&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;raster3D-fwd&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_eval3d_extra</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
@@ -2265,9 +2269,20 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="n">render_normals</span> <span class="o">=</span> <span class="kc">None</span>
 
-        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_fwd&quot;</span>
-        <span class="p">)(</span>
+        <span class="c1"># Fwd emits the CSR chunk structure (chunks_per_tile, chunk_offsets)</span>
+        <span class="c1"># and the `fwd_chunk_state` tensor that bwd consumes. Computing CSR</span>
+        <span class="c1"># offsets once per forward — instead of once per backward — shares</span>
+        <span class="c1"># the one blocking `chunk_offsets[-1].item()` D2H across both passes,</span>
+        <span class="c1"># and exposes the persisted per-chunk cumulative state so the bwd</span>
+        <span class="c1"># kernel can skip rebuilding it.</span>
+        <span class="p">(</span>
+            <span class="n">render_colors</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">chunks_per_tile</span><span class="p">,</span>
+            <span class="n">chunk_offsets</span><span class="p">,</span>
+            <span class="n">fwd_chunk_state</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_fwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
@@ -2317,7 +2332,13 @@
             <span class="n">flatten_ids</span><span class="p">,</span>
             <span class="n">render_alphas</span><span class="p">,</span>
             <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">chunks_per_tile</span><span class="p">,</span>
+            <span class="n">chunk_offsets</span><span class="p">,</span>
+            <span class="n">fwd_chunk_state</span><span class="p">,</span>
         <span class="p">)</span>
+        <span class="c1"># total_chunks is recoverable from the fwd_chunk_state leading dim</span>
+        <span class="c1"># (avoids a second D2H sync — fwd already read it to size this tensor).</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">total_chunks</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">fwd_chunk_state</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">ut_params</span> <span class="o">=</span> <span class="n">ut_params</span>
@@ -2332,7 +2353,7 @@
         <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span><span class="p">,</span> <span class="n">sample_counts</span><span class="p">,</span> <span class="n">render_normals</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render3D-bwd&quot;</span><span class="p">)</span>
+    <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;raster3D-bwd&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 3]</span>
@@ -2362,7 +2383,14 @@
             <span class="n">flatten_ids</span><span class="p">,</span>
             <span class="n">render_alphas</span><span class="p">,</span>
             <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">chunks_per_tile</span><span class="p">,</span>
+            <span class="n">chunk_offsets</span><span class="p">,</span>
+            <span class="n">fwd_chunk_state</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="c1"># Bwd consumes `fwd_chunk_state` directly in K2&#39;s preamble — no</span>
+        <span class="c1"># separate state-scan / prefix-scan kernels. The tensor carries</span>
+        <span class="c1"># per-chunk cumulative (T, pix_out, normal_out) from fwd at every</span>
+        <span class="c1"># CHUNK_BATCHES boundary.</span>
         <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
         <span class="n">ut_params</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ut_params</span>
@@ -2373,6 +2401,7 @@
         <span class="n">lidar_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">lidar_coeffs</span>
         <span class="n">external_distortion_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">external_distortion_coeffs</span>
         <span class="n">use_hit_distance</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">use_hit_distance</span>
+        <span class="n">total_chunks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">total_chunks</span>
 
         <span class="p">(</span>
             <span class="n">v_means</span><span class="p">,</span>
@@ -2413,6 +2442,10 @@
             <span class="n">v_render_colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_render_alphas</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_render_normals</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">v_render_normals</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">chunks_per_tile</span><span class="p">,</span>
+            <span class="n">chunk_offsets</span><span class="p">,</span>
+            <span class="n">total_chunks</span><span class="p">,</span>
+            <span class="n">fwd_chunk_state</span><span class="p">,</span>
         <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">5</span><span class="p">]:</span>  <span class="c1"># backgrounds</span>
