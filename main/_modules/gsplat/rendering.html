@@ -398,6 +398,20 @@
     <span class="k">return</span> <span class="ow">not</span> <span class="n">render_mode_has_depth_channel</span><span class="p">(</span><span class="n">mode</span><span class="p">)</span> <span class="ow">and</span> <span class="n">render_mode_has_color</span><span class="p">(</span><span class="n">mode</span><span class="p">)</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_3dgut_rasterize_mode</span><span class="p">(</span>
+    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">RasterizeMode</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">with_ut</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">rasterize_mode</span> <span class="o">!=</span> <span class="s2">&quot;classic&quot;</span> <span class="ow">and</span> <span class="p">(</span><span class="n">with_ut</span> <span class="ow">or</span> <span class="n">with_eval3d</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;3DGUT rendering only supports rasterize_mode=&#39;classic&#39;. &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;Got rasterize_mode=&#39;</span><span class="si">{</span><span class="n">rasterize_mode</span><span class="si">}</span><span class="s2">&#39; with &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;with_ut=</span><span class="si">{</span><span class="n">with_ut</span><span class="si">}</span><span class="s2"> and with_eval3d=</span><span class="si">{</span><span class="n">with_eval3d</span><span class="si">}</span><span class="s2">.&quot;</span>
+        <span class="p">)</span>
+
+
 <span class="k">def</span><span class="w"> </span><span class="nf">_compute_view_dirs_packed</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">campos</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3]</span>
@@ -844,6 +858,10 @@
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="n">has_color</span> <span class="o">=</span> <span class="n">render_mode_has_color</span><span class="p">(</span><span class="n">render_mode</span><span class="p">)</span>
+
+    <span class="n">_validate_3dgut_rasterize_mode</span><span class="p">(</span>
+        <span class="n">rasterize_mode</span><span class="p">,</span> <span class="n">with_ut</span><span class="o">=</span><span class="n">with_ut</span><span class="p">,</span> <span class="n">with_eval3d</span><span class="o">=</span><span class="n">with_eval3d</span>
+    <span class="p">)</span>
 
     <span class="k">if</span> <span class="n">colors</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">has_color</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -1717,6 +1735,10 @@
         <span class="n">height</span> <span class="o">=</span> <span class="n">lidar_coeffs</span><span class="o">.</span><span class="n">n_rows</span>
 
     <span class="n">has_color</span> <span class="o">=</span> <span class="n">render_mode_has_color</span><span class="p">(</span><span class="n">render_mode</span><span class="p">)</span>
+
+    <span class="n">_validate_3dgut_rasterize_mode</span><span class="p">(</span>
+        <span class="n">rasterize_mode</span><span class="p">,</span> <span class="n">with_ut</span><span class="o">=</span><span class="n">with_ut</span><span class="p">,</span> <span class="n">with_eval3d</span><span class="o">=</span><span class="n">with_eval3d</span>
+    <span class="p">)</span>
 
     <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">num_batch_dims</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
