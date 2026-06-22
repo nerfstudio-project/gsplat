@@ -28,6 +28,7 @@
 #include "Cameras.h"
 #include "Lidars.h"
 #include "ExternalDistortion.h"
+#include "TorchUtils.h"
 
 namespace at {
 class Tensor;
@@ -39,6 +40,21 @@ struct TileIntersectResult {
     at::Tensor tiles_per_gauss;
     at::Tensor isect_ids;
     at::Tensor flatten_ids;
+};
+
+template <> struct TorchArgDef<TileIntersectResult> {
+    static auto to(const TileIntersectResult &r) {
+        return to_torch_args(r.tiles_per_gauss, r.isect_ids, r.flatten_ids);
+    }
+
+    template <class TT>
+    static TileIntersectResult from(TT &&t) {
+        return {
+            .tiles_per_gauss = std::get<0>(std::forward<TT>(t)),
+            .isect_ids = std::get<1>(std::forward<TT>(t)),
+            .flatten_ids = std::get<2>(std::forward<TT>(t)),
+        };
+    }
 };
 
 TileIntersectResult intersect_tile(
