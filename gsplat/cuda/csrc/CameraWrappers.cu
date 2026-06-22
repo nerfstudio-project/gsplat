@@ -122,11 +122,12 @@ TensorView<T, SHAPE...> make_tensor_view(
         : TensorView<T, SHAPE...>{};
 }
 
-// Dimension tags for method kernels
-constexpr struct ray_tag_t {} RAY;
-constexpr struct coeff_tag_t {} COEFF;
-constexpr struct point_tag_t {} POINT;
-constexpr struct camera_tag_t {} CAMERA;
+// Negative values label dynamic dimensions. Using integral sentinels keeps
+// TensorView kernel parameter types valid in nvcc-generated host stubs.
+constexpr int CAMERA = -1;
+constexpr int RAY = -2;
+constexpr int POINT = -3;
+constexpr int COEFF = -4;
 
 // ==================== Helpers ====================
 
