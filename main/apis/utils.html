@@ -317,17 +317,21 @@
 <dt class="sig sig-object py" id="gsplat.spherical_harmonics">
 <span class="sig-name descname"><span class="pre">spherical_harmonics</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">degrees_to_use</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">dirs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">coeffs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">masks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="../_modules/gsplat/cuda/_wrapper.html#spherical_harmonics"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.spherical_harmonics" title="Link to this definition">¶</a></dt>
 <dd><p>Computes spherical harmonics.</p>
+<p>The output channel count <code class="docutils literal notranslate"><span class="pre">D</span></code> is taken from the last dim of <code class="docutils literal notranslate"><span class="pre">coeffs</span></code> and
+can be any positive integer (e.g. 3 for RGB, 1 for scalar features).</p>
+<p>In packed mode, callers pre-gather coeffs by <code class="docutils literal notranslate"><span class="pre">gaussian_ids</span></code> so <code class="docutils literal notranslate"><span class="pre">N</span></code> is
+<code class="docutils literal notranslate"><span class="pre">nnz</span></code> and <code class="docutils literal notranslate"><span class="pre">dirs</span></code> has no leading dims.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>degrees_to_use</strong> – The degree to be used.</p></li>
-<li><p><strong>dirs</strong> – Directions. […, 3]</p></li>
-<li><p><strong>coeffs</strong> – Coefficients. […, K, 3]</p></li>
-<li><p><strong>masks</strong> – Optional boolen masks to skip some computation. […,] Default: None.</p></li>
+<li><p><strong>degrees_to_use</strong> – SH degree to evaluate.</p></li>
+<li><p><strong>dirs</strong> – View directions. <code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">N,</span> <span class="pre">3]</span></code>; any leading shape, rank ≥ 2.</p></li>
+<li><p><strong>coeffs</strong> – SH coefficients. <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">K,</span> <span class="pre">D]</span></code>, with <code class="docutils literal notranslate"><span class="pre">N</span></code> matching <code class="docutils literal notranslate"><span class="pre">dirs.shape[-2]</span></code>.</p></li>
+<li><p><strong>masks</strong> – Optional boolean masks. <code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">N]</span></code> matching <code class="docutils literal notranslate"><span class="pre">dirs.shape[:-1]</span></code>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>Spherical harmonics. […, 3]</p>
+<dd class="field-even"><p>Spherical harmonics. <code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">N,</span> <span class="pre">D]</span></code>.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -729,6 +733,7 @@ of {<cite>means</cite>, <cite>covars</cite>, <cite>quats</cite>, <cite>scales</c
 <li><p><strong>batch_ids</strong>. The batch indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
 <li><p><strong>camera_ids</strong>. The camera indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
 <li><p><strong>gaussian_ids</strong>. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
+<li><p><strong>indptr</strong>. CSR-style index pointer into gaussian_ids for batch-camera pairs. Int32 tensor of shape [B*C+1].</p></li>
 <li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].</p></li>
 <li><p><strong>means</strong>. Projected Gaussian means in 2D. [nnz, 2]</p></li>
 <li><p><strong>depths</strong>. The z-depth of the projected Gaussians. [nnz]</p></li>

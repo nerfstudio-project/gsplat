@@ -659,31 +659,33 @@
 <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-fwd&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics</span><span class="p">(</span>
     <span class="n">degrees_to_use</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">dirs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., 3]</span>
-    <span class="n">coeffs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., K, 3]</span>
-    <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [...,]</span>
+    <span class="n">dirs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
+    <span class="n">coeffs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, K, D]</span>
+    <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., N]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Computes spherical harmonics.</span>
 
+<span class="sd">    The output channel count ``D`` is taken from the last dim of ``coeffs`` and</span>
+<span class="sd">    can be any positive integer (e.g. 3 for RGB, 1 for scalar features).</span>
+
+<span class="sd">    In packed mode, callers pre-gather coeffs by ``gaussian_ids`` so ``N`` is</span>
+<span class="sd">    ``nnz`` and ``dirs`` has no leading dims.</span>
+
 <span class="sd">    Args:</span>
-<span class="sd">        degrees_to_use: The degree to be used.</span>
-<span class="sd">        dirs: Directions. [..., 3]</span>
-<span class="sd">        coeffs: Coefficients. [..., K, 3]</span>
-<span class="sd">        masks: Optional boolen masks to skip some computation. [...,] Default: None.</span>
+<span class="sd">        degrees_to_use: SH degree to evaluate.</span>
+<span class="sd">        dirs: View directions. ``[..., N, 3]``; any leading shape, rank ≥ 2.</span>
+<span class="sd">        coeffs: SH coefficients. ``[N, K, D]``, with ``N`` matching ``dirs.shape[-2]``.</span>
+<span class="sd">        masks: Optional boolean masks. ``[..., N]`` matching ``dirs.shape[:-1]``.</span>
 
 <span class="sd">    Returns:</span>
-<span class="sd">        Spherical harmonics. [..., 3]</span>
+<span class="sd">        Spherical harmonics. ``[..., N, D]``.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="n">dirs</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">&gt;=</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span><span class="p">,</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="p">(</span><span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
     <span class="k">assert</span> <span class="p">(</span><span class="n">degrees_to_use</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">&lt;=</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span>
-    <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-    <span class="k">assert</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="mi">3</span><span class="p">,),</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span>
-    <span class="k">assert</span> <span class="p">(</span>
-        <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span> <span class="o">+</span> <span class="mi">2</span><span class="p">)</span>
-        <span class="ow">and</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span>
-        <span class="ow">and</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
-    <span class="p">),</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">assert</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span><span class="p">,</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="p">(</span><span class="n">masks</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">dirs</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">_SphericalHarmonics</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
         <span class="n">degrees_to_use</span><span class="p">,</span> <span class="n">dirs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span> <span class="n">masks</span>
@@ -2413,6 +2415,7 @@
 <span class="sd">        - **batch_ids**. The batch indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
 <span class="sd">        - **camera_ids**. The camera indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
 <span class="sd">        - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
+<span class="sd">        - **indptr**. CSR-style index pointer into gaussian_ids for batch-camera pairs. Int32 tensor of shape [B*C+1].</span>
 <span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].</span>
 <span class="sd">        - **means**. Projected Gaussian means in 2D. [nnz, 2]</span>
 <span class="sd">        - **depths**. The z-depth of the projected Gaussians. [nnz]</span>
@@ -2643,6 +2646,7 @@
             <span class="n">batch_ids</span><span class="p">,</span>
             <span class="n">camera_ids</span><span class="p">,</span>
             <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">indptr</span><span class="p">,</span>
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">depths</span><span class="p">,</span>
@@ -2656,6 +2660,7 @@
         <span class="n">v_batch_ids</span><span class="p">,</span>
         <span class="n">v_camera_ids</span><span class="p">,</span>
         <span class="n">v_gaussian_ids</span><span class="p">,</span>
+        <span class="n">v_indptr</span><span class="p">,</span>
         <span class="n">v_radii</span><span class="p">,</span>
         <span class="n">v_means2d</span><span class="p">,</span>
         <span class="n">v_depths</span><span class="p">,</span>

@@ -617,7 +617,7 @@
     <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N]</span>
     <span class="n">colors</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
         <span class="n">Tensor</span>
-    <span class="p">],</span>  <span class="c1"># [..., (C,) N, D] or [..., (C,) N, K, 3]; None for depth-only render_modes</span>
+    <span class="p">],</span>  <span class="c1"># [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients; None for depth-only render_modes</span>
     <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3, 3]</span>
     <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -661,7 +661,7 @@
     <span class="c1"># extra signal channels (order in output: RGB, depth, extra)</span>
     <span class="n">extra_signals</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
         <span class="n">Tensor</span>
-    <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, E] or [..., (C,) N, K, 3] when extra_signals_sh_degree set</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, E], or [N, K, E] when extra_signals_sh_degree set</span>
     <span class="n">extra_signals_sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
         <span class="nb">int</span>
     <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Currently only None or 3 is accepted.</span>
@@ -693,7 +693,8 @@
 <span class="sd">        the `colors` is expected to be with shape [..., N, D] or [..., C, N, D], in which D is the channel of</span>
 <span class="sd">        the features to be rendered. The computation is slow when D &gt; 32 at the moment.</span>
 <span class="sd">        If `sh_degree` is set, the `colors` is expected to be the SH coefficients with</span>
-<span class="sd">        shape [..., N, K, 3] or [..., C, N, K, 3], where K is the number of SH bases. In this case, it is expected</span>
+<span class="sd">        shape [N, K, D], shared across all batch and camera dims (i.e. no leading `...` or `C` dims),</span>
+<span class="sd">        where K is the number of SH bases and D is the number of feature channels. In this case, it is expected</span>
 <span class="sd">        that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the</span>
 <span class="sd">        activated bases in the SH coefficients.</span>
 
@@ -719,7 +720,7 @@
 <span class="sd">    .. note::</span>
 <span class="sd">        **Extra signals**: Optional `extra_signals` are rendered and returned in ``meta[&quot;render_extra_signals&quot;]``</span>
 <span class="sd">        (shape [..., C, height, width, E]). If `extra_signals_sh_degree` is set, extra_signals are</span>
-<span class="sd">        SH coefficients [..., N, K, 3] evaluated per view.</span>
+<span class="sd">        SH coefficients of shape [N, K, E] (shared across batch/camera dims), evaluated per view.</span>
 
 <span class="sd">    .. note::</span>
 <span class="sd">        **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between</span>
@@ -777,7 +778,7 @@
 <span class="sd">        quats: The quaternions of the Gaussians (wxyz convension). It&#39;s not required to be normalized. [..., N, 4]</span>
 <span class="sd">        scales: The scales of the Gaussians. [..., N, 3]</span>
 <span class="sd">        opacities: The opacities of the Gaussians. [..., N]</span>
-<span class="sd">        colors: The colors of the Gaussians. [..., (C,) N, D] or [..., (C,) N, K, 3] for SH coefficients.</span>
+<span class="sd">        colors: The colors of the Gaussians. [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients (shared across batch/camera dims).</span>
 <span class="sd">        viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]</span>
 <span class="sd">        Ks: The camera intrinsics. [..., C, 3, 3]</span>
 <span class="sd">        width: The width of the image.</span>
@@ -793,8 +794,9 @@
 <span class="sd">            This will prevents the projected GS to be too small. For example eps2d=0.3</span>
 <span class="sd">            leads to minimal 3 pixel unit. Default is 0.3.</span>
 <span class="sd">        sh_degree: The SH degree to use, which can be smaller than the total</span>
-<span class="sd">            number of bands. If set, the `colors` should be [..., (C,) N, K, 3] SH coefficients,</span>
-<span class="sd">            else the `colors` should be [..., (C,) N, D] post-activation color values. Default is None.</span>
+<span class="sd">            number of bands. If set, the `colors` should be [N, K, D] SH coefficients (shared</span>
+<span class="sd">            across batch/camera dims), else the `colors` should be [..., (C,) N, D]</span>
+<span class="sd">            post-activation color values. Default is None.</span>
 <span class="sd">        packed: Whether to use packed mode which is more memory efficient but might or</span>
 <span class="sd">            might not be as fast. Default is True.</span>
 <span class="sd">        tile_size: The size of the tiles for rasterization. Default is 16.</span>
@@ -974,23 +976,12 @@
                     <span class="n">features</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">2</span>
                 <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Distributed mode only supports per-Gaussian </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.&quot;</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># treat features as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]</span>
-            <span class="c1"># Allowing for activating partial SH bands</span>
+            <span class="c1"># treat features as SH coefficients in the deduplicated [N, K, D] layout,</span>
+            <span class="c1"># shared across batch and camera dims. Allowing for activating partial SH bands.</span>
             <span class="k">assert</span> <span class="p">(</span>
-                <span class="n">features</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span>
-                <span class="ow">and</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,)</span>
-                <span class="ow">and</span> <span class="n">channels</span> <span class="o">==</span> <span class="mi">3</span>
-            <span class="p">)</span> <span class="ow">or</span> <span class="p">(</span>
-                <span class="n">features</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">4</span>
-                <span class="ow">and</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
-                <span class="ow">and</span> <span class="n">channels</span> <span class="o">==</span> <span class="mi">3</span>
-            <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39;s shape </span><span class="si">{</span><span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="si">=}</span><span class="s2"> must be either </span><span class="si">{</span><span class="p">(</span><span class="o">*</span><span class="n">batch_dims</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">)</span><span class="si">}</span><span class="s2"> or </span><span class="si">{</span><span class="p">(</span><span class="o">*</span><span class="n">batch_dims</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-
+                <span class="n">features</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">N</span>
+            <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39;s shape </span><span class="si">{</span><span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="si">=}</span><span class="s2"> must be (N, K, D) with N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="k">assert</span> <span class="p">(</span><span class="n">sh_degree</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">&lt;=</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span>
-            <span class="k">if</span> <span class="n">distributed</span><span class="p">:</span>
-                <span class="k">assert</span> <span class="p">(</span>
-                    <span class="n">features</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span>
-                <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Distributed mode only supports per-Gaussian </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.&quot;</span>
 
     <span class="c1"># Skip colors validation for depth-only modes (colors are ignored/overwritten)</span>
     <span class="k">if</span> <span class="n">has_color</span><span class="p">:</span>
@@ -1202,9 +1193,11 @@
         <span class="k">if</span> <span class="n">extra_signals</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">feature_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">extra_signals</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">feature_list</span><span class="p">:</span>
-            <span class="k">with</span> <span class="n">trace_range</span><span class="p">(</span><span class="s2">&quot;concat-features&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span>
-                <span class="n">feature_list</span>
-            <span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">nullcontext</span><span class="p">():</span>
+            <span class="k">with</span> <span class="p">(</span>
+                <span class="n">trace_range</span><span class="p">(</span><span class="s2">&quot;concat-features&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">feature_list</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
+                <span class="k">else</span> <span class="n">nullcontext</span><span class="p">()</span>
+            <span class="p">):</span>
                 <span class="n">proj_features</span> <span class="o">=</span> <span class="p">(</span>
                     <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">feature_list</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
                     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">feature_list</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
@@ -1236,44 +1229,51 @@
 
         <span class="n">feature_list</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="k">if</span> <span class="n">has_color</span><span class="p">:</span>
-            <span class="n">colors_tail</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span> <span class="k">if</span> <span class="n">colors_sh_degree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">:]</span>
-            <span class="p">)</span>
             <span class="n">trace_push</span><span class="p">(</span><span class="s2">&quot;colors&quot;</span><span class="p">)</span>
-            <span class="n">colors</span> <span class="o">=</span> <span class="n">normalize_features_layout</span><span class="p">(</span>
-                <span class="n">colors</span><span class="p">,</span> <span class="n">batch_dims</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">colors_tail</span><span class="p">,</span> <span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span>
-            <span class="p">)</span>
             <span class="k">if</span> <span class="n">colors_sh_degree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">gaussian_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">colors</span> <span class="o">=</span> <span class="n">colors</span><span class="p">[</span><span class="n">gaussian_ids</span><span class="p">]</span>
                 <span class="n">colors</span> <span class="o">=</span> <span class="n">spherical_harmonics</span><span class="p">(</span>
                     <span class="n">colors_sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">colors</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="n">valid_gaussians</span>
                 <span class="p">)</span>
                 <span class="c1"># Make sure colors &gt;= 0 so that it&#39;s apples-to-apples with Inria CUDA backend</span>
                 <span class="k">with</span> <span class="n">trace_range</span><span class="p">(</span><span class="s2">&quot;adj-colors&quot;</span><span class="p">):</span>
                     <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="n">colors</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">colors</span> <span class="o">=</span> <span class="n">normalize_features_layout</span><span class="p">(</span>
+                    <span class="n">colors</span><span class="p">,</span>
+                    <span class="n">batch_dims</span><span class="p">,</span>
+                    <span class="n">C</span><span class="p">,</span>
+                    <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">:],</span>
+                    <span class="n">batch_ids</span><span class="p">,</span>
+                    <span class="n">camera_ids</span><span class="p">,</span>
+                    <span class="n">gaussian_ids</span><span class="p">,</span>
+                <span class="p">)</span>
             <span class="n">trace_pop</span><span class="p">()</span>  <span class="c1"># colors</span>
             <span class="n">feature_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">colors</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">extra_signals</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">es_tail</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">extra_signals</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span>
-                <span class="k">if</span> <span class="n">extra_signals_sh_degree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-                <span class="k">else</span> <span class="n">extra_signals</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">:]</span>
-            <span class="p">)</span>
             <span class="n">trace_push</span><span class="p">(</span><span class="s2">&quot;extra&quot;</span><span class="p">)</span>
-            <span class="n">extra_signals</span> <span class="o">=</span> <span class="n">normalize_features_layout</span><span class="p">(</span>
-                <span class="n">extra_signals</span><span class="p">,</span>
-                <span class="n">batch_dims</span><span class="p">,</span>
-                <span class="n">C</span><span class="p">,</span>
-                <span class="n">es_tail</span><span class="p">,</span>
-                <span class="n">batch_ids</span><span class="p">,</span>
-                <span class="n">camera_ids</span><span class="p">,</span>
-                <span class="n">gaussian_ids</span><span class="p">,</span>
-            <span class="p">)</span>
             <span class="k">if</span> <span class="n">extra_signals_sh_degree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">gaussian_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">extra_signals</span> <span class="o">=</span> <span class="n">extra_signals</span><span class="p">[</span><span class="n">gaussian_ids</span><span class="p">]</span>
                 <span class="n">extra_signals</span> <span class="o">=</span> <span class="n">spherical_harmonics</span><span class="p">(</span>
-                    <span class="n">extra_signals_sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">extra_signals</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="n">valid_gaussians</span>
+                    <span class="n">extra_signals_sh_degree</span><span class="p">,</span>
+                    <span class="n">dirs</span><span class="p">,</span>
+                    <span class="n">extra_signals</span><span class="p">,</span>
+                    <span class="n">masks</span><span class="o">=</span><span class="n">valid_gaussians</span><span class="p">,</span>
                 <span class="p">)</span>
                 <span class="n">extra_signals</span> <span class="o">=</span> <span class="n">extra_signals</span> <span class="o">+</span> <span class="mf">0.5</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">extra_signals</span> <span class="o">=</span> <span class="n">normalize_features_layout</span><span class="p">(</span>
+                    <span class="n">extra_signals</span><span class="p">,</span>
+                    <span class="n">batch_dims</span><span class="p">,</span>
+                    <span class="n">C</span><span class="p">,</span>
+                    <span class="n">extra_signals</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">:],</span>
+                    <span class="n">batch_ids</span><span class="p">,</span>
+                    <span class="n">camera_ids</span><span class="p">,</span>
+                    <span class="n">gaussian_ids</span><span class="p">,</span>
+                <span class="p">)</span>
             <span class="n">trace_pop</span><span class="p">()</span>  <span class="c1"># extra</span>
             <span class="n">feature_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">extra_signals</span><span class="p">)</span>
 
@@ -1687,21 +1687,12 @@
             <span class="c1"># features is already [..., C, N, D]</span>
             <span class="k">pass</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="c1"># Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]</span>
         <span class="n">camtoworlds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">inverse</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span>  <span class="c1"># [..., C, 4, 4]</span>
         <span class="n">dirs</span> <span class="o">=</span> <span class="n">means</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span> <span class="o">-</span> <span class="n">camtoworlds</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>  <span class="c1"># [..., C, N, 3]</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="p">(</span><span class="n">radii</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># [..., C, N]</span>
-        <span class="k">if</span> <span class="n">features</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span><span class="p">:</span>
-            <span class="c1"># Turn [..., N, K, 3] into [..., C, N, K, 3]</span>
-            <span class="n">shs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span>
-                <span class="n">features</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:,</span> <span class="p">:],</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
-            <span class="p">)</span>  <span class="c1"># [..., C, N, K, 3]</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># features is already [..., C, N, K, 3]</span>
-            <span class="n">shs</span> <span class="o">=</span> <span class="n">features</span>
         <span class="n">features</span> <span class="o">=</span> <span class="n">spherical_harmonics</span><span class="p">(</span>
-            <span class="n">sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">shs</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="n">masks</span>
-        <span class="p">)</span>  <span class="c1"># [..., C, N, 3]</span>
+            <span class="n">sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">features</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="n">masks</span>
+        <span class="p">)</span>  <span class="c1"># [..., C, N, D]</span>
         <span class="k">if</span> <span class="n">clamp</span><span class="p">:</span>
             <span class="c1"># make it apple-to-apple with Inria&#39;s CUDA Backend.</span>
             <span class="n">features</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="n">features</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
@@ -1715,7 +1706,7 @@
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
     <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N]</span>
-    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, D] or [..., (C,) N, K, 3]</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients</span>
     <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3, 3]</span>
     <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -1739,7 +1730,7 @@
     <span class="n">lidar_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">RowOffsetStructuredSpinningLidarModelParametersExt</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">extra_signals</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
         <span class="n">Tensor</span>
-    <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, 3] or [..., (C,) N, K, 3] when extra_signals_sh_degree set</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, E], or [N, K, E] when extra_signals_sh_degree set</span>
     <span class="n">extra_signals_sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;A version of rasterization() that utilies on PyTorch&#39;s autograd.</span>
@@ -1808,17 +1799,9 @@
                 <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
             <span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]</span>
-            <span class="c1"># Allowing for activating partial SH bands</span>
-            <span class="k">assert</span> <span class="p">(</span>
-                <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span>
-                <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,)</span>
-                <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
-            <span class="p">)</span> <span class="ow">or</span> <span class="p">(</span>
-                <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">4</span>
-                <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
-                <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
-            <span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
+            <span class="c1"># treat colors as SH coefficients, must be in shape [N, K, D].</span>
+            <span class="c1"># Allowing for activating partial SH bands.</span>
+            <span class="k">assert</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">N</span><span class="p">,</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
             <span class="k">assert</span> <span class="p">(</span><span class="n">sh_degree</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">&lt;=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
 
     <span class="k">if</span> <span class="n">with_ut</span><span class="p">:</span>
@@ -2110,7 +2093,7 @@
 <span class="c1">#     quats: Tensor,  # [N, 4]</span>
 <span class="c1">#     scales: Tensor,  # [N, 3]</span>
 <span class="c1">#     opacities: Tensor,  # [N]</span>
-<span class="c1">#     colors: Tensor,  # [N, D] or [N, K, 3]</span>
+<span class="c1">#     colors: Tensor,  # [N, D] or [N, K, D]</span>
 <span class="c1">#     viewmats: Tensor,  # [C, 4, 4]</span>
 <span class="c1">#     Ks: Tensor,  # [C, 3, 3]</span>
 <span class="c1">#     width: int,</span>
@@ -2202,7 +2185,7 @@
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
     <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N]</span>
-    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, D] or [..., N, K, 3]</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, D] for post-activation colors, or [N, K, 3] for SH coefficients</span>
     <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3, 3]</span>
     <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -2258,16 +2241,10 @@
             <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
         <span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="c1"># treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]</span>
-        <span class="c1"># Allowing for activating partial SH bands</span>
+        <span class="c1"># treat colors as SH coefficients, must be in shape [N, K, 3].</span>
+        <span class="c1"># Allowing for activating partial SH bands.</span>
         <span class="k">assert</span> <span class="p">(</span>
-            <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span>
-            <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,)</span>
-            <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
-        <span class="p">)</span> <span class="ow">or</span> <span class="p">(</span>
-            <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">4</span>
-            <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
+            <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">N</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
         <span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
         <span class="k">assert</span> <span class="p">(</span><span class="n">sh_degree</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">&lt;=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
 
@@ -2278,7 +2255,10 @@
     <span class="n">opacities</span> <span class="o">=</span> <span class="n">opacities</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
     <span class="n">viewmats</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
     <span class="n">Ks</span> <span class="o">=</span> <span class="n">Ks</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">2</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># SH coefficients are deduplicated as (N, K, 3), shared across batch dims.</span>
+        <span class="n">colors</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">expand</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">2</span><span class="p">:</span>
         <span class="n">colors</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
     <span class="k">elif</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span><span class="p">:</span>
         <span class="n">colors</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
@@ -2367,7 +2347,7 @@
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
     <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N]</span>
-    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, D] or [..., (C,) N, K, 3]</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients</span>
     <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3, 3]</span>
     <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -2398,7 +2378,7 @@
 <span class="sd">        quats: The quaternions of the Gaussians (wxyz convension). It&#39;s not required to be normalized. [..., N, 4]</span>
 <span class="sd">        scales: The scales of the Gaussians. [..., N, 3]</span>
 <span class="sd">        opacities: The opacities of the Gaussians. [..., N]</span>
-<span class="sd">        colors: The colors of the Gaussians. [..., (C,) N, D] or [..., (C,) N, K, 3] for SH coefficients.</span>
+<span class="sd">        colors: The colors of the Gaussians. [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients (shared across batch/camera dims).</span>
 <span class="sd">        viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]</span>
 <span class="sd">        Ks: The camera intrinsics. [..., C, 3, 3]</span>
 <span class="sd">        width: The width of the image.</span>
@@ -2412,8 +2392,9 @@
 <span class="sd">            This will prevents the projected GS to be too small. For example eps2d=0.3</span>
 <span class="sd">            leads to minimal 3 pixel unit. Default is 0.3.</span>
 <span class="sd">        sh_degree: The SH degree to use, which can be smaller than the total</span>
-<span class="sd">            number of bands. If set, the `colors` should be [(C,) N, K, 3] SH coefficients,</span>
-<span class="sd">            else the `colors` should [(C,) N, D] post-activation color values. Default is None.</span>
+<span class="sd">            number of bands. If set, the `colors` should be [N, K, D] SH coefficients (shared</span>
+<span class="sd">            across batch/camera dims), else the `colors` should [(C,) N, D]</span>
+<span class="sd">            post-activation color values. Default is None.</span>
 <span class="sd">        packed: Whether to use packed mode which is more memory efficient but might or</span>
 <span class="sd">            might not be as fast. Default is True.</span>
 <span class="sd">        tile_size: The size of the tiles for rasterization. Default is 16.</span>
@@ -2519,17 +2500,9 @@
             <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
         <span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="c1"># treat colors as SH coefficients, should be in shape [..., N, K, 3] or [..., C, N, K, 3]</span>
-        <span class="c1"># Allowing for activating partial SH bands</span>
-        <span class="k">assert</span> <span class="p">(</span>
-            <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span>
-            <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,)</span>
-            <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
-        <span class="p">)</span> <span class="ow">or</span> <span class="p">(</span>
-            <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">4</span>
-            <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
-        <span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
+        <span class="c1"># treat colors as SH coefficients, must be in shape [N, K, D].</span>
+        <span class="c1"># Allowing for activating partial SH bands.</span>
+        <span class="k">assert</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">N</span><span class="p">,</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
         <span class="k">assert</span> <span class="p">(</span><span class="n">sh_degree</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">&lt;=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
 
     <span class="c1"># Compute Ray-Splat intersection transformation.</span>
@@ -2554,6 +2527,7 @@
             <span class="n">batch_ids</span><span class="p">,</span>
             <span class="n">camera_ids</span><span class="p">,</span>
             <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">indptr</span><span class="p">,</span>
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">depths</span><span class="p">,</span>
@@ -2567,7 +2541,7 @@
         <span class="n">opacities</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span>
             <span class="n">opacities</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
         <span class="p">)</span>  <span class="c1"># [..., C, N]</span>
-        <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="n">indptr</span><span class="p">,</span> <span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
         <span class="n">image_ids</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="n">densify</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span>
@@ -2591,37 +2565,26 @@
     <span class="n">isect_offsets</span> <span class="o">=</span> <span class="n">isect_offset_encode</span><span class="p">(</span><span class="n">isect_ids</span><span class="p">,</span> <span class="n">I</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">)</span>
     <span class="n">isect_offsets</span> <span class="o">=</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">))</span>
 
-    <span class="c1"># TODO: SH also suport N-D.</span>
-    <span class="c1"># Compute the per-view colors</span>
-    <span class="c1"># if not (</span>
-    <span class="c1">#     colors.dim() == num_batch_dims + 3 and sh_degree is None</span>
-    <span class="c1"># ):  # silently support [..., C, N, D] color.</span>
-    <span class="c1">#     colors = (</span>
-    <span class="c1">#         colors.view(B, N, -1)[batch_ids, gaussian_ids]</span>
-    <span class="c1">#         if packed</span>
-    <span class="c1">#         else colors[..., None, :, :].expand((-1,) * num_batch_dims + (C, -1, -1))</span>
-    <span class="c1">#     )  # [nnz, D] or [..., C, N, 3]</span>
-    <span class="c1"># else:</span>
-    <span class="c1">#     if packed:</span>
-    <span class="c1">#         colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids, :]</span>
     <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>  <span class="c1"># SH coefficients</span>
-        <span class="n">camtoworlds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">inverse</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
-            <span class="n">dirs</span> <span class="o">=</span> <span class="n">means</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">,</span> <span class="p">:]</span> <span class="o">-</span> <span class="n">camtoworlds</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+            <span class="n">dirs</span> <span class="o">=</span> <span class="n">compute_directions</span><span class="p">(</span>
+                <span class="n">batch_dims</span><span class="p">,</span>
+                <span class="n">means</span><span class="p">,</span>
+                <span class="n">viewmats</span><span class="p">,</span>
+                <span class="n">batch_ids</span><span class="p">,</span>
+                <span class="n">camera_ids</span><span class="p">,</span>
+                <span class="n">gaussian_ids</span><span class="p">,</span>
+                <span class="n">indptr</span><span class="p">,</span>
+            <span class="p">)</span>  <span class="c1"># [nnz, 3]</span>
+            <span class="c1"># Gather per-Gaussian coeffs to match the [nnz, K, 3] dirs.</span>
+            <span class="n">shs</span> <span class="o">=</span> <span class="n">colors</span><span class="p">[</span><span class="n">gaussian_ids</span><span class="p">]</span>
         <span class="k">else</span><span class="p">:</span>
+            <span class="n">camtoworlds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">inverse</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span>
             <span class="n">dirs</span> <span class="o">=</span> <span class="n">means</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span> <span class="o">-</span> <span class="n">camtoworlds</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
-
-        <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span><span class="p">:</span>
-            <span class="c1"># Turn [..., N, K, 3] into [..., C, N, K, 3]</span>
-            <span class="n">shs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span>
-                <span class="n">colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:,</span> <span class="p">:],</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
-            <span class="p">)</span>  <span class="c1"># [..., C, N, K, 3]</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># colors is already [..., C, N, K, 3]</span>
             <span class="n">shs</span> <span class="o">=</span> <span class="n">colors</span>
         <span class="n">colors</span> <span class="o">=</span> <span class="n">spherical_harmonics</span><span class="p">(</span>
             <span class="n">sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">shs</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="p">(</span><span class="n">radii</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-        <span class="p">)</span>  <span class="c1"># [nnz, D] or [..., C, N, 3]</span>
+        <span class="p">)</span>  <span class="c1"># [nnz, 3] or [..., C, N, 3]</span>
         <span class="c1"># make it apple-to-apple with Inria&#39;s CUDA Backend.</span>
         <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="n">colors</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
 
