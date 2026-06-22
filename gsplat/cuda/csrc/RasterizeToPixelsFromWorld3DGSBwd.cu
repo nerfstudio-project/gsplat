@@ -32,6 +32,7 @@
 #include "ExternalDistortion.cuh"
 #include "Rasterization.h"
 #include "RasterizeChunkCSR.h"
+#include "RasterizeToPixelsFromWorld3DGS.cuh"
 #include "Utils.cuh"
 #include "Cameras.cuh"
 #include "Lidars.cuh"
@@ -44,7 +45,7 @@ using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 namespace cg = cooperative_groups;
 
 // Pad CDIM to an odd stride when it would be even, so that the per-thread
-// STORE `rgbs_batch[tr * stride + k] = colors[...]` in K2 writes to distinct
+// STORE `rgbs_batch[tr * stride + k] = colors[...]` in bwd writes to distinct
 // 32-bit banks across a warp. With a stride S, the 32 lanes in a warp land
 // in banks (tr * S) mod 32 for tr in [0,32); that hits all 32 banks iff
 // gcd(S, 32) == 1, i.e. S is odd. The inner loop READ from a fixed `t` and
@@ -57,16 +58,12 @@ constexpr uint32_t cdim_smem_stride() {
 }
 
 // ---------------------------------------------------------------------------
-// Single-kernel (K2-only) batch-parallel backward pass.
+// Single-kernel chunk-parallel backward pass.
 //
-// An earlier three-kernel split (K1 state-scan + K1.5 prefix-scan + K2
-// gradient) had K1/K1.5 rebuild the per-chunk starting state
-// `(T_start, render_accum_dot_start, normal_accum_dot_start)` for K2.
-// That duplicated per-Gaussian work the FORWARD pass had already computed.
-// The current design persists the required cumulative state from fwd into
-// `fwd_chunk_state` at every CHUNK_BATCHES boundary, then folds the
-// derivation of the starting accumulators into K2's preamble as a single
-// CDIM dot + vec3 dot per thread — K1 and K1.5 are gone. See
+// fwd persists per-chunk cumulative state into `fwd_chunk_state` at every
+// CHUNK_BATCHES boundary; bwd derives the per-chunk starting accumulators
+// from that state via a single CDIM dot + vec3 dot per thread in its
+// preamble, then runs the per-gaussian gradient walk. See
 // `RasterizeChunkCSR.h` for the tensor layout and boundary formula.
 //
 // Math (derived from the bwd recurrence in the hot loop below):
@@ -79,7 +76,7 @@ constexpr uint32_t cdim_smem_stride() {
 //   where `_final` is the c=0 slot (terminal fwd state) — the CSR-slot
 //   semantics are documented in `RasterizeChunkCSR.h`.
 //
-// K2 grid: 1D {total_chunks, 1, 1}. Chunks are independent — no sequential
+// Grid: 1D {total_chunks, 1, 1}. Chunks are independent — no sequential
 // dependency — exposing ample work to the GPU scheduler and eliminating the
 // tail latency on tiles with many Gaussians.
 // ---------------------------------------------------------------------------
@@ -118,7 +115,7 @@ static __global__ void compute_chunks_per_tile_kernel(
 // Host helper: see declaration in `RasterizeChunkCSR.h`. Launches the
 // device kernel above, builds the [num_tiles+1] CSR offsets via cumsum+cat,
 // then reads back `total_chunks` with a blocking `.item<int32_t>()`. Shared
-// by fwd (persist buffer sizing) and bwd (K1/K2 grid sizing).
+// by fwd (persist buffer sizing) and bwd (gradient-kernel grid sizing).
 std::tuple<at::Tensor, at::Tensor, int64_t> compute_chunk_csr(
     const at::Tensor &tile_offsets,
     int64_t n_isects,
@@ -159,16 +156,16 @@ std::tuple<at::Tensor, at::Tensor, int64_t> compute_chunk_csr(
 // Each tile contributes `chunks_per_tile[t]` chunk-slots to the flat
 // fwd_chunk_state buffer, with `chunk_offsets[t]` giving the starting slot
 // of tile t. `chunk_offsets[num_tiles]` is the total number of chunk-slots
-// and equals the CTA count for K2. Per-tile padding (the old
-// `num_tiles × max_chunks` layout) is gone, which removes the dense-scene
-// OOM vector driven by the worst tile.
+// and equals the CTA count for the gradient kernel. The flat layout
+// avoids the per-tile padding (`num_tiles × max_chunks`) that would
+// otherwise create a dense-scene OOM vector driven by the worst tile.
 //
 // `CHUNK_BATCHES` and `compute_chunks_per_tile_kernel` live in
 // `RasterizeChunkCSR.h` so fwd and bwd can share a single source of truth.
 
 // Binary-search helper: given ascending `chunk_offsets[num_tiles + 1]`, find
-// tile t such that chunk_offsets[t] <= bid < chunk_offsets[t + 1]. Called once
-// per CTA in K2; O(log num_tiles) ≈ 14 global-mem reads on a 10K-tile scene
+// tile t such that chunk_offsets[t] <= bid < chunk_offsets[t + 1]. Called
+// once per CTA; O(log num_tiles) ≈ 14 global-mem reads on a 10K-tile scene
 // and the reads hit L2 after the first CTA in the launch wave.
 __device__ __forceinline__ uint32_t find_tile_for_block(
     const int32_t *__restrict__ chunk_offsets,
@@ -188,208 +185,17 @@ __device__ __forceinline__ uint32_t find_tile_for_block(
     return lo;
 }
 
-// Shared ray-generation helper used by K2 (and previously by the deleted K1).
-// Takes the full camera-model switch (pinhole / fisheye / ftheta / lidar ×
-// {windshield, empty distortion}) plus the "explicit rays" path, and returns
-// the WorldRay for pixel (j, i) on image `iid`. Marked `__forceinline__` so
-// K2 keeps the register counts it had when the block was inlined verbatim;
-// the comment at K2's preamble previously justified the duplication on
-// occupancy grounds.
-template <typename scalar_t>
-__device__ __forceinline__ WorldRay compute_world_ray_bwd(
-    const uint32_t iid,
-    const uint32_t j,
-    const uint32_t i,
-    const int32_t pix_id,
-    const bool inside,
-    const scalar_t *__restrict__ rays,
-    const scalar_t *__restrict__ viewmats0,
-    const scalar_t *__restrict__ viewmats1,
-    const scalar_t *__restrict__ Ks,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const CameraModelType camera_model_type,
-    const ShutterType rs_type,
-    const scalar_t *__restrict__ radial_coeffs,
-    const scalar_t *__restrict__ tangential_coeffs,
-    const scalar_t *__restrict__ thin_prism_coeffs,
-    const FThetaCameraDistortionDeviceParams& ftheta_device_coeffs,
-    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice>& lidar_device_coeffs,
-    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams>& external_distortion_device_params
-) {
-    auto rs_params = RollingShutterParameters(
-        viewmats0 + iid * 16,
-        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16);
-    WorldRay ray;
-    if (inside && rays == nullptr) {
-        if (camera_model_type == CameraModelType::PINHOLE) {
-            if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-                if (external_distortion_device_params.has_value()) {
-                    using CameraModel = PerfectPinholeCameraModel<extdist::BivariateWindshieldModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        { {image_width, image_height}, rs_type, *external_distortion_device_params },
-                        Ks,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                } else {
-                    using CameraModel = PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        { {image_width, image_height}, rs_type, {} },
-                        Ks,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                }
-            } else {
-                if (external_distortion_device_params.has_value()) {
-                    using CameraModel = OpenCVPinholeCameraModel<extdist::BivariateWindshieldModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        { {image_width, image_height}, rs_type, *external_distortion_device_params },
-                        Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                } else {
-                    using CameraModel = OpenCVPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
-                    CameraModel::KernelParameters kernel_params = {
-                        { {image_width, image_height}, rs_type, {} },
-                        Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-                    };
-                    CameraModel camera_model(kernel_params, iid);
-                    ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                }
-            }
-        } else if (camera_model_type == CameraModelType::FISHEYE) {
-            if (external_distortion_device_params.has_value()) {
-                using CameraModel = OpenCVFisheyeCameraModel<extdist::BivariateWindshieldModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
-                    Ks, radial_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            } else {
-                using CameraModel = OpenCVFisheyeCameraModel<extdist::EmptyExternalDistortionModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    { {image_width, image_height}, rs_type, {} },
-                    Ks, radial_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            }
-        } else if (camera_model_type == CameraModelType::FTHETA) {
-            if (external_distortion_device_params.has_value()) {
-                using CameraModel = FThetaCameraModel<extdist::BivariateWindshieldModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
-                    Ks, ftheta_device_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            } else {
-                using CameraModel = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    { {image_width, image_height}, rs_type, {} },
-                    Ks, ftheta_device_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            }
-        } else if (camera_model_type == CameraModelType::LIDAR) {
-            using CameraModel = RowOffsetStructuredSpinningLidarModel;
-            assert(lidar_device_coeffs);
-            CameraModel::KernelParameters kernel_params = { *lidar_device_coeffs };
-            CameraModel camera_model(kernel_params, iid);
-            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-        } else {
-            assert(false);
-            ray.valid_flag = false;
-        }
-    } else {
-        // Explicit rays path — rays may be nullptr for inactive threads when inside==false.
-        ray.valid_flag = false;
-        if (inside) {
-            assert(rays != nullptr);
-            // TODO: use at least 3x64b loads instead of 6x32b
-            ray.ray_org = {rays[pix_id * 6 + 0], rays[pix_id * 6 + 1], rays[pix_id * 6 + 2]};
-            ray.ray_dir = {rays[pix_id * 6 + 3], rays[pix_id * 6 + 4], rays[pix_id * 6 + 5]};
-            ray.valid_flag = true;
-        }
-    }
-    return ray;
-}
+// Ray-generation helper (shared with the fwd kernel) lives in
+// `RasterizeToPixelsFromWorld3DGS.cuh` as `compute_world_ray`.
 
-// Pixel-coordinate resolution shared by K1 and K2. Handles the LIDAR-vs-camera
-// split: for LIDAR, looks up (row, col) from the per-tile element map and
-// marks inside=false for threads past element_count; for camera paths,
-// derives (row, col) from the tile origin + per-thread 2D rank and clamps to
-// the image extent. Also returns the clamped linear pix_id used by every
-// downstream load/store. Marked `__forceinline__` so K1/K2 keep their current
-// register counts; the call site would otherwise lose the fast path.
-struct PixelCoords
-{
-    uint32_t row;
-    uint32_t col;
-    int32_t pix_id;
-    bool inside;
-};
+// Pixel-coordinate resolution helper (shared with the fwd kernel) lives in
+// `RasterizeToPixelsFromWorld3DGS.cuh` as `compute_pixel_coords`.
 
-__device__ __forceinline__ PixelCoords compute_pixel_coords_bwd(
-    const CameraModelType camera_model_type,
-    const uint32_t tile_id,
-    const uint32_t tile_row,
-    const uint32_t tile_col,
-    const uint32_t tile_size,
-    const uint32_t tr,
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice>& lidar_device_coeffs
-)
-{
-    PixelCoords out;
-    if (camera_model_type == CameraModelType::LIDAR)
-    {
-        assert(lidar_device_coeffs);
-        const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
-        const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
-        const int tile_element_id = static_cast<int>(tr);
-        if (tile_element_id < element_count)
-        {
-            out.col = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].x; // col_azimuth
-            out.row = lidar_device_coeffs->tiles_to_elements_map[element_start + tile_element_id].y; // row_elevation
-            assert(0 <= out.row);
-            assert(out.row < image_height);
-            assert(0 <= out.col);
-            assert(out.col < image_width);
-            out.inside = true;
-        }
-        else
-        {
-            out.row = 0;
-            out.col = 0;
-            out.inside = false;
-        }
-    }
-    else
-    {
-        out.row = tile_row * tile_size + threadIdx.y;
-        out.col = tile_col * tile_size + threadIdx.x;
-        out.inside = (out.row < image_height && out.col < image_width);
-    }
-    // Clamp to last pixel for out-of-bounds threads (both branches produce
-    // valid (row, col) in range, so this is a min() rather than a branch).
-    out.pix_id = min(static_cast<int32_t>(out.row * image_width + out.col),
-                     static_cast<int32_t>(image_width * image_height) - 1);
-    return out;
-}
-
-// Kernel 2: gradient pass. Same CTA structure and inner loop as the original
-// kernel but with: (1) chunk_id decoded from grid x, (2) initial state
-// materialised directly from the fwd-persisted `fwd_chunk_state` tensor via
-// one CDIM dot + one vec3 dot per thread — no separate state-scan or
-// prefix-scan kernels, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
-// via atomicAdd (multiple chunks per pixel).
+// Gradient pass. Per-CTA: (1) chunk_id decoded from grid x via binary
+// search on chunk_offsets, (2) initial state materialised from the
+// fwd-persisted `fwd_chunk_state` tensor via one CDIM dot + one vec3 dot
+// per thread, (3) batch range limited to CHUNK_BATCHES, (4) v_rays
+// accumulated via atomicAdd (multiple chunks per pixel).
 //
 // Grid: 1D {total_chunks, 1, 1}; each CTA's (tile_linear, chunk_id) is decoded
 // via a binary search on chunk_offsets in the preamble.
@@ -456,9 +262,8 @@ __global__ void rasterize_gradient_bwd_kernel(
 )
 {
     // ---- Preamble: CSR chunk decode, pixel map, ray gen, fwd-state load ----
-    // K2 is the only bwd kernel in this path. The chunk-start accumulators
-    // are derived from `fwd_chunk_state` further down via one CDIM dot +
-    // one vec3 dot per thread.
+    // The chunk-start accumulators are derived from `fwd_chunk_state` further
+    // down via one CDIM dot + one vec3 dot per thread.
     auto block = cg::this_thread_block();
     const uint32_t num_tiles_total = (B * C) * tile_height * tile_width;
     const uint32_t bid = block.group_index().x;
@@ -511,18 +316,23 @@ __global__ void rasterize_gradient_bwd_kernel(
     // Grid sized to total_chunks (CSR); every launched block has a valid slot.
 
     // Pixel mapping (camera vs lidar) — shared helper.
-    const PixelCoords pc = compute_pixel_coords_bwd(
-        camera_model_type, tile_id, tile_row, tile_col, tile_size, tr,
+    const PixelCoords pc = compute_pixel_coords(
+        camera_model_type, tile_id, tile_row, tile_col, tile_size,
+        threadIdx.y, threadIdx.x, tr,
         image_width, image_height, lidar_device_coeffs);
     const uint32_t i = pc.row;
     const uint32_t j = pc.col;
     const bool inside = pc.inside;
     const int32_t pix_id = pc.pix_id;
 
-    // Ray generation — shared with K1 via compute_world_ray_bwd helper above.
-    WorldRay ray = compute_world_ray_bwd<scalar_t>(
-        iid, j, i, pix_id, inside,
-        rays, viewmats0, viewmats1, Ks,
+    // Ray generation — shared with the fwd kernel via compute_world_ray
+    // in RasterizeToPixelsFromWorld3DGS.cuh.
+    auto rs_params = RollingShutterParameters(
+        viewmats0 + iid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16);
+    WorldRay ray = compute_world_ray<scalar_t>(
+        iid, j, i, pix_id, inside, rs_params,
+        rays, Ks,
         image_width, image_height,
         camera_model_type, rs_type,
         radial_coeffs, tangential_coeffs, thin_prism_coeffs,
@@ -587,7 +397,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     // render_accum_dot = dot(v_render_c, pix_out_final - pix_out_boundary)
     // Streaming per-k load keeps the register footprint scalar (one `delta`
     // in flight at a time) rather than materialising pix_out_boundary[CDIM]
-    // as live registers — critical for K2's already-tight register budget.
+    // as live registers — critical for the kernel's already-tight register budget.
     float render_accum_dot = 0.f;
 #pragma unroll
     for (uint32_t k = 0; k < CDIM; ++k) {
@@ -625,7 +435,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     vec3 v_ray_o = {0.f, 0.f, 0.f};
     vec3 v_ray_d = {0.f, 0.f, 0.f};
 
-    extern __shared__ int s[];  // same layout as K1, plus id_batch prefix
+    extern __shared__ int s[];  // id_batch prefix + xyz_opacity + scale + quat + rgbs
     int32_t *id_batch = (int32_t *)s;
     vec4 *xyz_opacity_batch =
         reinterpret_cast<vec4 *>(&id_batch[block_size]);
@@ -691,10 +501,21 @@ __global__ void rasterize_gradient_bwd_kernel(
             mat3 Mt;
             vec3 o_minus_mu, gro, grd, grd_n, gcrod;
             float grayDist, power;
-            // Per-pixel hit distance — stored in a register, NOT in shared memory
-            // rgbs_batch, because hit_distance depends on ray_o/ray_d (per-pixel)
-            // while rgbs_batch is per-Gaussian (shared across all pixels in the tile).
-            float local_hit_dist = 0.f;
+            // Per-pixel hit-distance state. Three values:
+            // - `hit_distance`: world-frame length of `grds` (per-pixel)
+            // - `hit_t`:        whitened parametric closest-point distance
+            // - `grds`:         scale-weighted whitened ray direction
+            //
+            // Held in registers (not in shmem `rgbs_batch`) because they
+            // depend on ray_o/ray_d (per-pixel), whereas `rgbs_batch` is
+            // per-Gaussian (shared across all pixels in the tile).
+            //
+            // Computed once in the alpha-recompute block below and reused by:
+            // - the per-pixel rgb-render-dot path (hit_distance only)
+            // - the hit-distance VJP block       (all three)
+            float hit_distance = 0.f;
+            float hit_t = 0.f;
+            vec3 grds = vec3(0.f);
             if (valid) {
                 const vec4 xyz_opac = xyz_opacity_batch[t];
                 opac = xyz_opac[3];
@@ -714,25 +535,50 @@ __global__ void rasterize_gradient_bwd_kernel(
                     0.f,
                     1.0f / scale[2]
                 );
-                Mt = glm::transpose(R * S);
+                // Match fwd's Mt construction expression form (S * Rᵀ vs
+                // (R * S)ᵀ are mathematically equal for diagonal S, but
+                // compilers may pick different FFMA fusions per source
+                // form). Today nvcc emits identical SASS for both — this
+                // is forward-defensive: a future compiler / surrounding-
+                // code change could break the bit-equivalence we get
+                // today, and source-form match keeps it stable. Softer
+                // guarantee than `safe_normalize`'s explicit-intrinsic
+                // pinning, but no intrinsics exist for matrix
+                // construction expressions.
+                Mt = S * glm::transpose(R);
                 o_minus_mu = ray_o - xyz;
                 gro = Mt * o_minus_mu;
                 grd = Mt * ray_d;
                 grd_n = safe_normalize(grd);
-                gcrod = glm::cross(grd_n, gro);
-                grayDist = glm::dot(gcrod, gcrod);
-                power = -0.5f * grayDist;
-
-                vis = __expf(power);
-                alpha = min(MAX_ALPHA, opac * vis);
-                if (power > 0.f || alpha < ALPHA_THRESHOLD) {
+                // hit_t < 0 → closest approach behind camera; skip this gaussian.
+                // Declared in outer scope so the hit-distance VJP block can reuse it.
+                hit_t = -glm::dot(grd_n, gro);
+                if (hit_t < 0.f) {
                     valid = false;
                 }
+                else {
+                    gcrod = glm::cross(grd_n, gro);
+                    grayDist = glm::dot(gcrod, gcrod);
+                    power = -0.5f * grayDist;
 
-                if (use_hit_distance) {
-                    const float hit_t = glm::dot(grd_n, -gro);
-                    const vec3 grds = scale * (grd_n * hit_t);
-                    local_hit_dist = glm::length(grds);
+                    vis = __expf(power);
+                    alpha = min(MAX_ALPHA, opac * vis);
+                    // grayDist = dot(gcrod, gcrod) is a sum of three squares, so
+                    // grayDist >= 0 and therefore power = -0.5 * grayDist <= 0
+                    // under any IEEE-754 evaluation order on finite inputs.
+                    // Assert the invariant and use the same skip predicate as
+                    // fwd. The assert also fires on NaN power, which would
+                    // itself indicate an upstream numerics bug feeding NaN
+                    // into gcrod.
+                    assert(power <= 0.f);
+                    if (alpha < ALPHA_THRESHOLD) {
+                        valid = false;
+                    }
+
+                    if (use_hit_distance) {
+                        grds = scale * (grd_n * hit_t);
+                        hit_distance = glm::length(grds);
+                    }
                 }
             }
 
@@ -752,24 +598,45 @@ __global__ void rasterize_gradient_bwd_kernel(
                 // compute the current T for this gaussian
                 float ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
                 T *= ra;
-                // update v_rgb for this gaussian
+                // Per-Gaussian color VJP: v_rgb_local[k] = fac * v_render_c[k].
+                //
+                // Last-channel special case when `use_hit_distance` is on:
+                // - fwd substitutes per-pixel hit_distance for colors[g,CDIM-1]
+                //   in pix_out, so colors[..., CDIM-1] is structurally absent
+                //   from the rendered output.
+                // - Therefore d(loss)/d(colors[..., CDIM-1]) = 0.
+                // - Zero v_rgb_local[CDIM-1] so the warp-reduced atomic add
+                //   leaves v_colors[..., CDIM-1] at 0.
+                // - The hit_distance VJP below pulls the depth-channel
+                //   gradient straight from v_render_c[CDIM-1], not from this
+                //   slot.
                 const float fac = alpha * T;
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
-                
-                // Precompute normal if needed (for both v_alpha contribution and gradient)
+                if (use_hit_distance) {
+                    v_rgb_local[CDIM - 1] = 0.f;
+                }
+
+                // Precompute normal if needed. Used by:
+                // - v_alpha computation (this block)
+                // - normal-gradient VJP block below
+                //
+                // Hoist `flipped` and `unnormalized_flipped` to outer scope so
+                // the gradient block reuses the values without recomputing
+                // R[2] / the dot / the flip.
                 bool flipped = false;
+                vec3 unnormalized_flipped = vec3(0.f);
                 if (v_render_normals != nullptr) {
                     // Recompute normal from forward pass
                     // normal = R * (0, 0, 1) = R[:, 2] (third column)
                     const vec3 unnormalized_normal = R[2];
-                    
+
                     // Direction resolution: flip if facing away from ray
                     flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
-                    const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
-                    
+                    unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+
                     // Normalize
                     normal = safe_normalize(unnormalized_flipped);
                 }
@@ -779,16 +646,18 @@ __global__ void rasterize_gradient_bwd_kernel(
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     // For the last channel with use_hit_distance, use the per-pixel
-                    // local_hit_dist instead of per-Gaussian rgbs_batch (which is
+                    // hit_distance instead of per-Gaussian rgbs_batch (which is
                     // shared memory and would race across pixels in the tile).
                     const float rgb_k = (use_hit_distance && k == CDIM - 1)
-                        ? local_hit_dist
+                        ? hit_distance
                         : rgbs_batch[t * cdim_smem_stride<CDIM>() + k];
                     rgb_render_dot += rgb_k * v_render_c[k];
                 }
 
+                // Per-Gaussian projection of the rendered-normal grad onto the
+                // Gaussian's normal vector — used in the product-rule term for
+                // v_alpha below.
                 float normal_render_dot = 0.f;
-                // contribution from background pixel
                 if (v_render_normals != nullptr) {
                     normal_render_dot = glm::dot(normal, v_render_n);
                 }
@@ -797,7 +666,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 float v_alpha = rgb_render_dot * T - render_accum_dot * ra
                               + T_final * ra * v_alpha_ind_coeff;
                 // Forward: render_normals += normal * vis (where vis = alpha * T)
-                // So v_alpha_normals = dot(normal * T - normal_buffer * ra, v_render_n)
+                // So v_alpha_normals = dot(normal * T - normal_accum * ra, v_render_n)
                 if (v_render_normals != nullptr) {
                     v_alpha += normal_render_dot * T - normal_accum_dot * ra;
                 }
@@ -806,17 +675,21 @@ __global__ void rasterize_gradient_bwd_kernel(
                 vec3 v_grd_n_hit = vec3(0.f);
                 vec3 v_gro_hit = vec3(0.f);
                 if (use_hit_distance) {
-                    const float v_depth = v_rgb_local[CDIM - 1];  // gradient from depth channel (last channel)
+                    // Depth-channel gradient for the hit_distance VJP.
+                    // v_rgb_local[CDIM-1] was zeroed above (fwd replaces
+                    // that color channel with hit_distance, so the color
+                    // VJP must be 0). Compute v_depth directly from
+                    // v_render_c instead of reading the zeroed slot.
+                    const float v_depth = fac * v_render_c[CDIM - 1];
 
-                    // From forward:
-                    const float hit_t = glm::dot(grd_n, -gro);
-                    const vec3 grds = scale * (grd_n * hit_t);
-                    const float hit_dist_len = glm::length(grds);
+                    // hit_t / grds / hit_distance were computed in the
+                    // alpha-recompute block above and hoisted to outer scope;
+                    // reuse them here to avoid recomputation.
 
                     // Backward through length(grds)
                     vec3 v_grds = vec3(0.f);
-                    if (hit_dist_len > 1e-8f) {
-                        v_grds = (grds / hit_dist_len) * v_depth;
+                    if (hit_distance > 1e-8f) {
+                        v_grds = (grds / hit_distance) * v_depth;
                     }
 
                     // Backward through grds = scale * grd_n * hit_t (element-wise multiply)
@@ -864,10 +737,10 @@ __global__ void rasterize_gradient_bwd_kernel(
                         const vec3 v_normal_local = v_render_n * fac;
                         
                         // Forward: normal = safe_normalize(unnormalized_flipped)
-                        const vec3 unnormalized_normal = R[2];
-                        const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+                        // unnormalized_flipped was computed in the v_alpha
+                        // precompute block above and reused here.
                         const vec3 v_unnormalized_flipped = safe_normalize_bw(unnormalized_flipped, v_normal_local);
-                        
+
                         // Forward: unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal
                         const vec3 v_unnormalized = flipped ? -v_unnormalized_flipped : v_unnormalized_flipped;
 
@@ -881,7 +754,7 @@ __global__ void rasterize_gradient_bwd_kernel(
 
                 render_accum_dot += rgb_render_dot * fac;
                 
-                // Update normal buffer (for product rule in next iterations)
+                // Accumulate normal contribution (for product rule in next iterations).
                 if (v_render_normals != nullptr) {
                     normal_accum_dot += normal_render_dot * fac;
                 }
@@ -979,9 +852,9 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::Tensor chunk_offsets,    // [num_tiles + 1] int32
     const int64_t total_chunks,        // scalar, equals chunk_offsets[num_tiles]
     // Per-chunk cumulative state persisted by the fwd kernel at every
-    // CHUNK_BATCHES boundary. K2 reads this directly and folds the
-    // derivation of the starting accumulators into its preamble, so no
-    // separate state-scan or prefix-scan kernels are needed.
+    // CHUNK_BATCHES boundary. The bwd kernel reads it directly and derives
+    // the per-chunk starting accumulators in its preamble — no separate
+    // state-scan or prefix-scan pass needed.
     const at::Tensor fwd_chunk_state,  // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
     // outputs
     at::Tensor v_means,      // [..., N, 3]
@@ -1030,9 +903,10 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     }
 
     const int32_t channels = colors.size(-1);
-    TORCH_CHECK(SupportedChannels::contains(channels),
-        "Unsupported number of channels: ", channels,
-        " (check GSPLAT_NUM_CHANNELS)");
+    TORCH_CHECK_VALUE(SupportedChannels::contains(channels),
+        "Unsupported number of color channels: ", channels,
+        ". To add support, rebuild gsplat with this channel count included "
+        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h).");
 
     const uint32_t pixels_per_tile = tile_size * tile_size;
     const uint32_t num_tiles = I * tile_height * tile_width;
@@ -1056,10 +930,10 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
         // Shape parity check for the fwd-persisted state. fwd allocates with
         // shape `[total_chunks, pixels_per_tile, 1 + CDIM + 3]` and fills all
-        // boundaries (including early-exit tiles) with terminal state, so K2
-        // can read every slot unconditionally. Check each dim — matching numel
+        // boundaries (including early-exit tiles) with terminal state, so the
+        // bwd kernel can read every slot. Check each dim — matching numel
         // alone would accept a transposed tensor with the same total element
-        // count but wrong stride, silently corrupting K2's reads.
+        // count but wrong stride, silently corrupting bwd's reads.
         const int64_t state_dim =
             /*T*/ 1 + static_cast<int64_t>(CDIM) + /*normal*/ 3;
         TORCH_CHECK(fwd_chunk_state.dim() == 3,
@@ -1115,14 +989,12 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
         const auto *chunk_offsets_ptr = chunk_offsets.const_data_ptr<int32_t>();
 
-        // ---- Kernel 2: gradient, 1D grid over CSR chunk-slots ----
-        // K1 and K1.5 are gone. K2's preamble loads the
-        // per-chunk boundary and terminal state from `fwd_chunk_state` and
-        // materialises the starting accumulators via one CDIM dot + one vec3
-        // dot per thread — replacing the per-chunk scan that K1+K1.5 used to
-        // run, at the cost of one extra CSR slot read per chunk (the terminal
-        // slot).
-        dim3 k2_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
+        // ---- Gradient kernel: 1D grid over CSR chunk-slots ----
+        // The preamble loads per-chunk boundary and terminal state from
+        // `fwd_chunk_state` and materialises the starting accumulators via
+        // one CDIM dot + one vec3 dot per thread, at the cost of one extra
+        // CSR slot read per chunk (the terminal slot).
+        dim3 grad_grid = {static_cast<uint32_t>(total_chunks), 1, 1};
         if (cudaFuncSetAttribute(
                 rasterize_gradient_bwd_kernel<CDIM, float>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -1131,7 +1003,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                      shmem_size, " bytes).");
         }
         rasterize_gradient_bwd_kernel<CDIM, float>
-            <<<k2_grid, threads, shmem_size,
+            <<<grad_grid, threads, shmem_size,
                at::cuda::getCurrentCUDAStream()>>>(
                 B, C, N, n_isects,
                 means_ptr, quats_ptr, scales_ptr,

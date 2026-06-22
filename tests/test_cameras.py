@@ -517,7 +517,12 @@ def parse_lidar_camera(
     angles_to_columns_map, tiling = _cached_lidar_preprocessing(
         lidar_params,
         n_bins_elevation=16,
-        max_pts_per_tile=16 * 16,
+        # Lidar always dispatches the tile_size=8 3DGUT kernel: production
+        # spinning lidars are wide (n_columns ≥ 1200) but shallow (n_rows ≤
+        # 128), so the resolution-based fallback in rendering.py picks 8 via
+        # min(W,H) < 1080. The compact-CTA kernel at <CDIM,8,32> processes at
+        # most 64 elements per tile, which caps max_pts_per_tile here.
+        max_pts_per_tile=8 * 8,
         resolution_elevation=1600,
         densification_factor_azimuth=8,
     )

@@ -295,9 +295,10 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const dim3 grid = {I, grid_h, grid_w};
 
     const int32_t channels = colors.size(-1);
-    TORCH_CHECK(SupportedChannels::contains(channels),
-        "Unsupported number of channels: ", channels,
-        " (check GSPLAT_NUM_CHANNELS)");
+    TORCH_CHECK_VALUE(SupportedChannels::contains(channels),
+        "Unsupported number of color channels: ", channels,
+        ". To add support, rebuild gsplat with this channel count included "
+        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h).");
 
     auto launch_kernel = [&]<typename ChannelsT>() {
         constexpr uint32_t CDIM = ChannelsT::value;

@@ -2014,7 +2014,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     opacities.requires_grad = True
     backgrounds.requires_grad = True
 
-    # forward
+    # CUDA forward
     render_colors, render_alphas = rasterize_to_pixels(
         means2d,
         conics,
@@ -2027,6 +2027,19 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         flatten_ids,
         backgrounds=backgrounds,
     )
+    v_render_colors = torch.randn_like(render_colors)
+    v_render_alphas = torch.randn_like(render_alphas)
+
+    # CUDA backward — `torch.autograd.grad` defaults to retain_graph=False,
+    # so the saved-for-backward tensors of the CUDA forward graph are released
+    # here. The reference forward below builds its own independent graph.
+    v_means2d, v_conics, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
+        (render_colors * v_render_colors).sum()
+        + (render_alphas * v_render_alphas).sum(),
+        (means2d, conics, colors, opacities, backgrounds),
+    )
+
+    # Reference forward
     _render_colors, _render_alphas = _rasterize_to_pixels(
         means2d,
         conics,
@@ -2039,18 +2052,15 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         flatten_ids,
         backgrounds=backgrounds,
     )
+
+    # Compare values, then drop the CUDA-pass renders before the reference
+    # backward runs; keeping both render buffers live is what made the heavy
+    # arms (channels=128, batch_dims=(2,)/(1,2)) peak above the laptop VRAM.
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
+    del render_colors, render_alphas
 
-    # backward
-    v_render_colors = torch.randn_like(render_colors)
-    v_render_alphas = torch.randn_like(render_alphas)
-
-    v_means2d, v_conics, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
-        (render_colors * v_render_colors).sum()
-        + (render_alphas * v_render_alphas).sum(),
-        (means2d, conics, colors, opacities, backgrounds),
-    )
+    # Reference backward
     (
         _v_means2d,
         _v_conics,
@@ -2169,8 +2179,9 @@ def _pixel_ray_dir_pinhole(
         "off_center_gauss_ul_pixel_lr",
     ],
 )
+@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
 def test_rasterize_to_pixels_hit_distance_principal_axis(
-    means_list, quats_choice, scales_list, pixel_dx, pixel_dy
+    means_list, quats_choice, scales_list, pixel_dx, pixel_dy, tile_size
 ):
     """Check that hit distance (accumulated/alpha) matches the hit-distance formula:
     length(scale * grd * hit_t) with hit_t = dot(grd, -gro). Includes center and off-center
@@ -2184,7 +2195,6 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
     )
 
     width = height = 32
-    tile_size = 16
     N = 1
     C = 1
     I = C
@@ -2288,11 +2298,12 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
-    "channels,batch_dims,rs_type,use_hit_distance,use_rays,return_normals,camera_model",
+    "channels,batch_dims,rs_type,use_hit_distance,use_rays,return_normals,camera_model,tile_size",
     [
         pytest.param(
             *params,
             "pinhole",
+            tile_size,
             marks=[
                 # test based on use_rays (4)
                 pytest.mark.skipif(
@@ -2317,12 +2328,30 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
             # Dedicated test for return_normals=True with one configuration
             [(3, (), RollingShutterType.ROLLING_TOP_TO_BOTTOM, True, True, True)],
         )
+        # Camera path: cover both 3DGUT compile-time tile_size dispatches.
+        # tile_size=8 (CTA=32, PPT=2) is the compact-CTA path used at sub-1080p;
+        # tile_size=16 (CTA=256, PPT=1) is the thread-per-pixel path used at
+        # 1080p+. Both are expected to produce identical RGB/alphas vs the
+        # Python reference within tolerance.
+        for tile_size in (8, 16)
     ]
     + [
-        # Lidar: with explicit rays (forward + backward)
-        pytest.param(3, (), RollingShutterType.GLOBAL, True, True, False, "lidar"),
-        # Lidar: without explicit rays (kernel generates from lidar_coeffs)
-        pytest.param(3, (), RollingShutterType.GLOBAL, True, False, False, "lidar"),
+        # Lidar: cover both tile_size dispatches. The auto-fallback in
+        # rendering.py always picks 8 for production lidars (n_rows < 1080,
+        # max_pts_per_tile = 8*8 = 64 in parse_lidar_camera), so tile=16 here
+        # underutilizes the 256-thread CTA. We test it anyway to verify the
+        # <CDIM,16,256> kernel instantiation is correct on lidar inputs and
+        # to catch any TILE_SIZE-dependent assumption that silently bakes in 8.
+        pytest.param(
+            3, (), RollingShutterType.GLOBAL, True, True, False, "lidar", tile_size
+        )
+        for tile_size in (8, 16)
+    ]
+    + [
+        pytest.param(
+            3, (), RollingShutterType.GLOBAL, True, False, False, "lidar", tile_size
+        )
+        for tile_size in (8, 16)
     ],
 )
 def test_rasterize_to_pixels_eval3d(
@@ -2334,6 +2363,7 @@ def test_rasterize_to_pixels_eval3d(
     use_rays: bool,
     return_normals: bool,
     camera_model: CameraModel,
+    tile_size: int,
 ):
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._wrapper import (
@@ -2453,9 +2483,10 @@ def test_rasterize_to_pixels_eval3d(
         opacities[..., None, :], batch_dims + (C, N)
     )
 
-    # Identify intersecting tiles
+    # Identify intersecting tiles. tile_size flows in from the parametrize and
+    # selects which 3DGUT kernel instantiation is dispatched (<TILE,CTA> in
+    # {<8,32>, <16,256>}).
     if camera_model == "lidar":
-        tile_size = 16  # unused for lidar but required by rasterize API
         tile_width = lidar_coeffs.tiling.n_bins_azimuth
         tile_height = lidar_coeffs.tiling.n_bins_elevation
         _tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
@@ -2465,7 +2496,6 @@ def test_rasterize_to_pixels_eval3d(
             depths,
         )
     else:
-        tile_size = 16
         tile_width = math.ceil(width / float(tile_size))
         tile_height = math.ceil(height / float(tile_size))
         tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
@@ -2622,9 +2652,9 @@ def test_rasterize_to_pixels_eval3d(
     torch.testing.assert_close(
         render_alphas * count_match, _render_alphas * count_match, rtol=1e-2, atol=2e-3
     )
-    # For lidar use_rays=False, the CUDA kernel generates rays via element_to_image_point
-    # while the ref uses _generate_rays, producing ~1 pixel mismatch at tile boundaries
-    # (observed: 0.0073 at index (0, 269, 3, 0)).
+    # For lidar, the CUDA kernel generates rays via element_to_image_point
+    # while the ref uses _generate_rays, producing ~1 pixel mismatch at tile
+    # boundaries (observed: 0.00392 at (1, 0, 566, 0)).
     vis_mismatch_atol = 1e-2 if camera_model == "lidar" else ALPHA_THRESHOLD + 1e-5
     torch.testing.assert_close(
         render_alphas * vis_mismatch,
@@ -2868,6 +2898,23 @@ def test_rasterize_to_pixels_eval3d(
         rtol=0,
         atol=1e-4 * _lidar_tol,
     )
+    # Structural invariant for use_hit_distance:
+    # - fwd overwrites pix_out[..., -1] with per-pixel hit_distance,
+    #   computed from means/quats/scales/rays (not from colors[..., -1]).
+    # - colors[..., -1] is therefore absent from the rendered output, so
+    #   d(loss)/d(colors[..., -1]) is structurally zero.
+    # - PyTorch ref produces 0 via
+    #   `torch.cat([gauss_colors[..., :-1], hitDist[..., None]], -1)`.
+    # - The CUDA bwd's per-Gaussian color VJP must match exactly (atol=0).
+    if use_hit_distance:
+        last_grad = v_colors[..., -1]
+        assert torch.allclose(last_grad, torch.zeros_like(last_grad), atol=0.0), (
+            "v_colors[..., -1] must be 0 when use_hit_distance=True (the "
+            "last colors channel is replaced by hit_distance in fwd, so "
+            "d(loss)/d(colors[..., -1]) is structurally zero). Got max="
+            f"{last_grad.abs().max().item():.3e}, mean="
+            f"{last_grad.abs().mean().item():.3e}."
+        )
     torch.testing.assert_close(
         v_opacities * opacities_mask.float(),
         _v_opacities * opacities_mask.float(),
@@ -2916,7 +2963,8 @@ def test_rasterize_to_pixels_eval3d(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
-def test_fwd_chunk_state_c0_matches_terminal_after_early_exit():
+@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
+def test_fwd_chunk_state_c0_matches_terminal_after_early_exit(tile_size):
     """Exercise the fwd kernel's early-exit padding of `fwd_chunk_state`.
 
     When every pixel in a tile reaches `done = true` before the kernel
@@ -2936,12 +2984,17 @@ def test_fwd_chunk_state_c0_matches_terminal_after_early_exit():
     stays `false` forever and `__syncthreads_count(done) >= block_size`
     never fires. This test uses an inline synthetic scene specifically
     designed to trigger early-exit on a multi-chunk tile:
-      - 16×16 image = one tile.
-      - ~1281 gaussians so the single tile has num_batches=6 > CHUNK_BATCHES (multi-chunk).
+      - tile_size×tile_size image = one tile.
+      - ~pixels_per_tile*5+1 gaussians so the single tile has
+        num_batches=6 > CHUNK_BATCHES (multi-chunk) at either tile_size.
       - Gaussians clustered in front of the camera with scale large enough
         to cover the full tile — every pixel sees every gaussian.
       - opacity=1.0 drives T below the early-exit threshold after a few
         gaussians; early-exit fires on batch 0 or 1.
+
+    Parametrized over both 3DGUT tile_size dispatches (8 → <CDIM,8,32>,
+    16 → <CDIM,16,256>) so the early-exit padding is exercised in both
+    kernel instantiations.
 
     Invariant: `fwd_chunk_state[slot_c0, pix, 0]` = `1 - render_alphas[pix]`
     and `fwd_chunk_state[slot_c0, pix, 1:1+CDIM]` = `render_colors[pix]`
@@ -2957,9 +3010,8 @@ def test_fwd_chunk_state_c0_matches_terminal_after_early_exit():
         isect_tiles,
     )
 
-    tile_size = 16
     width = height = tile_size  # single tile
-    pixels_per_tile = tile_size * tile_size  # 256
+    pixels_per_tile = tile_size * tile_size  # 64 (tile=8) or 256 (tile=16)
 
     # Enough gaussians per tile that num_batches > CHUNK_BATCHES. The
     # per-batch count matches `block_size = pixels_per_tile`; six batches
@@ -3097,10 +3149,337 @@ def test_fwd_chunk_state_c0_matches_terminal_after_early_exit():
     )
 
 
+@pytest.fixture
+def _ghost_lobe_scene():
+    """Single needle gaussian + 32x32 pinhole camera at the origin."""
+    means = torch.tensor([[0.4, 0.0, 1.0]], device=device, dtype=torch.float32)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=torch.float32)
+    scales = torch.tensor([[0.01, 0.01, 0.5]], device=device, dtype=torch.float32)
+    opacities = torch.tensor([0.99], device=device, dtype=torch.float32)
+    width, height = 32, 32
+    fx = 64.0
+    cx = width / 2.0
+    Ks = torch.tensor(
+        [[[fx, 0.0, cx], [0.0, fx, height / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=torch.float32,
+    )
+    viewmats = torch.eye(4, device=device, dtype=torch.float32)[None]
+    return SimpleNamespace(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        opacities_broadcast=opacities[None, :],
+        colors=torch.ones(1, 1, 3, device=device, dtype=torch.float32),
+        backgrounds=torch.zeros(1, 3, device=device, dtype=torch.float32),
+        Ks=Ks,
+        viewmats=viewmats,
+        width=width,
+        height=height,
+        cx_int=int(cx),
+    )
+
+
+@pytest.fixture
+def _ghost_lobe_isect(_ghost_lobe_scene):
+    """Intersection list with radii inflated to cover every tile."""
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+    )
+
+    s = _ghost_lobe_scene
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        s.means,
+        s.quats,
+        s.scales,
+        s.opacities,
+        s.viewmats,
+        s.Ks,
+        s.width,
+        s.height,
+        camera_model="pinhole",
+    )
+    radii = radii.clone()
+    radii[..., 0] = s.width
+    radii[..., 1] = s.height
+    tile_size = 16
+    tw = math.ceil(s.width / tile_size)
+    th = math.ceil(s.height / tile_size)
+    _, isect_ids, flatten_ids = isect_tiles(means2d, radii, depths, tile_size, tw, th)
+    isect_offsets = isect_offset_encode(isect_ids, 1, tw, th).reshape(1, th, tw)
+    return SimpleNamespace(
+        isect_offsets=isect_offsets,
+        flatten_ids=flatten_ids,
+        tile_size=tile_size,
+    )
+
+
+@pytest.fixture
+def _ghost_lobe_rays(_ghost_lobe_scene):
+    """Rays tensor: left half → ghost direction (hit_t<0), right half → visible.
+
+    Ghost ray analysis (iscl_rot = diag(100,100,2), gro = (-40,0,-2)):
+      hit_t = -dot(grd_n, gro) ≈ -40 < 0  →  GHOST; |cross|² ≈ 7.84
+    """
+    s = _ghost_lobe_scene
+    ray_ghost = torch.tensor([-1.0, 0.0, 1.0], device=device, dtype=torch.float32)
+    ray_ghost /= ray_ghost.norm()
+    ray_visible = torch.tensor([1.0, 0.0, 1.0], device=device, dtype=torch.float32)
+    ray_visible /= ray_visible.norm()
+    col_idx = torch.arange(s.width, device=device)
+    ghost_mask = (col_idx < s.cx_int)[:, None]
+    rays_d = torch.where(ghost_mask, ray_ghost, ray_visible)  # [W, 3]
+    rays_d = rays_d.unsqueeze(0).expand(s.height, -1, -1)  # [H, W, 3]
+    rays_o = torch.zeros(s.height * s.width, 3, device=device, dtype=torch.float32)
+    return torch.cat([rays_o, rays_d.reshape(-1, 3)], dim=-1).reshape(
+        1, 1, s.height, s.width, 6
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterize_eval3d_no_behind_camera_ghost_lobe(
+    _ghost_lobe_scene, _ghost_lobe_isect, _ghost_lobe_rays
+):
+    """A 3DGUT gaussian with hit_t = -dot(grd, gro) < 0 must contribute zero
+    alpha (fwd) and zero gradient (bwd) to that pixel.
+
+    The alpha formula uses |cross(grd, gro)|² — distance to the infinite ray
+    line — so without a hit_t >= 0 clamp it produces a bilateral ghost lobe.
+    """
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.cuda._wrapper import (
+        rasterize_to_pixels_eval3d_extra,
+        RollingShutterType,
+    )
+
+    s, isect, rays = _ghost_lobe_scene, _ghost_lobe_isect, _ghost_lobe_rays
+
+    _, cuda_alphas, *_ = rasterize_to_pixels_eval3d_extra(
+        s.means,
+        s.quats,
+        s.scales,
+        s.colors,
+        s.opacities_broadcast,
+        s.viewmats,
+        s.Ks,
+        s.width,
+        s.height,
+        isect.tile_size,
+        isect.isect_offsets,
+        isect.flatten_ids,
+        backgrounds=s.backgrounds,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        use_hit_distance=False,
+        return_normals=False,
+        camera_model="pinhole",
+        rays=rays,
+    )
+    _, ref_alphas, *_ = _rasterize_to_pixels_eval3d(
+        s.means,
+        s.quats,
+        s.scales,
+        s.colors,
+        s.opacities_broadcast,
+        s.viewmats,
+        s.Ks,
+        s.width,
+        s.height,
+        tile_size=isect.tile_size,
+        isect_offsets=isect.isect_offsets,
+        flatten_ids=isect.flatten_ids,
+        backgrounds=s.backgrounds,
+        rs_type=RollingShutterType.GLOBAL,
+        use_hit_distance=False,
+        return_normals=False,
+        rays=rays,
+    )
+
+    # Precondition: right half must have visible alpha (otherwise test is vacuous).
+    for tag, alphas in [("CUDA", cuda_alphas), ("ref", ref_alphas)]:
+        assert (
+            alphas[..., s.cx_int :, :].max().item() > ALPHA_THRESHOLD
+        ), f"{tag}: visible-direction pixels have no alpha — test setup is degenerate."
+
+    # Fwd invariant: ghost-direction pixels (hit_t<0) must have zero alpha.
+    for tag, alphas in [("CUDA", cuda_alphas), ("ref", ref_alphas)]:
+        left_max = alphas[..., : s.cx_int, :].max().item()
+        assert left_max < ALPHA_THRESHOLD, (
+            f"{tag}: ghost lobe present (max alpha={left_max:.4e}). "
+            f"The 3DGUT formula must skip gaussians with hit_t < 0."
+        )
+
+    # Bwd invariant: gradients from ghost pixels must be zero.
+    means_bwd = s.means.detach().requires_grad_(True)
+    quats_bwd = s.quats.detach().requires_grad_(True)
+    scales_bwd = s.scales.detach().requires_grad_(True)
+    opac_bwd = s.opacities_broadcast.detach().requires_grad_(True)
+    _, alphas_bwd, *_ = rasterize_to_pixels_eval3d_extra(
+        means_bwd,
+        quats_bwd,
+        scales_bwd,
+        s.colors,
+        opac_bwd,
+        s.viewmats,
+        s.Ks,
+        s.width,
+        s.height,
+        isect.tile_size,
+        isect.isect_offsets,
+        isect.flatten_ids,
+        backgrounds=s.backgrounds,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        use_hit_distance=False,
+        return_normals=False,
+        camera_model="pinhole",
+        rays=rays,
+    )
+    alphas_bwd[..., : s.cx_int, :].sum().backward()
+    for name, tensor in [
+        ("means", means_bwd),
+        ("quats", quats_bwd),
+        ("scales", scales_bwd),
+        ("opacities", opac_bwd),
+    ]:
+        grad_max = tensor.grad.abs().max().item() if tensor.grad is not None else 0.0
+        assert grad_max == 0.0, (
+            f"CUDA bwd: nonzero gradient into {name} from hit_t<0 pixels "
+            f"(max |grad|={grad_max:.4e})."
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "width,height,expected_tile_size",
+    [
+        (540, 540, 8),  # well below 1080p
+        (960, 540, 8),  # 540p training default
+        (1280, 720, 8),  # 720p, min(W,H)=720 < 1080
+        (1920, 1080, 16),  # 1080p, min(W,H)=1080 boundary (>= 1080)
+        (1080, 1920, 16),  # vertical 1080p
+        (3840, 2160, 16),  # 4K
+    ],
+    ids=["540x540", "540p", "720p", "1080p", "vertical_1080p", "4k"],
+)
+def test_rasterization_auto_tile_size_dispatch_3dgut(
+    width: int, height: int, expected_tile_size: int
+):
+    """Verify the resolution-based tile_size fallback in gsplat.rasterization.
+
+    When tile_size=None and with_eval3d=True (3DGUT), gsplat picks tile=8
+    below 1080p (compact CTA, training-friendly) and tile=16 at 1080p+ (one
+    thread per pixel, render-friendly). The gate is min(W,H) >= 1080: lidar
+    grids are wide-but-shallow (n_rows ≤ 128) so they always pick 8.
+
+    The two dispatches share the same kernel body (same CUDA template, only
+    <TILE_SIZE, CTA_SIZE> constants differ) — separate parametrized tests
+    above (test_rasterize_to_pixels_eval3d, etc.) verify they produce the
+    same RGB/alpha output. This test only verifies the dispatch picks the
+    expected tile_size.
+    """
+    # Minimal scene: 4 gaussians spread across the field of view.
+    N = 4
+    means = torch.zeros(N, 3, device=device)
+    means[:, 2] = 5.0  # 5m in front of camera
+    means[:, 0] = torch.linspace(-0.5, 0.5, N, device=device)
+    quats = (
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device).expand(N, 4).contiguous()
+    )
+    scales = torch.full((N, 3), 0.2, device=device)
+    opacities = torch.full((N,), 0.5, device=device)
+    colors = torch.rand(1, N, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    fx = fy = float(width)
+    Ks = torch.tensor(
+        [[[fx, 0.0, width / 2.0], [0.0, fy, height / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+
+    _, _, meta = gsplat.rasterization(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=width,
+        height=height,
+        tile_size=None,  # let gsplat pick from resolution
+        camera_model="pinhole",
+        packed=False,
+        with_ut=True,
+        with_eval3d=True,
+    )
+    assert meta["tile_size"] == expected_tile_size, (
+        f"width={width} height={height} min(W,H)={min(width, height)}: "
+        f"expected tile_size={expected_tile_size}, got {meta['tile_size']}"
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "width,height,explicit_tile_size",
+    [
+        # Force tile_size=16 at sub-1080p (would auto-pick 8).
+        (540, 540, 16),
+        # Force tile_size=8 at 4K (would auto-pick 16).
+        (3840, 2160, 8),
+    ],
+    ids=["force16_at_540p", "force8_at_4k"],
+)
+def test_rasterization_explicit_tile_size_overrides_auto_3dgut(
+    width: int, height: int, explicit_tile_size: int
+):
+    """Explicit tile_size kwarg must override the resolution-based fallback."""
+    N = 4
+    means = torch.zeros(N, 3, device=device)
+    means[:, 2] = 5.0
+    means[:, 0] = torch.linspace(-0.5, 0.5, N, device=device)
+    quats = (
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device).expand(N, 4).contiguous()
+    )
+    scales = torch.full((N, 3), 0.2, device=device)
+    opacities = torch.full((N,), 0.5, device=device)
+    colors = torch.rand(1, N, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    fx = fy = float(width)
+    Ks = torch.tensor(
+        [[[fx, 0.0, width / 2.0], [0.0, fy, height / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+
+    _, _, meta = gsplat.rasterization(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=width,
+        height=height,
+        tile_size=explicit_tile_size,
+        camera_model="pinhole",
+        packed=False,
+        with_ut=True,
+        with_eval3d=True,
+    )
+    assert meta["tile_size"] == explicit_tile_size, (
+        f"explicit tile_size={explicit_tile_size} not respected at "
+        f"{width}x{height}: meta has {meta['tile_size']}"
+    )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_sh(test_data, sh_degree: int, batch_dims: Tuple[int, ...]):
+def test_sh(sh_degree: int, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
 
@@ -3139,8 +3518,13 @@ def test_sh(test_data, sh_degree: int, batch_dims: Tuple[int, ...]):
 # ============================================================================
 
 
-def _render_alpha(data, quats, scales, means2d, radii, depths):
-    """Render the scene and return the per-pixel alpha tensor."""
+def _render_alpha(data, quats, scales, means2d, radii, depths, tile_size=8):
+    """Render the scene and return the per-pixel alpha tensor.
+
+    `tile_size` selects the 3DGUT kernel instantiation (<TILE,CTA> in
+    {<8,32>, <16,256>}); default 8 since these helpers exist for projection
+    NaN-safety tests where the rasterizer's tile_size is incidental.
+    """
     from gsplat.cuda._wrapper import (
         isect_offset_encode,
         isect_tiles,
@@ -3151,7 +3535,6 @@ def _render_alpha(data, quats, scales, means2d, radii, depths):
     C = data["viewmats"].shape[0]
     W, H = data["width"], data["height"]
 
-    tile_size = 16
     tw = math.ceil(W / tile_size)
     th = math.ceil(H / tile_size)
     _, iids, fids = isect_tiles(means2d, radii, depths, tile_size, tw, th)
@@ -3454,7 +3837,8 @@ def test_projection_ut_zero_scale_single_axis(nan_test_data):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
-def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data):
+@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
+def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data, tile_size):
     """End-to-end: degenerate Gaussians (zero quat, zero scale) must be
     culled in projection so they never reach the rasterization kernel.
 
@@ -3514,8 +3898,8 @@ def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data):
     quats_safe[0] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
     scales_safe[1, 0] = 1.0
 
-    # Tile intersection
-    tile_size = 16
+    # Tile intersection. tile_size flows in from the parametrize and selects
+    # the 3DGUT kernel instantiation (<CDIM,8,32> or <CDIM,16,256>).
     tw = math.ceil(W / tile_size)
     th = math.ceil(H / tile_size)
     _tpg, iids, fids = isect_tiles(means2d, radii, depths, tile_size, tw, th)
@@ -3652,7 +4036,8 @@ def test_projection_ut_python_ref_no_nan(nan_test_data):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
-def test_backward_high_opacity_no_nan():
+@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
+def test_backward_high_opacity_no_nan(tile_size):
     """Backward pass must produce finite gradients when alpha approaches 1.0.
 
     High-opacity Gaussians stacked at the same location drive per-pixel alpha
@@ -3732,7 +4117,8 @@ def test_backward_high_opacity_no_nan():
         H,
     )
 
-    tile_size = 16
+    # tile_size flows in from the parametrize and selects the 3DGUT kernel
+    # instantiation (<CDIM,8,32> or <CDIM,16,256>).
     tw = math.ceil(W / tile_size)
     th = math.ceil(H / tile_size)
     _, iids, fids = isect_tiles(means2d, radii, depths, tile_size, tw, th)

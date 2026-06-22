@@ -863,6 +863,8 @@ def rasterize_to_pixels(
         means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
         conics: Inverse of the projected covariances with only upper triangle values. [..., N, 3] if packed is False, [nnz, 3] if packed is True.
         colors: Gaussian colors or ND features. [..., N, channels] if packed is False, [nnz, channels] if packed is True.
+            ``colors.shape[-1]`` must be one of the channel counts compiled into ``GSPLAT_NUM_CHANNELS``
+            (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA kernel raises ``ValueError``.
         opacities: Gaussian opacities that support per-view values. [..., N] if packed is False, [nnz] if packed is True.
         image_width: Image width.
         image_height: Image height.
@@ -887,7 +889,6 @@ def rasterize_to_pixels(
 
     image_dims = means2d.shape[:-2]
     channels = colors.shape[-1]
-    device = means2d.device
     if packed:
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.shape
@@ -906,53 +907,6 @@ def rasterize_to_pixels(
     if masks is not None:
         assert masks.shape == isect_offsets.shape, masks.shape
         masks = masks.contiguous()
-
-    # Pad the channels to the nearest supported number if necessary
-    if channels > 513 or channels == 0:
-        # TODO: maybe worth to support zero channels?
-        raise ValueError(f"Unsupported number of color channels: {channels}")
-    if channels not in (
-        1,
-        2,
-        3,
-        4,
-        5,
-        8,
-        9,
-        16,
-        17,
-        24,
-        32,
-        33,
-        64,
-        65,
-        128,
-        129,
-        256,
-        257,
-        512,
-        513,
-    ):
-        padded_channels = (1 << (channels - 1).bit_length()) - channels
-        colors = torch.cat(
-            [
-                colors,
-                torch.zeros(*colors.shape[:-1], padded_channels, device=device),
-            ],
-            dim=-1,
-        )
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [
-                    backgrounds,
-                    torch.zeros(
-                        *backgrounds.shape[:-1], padded_channels, device=device
-                    ),
-                ],
-                dim=-1,
-            )
-    else:
-        padded_channels = 0
 
     tile_height, tile_width = isect_offsets.shape[-2:]
     assert (
@@ -977,8 +931,6 @@ def rasterize_to_pixels(
         absgrad,
     )
 
-    if padded_channels > 0:
-        render_colors = render_colors[..., :-padded_channels]
     return render_colors, render_alphas
 
 
@@ -1018,6 +970,10 @@ def rasterize_to_pixels_eval3d(
     Similar to `rasterize_to_pixels()`, but compute the Gaussian responses in the
     3D world space instead of the 2D image space. Supports rolling shutter and
     camera distortion.
+
+    ``colors.shape[-1]`` must be one of the channel counts compiled into
+    ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA
+    kernel raises ``ValueError``.
 
     Returns:
         A tuple:
@@ -1099,6 +1055,10 @@ def rasterize_to_pixels_eval3d_extra(
     Similar to `rasterize_to_pixels_eval3d()`, but returns turns the last gaussian id
     accumulated in a pixel, and optionally the number of accumulated samples per pixel.
 
+    ``colors.shape[-1]`` must be one of the channel counts compiled into
+    ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA
+    kernel raises ``ValueError``.
+
     Args:
         return_last_ids: If True, also return last flatten_idx per pixel. Default: False.
         return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.
@@ -1124,7 +1084,6 @@ def rasterize_to_pixels_eval3d_extra(
     C = viewmats.size(-3)
     P = rays.shape[-2] if rays is not None else 0
     channels = colors.shape[-1]
-    device = means.device
 
     assert means.shape == batch_dims + (N, 3), means.shape
     assert quats.shape == batch_dims + (N, 4), quats.shape
@@ -1173,60 +1132,15 @@ def rasterize_to_pixels_eval3d_extra(
         assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
         viewmats_rs = viewmats_rs.contiguous()
 
-    # Pad the channels to the nearest supported number if necessary
-    channels = colors.shape[-1]
-    if channels > 513 or channels == 0:
-        # TODO: maybe worth to support zero channels?
-        raise ValueError(f"Unsupported number of color channels: {channels}")
-    if channels not in (
-        1,
-        2,
-        3,
-        4,
-        5,
+    # The 3DGUT fwd launcher dispatches at on tile_size:
+    #   tile_size=8  -> kernel<CDIM, 8,  32 > (compact CTA, PPT=2)
+    #   tile_size=16 -> kernel<CDIM, 16, 256> (one thread per pixel, PPT=1)
+    # tile_size must match the launcher dispatch or the tile grid will be
+    # misaligned with the kernel's TILE_SIZE constexpr.
+    assert tile_size in (
         8,
-        9,
         16,
-        17,
-        24,
-        32,
-        33,
-        64,
-        65,
-        128,
-        129,
-        256,
-        257,
-        512,
-        513,
-    ):
-        padded_channels = (1 << (channels - 1).bit_length()) - channels
-        # Insert padding before the last channel so that it stays at
-        # CDIM-1.  When depth is present it is always the last channel,
-        # so this keeps it where the CUDA kernel writes hit_distance.
-        # When depth is absent the last channel is preserved
-        # through the round-trip.
-        # This matches the approach used in rasterize_to_pixels_2dgs.
-        colors = torch.cat(
-            [
-                colors[..., :-1],
-                torch.zeros(*colors.shape[:-1], padded_channels, device=device),
-                colors[..., -1:],
-            ],
-            dim=-1,
-        )
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [
-                    backgrounds,
-                    torch.zeros(
-                        *backgrounds.shape[:-1], padded_channels, device=device
-                    ),
-                ],
-                dim=-1,
-            )
-    else:
-        padded_channels = 0
+    ), f"3DGUT rasterization requires tile_size in (8, 16), got {tile_size}"
 
     tile_height, tile_width = isect_offsets.shape[-2:]
     if camera_model == "lidar":
@@ -1283,12 +1197,6 @@ def rasterize_to_pixels_eval3d_extra(
         use_hit_distance,
         return_normals,  # Pass return_normals flag to forward
     )
-
-    if padded_channels > 0:
-        render_colors = torch.cat(
-            [render_colors[..., : -padded_channels - 1], render_colors[..., -1:]],
-            dim=-1,
-        )
 
     return render_colors, render_alphas, last_ids, sample_counts, render_normals
 
@@ -2056,7 +1964,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             chunk_offsets,
             fwd_chunk_state,
         ) = ctx.saved_tensors
-        # Bwd consumes `fwd_chunk_state` directly in K2's preamble — no
+        # Bwd consumes `fwd_chunk_state` directly in its preamble — no
         # separate state-scan / prefix-scan kernels. The tensor carries
         # per-chunk cumulative (T, pix_out, normal_out) from fwd at every
         # CHUNK_BATCHES boundary.
@@ -2833,6 +2741,8 @@ def rasterize_to_pixels_2dgs(
         means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
         ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [..., N, 3, 3] if packed is False, [nnz, channels] if packed is True.
         colors: Gaussian colors or ND features. [..., N, channels] if packed is False, [nnz, channels] if packed is True.
+            ``colors.shape[-1]`` must be one of the channel counts compiled into ``GSPLAT_NUM_CHANNELS``
+            (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA kernel raises ``ValueError``.
         opacities: Gaussian opacities that support per-view values. [..., N] if packed is False, [nnz] if packed is True.
         normals: The normals in camera space. [..., N, 3] if packed is False, [nnz, 3] if packed is True.
         densify: Dummy variable to keep track of gradient for densification. [..., N, 2] if packed, [nnz, 3] if packed is True.
@@ -2857,7 +2767,6 @@ def rasterize_to_pixels_2dgs(
     """
     image_dims = means2d.shape[:-2]
     channels = colors.shape[-1]
-    device = means2d.device
     if packed:
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.shape
@@ -2874,33 +2783,6 @@ def rasterize_to_pixels_2dgs(
         assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
         backgrounds = backgrounds.contiguous()
 
-    # Pad the channels to the nearest supported number if necessary
-    if channels > 512 or channels == 0:
-        # TODO: maybe worth to support zero channels?
-        raise ValueError(f"Unsupported number of color channels: {channels}")
-    if channels not in (1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 512):
-        padded_channels = (1 << (channels - 1).bit_length()) - channels
-        # Make sure the depth (last channel if present) remains in the last channel after padding (for depth distortion and median depth in CUDA kernel)
-        colors = torch.cat(
-            [
-                colors[..., :-1],
-                torch.empty(*colors.shape[:-1], padded_channels, device=device),
-                colors[..., -1:],
-            ],
-            dim=-1,
-        )
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [
-                    backgrounds,
-                    torch.zeros(
-                        *backgrounds.shape[:-1], padded_channels, device=device
-                    ),
-                ],
-                dim=-1,
-            )
-    else:
-        padded_channels = 0
     tile_height, tile_width = isect_offsets.shape[-2:]
     assert (
         tile_height * tile_size >= image_height
@@ -2932,12 +2814,6 @@ def rasterize_to_pixels_2dgs(
         absgrad,
         distloss,
     )
-
-    if padded_channels > 0:
-        render_colors = torch.cat(
-            [render_colors[..., : -padded_channels - 1], render_colors[..., -1:]],
-            dim=-1,
-        )
 
     return render_colors, render_alphas, render_normals, render_distort, render_median
 

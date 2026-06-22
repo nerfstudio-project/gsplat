@@ -440,7 +440,33 @@ def main() -> None:
     parser.add_argument(
         "--iterations", type=int, default=20, help="Number of profiled iterations"
     )
+    parser.add_argument(
+        "--ensure-rays",
+        action="store_true",
+        help=(
+            "When the captured input has `rays=None` and the camera model "
+            "is non-lidar with `with_eval3d=True`, pre-generate per-pixel "
+            "rays via `_BaseCameraModel.image_point_to_world_ray_shutter_pose` "
+            "and inject them into the inputs before replay. Required for "
+            "BF3D measurements: the C++ dispatch in Rasterization.cpp "
+            "silently falls back from BRUTE_FORCE_3D to LEGACY_CLOSEST_2D "
+            "when rays is None."
+        ),
+    )
+    parser.add_argument(
+        "--no-rays",
+        action="store_true",
+        help=(
+            "Strip the `rays` tensor from the captured inputs (set to None) "
+            "before replay, forcing the kernel to synthesise rays from the "
+            "camera model on the fly. Use this to profile the rays-synthesis "
+            "code path on captures that originally embed precomputed rays. "
+            "Mutually exclusive with --ensure-rays."
+        ),
+    )
     args = parser.parse_args()
+    if args.ensure_rays and args.no_rays:
+        parser.error("--ensure-rays and --no-rays are mutually exclusive")
 
     print(f"[gsplat.profile] Loading inputs from {args.input}")
     inputs: dict[str, Any] = torch.load(
@@ -455,6 +481,79 @@ def main() -> None:
             and inputs[k].is_floating_point()
         ):
             inputs[k] = inputs[k].requires_grad_(True)
+
+    if args.no_rays:
+        if inputs.get("rays") is None:
+            print("[gsplat.profile] --no-rays: skipping (rays already None)")
+        else:
+            print(
+                f"[gsplat.profile] --no-rays: stripping rays "
+                f"{tuple(inputs['rays'].shape)} from inputs"
+            )
+            inputs["rays"] = None
+
+    if args.ensure_rays and inputs.get("rays") is None:
+        cam_model = inputs.get("camera_model", "pinhole")
+        with_eval3d = inputs.get("with_eval3d", False)
+        if not with_eval3d:
+            print(
+                "[gsplat.profile] --ensure-rays: skipping (with_eval3d=False; "
+                "rays unused on this path)"
+            )
+        else:
+            from gsplat.cuda._torch_impl_eval3d import (
+                _BaseCameraModel,
+                _generate_rays,
+            )
+            from gsplat.cuda._wrapper import RollingShutterType
+
+            viewmats = inputs["viewmats"].reshape(-1, 4, 4)
+            viewmats_rs = inputs.get("viewmats_rs")
+            if viewmats_rs is not None:
+                viewmats_rs = viewmats_rs.reshape(-1, 4, 4)
+            rs_type = inputs.get("rolling_shutter")
+            if rs_type is None:
+                rs_type = RollingShutterType.GLOBAL
+
+            if cam_model == "lidar":
+                # Lidar dimensions come from lidar_coeffs (rendering.py:582-584
+                # overrides inputs["width"]/inputs["height"] from the coeffs).
+                lidar_coeffs = inputs["lidar_coeffs"]
+                gen_width = lidar_coeffs.n_columns
+                gen_height = lidar_coeffs.n_rows
+                cam = _BaseCameraModel.create(
+                    camera_model="lidar",
+                    rs_type=rs_type,
+                    lidar_coeffs=lidar_coeffs,
+                )
+            else:
+                Ks = inputs["Ks"].reshape(-1, 3, 3)
+                gen_width = inputs["width"]
+                gen_height = inputs["height"]
+                cam = _BaseCameraModel.create(
+                    width=gen_width,
+                    height=gen_height,
+                    camera_model=cam_model,
+                    focal_lengths=Ks[:, [0, 1], [0, 1]],
+                    principal_points=Ks[:, [0, 1], [2, 2]],
+                    rs_type=rs_type,
+                    radial_coeffs=inputs.get("radial_coeffs"),
+                    tangential_coeffs=inputs.get("tangential_coeffs"),
+                    thin_prism_coeffs=inputs.get("thin_prism_coeffs"),
+                    ftheta_coeffs=inputs.get("ftheta_coeffs"),
+                )
+            rays = _generate_rays(
+                cam,
+                gen_width,
+                gen_height,
+                viewmats,
+                viewmats_rs,
+            ).reshape(-1, gen_height, gen_width, 6)
+            inputs["rays"] = rays
+            print(
+                f"[gsplat.profile] --ensure-rays: generated rays {tuple(rays.shape)} "
+                f"(camera_model={cam_model})"
+            )
 
     n_gaussians = inputs["means"].shape[-2] if "means" in inputs else "?"
     width = inputs.get("width", "?")
