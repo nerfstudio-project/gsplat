@@ -329,6 +329,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing_extensions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">gsplat._helper</span><span class="w"> </span><span class="kn">import</span> <span class="n">assert_shape</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.trace</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace_function</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.cuda._lidar</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">SpinningDirection</span><span class="p">,</span>
     <span class="n">LidarModelParameters</span><span class="p">,</span>
@@ -657,6 +658,7 @@
 
 <div class="viewcode-block" id="spherical_harmonics">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.spherical_harmonics">[docs]</a>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-fwd&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics</span><span class="p">(</span>
     <span class="n">degrees_to_use</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">dirs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., 3]</span>
@@ -803,6 +805,7 @@
 
 <div class="viewcode-block" id="fully_fused_projection">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.fully_fused_projection">[docs]</a>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;project-fwd&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">fully_fused_projection</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span>  <span class="c1"># [..., N, 6] or None</span>
@@ -962,6 +965,7 @@
 <div class="viewcode-block" id="isect_tiles">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.isect_tiles">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;isect-camera&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">isect_tiles</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">radii</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
@@ -1062,6 +1066,7 @@
 
 
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;isect-lidar&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">isect_tiles_lidar</span><span class="p">(</span>
     <span class="n">lidar</span><span class="p">:</span> <span class="n">RowOffsetStructuredSpinningLidarModelParametersExt</span><span class="p">,</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
@@ -1137,6 +1142,7 @@
 <div class="viewcode-block" id="isect_offset_encode">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.isect_offset_encode">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;offsets&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">isect_offset_encode</span><span class="p">(</span>
     <span class="n">isect_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">n_images</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -1162,6 +1168,7 @@
 
 <div class="viewcode-block" id="rasterize_to_pixels">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_pixels">[docs]</a>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-fwd&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
@@ -1378,6 +1385,7 @@
     <span class="k">return</span> <span class="n">colors</span><span class="p">,</span> <span class="n">alphas</span>
 
 
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render3D-fwd&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_eval3d_extra</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
@@ -1866,6 +1874,7 @@
         <span class="k">return</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
 
     <span class="nd">@staticmethod</span>
+    <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;project-bwd&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_conics</span><span class="p">,</span> <span class="n">v_compensations</span><span class="p">):</span>
         <span class="p">(</span>
             <span class="n">means</span><span class="p">,</span>
@@ -1936,6 +1945,7 @@
         <span class="p">)</span>
 
 
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;projectUT-fwd&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">fully_fused_projection_with_ut</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
@@ -2105,6 +2115,7 @@
         <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span>
 
     <span class="nd">@staticmethod</span>
+    <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-bwd&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., H, W, 3]</span>
@@ -2321,6 +2332,7 @@
         <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span><span class="p">,</span> <span class="n">sample_counts</span><span class="p">,</span> <span class="n">render_normals</span>
 
     <span class="nd">@staticmethod</span>
+    <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render3D-bwd&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 3]</span>
@@ -2538,6 +2550,7 @@
         <span class="p">)</span>
 
     <span class="nd">@staticmethod</span>
+    <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;project-bwd&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_batch_ids</span><span class="p">,</span>
@@ -2683,6 +2696,7 @@
         <span class="k">return</span> <span class="n">colors</span>
 
     <span class="nd">@staticmethod</span>
+    <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-bwd&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
         <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">sh_degree</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sh_degree</span>
