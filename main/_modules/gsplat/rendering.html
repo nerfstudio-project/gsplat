@@ -575,6 +575,37 @@
     <span class="k">return</span> <span class="n">F</span><span class="o">.</span><span class="n">normalize</span><span class="p">(</span><span class="n">dirs</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_resolve_tile_size</span><span class="p">(</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">with_eval3d</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">height</span><span class="p">:</span> <span class="nb">int</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve a None-valued tile_size to the path-correct default.</span>
+
+<span class="sd">    The 3DGS kernel is compiled with TILE_SIZE=16 only; the 3DGUT kernel</span>
+<span class="sd">    dispatches at compile time on tile_size in {8, 16} and the optimum is</span>
+<span class="sd">    workload-dependent:</span>
+<span class="sd">      - tile=8 (CTA=32, PPT=2) is the compact-CTA path. Wins below 1080p</span>
+<span class="sd">        where smaller per-tile shmem lets many CTAs co-reside per SM and</span>
+<span class="sd">        intersect+sort cost is small.</span>
+<span class="sd">      - tile=16 (CTA=256, PPT=1) is one thread per pixel. Wins at 1080p+</span>
+<span class="sd">        where intersect+sort dominates and fewer/larger tiles shrink it.</span>
+
+<span class="sd">    Spinning lidar grids are wide but shallow (e.g. pandar128 = 128 rows x</span>
+<span class="sd">    3600 cols, at128 = 128 x 1200); min gates on the row count keeps lidar at</span>
+<span class="sd">    tile=8 alongside sub-1080p cameras. Cameras at 1080p+ have min(W,H) &gt;= 1080</span>
+<span class="sd">    and pick tile=16.</span>
+
+<span class="sd">    Callers must pass `width`/`height` AFTER any lidar dim override so the</span>
+<span class="sd">    gate sees the right dims for lidar.</span>
+
+<span class="sd">    Explicit non-None tile_size is returned unchanged (caller override wins).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">tile_size</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">tile_size</span>
+    <span class="k">if</span> <span class="n">with_eval3d</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mi">16</span> <span class="k">if</span> <span class="nb">min</span><span class="p">(</span><span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">1080</span> <span class="k">else</span> <span class="mi">8</span>
+    <span class="k">return</span> <span class="mi">16</span>
+
+
 <div class="viewcode-block" id="rasterization">
 <a class="viewcode-back" href="../../apis/rasterization.html#gsplat.rasterization">[docs]</a>
 <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render&quot;</span><span class="p">)</span>
@@ -597,7 +628,7 @@
     <span class="n">eps2d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.3</span><span class="p">,</span>
     <span class="n">sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">render_mode</span><span class="p">:</span> <span class="n">RenderMode</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
@@ -882,6 +913,8 @@
     <span class="k">if</span> <span class="n">lidar_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">width</span> <span class="o">=</span> <span class="n">lidar_coeffs</span><span class="o">.</span><span class="n">n_columns</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">lidar_coeffs</span><span class="o">.</span><span class="n">n_rows</span>
+
+    <span class="n">tile_size</span> <span class="o">=</span> <span class="n">_resolve_tile_size</span><span class="p">(</span><span class="n">tile_size</span><span class="p">,</span> <span class="n">with_eval3d</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">)</span>
 
     <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">num_batch_dims</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
@@ -1691,7 +1724,7 @@
     <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e10</span><span class="p">,</span>
     <span class="n">eps2d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.3</span><span class="p">,</span>
     <span class="n">sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">rays</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
         <span class="n">Tensor</span>
     <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, H, W, 6] -&gt; ox, oy, oz, dx*spread, dy*spread, dz*spread</span>
@@ -1735,6 +1768,8 @@
     <span class="k">if</span> <span class="n">lidar_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">width</span> <span class="o">=</span> <span class="n">lidar_coeffs</span><span class="o">.</span><span class="n">n_columns</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">lidar_coeffs</span><span class="o">.</span><span class="n">n_rows</span>
+
+    <span class="n">tile_size</span> <span class="o">=</span> <span class="n">_resolve_tile_size</span><span class="p">(</span><span class="n">tile_size</span><span class="p">,</span> <span class="n">with_eval3d</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">)</span>
 
     <span class="n">has_color</span> <span class="o">=</span> <span class="n">render_mode_has_color</span><span class="p">(</span><span class="n">render_mode</span><span class="p">)</span>
 

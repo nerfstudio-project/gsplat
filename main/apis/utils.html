@@ -561,7 +561,9 @@ tile ids, respectively. Int64 [n_isects]</p></li>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>means2d</strong> – Projected Gaussian means. […, N, 2] if packed is False, [nnz, 2] if packed is True.</p></li>
 <li><p><strong>conics</strong> – Inverse of the projected covariances with only upper triangle values. […, N, 3] if packed is False, [nnz, 3] if packed is True.</p></li>
-<li><p><strong>colors</strong> – Gaussian colors or ND features. […, N, channels] if packed is False, [nnz, channels] if packed is True.</p></li>
+<li><p><strong>colors</strong> – Gaussian colors or ND features. […, N, channels] if packed is False, [nnz, channels] if packed is True.
+<code class="docutils literal notranslate"><span class="pre">colors.shape[-1]</span></code> must be one of the channel counts compiled into <code class="docutils literal notranslate"><span class="pre">GSPLAT_NUM_CHANNELS</span></code>
+(see <code class="docutils literal notranslate"><span class="pre">gsplat/cuda/csrc/Config.h</span></code>); otherwise the CUDA kernel raises <code class="docutils literal notranslate"><span class="pre">ValueError</span></code>.</p></li>
 <li><p><strong>opacities</strong> – Gaussian opacities that support per-view values. […, N] if packed is False, [nnz] if packed is True.</p></li>
 <li><p><strong>image_width</strong> – Image width.</p></li>
 <li><p><strong>image_height</strong> – Image height.</p></li>
@@ -758,7 +760,9 @@ of {<cite>means</cite>, <cite>covars</cite>, <cite>quats</cite>, <cite>scales</c
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>means2d</strong> – Projected Gaussian means. […, N, 2] if packed is False, [nnz, 2] if packed is True.</p></li>
 <li><p><strong>ray_transforms</strong> – transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. […, N, 3, 3] if packed is False, [nnz, channels] if packed is True.</p></li>
-<li><p><strong>colors</strong> – Gaussian colors or ND features. […, N, channels] if packed is False, [nnz, channels] if packed is True.</p></li>
+<li><p><strong>colors</strong> – Gaussian colors or ND features. […, N, channels] if packed is False, [nnz, channels] if packed is True.
+<code class="docutils literal notranslate"><span class="pre">colors.shape[-1]</span></code> must be one of the channel counts compiled into <code class="docutils literal notranslate"><span class="pre">GSPLAT_NUM_CHANNELS</span></code>
+(see <code class="docutils literal notranslate"><span class="pre">gsplat/cuda/csrc/Config.h</span></code>); otherwise the CUDA kernel raises <code class="docutils literal notranslate"><span class="pre">ValueError</span></code>.</p></li>
 <li><p><strong>opacities</strong> – Gaussian opacities that support per-view values. […, N] if packed is False, [nnz] if packed is True.</p></li>
 <li><p><strong>normals</strong> – The normals in camera space. […, N, 3] if packed is False, [nnz, 3] if packed is True.</p></li>
 <li><p><strong>densify</strong> – Dummy variable to keep track of gradient for densification. […, N, 2] if packed, [nnz, 3] if packed is True.</p></li>

@@ -1190,6 +1190,8 @@
 <span class="sd">        means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.</span>
 <span class="sd">        conics: Inverse of the projected covariances with only upper triangle values. [..., N, 3] if packed is False, [nnz, 3] if packed is True.</span>
 <span class="sd">        colors: Gaussian colors or ND features. [..., N, channels] if packed is False, [nnz, channels] if packed is True.</span>
+<span class="sd">            ``colors.shape[-1]`` must be one of the channel counts compiled into ``GSPLAT_NUM_CHANNELS``</span>
+<span class="sd">            (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA kernel raises ``ValueError``.</span>
 <span class="sd">        opacities: Gaussian opacities that support per-view values. [..., N] if packed is False, [nnz] if packed is True.</span>
 <span class="sd">        image_width: Image width.</span>
 <span class="sd">        image_height: Image height.</span>
@@ -1214,7 +1216,6 @@
 
     <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">channels</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-    <span class="n">device</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">device</span>
     <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
         <span class="n">nnz</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
@@ -1233,53 +1234,6 @@
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">assert</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-
-    <span class="c1"># Pad the channels to the nearest supported number if necessary</span>
-    <span class="k">if</span> <span class="n">channels</span> <span class="o">&gt;</span> <span class="mi">513</span> <span class="ow">or</span> <span class="n">channels</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="c1"># TODO: maybe worth to support zero channels?</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported number of color channels: </span><span class="si">{</span><span class="n">channels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">channels</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span>
-        <span class="mi">1</span><span class="p">,</span>
-        <span class="mi">2</span><span class="p">,</span>
-        <span class="mi">3</span><span class="p">,</span>
-        <span class="mi">4</span><span class="p">,</span>
-        <span class="mi">5</span><span class="p">,</span>
-        <span class="mi">8</span><span class="p">,</span>
-        <span class="mi">9</span><span class="p">,</span>
-        <span class="mi">16</span><span class="p">,</span>
-        <span class="mi">17</span><span class="p">,</span>
-        <span class="mi">24</span><span class="p">,</span>
-        <span class="mi">32</span><span class="p">,</span>
-        <span class="mi">33</span><span class="p">,</span>
-        <span class="mi">64</span><span class="p">,</span>
-        <span class="mi">65</span><span class="p">,</span>
-        <span class="mi">128</span><span class="p">,</span>
-        <span class="mi">129</span><span class="p">,</span>
-        <span class="mi">256</span><span class="p">,</span>
-        <span class="mi">257</span><span class="p">,</span>
-        <span class="mi">512</span><span class="p">,</span>
-        <span class="mi">513</span><span class="p">,</span>
-    <span class="p">):</span>
-        <span class="n">padded_channels</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="p">(</span><span class="n">channels</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">bit_length</span><span class="p">())</span> <span class="o">-</span> <span class="n">channels</span>
-        <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-            <span class="p">[</span>
-                <span class="n">colors</span><span class="p">,</span>
-                <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="o">*</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">padded_channels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
-            <span class="p">],</span>
-            <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-                <span class="p">[</span>
-                    <span class="n">backgrounds</span><span class="p">,</span>
-                    <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
-                        <span class="o">*</span><span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">padded_channels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
-                    <span class="p">),</span>
-                <span class="p">],</span>
-                <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
-            <span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="n">padded_channels</span> <span class="o">=</span> <span class="mi">0</span>
 
     <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span> <span class="o">=</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span>
     <span class="k">assert</span> <span class="p">(</span>
@@ -1304,8 +1258,6 @@
         <span class="n">absgrad</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">padded_channels</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="n">render_colors</span> <span class="o">=</span> <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="n">padded_channels</span><span class="p">]</span>
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span></div>
 
 
@@ -1346,6 +1298,10 @@
 <span class="sd">    Similar to `rasterize_to_pixels()`, but compute the Gaussian responses in the</span>
 <span class="sd">    3D world space instead of the 2D image space. Supports rolling shutter and</span>
 <span class="sd">    camera distortion.</span>
+
+<span class="sd">    ``colors.shape[-1]`` must be one of the channel counts compiled into</span>
+<span class="sd">    ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA</span>
+<span class="sd">    kernel raises ``ValueError``.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple:</span>
@@ -1427,6 +1383,10 @@
 <span class="sd">    Similar to `rasterize_to_pixels_eval3d()`, but returns turns the last gaussian id</span>
 <span class="sd">    accumulated in a pixel, and optionally the number of accumulated samples per pixel.</span>
 
+<span class="sd">    ``colors.shape[-1]`` must be one of the channel counts compiled into</span>
+<span class="sd">    ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA</span>
+<span class="sd">    kernel raises ``ValueError``.</span>
+
 <span class="sd">    Args:</span>
 <span class="sd">        return_last_ids: If True, also return last flatten_idx per pixel. Default: False.</span>
 <span class="sd">        return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.</span>
@@ -1452,7 +1412,6 @@
     <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">)</span>
     <span class="n">P</span> <span class="o">=</span> <span class="n">rays</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mi">0</span>
     <span class="n">channels</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-    <span class="n">device</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">device</span>
 
     <span class="k">assert</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">assert</span> <span class="n">quats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">quats</span><span class="o">.</span><span class="n">shape</span>
@@ -1501,60 +1460,15 @@
         <span class="k">assert</span> <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">shape</span>
         <span class="n">viewmats_rs</span> <span class="o">=</span> <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
-    <span class="c1"># Pad the channels to the nearest supported number if necessary</span>
-    <span class="n">channels</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-    <span class="k">if</span> <span class="n">channels</span> <span class="o">&gt;</span> <span class="mi">513</span> <span class="ow">or</span> <span class="n">channels</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="c1"># TODO: maybe worth to support zero channels?</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported number of color channels: </span><span class="si">{</span><span class="n">channels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">channels</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span>
-        <span class="mi">1</span><span class="p">,</span>
-        <span class="mi">2</span><span class="p">,</span>
-        <span class="mi">3</span><span class="p">,</span>
-        <span class="mi">4</span><span class="p">,</span>
-        <span class="mi">5</span><span class="p">,</span>
+    <span class="c1"># The 3DGUT fwd launcher dispatches at on tile_size:</span>
+    <span class="c1">#   tile_size=8  -&gt; kernel&lt;CDIM, 8,  32 &gt; (compact CTA, PPT=2)</span>
+    <span class="c1">#   tile_size=16 -&gt; kernel&lt;CDIM, 16, 256&gt; (one thread per pixel, PPT=1)</span>
+    <span class="c1"># tile_size must match the launcher dispatch or the tile grid will be</span>
+    <span class="c1"># misaligned with the kernel&#39;s TILE_SIZE constexpr.</span>
+    <span class="k">assert</span> <span class="n">tile_size</span> <span class="ow">in</span> <span class="p">(</span>
         <span class="mi">8</span><span class="p">,</span>
-        <span class="mi">9</span><span class="p">,</span>
         <span class="mi">16</span><span class="p">,</span>
-        <span class="mi">17</span><span class="p">,</span>
-        <span class="mi">24</span><span class="p">,</span>
-        <span class="mi">32</span><span class="p">,</span>
-        <span class="mi">33</span><span class="p">,</span>
-        <span class="mi">64</span><span class="p">,</span>
-        <span class="mi">65</span><span class="p">,</span>
-        <span class="mi">128</span><span class="p">,</span>
-        <span class="mi">129</span><span class="p">,</span>
-        <span class="mi">256</span><span class="p">,</span>
-        <span class="mi">257</span><span class="p">,</span>
-        <span class="mi">512</span><span class="p">,</span>
-        <span class="mi">513</span><span class="p">,</span>
-    <span class="p">):</span>
-        <span class="n">padded_channels</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="p">(</span><span class="n">channels</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">bit_length</span><span class="p">())</span> <span class="o">-</span> <span class="n">channels</span>
-        <span class="c1"># Insert padding before the last channel so that it stays at</span>
-        <span class="c1"># CDIM-1.  When depth is present it is always the last channel,</span>
-        <span class="c1"># so this keeps it where the CUDA kernel writes hit_distance.</span>
-        <span class="c1"># When depth is absent the last channel is preserved</span>
-        <span class="c1"># through the round-trip.</span>
-        <span class="c1"># This matches the approach used in rasterize_to_pixels_2dgs.</span>
-        <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-            <span class="p">[</span>
-                <span class="n">colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
-                <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="o">*</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">padded_channels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
-                <span class="n">colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">:],</span>
-            <span class="p">],</span>
-            <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-                <span class="p">[</span>
-                    <span class="n">backgrounds</span><span class="p">,</span>
-                    <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
-                        <span class="o">*</span><span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">padded_channels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
-                    <span class="p">),</span>
-                <span class="p">],</span>
-                <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
-            <span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="n">padded_channels</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;3DGUT rasterization requires tile_size in (8, 16), got </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2">&quot;</span>
 
     <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span> <span class="o">=</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span>
     <span class="k">if</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;lidar&quot;</span><span class="p">:</span>
@@ -1611,12 +1525,6 @@
         <span class="n">use_hit_distance</span><span class="p">,</span>
         <span class="n">return_normals</span><span class="p">,</span>  <span class="c1"># Pass return_normals flag to forward</span>
     <span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">padded_channels</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-            <span class="p">[</span><span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span> <span class="o">-</span><span class="n">padded_channels</span> <span class="o">-</span> <span class="mi">1</span><span class="p">],</span> <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">:]],</span>
-            <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
-        <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span><span class="p">,</span> <span class="n">sample_counts</span><span class="p">,</span> <span class="n">render_normals</span>
 
@@ -2387,7 +2295,7 @@
             <span class="n">chunk_offsets</span><span class="p">,</span>
             <span class="n">fwd_chunk_state</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
-        <span class="c1"># Bwd consumes `fwd_chunk_state` directly in K2&#39;s preamble — no</span>
+        <span class="c1"># Bwd consumes `fwd_chunk_state` directly in its preamble — no</span>
         <span class="c1"># separate state-scan / prefix-scan kernels. The tensor carries</span>
         <span class="c1"># per-chunk cumulative (T, pix_out, normal_out) from fwd at every</span>
         <span class="c1"># CHUNK_BATCHES boundary.</span>
@@ -3169,6 +3077,8 @@
 <span class="sd">        means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.</span>
 <span class="sd">        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [..., N, 3, 3] if packed is False, [nnz, channels] if packed is True.</span>
 <span class="sd">        colors: Gaussian colors or ND features. [..., N, channels] if packed is False, [nnz, channels] if packed is True.</span>
+<span class="sd">            ``colors.shape[-1]`` must be one of the channel counts compiled into ``GSPLAT_NUM_CHANNELS``</span>
+<span class="sd">            (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA kernel raises ``ValueError``.</span>
 <span class="sd">        opacities: Gaussian opacities that support per-view values. [..., N] if packed is False, [nnz] if packed is True.</span>
 <span class="sd">        normals: The normals in camera space. [..., N, 3] if packed is False, [nnz, 3] if packed is True.</span>
 <span class="sd">        densify: Dummy variable to keep track of gradient for densification. [..., N, 2] if packed, [nnz, 3] if packed is True.</span>
@@ -3193,7 +3103,6 @@
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">channels</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-    <span class="n">device</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">device</span>
     <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
         <span class="n">nnz</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
@@ -3210,33 +3119,6 @@
         <span class="k">assert</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">channels</span><span class="p">,),</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span>
         <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
-    <span class="c1"># Pad the channels to the nearest supported number if necessary</span>
-    <span class="k">if</span> <span class="n">channels</span> <span class="o">&gt;</span> <span class="mi">512</span> <span class="ow">or</span> <span class="n">channels</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="c1"># TODO: maybe worth to support zero channels?</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported number of color channels: </span><span class="si">{</span><span class="n">channels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">channels</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">512</span><span class="p">):</span>
-        <span class="n">padded_channels</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="p">(</span><span class="n">channels</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">bit_length</span><span class="p">())</span> <span class="o">-</span> <span class="n">channels</span>
-        <span class="c1"># Make sure the depth (last channel if present) remains in the last channel after padding (for depth distortion and median depth in CUDA kernel)</span>
-        <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-            <span class="p">[</span>
-                <span class="n">colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
-                <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="o">*</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">padded_channels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
-                <span class="n">colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">:],</span>
-            <span class="p">],</span>
-            <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-                <span class="p">[</span>
-                    <span class="n">backgrounds</span><span class="p">,</span>
-                    <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
-                        <span class="o">*</span><span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">padded_channels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
-                    <span class="p">),</span>
-                <span class="p">],</span>
-                <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
-            <span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="n">padded_channels</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span> <span class="o">=</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span>
     <span class="k">assert</span> <span class="p">(</span>
         <span class="n">tile_height</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_height</span>
@@ -3268,12 +3150,6 @@
         <span class="n">absgrad</span><span class="p">,</span>
         <span class="n">distloss</span><span class="p">,</span>
     <span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">padded_channels</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-            <span class="p">[</span><span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span> <span class="o">-</span><span class="n">padded_channels</span> <span class="o">-</span> <span class="mi">1</span><span class="p">],</span> <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">:]],</span>
-            <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
-        <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">render_normals</span><span class="p">,</span> <span class="n">render_distort</span><span class="p">,</span> <span class="n">render_median</span></div>
 
