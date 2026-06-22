@@ -41,6 +41,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     const uint32_t N,        // number of gaussians
     const uint32_t n_isects, // number of ray-primitive intersections.
     const bool packed,       // whether the input tensors are packed
+    const bool has_depth_channel, // Fix #863: last color channel is depth
     // fwd inputs
     const vec2
         *__restrict__ means2d, // Projected Gaussian means. [..., N, 2] if
@@ -484,6 +485,17 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_rgb_local[k] += fac * v_render_c[k];
                 }
+                // Fix #863: depth channel grad goes to v_w_M, not v_colors
+                if (has_depth_channel) {
+                    float isect_d =
+                        1.0f / (w_M.x * px + w_M.y * py + w_M.z);
+                    float d2 = isect_d * isect_d;
+                    float v_id = fac * v_render_c[CDIM - 1];
+                    v_w_M_local.x += v_id * (-px * d2);
+                    v_w_M_local.y += v_id * (-py * d2);
+                    v_w_M_local.z += v_id * (-d2);
+                    v_rgb_local[CDIM - 1] -= v_id; // undo center-depth grad
+                }
 
                 // contribution from this pixel to alpha
                 // we have d(alpha)/d(c_i) = c_i * G_i * T + [grad contribution
@@ -493,6 +505,13 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_alpha += (rgbs_batch[t * CDIM + k] * T - buffer[k] * ra) *
                                v_render_c[k];
+                }
+                // Fix #863: fix depth channel's contribution to v_alpha
+                if (has_depth_channel) {
+                    float isect_d =
+                        1.0f / (w_M.x * px + w_M.y * py + w_M.z);
+                    v_alpha += (isect_d - rgbs_batch[t * CDIM + CDIM - 1])
+                               * T * v_render_c[CDIM - 1];
                 }
 
 /*
@@ -620,6 +639,13 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     buffer[k] += rgbs_batch[t * CDIM + k] * fac;
                 }
+                // Fix #863: fix depth channel in buffer accumulator
+                if (has_depth_channel) {
+                    float isect_d =
+                        1.0f / (w_M.x * px + w_M.y * py + w_M.z);
+                    buffer[CDIM - 1] +=
+                        (isect_d - rgbs_batch[t * CDIM + CDIM - 1]) * fac;
+                }
 
 /**
  * Update the cumulative "later" gaussian contributions, used in derivatives of
@@ -722,6 +748,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // ray_crossions
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool has_depth_channel,  // Fix #863: last channel is depth
     // forward outputs
     const at::Tensor render_colors, // [..., image_height, image_width, CDIM]
     const at::Tensor render_alphas, // [..., image_height, image_width, 1]
@@ -786,6 +813,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
             N,
             n_isects,
             packed,
+            has_depth_channel,
             reinterpret_cast<vec2 *>(means2d.data_ptr<float>()),
             ray_transforms.data_ptr<float>(),
             colors.data_ptr<float>(),
@@ -842,6 +870,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
         const uint32_t tile_size,                                              \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
+        bool has_depth_channel,                                                \
         const at::Tensor render_colors,                                        \
         const at::Tensor render_alphas,                                        \
         const at::Tensor last_ids,                                             \

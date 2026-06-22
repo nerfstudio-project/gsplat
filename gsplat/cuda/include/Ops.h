@@ -538,7 +538,8 @@ rasterize_to_pixels_2dgs_fwd(
     int64_t tile_size,
     // intersections
     const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor &flatten_ids   // [n_isects]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    bool has_depth_channel          // Fix #863: last channel is depth
 );
 std::tuple<
     at::Tensor,
@@ -577,7 +578,8 @@ rasterize_to_pixels_2dgs_bwd(
     const at::Tensor &v_render_distort, // [..., image_height, image_width, 1]
     const at::Tensor &v_render_median,  // [..., image_height, image_width, 1]
     // options
-    bool absgrad
+    bool absgrad,
+    bool has_depth_channel // Fix #863: last channel is depth
 );
 
 std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(

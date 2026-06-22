@@ -43,6 +43,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     const uint32_t N,        // number of gaussians
     const uint32_t n_isects, // number of ray-primitive intersections.
     const bool packed,       // whether the input tensors are packed
+    const bool has_depth_channel, // Fix #863: last color channel is depth
     const vec2
         *__restrict__ means2d, // Projected Gaussian means. [..., N, 2] if
                                // packed is False, [nnz, 2] if packed is True.
@@ -404,6 +405,13 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
             for (uint32_t k = 0; k < CDIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
             }
+            if (has_depth_channel) {
+                // Fix #863: replace packed Gaussian center depth
+                // with the Inria 2DGS ray-splat intersection depth.
+                const float isect_depth = s.x * w_M.x + s.y * w_M.y + w_M.z;
+                pix_out[CDIM - 1] +=
+                    (isect_depth - c_ptr[CDIM - 1]) * vis;
+            }
 
             const float *n_ptr = normals + g * 3;
 #pragma unroll
@@ -413,7 +421,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
 
             if (render_distort != nullptr) {
                 // the last channel of colors is depth
-                const float depth = c_ptr[CDIM - 1];
+                const float depth = s.x * w_M.x + s.y * w_M.y + w_M.z;
                 // in nerfacc, loss_bi_0 = weights * t_mids *
                 // exclusive_sum(weights)
                 const float distort_bi_0 = vis * depth * (1.0f - T);
@@ -426,7 +434,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
 
             // compute median depth
             if (T > 0.5) {
-                median_depth = c_ptr[CDIM - 1];
+                median_depth = s.x * w_M.x + s.y * w_M.y + w_M.z;
                 median_idx = batch_start + t;
             }
 
@@ -482,6 +490,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool has_depth_channel,  // Fix #863: last channel is depth
     // outputs
     at::Tensor renders,        // [..., image_height, image_width, channels]
     at::Tensor alphas,         // [..., image_height, image_width]
@@ -529,6 +538,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
             N,
             n_isects,
             packed,
+            has_depth_channel,
             reinterpret_cast<vec2 *>(means2d.data_ptr<float>()),
             ray_transforms.data_ptr<float>(),
             colors.data_ptr<float>(),
@@ -571,6 +581,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
         uint32_t tile_size,                                                    \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
+        bool has_depth_channel,                                                \
         at::Tensor renders,                                                    \
         at::Tensor alphas,                                                     \
         at::Tensor render_normals,                                             \

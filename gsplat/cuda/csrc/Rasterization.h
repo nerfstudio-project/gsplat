@@ -136,6 +136,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    bool has_depth_channel,        // Fix #863: last channel is depth
     // outputs
     at::Tensor renders,        // [..., image_height, image_width, channels]
     at::Tensor alphas,         // [..., image_height, image_width, 1]
@@ -163,6 +164,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // ray_crossions
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    bool has_depth_channel,        // Fix #863: last channel is depth
     // forward outputs
     const at::Tensor render_colors, // [..., image_height, image_width, CDIM]
     const at::Tensor render_alphas, // [..., image_height, image_width, 1]
