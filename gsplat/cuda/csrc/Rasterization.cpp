@@ -53,7 +53,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     int64_t tile_size,
     // intersections
     const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor &flatten_ids   // [n_isects]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    int64_t rasterize_fwd_impl
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -99,6 +100,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
             tile_size,                                                         \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
+            rasterize_fwd_impl,                                                \
             renders,                                                           \
             alphas,                                                            \
             last_ids                                                           \
@@ -330,7 +332,8 @@ rasterize_to_pixels_2dgs_fwd(
     int64_t tile_size,
     // intersections
     const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor &flatten_ids   // [n_isects]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    int64_t rasterize_fwd_impl
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -394,6 +397,7 @@ rasterize_to_pixels_2dgs_fwd(
             tile_size,                                                         \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
+            rasterize_fwd_impl,                                                \
             renders,                                                           \
             alphas,                                                            \
             render_normals,                                                    \
