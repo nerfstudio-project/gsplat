@@ -576,9 +576,10 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
     # A masked-out tile takes the forward rasterizer's early-return branch,
     # which must initialize ALL of its pixel outputs (the binding allocates
     # them with at::empty, leaving render_alphas / render_normals /
-    # render_distort / render_median uninitialized otherwise). The public op
-    # also returns the absgrad holder, but not the internal last_ids /
-    # median_ids state used by the backward. Stale allocator contents could
+    # render_distort / render_median uninitialized otherwise). The op also
+    # returns the absgrad holder, plus last_ids / median_ids saved by the
+    # Python autograd's setup_context; the public rasterize_to_pixels_2dgs
+    # wrapper drops them. Stale allocator contents could
     # coincidentally match these defaults, so this only reliably catches a
     # missing store when uninitialized memory differs from the default.
 
@@ -605,6 +606,8 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
         render_distort,
         render_median,
         means2d_absgrad,
+        _last_ids,
+        _median_ids,
     ) = torch.ops.gsplat.rasterize_to_pixels_2dgs(
         means2d,
         ray_transforms,

@@ -119,7 +119,9 @@ INSTALL_REQUIRES = [
     # However, PyTorch >= 2.11 still provides a prebuilt CUDA 12.6 wheel
     # for compatibility with older CUDA drivers and versions which can be installed
     # by passing --index-url https://download.pytorch.org/whl/cu126
-    "torch>=2.0",
+    # torch.library.register_autograd needs PyTorch >=2.4;
+    # Blackwell (sm_120) support needs PyTorch >=2.7
+    "torch>=2.7",
     "typing_extensions; python_version<'3.8'",
 ]
 
