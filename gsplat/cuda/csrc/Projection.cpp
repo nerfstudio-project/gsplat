@@ -989,10 +989,8 @@ projection_ut_3dgs_fused_impl(
     }
 
     if (external_distortion_params.has_value()) {
-        CHECK_INPUT(external_distortion_params.value()->horizontal_poly);
-        CHECK_INPUT(external_distortion_params.value()->vertical_poly);
-        CHECK_INPUT(external_distortion_params.value()->horizontal_poly_inverse); // Could be omitted for projection
-        CHECK_INPUT(external_distortion_params.value()->vertical_poly_inverse); // Could be omitted for projection
+        CHECK_CONTIGUOUS(external_distortion_params.value()->horizontal_poly);
+        CHECK_CONTIGUOUS(external_distortion_params.value()->vertical_poly);
     }
 
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
