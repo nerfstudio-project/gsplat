@@ -49,6 +49,49 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("null", &gsplat::null);
 }
 
+namespace {
+
+// Unpacks a def_pickle state into a version + data-element vector.
+//
+// Versioned pickles lead with an int64 version slot followed by the data
+// elements. The caller branches on `version` and validates the per-version
+// data length, so adding new versions is a local edit in each __setstate__.
+//
+// `state` may arrive as an IValue Tuple (newly-serialized with the
+// IValue-based schema) or as a GenericList (previously-serialized with
+// the older typed-tuple schema; torch materializes those as List[Any]
+// under an IValue setstate).
+inline std::pair<int64_t, std::vector<c10::IValue>> unpack_versioned_state(
+    const c10::IValue &state,
+    const char *class_name
+) {
+    std::vector<c10::IValue> elems;
+    if (state.isTuple()) {
+        const auto &tup_elems = state.toTuple()->elements();
+        elems.assign(tup_elems.begin(), tup_elems.end());
+    } else if (state.isList()) {
+        const auto list = state.toList();
+        elems.reserve(list.size());
+        for (const auto ivalue_ref : list) {
+            elems.push_back(static_cast<c10::IValue>(ivalue_ref));
+        }
+    } else {
+        TORCH_CHECK(
+            false, class_name,
+            ": pickle state must be Tuple or List, got ", state.tagKind()
+        );
+    }
+    TORCH_CHECK(
+        !elems.empty() && elems[0].isInt(), class_name,
+        ": versioned pickle must lead with int64 version"
+    );
+    const int64_t version = elems[0].toInt();
+    std::vector<c10::IValue> data(elems.begin() + 1, elems.end());
+    return {version, std::move(data)};
+}
+
+} // namespace
+
 TORCH_LIBRARY(gsplat, m) {
     m.class_<UnscentedTransformParameters>("UnscentedTransformParameters")
         .def(
@@ -110,6 +153,45 @@ TORCH_LIBRARY(gsplat, m) {
         .def_readwrite(
             "require_all_sigma_points_valid",
             &UnscentedTransformParameters::require_all_sigma_points_valid
+        )
+        .def_pickle(
+            // __getstate__ — emits the v1 6-tuple (int64 version + 5 doubles).
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self)
+                -> c10::IValue {
+                return c10::IValue(c10::ivalue::Tuple::create({
+                    c10::IValue(static_cast<int64_t>(1)),
+                    c10::IValue(static_cast<double>(self->alpha)),
+                    c10::IValue(static_cast<double>(self->beta)),
+                    c10::IValue(static_cast<double>(self->kappa)),
+                    c10::IValue(static_cast<double>(self->in_image_margin_factor)),
+                    c10::IValue(static_cast<double>(self->require_all_sigma_points_valid ? 1.0 : 0.0))
+                }));
+            },
+            // __setstate__ — accepts v1 versioned pickles (6-tuple leading
+            // with an int64 version + 5 doubles).
+            [](c10::IValue state)
+                -> c10::intrusive_ptr<UnscentedTransformParameters> {
+                auto [version, data] = unpack_versioned_state(
+                    state, "UnscentedTransformParameters"
+                );
+                TORCH_CHECK(
+                    version == 1,
+                    "UnscentedTransformParameters: unsupported pickle version ",
+                    version, " (expected 1)"
+                );
+                TORCH_CHECK(
+                    data.size() == 5,
+                    "UnscentedTransformParameters: v1 expects 5 data elements, got ",
+                    data.size()
+                );
+                return c10::make_intrusive<UnscentedTransformParameters>(
+                    static_cast<float>(data[0].toDouble()),
+                    static_cast<float>(data[1].toDouble()),
+                    static_cast<float>(data[2].toDouble()),
+                    static_cast<float>(data[3].toDouble()),
+                    data[4].toDouble() != 0.0
+                );
+            }
         );
 
     using FThetaPolynomialType = FThetaCameraDistortionParameters::PolynomialType;
@@ -229,6 +311,81 @@ TORCH_LIBRARY(gsplat, m) {
                     self->linear_cde[i] = static_cast<float>(linear_cde[i]);
                 }
             }
+        )
+        .def_pickle(
+            // __getstate__ — emits the v1 6-tuple
+            // (int64 version, ref_poly, p2a, a2p, max_angle, cde).
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self)
+                -> c10::IValue {
+                c10::List<double> p2a_list, a2p_list;
+                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
+                    p2a_list.push_back(static_cast<double>(self->pixeldist_to_angle_poly[i]));
+                    a2p_list.push_back(static_cast<double>(self->angle_to_pixeldist_poly[i]));
+                }
+                c10::List<double> cde_list;
+                for (int i = 0; i < 3; ++i)
+                    cde_list.push_back(static_cast<double>(self->linear_cde[i]));
+                return c10::IValue(c10::ivalue::Tuple::create({
+                    c10::IValue(static_cast<int64_t>(1)),
+                    c10::IValue(static_cast<int64_t>(self->reference_poly)),
+                    c10::IValue(p2a_list),
+                    c10::IValue(a2p_list),
+                    c10::IValue(static_cast<double>(self->max_angle)),
+                    c10::IValue(cde_list)
+                }));
+            },
+            // __setstate__ — accepts v1 versioned pickles.
+            [](c10::IValue state)
+                -> c10::intrusive_ptr<FThetaCameraDistortionParameters> {
+                auto [version, data] = unpack_versioned_state(
+                    state, "FThetaCameraDistortionParameters"
+                );
+                TORCH_CHECK(
+                    version == 1,
+                    "FThetaCameraDistortionParameters: unsupported pickle version ",
+                    version, " (expected 1)"
+                );
+                TORCH_CHECK(
+                    data.size() == 5,
+                    "FThetaCameraDistortionParameters: v1 expects 5 data elements, got ",
+                    data.size()
+                );
+                const int64_t ref_poly = data[0].toInt();
+                const auto p2a_list = data[1].toDoubleList();
+                const auto a2p_list = data[2].toDoubleList();
+                const double max_angle = data[3].toDouble();
+                const auto cde_list = data[4].toDoubleList();
+                TORCH_CHECK(
+                    p2a_list.size() == FThetaCameraDistortionParameters::PolynomialDegree &&
+                    a2p_list.size() == FThetaCameraDistortionParameters::PolynomialDegree,
+                    "FThetaCameraDistortionParameters: polynomial list length ",
+                    p2a_list.size(), "/", a2p_list.size(),
+                    " (expected ",
+                    FThetaCameraDistortionParameters::PolynomialDegree,
+                    ")"
+                );
+                TORCH_CHECK(
+                    cde_list.size() == 3,
+                    "FThetaCameraDistortionParameters: linear_cde length ",
+                    cde_list.size(), " (expected 3)"
+                );
+                std::array<float, FThetaPolynomialDegree> p2a_f, a2p_f;
+                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
+                    p2a_f[i] = static_cast<float>(p2a_list.get(i));
+                    a2p_f[i] = static_cast<float>(a2p_list.get(i));
+                }
+                std::array<float, 3> cde_f = {
+                    static_cast<float>(cde_list.get(0)),
+                    static_cast<float>(cde_list.get(1)),
+                    static_cast<float>(cde_list.get(2))
+                };
+                return c10::make_intrusive<FThetaCameraDistortionParameters>(
+                    static_cast<FThetaPolynomialType>(ref_poly),
+                    p2a_f, a2p_f,
+                    static_cast<float>(max_angle),
+                    cde_f
+                );
+            }
         );
 
     m.class_<gsplat::extdist::BivariateWindshieldModelParameters>("BivariateWindshieldModelParameters")
@@ -257,7 +414,47 @@ TORCH_LIBRARY(gsplat, m) {
         .def_static("get_max_coeffs",
             []() -> int64_t {
                 return gsplat::extdist::BivariateWindshieldModelParameters::MAX_COEFFS;
-            });
+            })
+        .def_pickle(
+            // __getstate__ — emits the v1 6-tuple
+            // (int64 version, h_poly, v_poly, h_poly_inv, v_poly_inv, ref_poly).
+            [](const c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> &self)
+                -> c10::IValue {
+                return c10::IValue(c10::ivalue::Tuple::create({
+                    c10::IValue(static_cast<int64_t>(1)),
+                    c10::IValue(self->horizontal_poly),
+                    c10::IValue(self->vertical_poly),
+                    c10::IValue(self->horizontal_poly_inverse),
+                    c10::IValue(self->vertical_poly_inverse),
+                    c10::IValue(static_cast<int64_t>(self->reference_poly))
+                }));
+            },
+            // __setstate__ — accepts v1 versioned pickles.
+            [](c10::IValue state)
+                -> c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> {
+                auto [version, data] = unpack_versioned_state(
+                    state, "BivariateWindshieldModelParameters"
+                );
+                TORCH_CHECK(
+                    version == 1,
+                    "BivariateWindshieldModelParameters: unsupported pickle version ",
+                    version, " (expected 1)"
+                );
+                TORCH_CHECK(
+                    data.size() == 5,
+                    "BivariateWindshieldModelParameters: v1 expects 5 data elements, got ",
+                    data.size()
+                );
+                auto obj = c10::make_intrusive<gsplat::extdist::BivariateWindshieldModelParameters>();
+                obj->horizontal_poly         = data[0].toTensor();
+                obj->vertical_poly           = data[1].toTensor();
+                obj->horizontal_poly_inverse = data[2].toTensor();
+                obj->vertical_poly_inverse   = data[3].toTensor();
+                obj->reference_poly =
+                    static_cast<gsplat::extdist::ReferencePolynomialType>(data[4].toInt());
+                return obj;
+            }
+        );
 
     // Lidar sensor support
     m.class_<gsplat::FOV>("FOV")
@@ -732,7 +929,7 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("projection_ewa_3dgs_packed_fwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
     m.def("projection_ewa_3dgs_packed_bwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, int camera_model, Tensor batch_ids, Tensor camera_ids, Tensor gaussian_ids, Tensor conics, Tensor? compensations, Tensor v_means2d, Tensor v_depths, Tensor v_conics, Tensor? v_compensations, bool viewmats_requires_grad, bool sparse_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
 
-    m.def("rasterize_to_pixels_3dgs_fwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor)");
+    m.def("rasterize_to_pixels_3dgs_fwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor isect_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor)");
     m.def("rasterize_to_pixels_3dgs_bwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, bool absgrad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
     m.def("rasterize_to_indices_3dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor conics, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor)");
 #endif
@@ -759,8 +956,8 @@ TORCH_LIBRARY(gsplat, m) {
 
 #if GSPLAT_BUILD_3DGUT
     m.def("projection_ut_3dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor? opacities, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model, bool global_z_order, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_from_world_3dgs_fwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor? sample_counts, Tensor? normals) -> (Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_from_world_3dgs_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor? v_render_normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)");
+    m.def("rasterize_to_pixels_from_world_3dgs_fwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor? sample_counts, Tensor? normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def("rasterize_to_pixels_from_world_3dgs_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor? v_render_normals, Tensor chunks_per_tile, Tensor chunk_offsets, int total_chunks, Tensor fwd_chunk_state) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)");
 #endif
 
 #if GSPLAT_BUILD_3DGS

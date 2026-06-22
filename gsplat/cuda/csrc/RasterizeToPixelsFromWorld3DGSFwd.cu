@@ -23,18 +23,22 @@
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h>
+#include <cassert>
 #include <cooperative_groups.h>
 #include <cuda/std/optional>
 
 #include "Common.h"
 #include "ExternalDistortion.cuh"
 #include "Rasterization.h"
+#include "RasterizeChunkCSR.h"
 #include "Cameras.cuh"
 #include "Lidars.cuh"
 #include "Utils.cuh"
-#include "MacroUtils.h"
+#include "Dispatch.h"
 
 namespace gsplat {
+
+using SupportedChannels = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 
 namespace cg = cooperative_groups;
 
@@ -85,7 +89,20 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     scalar_t *__restrict__ render_alphas, // [B, C, image_height, image_width, 1]
     scalar_t *__restrict__ render_normals, // [B, C, image_height, image_width, 3] optional (can be nullptr)
     int32_t *__restrict__ last_ids,       // [B, C, image_height, image_width]
-    int32_t *__restrict__ sample_counts   // [B, C, image_height, image_width] optional (can be nullptr)
+    int32_t *__restrict__ sample_counts,  // [B, C, image_height, image_width] optional (can be nullptr)
+    // CSR chunk-state persistence (for bwd reuse). See RasterizeChunkCSR.h.
+    // Storage layout: [total_chunks][pixels_per_tile][1 + CDIM + 3] fp32.
+    //   - [0]: T (cumulative transmittance after the persist batch)
+    //   - [1..1+CDIM): pix_out[CDIM] (cumulative color accumulator)
+    //   - [1+CDIM..1+CDIM+3): normal_out[3] (only written when render_normals != nullptr)
+    // Each tile owns chunks_per_tile[tile_linear] slots, starting at
+    // chunk_offsets[tile_linear]. Persist slot c (c in [0, num_chunks))
+    // corresponds to fwd state after batch (num_batches - 1 - c*CHUNK_BATCHES).
+    // chunk_offsets_csr and fwd_chunk_state are passed null-or-non-null in
+    // lockstep by the launcher (gated on `total_chunks > 0`); both null ⇔
+    // persistence disabled (e.g. `n_isects == 0`).
+    const int32_t *__restrict__ chunk_offsets_csr, // [num_tiles + 1]
+    scalar_t *__restrict__ fwd_chunk_state // [total_chunks, pixels_per_tile, 1 + CDIM + 3]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -343,6 +360,41 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     uint32_t num_batches =
         (range_end - range_start + block_size - 1) / block_size;
 
+    // --- Chunk-state persistence setup (shared with bwd K1/K2) ---------------
+    // Compute this tile's base slot in the CSR `fwd_chunk_state` buffer. Per
+    // the CSR invariant (see `RasterizeChunkCSR.h`), the slot `c` for bwd
+    // chunk c corresponds to fwd state after batch `num_batches - 1 -
+    // c*CHUNK_BATCHES` (for c in [0, num_chunks)), so c=0 is the terminal
+    // state and c=num_chunks-1 is the earliest persistable state. We
+    // precompute per-pixel state write pointers here so the inner batch loop
+    // stays tight.
+    //
+    // chunk_offsets_csr and fwd_chunk_state are passed null-or-non-null in
+    // lockstep by the launcher (gated on `total_chunks > 0`); pin the
+    // invariant and read either pointer to detect "no persistence". The tile
+    // index for CSR matches bwd:
+    // tile_linear = iid * tile_height * tile_width + tile_id.
+    assert((chunk_offsets_csr == nullptr) == (fwd_chunk_state == nullptr));
+    const bool persist_chunks = chunk_offsets_csr != nullptr;
+    const uint32_t tile_linear =
+        iid * tile_height * tile_width + tile_id;
+    const uint32_t pixels_per_tile = tile_size * tile_size;
+    const uint32_t state_dim =
+        FWD_CHUNK_STATE_PIX_OFFSET + CDIM + FWD_CHUNK_STATE_NORMAL_EXTRA;
+    // chunk_base_slot is the slot index in fwd_chunk_state for this tile's
+    // c=0 entry (i.e., the terminal state). Later c entries follow
+    // contiguously in the CSR.
+    const int64_t chunk_base_slot = persist_chunks
+        ? static_cast<int64_t>(chunk_offsets_csr[tile_linear])
+        : 0;
+    // Number of chunks bwd will consume for this tile = ceil-div; we don't
+    // reference `num_chunks` directly because the per-batch persist check
+    // `(num_batches - 1 - b) % CHUNK_BATCHES == 0` naturally emits exactly
+    // `num_chunks` writes (one per persist boundary), and the partial-last-
+    // chunk case (num_batches % CHUNK_BATCHES != 0) maps to
+    // c = num_chunks - 1 being the oldest boundary, written when b = b_last
+    // where b_last = (num_batches - 1) - (num_chunks - 1)*CHUNK_BATCHES.
+
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s; // [block_size]
     vec4 *xyz_opacity_batch =
@@ -372,10 +424,69 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
     float pix_out[CDIM] = {0.f};
     vec3 normal_out = {0.f, 0.f, 0.f};  // Accumulated normal (only used if return_normals)
+
+    // Lambda that persists the CURRENT per-pixel cumulative state (T, pix_out,
+    // normal_out) to chunk slot c (c in [0, num_chunks)). All threads in the
+    // block call this together — one slot row per thread (tr), with thread
+    // rank tr indexing the pixels_per_tile axis. Threads where `inside ==
+    // false` write their trivial (T=1, pix_out=0, normal_out=0) state into
+    // the slot; bwd K1 writes similar no-op states in the same positions and
+    // bwd variants that consume these slots also ignore out-of-bounds pixels
+    // via the same `inside` check, so the write is harmless but kept to keep
+    // the memory layout fully populated.
+    //
+    // `c=0` corresponds to the terminal state (what bwd chunk 0 starts from);
+    // `c=num_chunks-1` corresponds to the earliest persistable state. The
+    // boundary-formula derivation is documented in `RasterizeChunkCSR.h`.
+    auto persist_state = [&](uint32_t c) {
+        if (!persist_chunks) {
+            return;
+        }
+        const int64_t slot = chunk_base_slot + static_cast<int64_t>(c);
+        const int64_t base = slot * static_cast<int64_t>(pixels_per_tile) *
+                                 static_cast<int64_t>(state_dim) +
+                             static_cast<int64_t>(tr) *
+                                 static_cast<int64_t>(state_dim);
+        fwd_chunk_state[base + FWD_CHUNK_STATE_T_OFFSET] = T;
+#pragma unroll
+        for (uint32_t k = 0; k < CDIM; ++k) {
+            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + k] = pix_out[k];
+        }
+        // Always zero-fill the normal slot when return_normals is false, so
+        // bwd consumers can read it unconditionally without branching on a
+        // template flag they may not know.
+        if (return_normals) {
+            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = normal_out.x;
+            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = normal_out.y;
+            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = normal_out.z;
+        } else {
+            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = 0.0f;
+            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = 0.0f;
+            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = 0.0f;
+        }
+    };
+
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
         if (__syncthreads_count(done) >= block_size) {
+            // Block-level early exit: every pixel has hit T <=
+            // TRANSMITTANCE_THRESHOLD (or was never inside). Remaining
+            // persist boundaries therefore all reflect the terminal state
+            // each thread holds now. Emit them before breaking so the CSR
+            // slot array is completely populated — bwd K1-lite / K1.5' / K2
+            // variants will be able to load any slot `c` in [0, num_chunks)
+            // without needing to know which batches actually executed.
+            if (persist_chunks) {
+                for (uint32_t bb = b; bb < num_batches; ++bb) {
+                    const int32_t diff =
+                        static_cast<int32_t>(num_batches) - 1 -
+                        static_cast<int32_t>(bb);
+                    if (diff >= 0 && (diff % CHUNK_BATCHES) == 0) {
+                        persist_state(static_cast<uint32_t>(diff) / CHUNK_BATCHES);
+                    }
+                }
+            }
             break;
         }
 
@@ -501,6 +612,25 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
             T = next_T;
         }
+
+        // --- Chunk-boundary persist ---------------------------------------
+        // After finishing batch `b`, if this batch is a persist boundary
+        // write the current per-pixel state into fwd_chunk_state. A batch is
+        // a persist boundary when (num_batches - 1 - b) is a non-negative
+        // multiple of CHUNK_BATCHES; the corresponding chunk index is
+        // c = (num_batches - 1 - b) / CHUNK_BATCHES.
+        //
+        // The lambda is called uniformly across all threads in the block
+        // (no divergent control): every thread's T/pix_out/normal_out is
+        // valid at this program point since we're outside the per-Gaussian
+        // inner loop. This keeps the writes coalesced per CSR row.
+        if (persist_chunks) {
+            const int32_t diff = static_cast<int32_t>(num_batches) - 1 -
+                                 static_cast<int32_t>(b);
+            if (diff >= 0 && (diff % CHUNK_BATCHES) == 0) {
+                persist_state(static_cast<uint32_t>(diff) / CHUNK_BATCHES);
+            }
+        }
     }
 
     if (inside) {
@@ -532,7 +662,6 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     }
 }
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
@@ -566,14 +695,20 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
+    // CSR chunk structure (precomputed by caller, shared with bwd)
+    const at::Tensor chunks_per_tile, // [num_tiles] int32
+    const at::Tensor chunk_offsets,   // [num_tiles + 1] int32
+    const int64_t total_chunks,       // scalar; equals chunk_offsets[num_tiles]
     // outputs
     at::Tensor renders, // [..., C, image_height, image_width, channels]
     at::Tensor alphas,  // [..., C, image_height, image_width]
     at::Tensor last_ids, // [..., C, image_height, image_width]
     at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
-    at::optional<at::Tensor> normals  // [..., C, image_height, image_width, 3]
+    at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3]
+    at::Tensor fwd_chunk_state // [total_chunks, pixels_per_tile, 1 + CDIM + 3] fp32
 ) {
     // Note: quats need to be normalized before passing in.
+    (void)chunks_per_tile;  // reserved for future parity checks
 
     bool packed = opacities.dim() == 1;
     assert (packed == false); // only support non-packed for now
@@ -593,23 +728,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
     // Shared memory: id_batch + xyz_opacity_batch + iscl_rot_batch + scale_batch + normal_batch
     int64_t shmem_size =
-        tile_size * tile_size * 
+        tile_size * tile_size *
         (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3) + sizeof(vec3));
-
-    // TODO: an optimization can be done by passing the actual number of
-    // channels into the kernel functions and avoid necessary global memory
-    // writes. This requires moving the channel padding from python to C side.
-    if (cudaFuncSetAttribute(
-        rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        shmem_size
-    ) != cudaSuccess) {
-        AT_ERROR(
-            "Failed to set maximum shared memory size (requested ",
-            shmem_size,
-            " bytes), try lowering tile_size."
-        );
-    }
 
     TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
     TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
@@ -630,108 +750,94 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         TORCH_CHECK(camera_model != CameraModelType::LIDAR, "If the sensor isn't lidar, lidar coefficients must not be given");
     }
 
-    rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>
-        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-            B,
-            C,
-            N,
-            n_isects,
-            packed,
-            reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
-            reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
-            reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
-            colors.const_data_ptr<float>(),
-            opacities.const_data_ptr<float>(),
-            backgrounds.has_value()
-                ? backgrounds.value().const_data_ptr<float>()
-                : nullptr,
-            masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
-            image_width,
-            image_height,
-            tile_size,
-            tile_width,
-            tile_height,
-            // camera model
-            viewmats0.const_data_ptr<float>(),
-            viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
-                                  : nullptr,
-            Ks.const_data_ptr<float>(),
-            camera_model,
-            // uncented transform
-            *ut_params,
-            rs_type,
-            rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
-            radial_coeffs.has_value()
-                ? radial_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            tangential_coeffs.has_value()
-                ? tangential_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            thin_prism_coeffs.has_value()
-                ? thin_prism_coeffs.value().const_data_ptr<float>()
-                : nullptr,
-            ftheta_device_coeffs,
-            lidar_device_coeffs,
-            external_distortion_device_params,
-            // intersections
-            tile_offsets.const_data_ptr<int32_t>(),
-            flatten_ids.const_data_ptr<int32_t>(),
-            use_hit_distance,
-            renders.data_ptr<float>(),
-            alphas.data_ptr<float>(),
-            normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
-            last_ids.data_ptr<int32_t>(),
-            sample_counts.has_value()
-                ? sample_counts.value().data_ptr<int32_t>()
-                : nullptr
-        );
+    const int32_t channels = colors.size(-1);
+    TORCH_CHECK(SupportedChannels::contains(channels),
+        "Unsupported number of channels: ", channels,
+        " (check GSPLAT_NUM_CHANNELS)");
+
+    auto launch_kernel = [&]<typename ChannelsT>() {
+        constexpr uint32_t CDIM = ChannelsT::value;
+
+        if (cudaFuncSetAttribute(
+            rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shmem_size
+        ) != cudaSuccess) {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size,
+                " bytes), try lowering tile_size."
+            );
+        }
+
+        rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>
+            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                B,
+                C,
+                N,
+                n_isects,
+                packed,
+                reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
+                reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
+                reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
+                colors.const_data_ptr<float>(),
+                opacities.const_data_ptr<float>(),
+                backgrounds.has_value()
+                    ? backgrounds.value().const_data_ptr<float>()
+                    : nullptr,
+                masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
+                image_width,
+                image_height,
+                tile_size,
+                tile_width,
+                tile_height,
+                // camera model
+                viewmats0.const_data_ptr<float>(),
+                viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
+                                      : nullptr,
+                Ks.const_data_ptr<float>(),
+                camera_model,
+                // uncented transform
+                *ut_params,
+                rs_type,
+                rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
+                radial_coeffs.has_value()
+                    ? radial_coeffs.value().const_data_ptr<float>()
+                    : nullptr,
+                tangential_coeffs.has_value()
+                    ? tangential_coeffs.value().const_data_ptr<float>()
+                    : nullptr,
+                thin_prism_coeffs.has_value()
+                    ? thin_prism_coeffs.value().const_data_ptr<float>()
+                    : nullptr,
+                ftheta_device_coeffs,
+                lidar_device_coeffs,
+                external_distortion_device_params,
+                // intersections
+                tile_offsets.const_data_ptr<int32_t>(),
+                flatten_ids.const_data_ptr<int32_t>(),
+                use_hit_distance,
+                renders.data_ptr<float>(),
+                alphas.data_ptr<float>(),
+                normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
+                last_ids.data_ptr<int32_t>(),
+                sample_counts.has_value()
+                    ? sample_counts.value().data_ptr<int32_t>()
+                    : nullptr,
+                // CSR chunk state persistence. A total_chunks==0 degenerate case
+                // (e.g. n_isects==0) is signaled by passing nullptr — the
+                // in-kernel `persist_chunks` flag then short-circuits all writes.
+                (total_chunks > 0)
+                    ? chunk_offsets.const_data_ptr<int32_t>()
+                    : nullptr,
+                (total_chunks > 0)
+                    ? fwd_chunk_state.data_ptr<float>()
+                    : nullptr
+            );
+    };
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
+    TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
-
-// Explicit Instantiation: this should match how it is being called in .cpp
-// file.
-// TODO: this is slow to compile, can we do something about it?
-#define __INS__(CDIM)                                                          \
-    template void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM>( \
-        const at::Tensor means,                                                \
-        const at::Tensor quats,                                                \
-        const at::Tensor scales,                                               \
-        const at::Tensor colors,                                               \
-        const at::Tensor opacities,                                            \
-        const at::optional<at::Tensor> backgrounds,                            \
-        const at::optional<at::Tensor> masks,                                  \
-        const uint32_t image_width,                                            \
-        const uint32_t image_height,                                           \
-        const uint32_t tile_size,                                              \
-        const at::Tensor viewmats0,                                            \
-        const at::optional<at::Tensor> viewmats1,                              \
-        const at::Tensor Ks,                                                   \
-        const CameraModelType camera_model,                                    \
-        const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,     \
-        const ShutterType rs_type,                                             \
-        const at::optional<at::Tensor> rays,                                   \
-        const at::optional<at::Tensor> radial_coeffs,                          \
-        const at::optional<at::Tensor> tangential_coeffs,                      \
-        const at::optional<at::Tensor> thin_prism_coeffs,                      \
-        const c10::intrusive_ptr<FThetaCameraDistortionParameters>             \
-            &ftheta_coeffs,                                                    \
-        const at::optional<c10::intrusive_ptr<                                 \
-            RowOffsetStructuredSpinningLidarModelParametersExt>>               \
-            &lidar_coeffs,                                                     \
-        const at::optional<                                                    \
-            c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>   \
-            &external_distortion_params,                                       \
-        const at::Tensor tile_offsets,                                         \
-        const at::Tensor flatten_ids,                                          \
-        const bool use_hit_distance,                                           \
-        const at::Tensor renders,                                              \
-        const at::Tensor alphas,                                               \
-        const at::Tensor last_ids,                                             \
-        const at::optional<at::Tensor> sample_counts,                          \
-        const at::optional<at::Tensor> normals                                 \
-    );
-
-GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)
-#undef __INS__
 
 } // namespace gsplat
 

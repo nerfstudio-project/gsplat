@@ -35,7 +35,6 @@ namespace gsplat {
 // rasterize_to_pixels_3dgs
 /////////////////////////////////////////////////
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
@@ -49,15 +48,14 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
-    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
-    const at::Tensor flatten_ids,  // [n_isects]
+    const at::Tensor isect_offsets, // [..., tile_height, tile_width]
+    const at::Tensor flatten_ids,   // [n_isects]
     // outputs
     at::Tensor renders, // [..., image_height, image_width, channels]
     at::Tensor alphas,  // [..., image_height, image_width]
     at::Tensor last_ids // [..., image_height, image_width]
 );
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
@@ -119,7 +117,6 @@ void launch_rasterize_to_indices_3dgs_kernel(
 // rasterize_to_pixels_2dgs
 /////////////////////////////////////////////////
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,        // [..., N, 2] or [nnz, 2]
@@ -145,7 +142,6 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     at::Tensor last_ids,       // [..., image_height, image_width]
     at::Tensor median_ids      // [..., image_height, image_width]
 );
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
@@ -216,7 +212,6 @@ void launch_rasterize_to_indices_2dgs_kernel(
 // rasterize_to_pixels_from_world_3dgs
 ///////////////////////////////////////////////////
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // Gaussian parameters
     const at::Tensor means,     // [..., N, 3]
@@ -249,15 +244,19 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
+    // CSR chunk structure (precomputed by caller, shared with bwd)
+    const at::Tensor chunks_per_tile, // [num_tiles] int32
+    const at::Tensor chunk_offsets,   // [num_tiles + 1] int32
+    const int64_t total_chunks,       // scalar; equals chunk_offsets[num_tiles]
     // outputs
     at::Tensor renders, // [..., C, image_height, image_width, channels]
     at::Tensor alphas,  // [..., C, image_height, image_width]
     at::Tensor last_ids, // [..., C, image_height, image_width]
     at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
-    at::optional<at::Tensor> normals // [..., C, image_height, image_width, 3]
+    at::optional<at::Tensor> normals, // [..., C, image_height, image_width, 3]
+    at::Tensor fwd_chunk_state // [total_chunks, pixels_per_tile, 1 + CDIM + 3] fp32, persisted cumulative state for bwd reuse
 );
 
-template <uint32_t CDIM>
 void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // Gaussian parameters
     const at::Tensor means,  // [..., N, 3]
@@ -297,6 +296,12 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
     const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
+    // CSR chunk structure (precomputed by forward)
+    const at::Tensor chunks_per_tile, // [num_tiles] int32
+    const at::Tensor chunk_offsets,   // [num_tiles + 1] int32
+    const int64_t total_chunks,       // scalar; equals chunk_offsets[num_tiles]
+    // Per-chunk cumulative (T, pix_out, normal_out) persisted by the fwd pass.
+    const at::Tensor fwd_chunk_state, // [total_chunks, pixels_per_tile, 1+CDIM+3] fp32
     // outputs
     at::Tensor v_means,      // [..., N, 3]
     at::Tensor v_quats,      // [..., N, 4]
