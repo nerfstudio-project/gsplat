@@ -776,6 +776,14 @@ def test_identity_bivariate_backward_smoke_all_public_ops(
         op().sum().backward()
         assert coeffs.grad is not None
         assert coeffs.grad[active_slice].abs().sum() > 0
+        inactive = slice(0, 21) if active_slice.start == 21 else slice(21, 42)
+        assert_grad_reference_close(
+            coeffs.grad[inactive],
+            torch.zeros_like(coeffs.grad[inactive]),
+            rtol=0.0,
+            atol=0.0,
+            msg="inactive FORWARD-reference bivariate coeff gradients",
+        )
 
 
 def test_identity_bivariate_backward_smoke_all_public_ops_backward_reference(
@@ -4243,6 +4251,14 @@ def test_fisheye_identity_bivariate_backward_smoke_all_public_ops(
         op().sum().backward()
         assert coeffs.grad is not None
         assert coeffs.grad[active_slice].abs().sum() > 0
+        inactive = slice(0, 21) if active_slice.start == 21 else slice(21, 42)
+        assert_grad_reference_close(
+            coeffs.grad[inactive],
+            torch.zeros_like(coeffs.grad[inactive]),
+            rtol=0.0,
+            atol=0.0,
+            msg="inactive FORWARD-reference fisheye coeff gradients",
+        )
 
 
 def test_fisheye_identity_bivariate_backward_smoke_all_public_ops_backward_reference(
