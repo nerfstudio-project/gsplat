@@ -1479,8 +1479,17 @@ def test_intrinsics_gradient(ideal_projection, no_external):
         rays, ideal_projection, no_external, allow_device_transfer=True
     )
     image_points.sum().backward()
-    assert torch.allclose(
-        ideal_projection.focal_length.grad, torch.tensor([0.1, 0.2], device=rays.device)
+    assert ideal_projection.focal_length.grad is not None
+    assert_grad_reference_close(
+        ideal_projection.focal_length.grad,
+        torch.tensor([0.1, 0.2], device=rays.device),
+        rtol=1e-5,
+        atol=1e-8,
+        max_rel_l2=1e-5,
+        max_rel_l1=1e-5,
+        min_cosine=1.0 - 1e-10,
+        max_signed_bias=1e-5,
+        msg="pinhole focal_length.grad",
     )
 
 

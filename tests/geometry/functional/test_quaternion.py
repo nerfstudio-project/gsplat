@@ -235,7 +235,17 @@ class TestQuaternionOperations(unittest.TestCase):
         y.backward(g_up)
         g_cuda = q.grad.detach()
         g_ref = _quat_conjugate_backward_reference(g_up)
-        self.assertTrue(torch.allclose(g_cuda, g_ref, atol=ATOL, rtol=1e-12))
+        assert_grad_reference_close(
+            g_cuda,
+            g_ref,
+            rtol=1e-12,
+            atol=ATOL,
+            max_rel_l2=1e-6,
+            max_rel_l1=1e-6,
+            min_cosine=1.0 - 1e-12,
+            max_signed_bias=1e-6,
+            msg="quat_conjugate q.grad",
+        )
 
     def test_inverse(self):
         """Test quaternion inverse."""
