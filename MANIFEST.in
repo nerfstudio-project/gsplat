@@ -1,3 +1,10 @@
 recursive-include gsplat/cuda/csrc *
 recursive-include gsplat/cuda/include *
 include gsplat/cuda/ext.cpp
+
+# CUDA / JIT sources for the sub-packages, so that source distributions can
+# JIT-build them. test_data and tests are intentionally not shipped.
+recursive-include gsplat/geometry/kernels/cuda *
+recursive-include gsplat/sensors/kernels/cuda *
+recursive-include gsplat/scene/kernels/cuda *
+recursive-include gsplat/experimental/render/kernels/cuda *

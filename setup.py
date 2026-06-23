@@ -121,9 +121,6 @@ INSTALL_REQUIRES = [
     # by passing --index-url https://download.pytorch.org/whl/cu126
     "torch>=2.0",
     "typing_extensions; python_version<'3.8'",
-    # gsplat-scene / gsplat-stage live under libs/scene and libs/stage and
-    # are installed via ``libs/install.sh scene && libs/install.sh stage``;
-    # they are not published, so listing them here would break ``pip install``.
 ]
 
 
@@ -222,14 +219,16 @@ def get_extensions():
     # --- experimental Inference render extension ---
     inference_build = _load_build_module(
         "experimental_gaussian_render_inference_scene_build",
-        os.path.join("experimental", "render", "kernels", "cuda", "build.py"),
+        os.path.join("gsplat", "experimental", "render", "kernels", "cuda", "build.py"),
     )
     inference_params = inference_build.get_build_parameters()
     inference_sources = [
         os.path.relpath(s, setup_dir) for s in inference_params.sources
     ]
     inference_ext = CUDAExtension(
-        "experimental.render.kernels.csrc",
+        # The native extension's fully-qualified module name matches its
+        # location under ``gsplat/experimental/render/kernels/``.
+        "gsplat.experimental.render.kernels.csrc",
         sources=inference_sources,
         include_dirs=inference_params.extra_include_paths,
         extra_compile_args={
@@ -248,6 +247,9 @@ def _setup():
     # a fresh venv before pip has populated it).
     from setuptools import find_packages, setup
 
+    # --- Package discovery -------------------------------------------------
+    packages = find_packages(exclude=["tests", "tests.*"])
+
     setup(
         name="gsplat",
         version=__version__,
@@ -260,7 +262,36 @@ def _setup():
         extras_require=get_extras_require(),
         ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
         cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
-        packages=find_packages(),
+        packages=packages,
+        # Ship the CUDA / JIT sources for the sub-packages so wheels and
+        # sdists can JIT-build (or be inspected). Paths are relative to each
+        # package's source dir.
+        # Globs cover every file under each package's cuda/ tree (all .cpp at the
+        # cuda/ root, and the full csrc/ subtree) rather than enumerating
+        # extensions, so a future source/header isn't silently dropped from
+        # wheels (and matches MANIFEST.in's recursive-include breadth).
+        package_data={
+            "gsplat.geometry": [
+                "kernels/cuda/*.cpp",
+                "kernels/cuda/csrc/*",
+            ],
+            "gsplat.sensors": [
+                "kernels/cuda/*.cpp",
+                "kernels/cuda/csrc/*",
+            ],
+            "gsplat.scene": [
+                "kernels/cuda/*.cpp",
+                "kernels/cuda/csrc/*",
+            ],
+            "gsplat.experimental": [
+                "render/kernels/cuda/*.cpp",
+                "render/kernels/cuda/csrc/*",
+                "render/kernels/cuda/csrc/gaussian_inference/*",
+            ],
+        },
+        # We keep include_package_data=True so MANIFEST.in stays authoritative
+        # for what lands in the sdist, while the explicit package_data above
+        # guarantees the per-package CUDA sources are also copied into wheels.
         # https://github.com/pypa/setuptools/issues/1461#issuecomment-954725244
         include_package_data=True,
     )

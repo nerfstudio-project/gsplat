@@ -23,9 +23,9 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/library.h>
 
 #include "Common.h"             // where all the macros are defined
-#include "Ops.h"                // a collection of all gsplat operators
 #include "SphericalHarmonics.h" // where the launch function is declared
 
 namespace gsplat {
@@ -142,6 +142,11 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
         ? v_coeffs_accum
         : v_coeffs_accum.to(coeffs.scalar_type());
     return std::make_tuple(v_coeffs, v_dirs); // [N, K, D], [..., N, 3]
+}
+
+void register_spherical_harmonics_cuda_impl(torch::Library &m) {
+    m.impl("spherical_harmonics_fwd", &spherical_harmonics_fwd);
+    m.impl("spherical_harmonics_bwd", &spherical_harmonics_bwd);
 }
 
 } // namespace gsplat

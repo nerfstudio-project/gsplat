@@ -23,12 +23,12 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/library.h>
 
 #include "MathUtils.h"
 #include "Common.h"    // where all the macros are defined
 #include "Config.h"
 #include "Intersect.h" // where the launch function is declared
-#include "Ops.h"       // a collection of all gsplat operators
 
 namespace gsplat {
 
@@ -362,6 +362,12 @@ at::Tensor intersect_offset(
         isect_ids, I, tile_width, tile_height, offsets
     );
     return offsets;
+}
+
+void register_intersect_cuda_impl(torch::Library &m) {
+    m.impl("intersect_tile", &intersect_tile);
+    m.impl("intersect_tile_lidar", &intersect_tile_lidar);
+    m.impl("intersect_offset", &intersect_offset);
 }
 
 } // namespace gsplat

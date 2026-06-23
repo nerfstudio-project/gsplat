@@ -27,6 +27,8 @@ class Tensor;
 
 namespace gsplat {
 
+at::Tensor null(const at::Tensor input);
+
 // This .h file only declares function for launching CUDA kernels. It should be
 // included by both a .cpp and .cu file, to server as the bridge between them.
 //

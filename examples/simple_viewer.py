@@ -33,8 +33,8 @@ from gsplat._helper import load_test_data
 from gsplat.distributed import cli
 from gsplat.exporter import load_ply_to_splats
 from gsplat.rendering import rasterization
-from libs.scene import GaussianScene
-import experimental
+from gsplat.scene import GaussianScene
+import gsplat.experimental as experimental
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState

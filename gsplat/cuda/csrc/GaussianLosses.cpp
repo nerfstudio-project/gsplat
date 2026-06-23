@@ -23,10 +23,10 @@
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <torch/library.h>
 
 #include "GaussianLosses.h"
 #include "Common.h"
-#include "Ops.h"
 
 namespace gsplat {
 
@@ -169,6 +169,11 @@ void gaussian_losses_bwd(
         v_loss_scale, v_loss_density, v_loss_z_scale, v_loss_oob,
         v_scales, v_densities, v_z_scales, v_positions
     );
+}
+
+void register_gaussian_losses_cuda_impl(torch::Library &m) {
+    m.impl("gaussian_losses_fwd", &gaussian_losses_fwd);
+    m.impl("gaussian_losses_bwd", &gaussian_losses_bwd);
 }
 
 } // namespace gsplat

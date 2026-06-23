@@ -57,7 +57,7 @@ Since there is no GPU supported on github workflow container, we don't test agai
 ```bash
 pytest tests/  # check for all tests
 pytest tests/test_basic.py  # check for a single test file.
-libs/install.sh geometry && pytest -sv tests libs/geometry/functional  # mirror GPU CI (root tests/ plus colocated geometry tests)
+pytest -sv  # mirror the GPU CI (all tests live under tests/)
 ```
 
 Note that `pytest` recognizes and runs all functions named as `test_*`, so you should name the test functions in this pattern. See `test_basic.py` as an example.

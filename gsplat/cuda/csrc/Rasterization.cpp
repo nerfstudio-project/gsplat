@@ -25,10 +25,10 @@
 #include <ATen/core/grad_mode.h>
 #include <ATen/NativeFunctions.h>
 #include <torch/csrc/autograd/custom_function.h>
+#include <torch/library.h>
 
 #include "Config.h"
 #include "Common.h"
-#include "Ops.h"
 #include "PrimingChainEncoding.cuh"
 #include "Rasterization.h"
 #include "RasterizeCSR.cuh"
@@ -789,10 +789,9 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 // 3DGS (from world)
 ////////////////////////////////////////////////////
 
-// Keep the eval3d dispatcher entry points out of Ops.h. `ext.cpp` declares only
-// the public schema; this translation unit registers the CUDA and AutogradCUDA
-// kernels below. Native C++ tests include Rasterization.h for the internal
-// functions they intentionally exercise.
+// `ext.cpp` declares only the public schema; this translation unit owns the CUDA
+// and AutogradCUDA implementations. Native C++ tests include Rasterization.h
+// for the internal functions they intentionally exercise.
 
 // The forward result includes public render outputs plus optional CSR-packed
 // batch state that backward consumes to skip work it would otherwise recompute.
@@ -1746,6 +1745,35 @@ rasterize_to_pixels_from_world_3dgs_autograd(
         return_normals ? at::optional<at::Tensor>(outputs[4]) : c10::nullopt
     );
 #endif // !GSPLAT_BUILD_3DGUT
+}
+
+void register_rasterization_cuda_impl(torch::Library &m) {
+#if GSPLAT_BUILD_3DGS
+    m.impl("rasterize_to_pixels_3dgs_fwd", &rasterize_to_pixels_3dgs_fwd);
+    m.impl("rasterize_to_pixels_3dgs_bwd", &rasterize_to_pixels_3dgs_bwd);
+    m.impl("rasterize_to_indices_3dgs", &rasterize_to_indices_3dgs);
+    m.impl("rasterize_num_contributing_gaussians", &rasterize_num_contributing_gaussians);
+    m.impl("rasterize_contributing_gaussian_ids", &rasterize_contributing_gaussian_ids);
+    m.impl("rasterize_top_contributing_gaussian_ids", &rasterize_top_contributing_gaussian_ids);
+#endif
+
+#if GSPLAT_BUILD_2DGS
+    m.impl("rasterize_to_pixels_2dgs_fwd", &rasterize_to_pixels_2dgs_fwd);
+    m.impl("rasterize_to_pixels_2dgs_bwd", &rasterize_to_pixels_2dgs_bwd);
+    m.impl("rasterize_to_indices_2dgs", &rasterize_to_indices_2dgs);
+#endif
+
+    m.impl(
+        "rasterize_to_pixels_from_world_3dgs",
+        &rasterize_to_pixels_from_world_3dgs
+    );
+}
+
+void register_rasterization_autograd_cuda_impl(torch::Library &m) {
+    m.impl(
+        "rasterize_to_pixels_from_world_3dgs",
+        &rasterize_to_pixels_from_world_3dgs_autograd
+    );
 }
 
 } // namespace gsplat

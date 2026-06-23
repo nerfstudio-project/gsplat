@@ -15,9 +15,9 @@
 
 """Tests for GaussianScene + Stage integration with 2DGS splats.
 
-The libs/scene and libs/stage subpackages are optional (installed via
-``libs/install.sh scene`` / ``libs/install.sh stage``). On environments
-where they are not installed (e.g. upstream GitHub Actions
+The gsplat.scene and gsplat.stage subpackages ship with gsplat and are
+installed by a normal ``pip install -e .``. On environments
+where they are not available (e.g. upstream GitHub Actions
 core_tests.yml on ubuntu-latest), this whole test module is skipped at
 collection time via ``pytest.importorskip``.
 """
@@ -25,17 +25,17 @@ collection time via ``pytest.importorskip``.
 import torch
 import pytest
 
-gsplat_scene = pytest.importorskip(
-    "gsplat_scene",
-    reason="gsplat_scene not installed (install via libs/install.sh scene)",
+_scene = pytest.importorskip(
+    "gsplat.scene",
+    reason="gsplat.scene not installed",
 )
-gsplat_stage = pytest.importorskip(
-    "gsplat_stage",
-    reason="gsplat_stage not installed (install via libs/install.sh stage)",
+_stage = pytest.importorskip(
+    "gsplat.stage",
+    reason="gsplat.stage not installed",
 )
 
-GaussianScene = gsplat_scene.GaussianScene
-Stage = gsplat_stage.Stage
+GaussianScene = _scene.GaussianScene
+Stage = _stage.Stage
 
 
 def _make_2dgs_splats(n: int = 100, device: str = "cpu") -> torch.nn.ParameterDict:

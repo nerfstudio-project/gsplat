@@ -50,13 +50,13 @@ from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
 
 try:
-    from gsplat_scene import GaussianScene
-    from gsplat_stage import Stage
+    from gsplat.scene import GaussianScene
+    from gsplat.stage import Stage
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
-        f"{e.name} is not installed. The example trainers require the local "
-        "scene/stage helper libraries. Install them with:\n"
-        "    python -m pip install -e libs/scene -e libs/stage"
+        f"{e.name} is not installed. The example trainers require the "
+        "scene/stage helper packages, which ship with gsplat. Install gsplat with:\n"
+        "    python -m pip install -e ."
     ) from e
 from gsplat.strategy import DefaultStrategy
 from nerfview import CameraState, RenderTabState, apply_float_colormap

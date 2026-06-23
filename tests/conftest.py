@@ -316,33 +316,6 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         tr.write_line(f"  (full per-test CSV written to {out_path})")
 
 
-# When optional libs/* subpackages are not installed (e.g. on the upstream
-# GitHub Actions ``core_tests.yml`` runner that only installs core gsplat),
-# drop the corresponding testpaths so ``pytest`` does not try to collect
-# tests whose imports would crash. ``pytest.ini`` keeps the full testpaths
-# list for the internal NVIDIA GPU validation environment where the libs
-# are installed by ``libs/install.sh``.
-_LIBS_TESTPATH_TO_PACKAGE = (
-    ("libs/geometry/functional", "gsplat_geometry"),
-    ("libs/scene/components", "gsplat_scene"),
-    ("libs/scene/functional", "gsplat_scene"),
-    ("libs/scene/test_package_imports.py", "gsplat_scene"),
-    ("libs/sensors", "gsplat_sensors"),
-    ("libs/stage/components", "gsplat_stage"),
-)
-
-
-def pytest_ignore_collect(collection_path, config):
-    path_str = str(collection_path)
-    for testpath, package in _LIBS_TESTPATH_TO_PACKAGE:
-        if testpath in path_str:
-            try:
-                __import__(package)
-            except ImportError:
-                return True
-    return False
-
-
 @pytest.fixture(autouse=True)
 def setup_test_environment():
     """
