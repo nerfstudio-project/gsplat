@@ -19,12 +19,13 @@
 
 #include <cstdint>
 
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-
+namespace gsplat
+{
 void launch_quat_scale_to_covar_preci_fwd_kernel(
     // inputs
     const at::Tensor quats,  // [..., 4]
@@ -46,5 +47,4 @@ void launch_quat_scale_to_covar_preci_bwd_kernel(
     at::Tensor v_quats, // [..., 4]
     at::Tensor v_scales // [..., 3]
 );
-
 } // namespace gsplat

@@ -30,29 +30,35 @@
 #include "ExternalDistortion.h"
 #include "TorchUtils.h"
 
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-
-struct TileIntersectResult {
+namespace gsplat
+{
+struct TileIntersectResult
+{
     at::Tensor tiles_per_gauss;
     at::Tensor isect_ids;
     at::Tensor flatten_ids;
 };
 
-template <> struct TorchArgDef<TileIntersectResult> {
-    static auto to(const TileIntersectResult &r) {
+template<>
+struct TorchArgDef<TileIntersectResult>
+{
+    static auto to(const TileIntersectResult &r)
+    {
         return to_torch_args(r.tiles_per_gauss, r.isect_ids, r.flatten_ids);
     }
 
-    template <class TT>
-    static TileIntersectResult from(TT &&t) {
+    template<class TT>
+    static TileIntersectResult from(TT &&t)
+    {
         return {
             .tiles_per_gauss = std::get<0>(std::forward<TT>(t)),
-            .isect_ids = std::get<1>(std::forward<TT>(t)),
-            .flatten_ids = std::get<2>(std::forward<TT>(t)),
+            .isect_ids       = std::get<1>(std::forward<TT>(t)),
+            .flatten_ids     = std::get<2>(std::forward<TT>(t)),
         };
     }
 };
@@ -85,12 +91,7 @@ TileIntersectResult intersect_tile_lidar(
     bool segmented
 );
 
-at::Tensor intersect_offset(
-    const at::Tensor &isect_ids,
-    int64_t I,
-    int64_t tile_width,
-    int64_t tile_height
-);
+at::Tensor intersect_offset(const at::Tensor &isect_ids, int64_t I, int64_t tile_width, int64_t tile_height);
 
 std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
     const at::Tensor &means2d,                 // [I, N, 2] or [nnz, 2]
@@ -115,8 +116,7 @@ std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
 //   tile_pixel_cumsum [AT] int64, inclusive per-active-tile active-pixel count
 //   pixel_map         [P] int64, argsort to (tile_id, in-tile) sorted order
 // PRECONDITION: no duplicate (image, row, col) pixels (caller deduplicates).
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-build_sparse_tile_layout(
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> build_sparse_tile_layout(
     const at::Tensor &pixels,    // [P, 2] int, (row, col)
     const at::Tensor &image_ids, // [P] int
     int64_t n_images,
@@ -127,13 +127,13 @@ build_sparse_tile_layout(
 
 void launch_intersect_tile_kernel(
     // inputs
-    const at::Tensor means2d,                           // [..., N, 2] or [nnz, 2]
-    const at::Tensor radii,                             // [..., N, 2] or [nnz, 2]
-    const at::Tensor depths,                            // [..., N] or [nnz]
-    const at::optional<at::Tensor> conics,              // [..., N, 3] or [nnz, 3]
-    const at::optional<at::Tensor> opacities,           // [..., N] or [nnz]      
-    const at::optional<at::Tensor> image_ids,           // [nnz]
-    const at::optional<at::Tensor> gaussian_ids,        // [nnz]
+    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> conics,       // [..., N, 3] or [nnz, 3]
+    const at::optional<at::Tensor> opacities,    // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,    // [nnz]
+    const at::optional<at::Tensor> gaussian_ids, // [nnz]
     const uint32_t I,
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -248,5 +248,4 @@ void segmented_radix_sort_double_buffer(
     at::Tensor isect_ids_sorted,
     at::Tensor flatten_ids_sorted
 );
-
 } // namespace gsplat

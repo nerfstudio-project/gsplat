@@ -34,18 +34,18 @@
 #include <cuda_runtime.h>
 #include <type_traits>
 
-namespace higs {
-
+namespace higs
+{
 static constexpr int CODEC_CTA_SIZE   = 256;
 static constexpr int CODEC_MIN_BLOCKS = 4;
 
 template<SHCompressionMode MODE, typename T>
-__global__ void __launch_bounds__(CODEC_CTA_SIZE, CODEC_MIN_BLOCKS)
-    sh_encode_kernel(int32_t N, const T *__restrict__ coeffs_in, uint4 *__restrict__ packed_out,
-                     SHEncodeParams encode_params)
+__global__ void __launch_bounds__(CODEC_CTA_SIZE, CODEC_MIN_BLOCKS) sh_encode_kernel(
+    int32_t N, const T *__restrict__ coeffs_in, uint4 *__restrict__ packed_out, SHEncodeParams encode_params
+)
 {
     const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N)
+    if(idx >= N)
     {
         return;
     }
@@ -55,14 +55,14 @@ __global__ void __launch_bounds__(CODEC_CTA_SIZE, CODEC_MIN_BLOCKS)
     T coeffs[3][16];
     const T *src = coeffs_in + (int64_t)idx * 48;
 #pragma unroll
-    for (int k = 0; k < 16; k++)
+    for(int k = 0; k < 16; k++)
     {
         coeffs[0][k] = src[k * 3 + 0];
         coeffs[1][k] = src[k * 3 + 1];
         coeffs[2][k] = src[k * 3 + 2];
     }
 
-    if constexpr (MODE == SHCompressionMode::COMPRESS_32B)
+    if constexpr(MODE == SHCompressionMode::COMPRESS_32B)
     {
         uint32_t block[8];
         sh_encode_32b(coeffs, block, encode_params.inv_scales);
@@ -91,24 +91,26 @@ __global__ void __launch_bounds__(CODEC_CTA_SIZE, CODEC_MIN_BLOCKS)
 at::Tensor launch_sh_encode(const at::Tensor &coeffs, const SHEncodeParams &encode_params, SHCompressionMode mode)
 {
     TORCH_CHECK(coeffs.dim() == 3 && coeffs.size(1) == 16 && coeffs.size(2) == 3, "coeffs must be [N, 16, 3]");
-    TORCH_CHECK(coeffs.scalar_type() == at::kFloat || coeffs.scalar_type() == at::kHalf,
-                "coeffs must be float32 or float16");
+    TORCH_CHECK(
+        coeffs.scalar_type() == at::kFloat || coeffs.scalar_type() == at::kHalf, "coeffs must be float32 or float16"
+    );
     TORCH_CHECK(coeffs.is_cuda() && coeffs.is_contiguous());
 
     const int32_t N   = static_cast<int32_t>(coeffs.size(0));
     const bool is_32b = (mode == SHCompressionMode::COMPRESS_32B);
     auto packed       = at::empty({is_32b ? 2 * N : N, 4}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
 
-    if (N > 0)
+    if(N > 0)
     {
         dim3 threads(CODEC_CTA_SIZE);
         dim3 blocks((N + CODEC_CTA_SIZE - 1) / CODEC_CTA_SIZE);
         auto stream = at::cuda::getCurrentCUDAStream();
         auto *dst   = reinterpret_cast<uint4 *>(packed.data_ptr<int32_t>());
 
-        auto launch = [&](auto mode_tag) {
+        auto launch = [&](auto mode_tag)
+        {
             constexpr SHCompressionMode MODE = decltype(mode_tag)::value;
-            if (coeffs.scalar_type() == at::kFloat)
+            if(coeffs.scalar_type() == at::kFloat)
             {
                 sh_encode_kernel<MODE, float>
                     <<<blocks, threads, 0, stream>>>(N, coeffs.data_ptr<float>(), dst, encode_params);
@@ -116,11 +118,12 @@ at::Tensor launch_sh_encode(const at::Tensor &coeffs, const SHEncodeParams &enco
             else
             {
                 sh_encode_kernel<MODE, __half><<<blocks, threads, 0, stream>>>(
-                    N, reinterpret_cast<const __half *>(coeffs.data_ptr<at::Half>()), dst, encode_params);
+                    N, reinterpret_cast<const __half *>(coeffs.data_ptr<at::Half>()), dst, encode_params
+                );
             }
         };
 
-        if (is_32b)
+        if(is_32b)
         {
             launch(std::integral_constant<SHCompressionMode, SHCompressionMode::COMPRESS_32B>{});
         }
@@ -169,8 +172,8 @@ SHCompressed launch_sh_compress(const at::Tensor &coeffs, const at::Tensor &opac
         // Filter to visible gaussians (opacity >= 0.5%) for scale computation.
         // Low-opacity outliers don't visibly affect rendering but can inflate scales.
         constexpr float OPACITY_THRESHOLD = 0.005f;
-        auto visible_mask                 = opacities.to(at::kFloat).ge(OPACITY_THRESHOLD);   // [N] bool
-        auto vis_indices                  = visible_mask.nonzero().squeeze(1); // [M] long
+        auto visible_mask                 = opacities.to(at::kFloat).ge(OPACITY_THRESHOLD); // [N] bool
+        auto vis_indices                  = visible_mask.nonzero().squeeze(1);              // [M] long
 
         // Compute per-basis p99.99 scales from visible gaussians only
         constexpr float PERCENTILE = 0.9999f;
@@ -185,20 +188,25 @@ SHCompressed launch_sh_compress(const at::Tensor &coeffs, const at::Tensor &opac
 
         // When all Gaussians are below the opacity threshold, fall back to
         // unit scales so the encoder/decoder round-trips zeros cleanly.
-        if (M == 0) {
-            for (int ch = 0; ch < 3; ch++) {
-                for (int j = 0; j < 15; j++) {
-                    scales_f[ch][j + 1] = 1.0f;
+        if(M == 0)
+        {
+            for(int ch = 0; ch < 3; ch++)
+            {
+                for(int j = 0; j < 15; j++)
+                {
+                    scales_f[ch][j + 1]                 = 1.0f;
                     encode_params.inv_scales[ch][j + 1] = 1.0f;
                 }
             }
-        } else {
+        }
+        else
+        {
             // For 16B mode, only Y channel scales are needed (CoCg is dropped)
             const int n_channels = is_32b ? 3 : 1;
 
-            for (int ch = 0; ch < n_channels; ch++)
+            for(int ch = 0; ch < n_channels; ch++)
             {
-                for (int j = 0; j < 15; j++)
+                for(int j = 0; j < 15; j++)
                 {
                     // Select only visible gaussians for this basis/channel
                     auto col        = ycocg_channels[ch].select(1, j).index_select(0, vis_indices); // [M]
@@ -206,7 +214,7 @@ SHCompressed launch_sh_compress(const at::Tensor &coeffs, const at::Tensor &opac
                     int64_t idx     = std::min((int64_t)(PERCENTILE * M), M - 1);
                     float scale     = abs_sorted[idx].item<float>();
 
-                    scales_f[ch][j + 1] = scale;
+                    scales_f[ch][j + 1]   = scale;
                     // If scale is zero (all coefficients zero for this basis/channel), set reciprocal
                     // to zero so val * 0 = 0 quantizes to the midpoint. Avoids inf/NaN.
                     inv_arrays[ch][j + 1] = (scale > 0.f) ? 1.0f / scale : 0.f;
@@ -220,7 +228,7 @@ SHCompressed launch_sh_compress(const at::Tensor &coeffs, const at::Tensor &opac
 
     // build decoder params: pack per-basis scales to half2
     SHDecodeParams decode_params{};
-    for (int p = 0; p < 8; p++)
+    for(int p = 0; p < 8; p++)
     {
         int k_lo                   = p * 2;
         int k_hi                   = p * 2 + 1;
@@ -231,5 +239,4 @@ SHCompressed launch_sh_compress(const at::Tensor &coeffs, const at::Tensor &opac
 
     return {packed, decode_params};
 }
-
 } // namespace higs

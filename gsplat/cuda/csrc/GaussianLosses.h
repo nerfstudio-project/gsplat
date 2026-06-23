@@ -17,42 +17,42 @@
 
 #pragma once
 
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-
+namespace gsplat
+{
 void launch_gaussian_losses_fwd_kernel(
-    const at::Tensor &scales,           // [N, 3]
-    const at::Tensor &densities,        // [N]
-    const at::Tensor &z_scales,         // [N]
-    const at::Tensor &positions,        // [N, 3]
-    const at::Tensor &cuboid_dims,      // [N, 3]
-    const at::Tensor *visibility,       // [N] float or nullptr
+    const at::Tensor &scales,      // [N, 3]
+    const at::Tensor &densities,   // [N]
+    const at::Tensor &z_scales,    // [N]
+    const at::Tensor &positions,   // [N, 3]
+    const at::Tensor &cuboid_dims, // [N, 3]
+    const at::Tensor *visibility,  // [N] float or nullptr
     float z_scale_threshold,
-    at::Tensor &loss_scale,             // [N, 3]
-    at::Tensor &loss_density,           // [N]
-    at::Tensor &loss_z_scale,           // [N]
-    at::Tensor &loss_oob               // [N, 3]
+    at::Tensor &loss_scale,   // [N, 3]
+    at::Tensor &loss_density, // [N]
+    at::Tensor &loss_z_scale, // [N]
+    at::Tensor &loss_oob      // [N, 3]
 );
 
 void launch_gaussian_losses_bwd_kernel(
-    const at::Tensor &scales,           // [N, 3]
-    const at::Tensor &densities,        // [N]
-    const at::Tensor &z_scales,         // [N]
-    const at::Tensor &positions,        // [N, 3]
-    const at::Tensor &cuboid_dims,      // [N, 3]
-    const at::Tensor *visibility,       // [N] float or nullptr
+    const at::Tensor &scales,      // [N, 3]
+    const at::Tensor &densities,   // [N]
+    const at::Tensor &z_scales,    // [N]
+    const at::Tensor &positions,   // [N, 3]
+    const at::Tensor &cuboid_dims, // [N, 3]
+    const at::Tensor *visibility,  // [N] float or nullptr
     float z_scale_threshold,
-    const at::Tensor &v_loss_scale,     // [N, 3]
-    const at::Tensor &v_loss_density,   // [N]
-    const at::Tensor &v_loss_z_scale,   // [N]
-    const at::Tensor &v_loss_oob,       // [N, 3]
-    at::Tensor &v_scales,               // [N, 3]
-    at::Tensor &v_densities,            // [N]
-    at::Tensor &v_z_scales,             // [N]
-    at::Tensor &v_positions             // [N, 3]
+    const at::Tensor &v_loss_scale,   // [N, 3]
+    const at::Tensor &v_loss_density, // [N]
+    const at::Tensor &v_loss_z_scale, // [N]
+    const at::Tensor &v_loss_oob,     // [N, 3]
+    at::Tensor &v_scales,             // [N, 3]
+    at::Tensor &v_densities,          // [N]
+    at::Tensor &v_z_scales,           // [N]
+    at::Tensor &v_positions           // [N, 3]
 );
-
 } // namespace gsplat

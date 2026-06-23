@@ -19,12 +19,13 @@
 
 #include <cstdint>
 
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-
+namespace gsplat
+{
 // Autograd-aware SH color evaluation; declared here for cross-TU orchestration
 // callers (Rendering.cpp). Returns colors only.
 at::Tensor spherical_harmonics(
@@ -130,5 +131,4 @@ void assemble_proj_features_unpacked_fwd(
     at::Tensor &out,
     const at::optional<at::Tensor> &relu_mask
 );
-
 } // namespace gsplat

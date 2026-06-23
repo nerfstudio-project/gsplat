@@ -31,8 +31,8 @@
 #include <c10/util/intrusive_ptr.h>
 #include <torch/custom_class.h>
 
-namespace gsplat_sensors {
-
+namespace gsplat_sensors
+{
 // ===========================================================================
 // Constants
 // ===========================================================================
@@ -46,7 +46,8 @@ inline constexpr int64_t kBivariateWindshieldCoeffCount = 42;
 // ===========================================================================
 
 // Identity external distortion — to_kernel_params() returns an empty struct.
-struct NoExternalDistortion : public torch::CustomClassHolder {
+struct NoExternalDistortion : public torch::CustomClassHolder
+{
     NoExternalDistortion_KernelParameters to_kernel_params() const;
 };
 
@@ -62,17 +63,16 @@ struct NoExternalDistortion : public torch::CustomClassHolder {
 //                        distortion_coeffs is the distort polynomial.
 // h_poly_degree — effective degree of the horizontal polynomial in [0, 2].
 // v_poly_degree — effective degree of the vertical polynomial in [0, 4].
-struct BivariateWindshieldDistortion : public torch::CustomClassHolder {
+struct BivariateWindshieldDistortion : public torch::CustomClassHolder
+{
     at::Tensor distortion_coeffs;
     int64_t reference_polynomial;
     int64_t h_poly_degree;
     int64_t v_poly_degree;
 
     BivariateWindshieldDistortion(
-        at::Tensor distortion_coeffs,
-        int64_t reference_polynomial,
-        int64_t h_poly_degree,
-        int64_t v_poly_degree);
+        at::Tensor distortion_coeffs, int64_t reference_polynomial, int64_t h_poly_degree, int64_t v_poly_degree
+    );
 
     // Build the kernel-side parameter pack (raw pointer + scalar metadata).
     // Caller must ensure this object outlives any kernel launch using the result.
@@ -89,7 +89,5 @@ struct BivariateWindshieldDistortion : public torch::CustomClassHolder {
 //   - reference_polynomial is 0 or 1.
 //   - h_poly_degree in [0, 2], v_poly_degree in [0, 4].
 // Raises via TORCH_CHECK on violation.
-void check_bivariate_windshield_distortion(
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& distortion);
-
+void check_bivariate_windshield_distortion(const c10::intrusive_ptr<BivariateWindshieldDistortion> &distortion);
 } // namespace gsplat_sensors
