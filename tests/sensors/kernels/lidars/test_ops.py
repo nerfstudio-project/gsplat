@@ -41,6 +41,7 @@ import math
 import pytest
 import torch
 
+from gsplat._helper import expect_grad_reference_close, expect_group
 from gsplat.sensors.kernels.common import DynamicPose, Pose
 from gsplat.sensors.kernels.lidars.ops import (
     _GenerateSpinningLidarRays,
@@ -752,6 +753,20 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
     crr = cr.clone().requires_grad_(True)
     sa_ref = fn_ref(wpr, ctr, crr)
     sa_ref.backward(upstream)
-    assert (g_wp_cuda - wpr.grad).abs().max().item() < 1e-6
-    assert (g_ct_cuda - ctr.grad).abs().max().item() < 1e-6
-    assert (g_cr_cuda - crr.grad).abs().max().item() < 1e-6
+    with expect_group("inverse lidar frozen-alpha VJP gradients"):
+        for name, actual, expected in (
+            ("world_points", g_wp_cuda, wpr.grad),
+            ("control_translations", g_ct_cuda, ctr.grad),
+            ("control_rotations", g_cr_cuda, crr.grad),
+        ):
+            expect_grad_reference_close(
+                actual,
+                expected,
+                rtol=0.0,
+                atol=1e-6,
+                max_rel_l2=1e-6,
+                max_rel_l1=1e-6,
+                min_cosine=1.0 - 1e-12,
+                max_signed_bias=1e-6,
+                msg=f"inverse lidar {name} VJP",
+            )
