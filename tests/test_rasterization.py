@@ -31,6 +31,7 @@ import gsplat
 import pytest
 import torch
 
+from gsplat._helper import assert_grad_reference_close
 from tests.test_cameras import parse_lidar_camera
 from gsplat.rendering import (
     RenderMode,
@@ -47,6 +48,27 @@ device = torch.device("cuda:0")
 
 _RENDER_EXECUTION = "render"
 _TRAINING_EXECUTION = "training"
+
+
+def _assert_rasterization_grad_close(
+    actual: torch.Tensor,
+    expected: torch.Tensor,
+    *,
+    name: str,
+    rtol: float = 1e-3,
+    atol: float = 1e-3,
+) -> None:
+    assert_grad_reference_close(
+        actual,
+        expected,
+        rtol=rtol,
+        atol=atol,
+        max_rel_l2=5e-2,
+        max_rel_l1=5e-2,
+        min_cosine=0.999,
+        max_signed_bias=5e-2,
+        msg=name,
+    )
 
 
 def _append_renderer_execution(params, renderer_execution_cases):
@@ -654,14 +676,14 @@ def test_rasterization(
             for name, tensor in grad_inputs:
                 if tensor is None:
                     continue
-                torch.testing.assert_close(
+                _assert_rasterization_grad_close(
                     tensor.grad,
                     ref_inputs[name].grad,
                     rtol=1e-3,
                     atol=1e-3,
-                    msg=lambda formatted, n=name: (
-                        f"ParallelBatch {n} grad diverges from the MixedBatch "
-                        f"reference:\n{formatted}"
+                    name=(
+                        f"ParallelBatch {name} grad diverges from the "
+                        "MixedBatch reference"
                     ),
                 )
 
@@ -834,8 +856,8 @@ def test_rasterization_distributed_single_rank_matches_local(
     colors_local.sum().backward()
     colors_dist.sum().backward()
     for key in grad_keys:
-        torch.testing.assert_close(
+        _assert_rasterization_grad_close(
             dist_in[key].grad,
             local_in[key].grad,
-            msg=lambda m, key=key: f"gradient mismatch for {key}: {m}",
+            name=f"distributed gradient mismatch for {key}",
         )

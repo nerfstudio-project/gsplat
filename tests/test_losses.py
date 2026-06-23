@@ -23,6 +23,7 @@ import torch.nn.functional as F
 
 import gsplat.losses as _losses_module
 
+from gsplat._helper import assert_grad_reference_close
 from gsplat.losses import (
     create_ssim_window,
     depth_l1_loss,
@@ -55,6 +56,24 @@ def _enforce_contracts():
         yield
     finally:
         _losses_module.ENFORCE_CONTRACTS = prev
+
+
+def _assert_loss_grad_close(actual, expected, *, name, atol=0.0, rtol=0.0):
+    """Check a small analytic loss gradient with value and vector metrics."""
+
+    expected = torch.as_tensor(expected, dtype=actual.dtype, device=actual.device)
+    aggregate_tol = max(float(atol), float(rtol), 1e-12)
+    assert_grad_reference_close(
+        actual,
+        expected,
+        rtol=rtol,
+        atol=atol,
+        max_rel_l2=aggregate_tol,
+        max_rel_l1=aggregate_tol,
+        min_cosine=1.0 - aggregate_tol,
+        max_signed_bias=aggregate_tol,
+        msg=name,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +110,9 @@ class TestL1Loss:
         target = torch.tensor([1.0, 1.0])
         l1_loss(pred, target).sum().backward()
         # L1 gradient is sign(pred - target): [+1, -1]
-        assert torch.allclose(pred.grad, torch.tensor([1.0, -1.0]))
+        _assert_loss_grad_close(
+            pred.grad, torch.tensor([1.0, -1.0]), name="l1_loss pred.grad"
+        )
 
 
 class TestMSELoss:
@@ -123,7 +144,9 @@ class TestMSELoss:
         target = torch.tensor([1.0, 1.0])
         mse_loss(pred, target).sum().backward()
         # MSE gradient is 2*(pred - target): [4.0, 0.0]
-        assert torch.allclose(pred.grad, torch.tensor([4.0, 0.0]))
+        _assert_loss_grad_close(
+            pred.grad, torch.tensor([4.0, 0.0]), name="mse_loss pred.grad"
+        )
 
 
 # ---------------------------------------------------------------------------
