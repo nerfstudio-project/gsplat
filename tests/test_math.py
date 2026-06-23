@@ -22,6 +22,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from gsplat._helper import assert_grad_reference_close
+
 device = torch.device("cuda:0")
 
 
@@ -543,4 +545,14 @@ def test_safe_normalize():
     grad_out = torch.randn_like(out)
     out.backward(grad_out)
     # Must yield the same gradient as the input's
-    torch.testing.assert_close(v_zero_grad.grad, grad_out)
+    assert_grad_reference_close(
+        v_zero_grad.grad,
+        grad_out,
+        rtol=0.0,
+        atol=0.0,
+        max_rel_l2=0.0,
+        max_rel_l1=0.0,
+        min_cosine=1.0 - 1e-15,
+        max_signed_bias=0.0,
+        msg="_safe_normalize zero-vector backward",
+    )
