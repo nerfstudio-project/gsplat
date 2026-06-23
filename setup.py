@@ -154,6 +154,7 @@ def get_extras_require() -> dict:
             "isort==5.10.1",
             "pylint==2.13.4",
             "pytest",
+            "pytest-check",
             "pytest-env",
             "pytest-xdist==2.5.0",
             # Tests for examples/datasets/endonerf.py and the dynamic-surgical
