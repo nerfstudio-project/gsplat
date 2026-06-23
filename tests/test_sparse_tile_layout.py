@@ -88,9 +88,7 @@ def _check_layout(pixels, image_ids, n_images, ts, tw, th):
     torch.testing.assert_close(g_pm, r_pm, rtol=0, atol=0)
 
     # invariants (independent of the reference)
-    assert torch.equal(
-        g_at, torch.nonzero(g_mask.flatten()).flatten().to(torch.int32)
-    )
+    assert torch.equal(g_at, torch.nonzero(g_mask.flatten()).flatten().to(torch.int32))
     if AT:
         assert g_cs[-1].item() == P  # every pixel lands in some active tile
     # the bitmask sets exactly P bits across all active tiles
@@ -101,9 +99,7 @@ def _check_layout(pixels, image_ids, n_images, ts, tw, th):
     return g_at, g_mask, g_bm, g_cs, g_pm
 
 
-@pytest.mark.parametrize(
-    "counts", [[16], [64, 32], [100, 0, 50], [8, 8, 8, 8]]
-)
+@pytest.mark.parametrize("counts", [[16], [64, 32], [100, 0, 50], [8, 8, 8, 8]])
 @pytest.mark.parametrize("tile_size", [4, 8, 16])
 def test_layout_matches_reference(counts, tile_size):
     W, H = 64, 48
