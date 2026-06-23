@@ -1297,6 +1297,244 @@
 
 
 
+<div class="viewcode-block" id="rasterize_num_contributing_gaussians">
+<a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_num_contributing_gaussians">[docs]</a>
+<span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-count&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_num_contributing_gaussians</span><span class="p">(</span>
+    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
+    <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N] or [nnz]</span>
+    <span class="n">tile_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., tile_height, tile_width]</span>
+    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Counts contributing Gaussians per pixel and returns accumulated alpha.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means2d: Projected Gaussian means. [..., N, 2] for dense inputs, or [nnz, 2] for packed inputs.</span>
+<span class="sd">        conics: Inverse projected covariances. [..., N, 3] for dense inputs, or [nnz, 3] for packed inputs.</span>
+<span class="sd">        opacities: Gaussian opacities. [..., N] for dense inputs, or [nnz] for packed inputs.</span>
+<span class="sd">        tile_offsets: Intersection offsets from :func:`isect_offset_encode`. [..., tile_height, tile_width].</span>
+<span class="sd">        flatten_ids: Flattened Gaussian indices from :func:`isect_tiles`. [n_isects].</span>
+<span class="sd">        image_width: Image width.</span>
+<span class="sd">        image_height: Image height.</span>
+<span class="sd">        tile_size: Tile size.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Number of contributing Gaussians**. [..., image_height, image_width]</span>
+<span class="sd">        - **Rendered alphas**. [..., image_height, image_width]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="n">tile_size</span> <span class="ow">in</span> <span class="p">(</span>
+        <span class="mi">4</span><span class="p">,</span>
+        <span class="mi">16</span><span class="p">,</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Only tile_size in </span><span class="se">{{</span><span class="s2">4, 16</span><span class="se">}}</span><span class="s2"> is supported for 3DGS rasterization, got </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2">&quot;</span>
+
+    <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span> <span class="o">=</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span>
+    <span class="k">if</span> <span class="n">means2d</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="n">nnz</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">N</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span>
+            <span class="n">tile_height</span><span class="p">,</span>
+            <span class="n">tile_width</span><span class="p">,</span>
+        <span class="p">),</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">tile_height</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_height</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_height</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_height</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
+
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_num_contributing_gaussians&quot;</span><span class="p">)(</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_width</span><span class="p">,</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="rasterize_contributing_gaussian_ids">
+<a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_contributing_gaussian_ids">[docs]</a>
+<span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-contributors&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_contributing_gaussian_ids</span><span class="p">(</span>
+    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
+    <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N] or [nnz]</span>
+    <span class="n">tile_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., tile_height, tile_width]</span>
+    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">num_contributing_gaussians</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., image_height, image_width]</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Returns all contributing Gaussian IDs and weights per pixel.</span>
+
+<span class="sd">    The output is padded to ``num_contributing_gaussians.max()`` samples per</span>
+<span class="sd">    pixel. Valid entries are in front-to-back order, IDs are padded with ``-1``,</span>
+<span class="sd">    and weights are padded with ``0``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means2d: Projected Gaussian means. [..., N, 2] for dense inputs, or [nnz, 2] for packed inputs.</span>
+<span class="sd">        conics: Inverse projected covariances. [..., N, 3] for dense inputs, or [nnz, 3] for packed inputs.</span>
+<span class="sd">        opacities: Gaussian opacities. [..., N] for dense inputs, or [nnz] for packed inputs.</span>
+<span class="sd">        tile_offsets: Intersection offsets from :func:`isect_offset_encode`. [..., tile_height, tile_width].</span>
+<span class="sd">        flatten_ids: Flattened Gaussian indices from :func:`isect_tiles`. [n_isects].</span>
+<span class="sd">        image_width: Image width.</span>
+<span class="sd">        image_height: Image height.</span>
+<span class="sd">        tile_size: Tile size.</span>
+<span class="sd">        num_contributing_gaussians: Number of valid contributors per pixel. [..., image_height, image_width].</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Gaussian IDs**. [..., image_height, image_width, max_num_contributing]</span>
+<span class="sd">        - **Radiance weights**. [..., image_height, image_width, max_num_contributing]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="n">tile_size</span> <span class="ow">in</span> <span class="p">(</span>
+        <span class="mi">4</span><span class="p">,</span>
+        <span class="mi">16</span><span class="p">,</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Only tile_size in </span><span class="se">{{</span><span class="s2">4, 16</span><span class="se">}}</span><span class="s2"> is supported for 3DGS rasterization, got </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2">&quot;</span>
+
+    <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span> <span class="o">=</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span>
+    <span class="k">if</span> <span class="n">means2d</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="n">image_dims</span> <span class="o">=</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">nnz</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">N</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span>
+            <span class="n">tile_height</span><span class="p">,</span>
+            <span class="n">tile_width</span><span class="p">,</span>
+        <span class="p">),</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">num_contributing_gaussians</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">image_width</span><span class="p">,</span>
+    <span class="p">),</span> <span class="n">num_contributing_gaussians</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">tile_height</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_height</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_height</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_height</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
+
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_contributing_gaussian_ids&quot;</span><span class="p">)(</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_width</span><span class="p">,</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">num_contributing_gaussians</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="rasterize_top_contributing_gaussian_ids">
+<a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_top_contributing_gaussian_ids">[docs]</a>
+<span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-top-contributors&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_top_contributing_gaussian_ids</span><span class="p">(</span>
+    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
+    <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N] or [nnz]</span>
+    <span class="n">tile_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., tile_height, tile_width]</span>
+    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">num_depth_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Returns the top radiance-weight Gaussian IDs and weights per pixel.</span>
+
+<span class="sd">    The selected samples are the strongest contributors by ``alpha * T`` during</span>
+<span class="sd">    front-to-back rasterization, then sorted back into front-to-back order.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means2d: Projected Gaussian means. [..., N, 2] for dense inputs, or [nnz, 2] for packed inputs.</span>
+<span class="sd">        conics: Inverse projected covariances. [..., N, 3] for dense inputs, or [nnz, 3] for packed inputs.</span>
+<span class="sd">        opacities: Gaussian opacities. [..., N] for dense inputs, or [nnz] for packed inputs.</span>
+<span class="sd">        tile_offsets: Intersection offsets from :func:`isect_offset_encode`. [..., tile_height, tile_width].</span>
+<span class="sd">        flatten_ids: Flattened Gaussian indices from :func:`isect_tiles`. [n_isects].</span>
+<span class="sd">        image_width: Image width.</span>
+<span class="sd">        image_height: Image height.</span>
+<span class="sd">        tile_size: Tile size.</span>
+<span class="sd">        num_depth_samples: Number of contributors to return per pixel.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Gaussian IDs**. [..., image_height, image_width, num_depth_samples]</span>
+<span class="sd">        - **Radiance weights**. [..., image_height, image_width, num_depth_samples]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="n">tile_size</span> <span class="ow">in</span> <span class="p">(</span>
+        <span class="mi">4</span><span class="p">,</span>
+        <span class="mi">16</span><span class="p">,</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Only tile_size in </span><span class="se">{{</span><span class="s2">4, 16</span><span class="se">}}</span><span class="s2"> is supported for 3DGS rasterization, got </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">assert</span> <span class="n">num_depth_samples</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;num_depth_samples must be greater than 0&quot;</span>
+
+    <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span> <span class="o">=</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span>
+    <span class="k">if</span> <span class="n">means2d</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="n">nnz</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">N</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">conics</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span>
+            <span class="n">tile_height</span><span class="p">,</span>
+            <span class="n">tile_width</span><span class="p">,</span>
+        <span class="p">),</span> <span class="n">tile_offsets</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">tile_height</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_height</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_height</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_height</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
+
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_top_contributing_gaussian_ids&quot;</span><span class="p">)(</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_width</span><span class="p">,</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">num_depth_samples</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_eval3d</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 4]</span>
@@ -1962,7 +2200,7 @@
 <span class="sd">    Args:</span>
 <span class="sd">        global_z_order: Defines how Gaussians are sorted for depth ordering. If True (default),</span>
 <span class="sd">            Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted</span>
-<span class="sd">            by their Euclidean distance from the camera origin.             The z-coordinate sorting is typically</span>
+<span class="sd">            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically</span>
 <span class="sd">            faster and sufficient for most cases, while Euclidean distance can be useful for scenes</span>
 <span class="sd">            with wide field-of-view or non-standard camera models. Default: True.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
