@@ -15,8 +15,23 @@
 
 """LiDAR models sub-package - Layer 2 stateful LiDAR models.
 
-This package is reserved for future LiDAR model implementations.
-No public symbols are exported at this time.
+This module provides:
+- LidarModel: Stateful spinning-LiDAR model (nn.Module) wrapping a Layer 0 projection
+- LidarFrame / LidarFrameSet: LiDAR frame and keyed collection types
+- RowOffsetStructuredSpinningLidarProjection / SpinningDirection: public LiDAR projection type and spin enum
 """
 
-__all__: list[str] = []
+from ...kernels.lidars import (
+    RowOffsetStructuredSpinningLidarProjection,
+    SpinningDirection,
+)
+from .lidar_frame import LidarFrame, LidarFrameSet
+from .lidar_model import LidarModel
+
+__all__ = [
+    "LidarFrame",
+    "LidarFrameSet",
+    "LidarModel",
+    "RowOffsetStructuredSpinningLidarProjection",
+    "SpinningDirection",
+]

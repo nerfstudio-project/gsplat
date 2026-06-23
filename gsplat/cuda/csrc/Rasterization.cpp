@@ -301,6 +301,171 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
 
+std::tuple<at::Tensor, at::Tensor> rasterize_num_contributing_gaussians(
+    const at::Tensor &means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor &opacities, // [..., N] or [nnz]
+    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+
+    auto opt = means2d.options();
+    at::DimVector out_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
+    out_dims.append({image_height, image_width});
+    at::Tensor num_contributing = at::empty(out_dims, opt.dtype(at::kInt));
+    at::Tensor alphas = at::empty(out_dims, opt);
+
+    launch_rasterize_num_contributing_gaussians_kernel(
+        means2d,
+        conics,
+        opacities,
+        image_width,
+        image_height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+        num_contributing,
+        alphas
+    );
+
+    return std::make_tuple(num_contributing, alphas);
+}
+
+std::tuple<at::Tensor, at::Tensor> rasterize_contributing_gaussian_ids(
+    const at::Tensor &means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor &opacities, // [..., N] or [nnz]
+    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    const at::Tensor &num_contributing_gaussians // [..., image_height, image_width]
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(num_contributing_gaussians);
+    TORCH_CHECK_VALUE(
+        num_contributing_gaussians.scalar_type() == at::kInt,
+        "num_contributing_gaussians must have dtype int32"
+    );
+    TORCH_CHECK_VALUE(
+        tile_offsets.dim() >= 2,
+        "tile_offsets must have at least two dimensions"
+    );
+    TORCH_CHECK_VALUE(
+        num_contributing_gaussians.dim() == tile_offsets.dim(),
+        "num_contributing_gaussians must have the same number of dimensions as tile_offsets"
+    );
+    for (int64_t d = 0; d < tile_offsets.dim() - 2; ++d) {
+        TORCH_CHECK_VALUE(
+            num_contributing_gaussians.size(d) == tile_offsets.size(d),
+            "num_contributing_gaussians batch dimensions must match tile_offsets"
+        );
+    }
+    TORCH_CHECK_VALUE(
+        num_contributing_gaussians.size(-2) == image_height,
+        "num_contributing_gaussians height must match image_height"
+    );
+    TORCH_CHECK_VALUE(
+        num_contributing_gaussians.size(-1) == image_width,
+        "num_contributing_gaussians width must match image_width"
+    );
+
+    int64_t max_num_contributing = 0;
+    if (num_contributing_gaussians.numel() > 0) {
+        const int32_t min_num_contributing =
+            num_contributing_gaussians.min().item<int32_t>();
+        TORCH_CHECK_VALUE(
+            min_num_contributing >= 0,
+            "num_contributing_gaussians must be non-negative"
+        );
+        max_num_contributing =
+            num_contributing_gaussians.max().item<int32_t>();
+    }
+
+    auto opt = means2d.options();
+    at::DimVector out_dims(num_contributing_gaussians.sizes());
+    out_dims.append({max_num_contributing});
+    at::Tensor ids = at::full(out_dims, -1, opt.dtype(at::kInt));
+    at::Tensor weights = at::zeros(out_dims, opt);
+
+    if (max_num_contributing > 0) {
+        launch_rasterize_contributing_gaussian_ids_kernel(
+            means2d,
+            conics,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            static_cast<uint32_t>(max_num_contributing),
+            tile_offsets,
+            flatten_ids,
+            ids,
+            weights
+        );
+    }
+
+    return std::make_tuple(ids, weights);
+}
+
+std::tuple<at::Tensor, at::Tensor> rasterize_top_contributing_gaussian_ids(
+    const at::Tensor &means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor &opacities, // [..., N] or [nnz]
+    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    int64_t num_depth_samples
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    TORCH_CHECK_VALUE(
+        num_depth_samples > 0, "num_depth_samples must be greater than 0"
+    );
+
+    auto opt = means2d.options();
+    at::DimVector out_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
+    out_dims.append({image_height, image_width, num_depth_samples});
+    at::Tensor ids = at::empty(out_dims, opt.dtype(at::kInt));
+    at::Tensor weights = at::empty(out_dims, opt);
+
+    launch_rasterize_top_contributing_gaussian_ids_kernel(
+        means2d,
+        conics,
+        opacities,
+        image_width,
+        image_height,
+        tile_size,
+        num_depth_samples,
+        tile_offsets,
+        flatten_ids,
+        ids,
+        weights
+    );
+
+    return std::make_tuple(ids, weights);
+}
+
 #endif
 
 

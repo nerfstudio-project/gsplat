@@ -22,6 +22,7 @@ This module provides:
 - Pose / DynamicPose / Trajectory: Sensor pose representations
 - Return types: typed dataclasses for all projection and ray-casting outputs
 - ShutterType / BivariateWindshieldDistortion / ReferencePolynomial: kernel-layer enums and types
+- RowOffsetStructuredSpinningLidarProjection / SpinningDirection: LiDAR projection type and spin enum
 - from_components: factory helper for building BivariateWindshieldDistortion from raw polynomial tensors
 """
 
@@ -41,14 +42,20 @@ from ..kernels.cameras import (
     ExternalDistortion,
     FThetaProjection,
     NoExternalDistortion,
+    OpenCVFisheyeProjection,
     OpenCVPinholeProjection,
     ReferencePolynomial,
     ShutterType,
     from_components,
 )
 from ..kernels.common.pose import DynamicPose, Pose, Trajectory
+from ..kernels.lidars import (
+    RowOffsetStructuredSpinningLidarProjection,
+    SpinningDirection,
+)
 from .cameras import CameraModel, ImageFrame, ImageFrameGroup
 from .common import Frame, FrameId
+from .lidars import LidarFrame, LidarFrameSet, LidarModel
 
 __all__ = [
     "BivariateWindshieldDistortion",
@@ -62,14 +69,20 @@ __all__ = [
     "ImageFrame",
     "ImageFrameGroup",
     "ImagePointsReturn",
+    "LidarFrame",
+    "LidarFrameSet",
+    "LidarModel",
     "NoExternalDistortion",
+    "OpenCVFisheyeProjection",
     "OpenCVPinholeProjection",
     "PixelsReturn",
     "Pose",
     "ReferencePolynomial",
+    "RowOffsetStructuredSpinningLidarProjection",
     "SensorAnglesReturn",
     "SensorRayReturn",
     "ShutterType",
+    "SpinningDirection",
     "Trajectory",
     "WorldPointsToImagePointsReturn",
     "WorldPointsToPixelsReturn",

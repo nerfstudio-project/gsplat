@@ -34,11 +34,6 @@ import torch
 from typing_extensions import Literal, Tuple, assert_never
 import torch.nn.functional as F
 
-from gsplat._helper import (
-    load_test_data,
-    get_inlier_abserror_mask,
-    assert_mismatch_ratio,
-)
 import gsplat
 
 from gsplat.cuda._backend import _C
@@ -690,7 +685,7 @@ def test_fully_fused_projection_packed(
     "rolling_shutter",
     [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM],
 )
-@pytest.mark.parametrize("global_z_order", [True, False])
+@pytest.mark.parametrize("global_z_order", [True, False], ids=["globalz", "distsensor"])
 def test_fully_fused_projection_ut(
     test_data,
     batch_dims: Tuple[int, ...],
@@ -2411,6 +2406,640 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
             flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
             msg=f"{name} backward (rasterize)",
         )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("tile_size", [4, 16])
+def test_rasterize_num_contributing_gaussians(tile_size: int):
+    from gsplat.cuda._wrapper import (
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_num_contributing_gaussians,
+        rasterize_to_indices_in_range,
+        rasterize_to_pixels,
+    )
+
+    width, height = 18, 17
+    means2d = torch.tensor(
+        [[[4.5, 4.5], [7.5, 4.5], [4.5, 7.5], [12.5, 12.5]]],
+        device=device,
+    )
+    conics = torch.tensor(
+        [[[0.08, 0.0, 0.08], [0.10, 0.0, 0.10], [0.12, 0.0, 0.12], [0.07, 0.0, 0.07]]],
+        device=device,
+    )
+    opacities = torch.tensor([[0.45, 0.50, 0.55, 0.35]], device=device)
+    colors = torch.zeros((*opacities.shape, 3), device=device)
+    radii = torch.full((*opacities.shape, 2), 8, dtype=torch.int32, device=device)
+    depths = torch.tensor([[1.0, 2.0, 3.0, 4.0]], device=device)
+
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    tile_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+
+    num_contributing, alphas = rasterize_num_contributing_gaussians(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+    )
+
+    _, render_alphas = rasterize_to_pixels(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        width,
+        height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+    )
+    torch.testing.assert_close(alphas, render_alphas.squeeze(-1))
+
+    gauss_ids, pixel_ids, image_ids = rasterize_to_indices_in_range(
+        0,
+        2**30,
+        torch.ones_like(alphas),
+        means2d,
+        conics,
+        opacities,
+        width,
+        height,
+        tile_size,
+        tile_offsets,
+        flatten_ids,
+    )
+    assert gauss_ids.numel() > 0
+    expected_counts = torch.zeros(
+        num_contributing.numel(), dtype=torch.int32, device=device
+    )
+    linear_ids = image_ids * (height * width) + pixel_ids
+    expected_counts.index_add_(
+        0, linear_ids, torch.ones_like(linear_ids, dtype=torch.int32)
+    )
+    expected_counts = expected_counts.reshape_as(num_contributing)
+    torch.testing.assert_close(num_contributing, expected_counts)
+
+
+def _assert_contributor_output_invariants(
+    ids: torch.Tensor,
+    weights: torch.Tensor,
+    max_gaussian_id: int,
+    expected_counts: torch.Tensor,
+):
+    valid = ids >= 0
+
+    assert ids.dtype == torch.int32
+    assert weights.dtype == torch.float32
+    assert weights.shape == ids.shape
+    torch.testing.assert_close(valid.sum(dim=-1).to(torch.int32), expected_counts)
+
+    if ids.shape[-1] > 1:
+        invalid_before_valid = (~valid[..., :-1]) & valid[..., 1:]
+        sorted_ids = ids.sort(dim=-1).values
+        duplicate_ids = (sorted_ids[..., 1:] == sorted_ids[..., :-1]) & (
+            sorted_ids[..., 1:] >= 0
+        )
+        assert not bool(invalid_before_valid.any().item())
+        assert not bool(duplicate_ids.any().item())
+
+    if bool(valid.any().item()):
+        valid_ids = ids[valid]
+        assert int(valid_ids.min().item()) >= 0
+        assert int(valid_ids.max().item()) < max_gaussian_id
+        assert bool((weights[valid] > 0).all().item())
+
+    torch.testing.assert_close(weights[~valid], torch.zeros_like(weights[~valid]))
+    assert bool(torch.isfinite(weights).all().item())
+    assert bool((weights >= 0).all().item())
+    assert bool((weights <= 1).all().item())
+
+
+def _assert_contributor_ids_are_depth_ordered(
+    ids: torch.Tensor,
+    depths: torch.Tensor,
+    packed: bool,
+):
+    if ids.shape[-1] <= 1:
+        return
+
+    clamped_ids = ids.clamp_min(0).to(torch.long)
+    if packed:
+        sample_depths = depths.reshape(-1)[clamped_ids]
+    else:
+        image_count = math.prod(ids.shape[:-3])
+        num_gaussians = depths.shape[-1]
+        ids_flat = clamped_ids.reshape(image_count, -1, ids.shape[-1])
+        depths_flat = depths.reshape(image_count, num_gaussians)
+        sample_depths = torch.gather(
+            depths_flat[:, None, :].expand(-1, ids_flat.shape[1], -1),
+            2,
+            ids_flat,
+        ).reshape_as(ids)
+
+    valid = ids >= 0
+    adjacent_valid = valid[..., :-1] & valid[..., 1:]
+    ordered = sample_depths[..., :-1] <= sample_depths[..., 1:]
+    assert bool((ordered | ~adjacent_valid).all().item())
+
+
+def _assert_top_contributors_are_largest_weights(
+    top_ids: torch.Tensor,
+    top_weights: torch.Tensor,
+    all_ids: torch.Tensor,
+    all_weights: torch.Tensor,
+):
+    num_depth_samples = top_ids.shape[-1]
+    if all_weights.shape[-1] < num_depth_samples:
+        pad_shape = all_weights.shape[:-1] + (
+            num_depth_samples - all_weights.shape[-1],
+        )
+        all_weights = torch.cat(
+            [
+                all_weights,
+                torch.zeros(
+                    pad_shape,
+                    dtype=all_weights.dtype,
+                    device=all_weights.device,
+                ),
+            ],
+            dim=-1,
+        )
+
+    expected_weights = torch.topk(all_weights, num_depth_samples, dim=-1).values
+    actual_weights = top_weights.sort(dim=-1, descending=True).values
+    torch.testing.assert_close(actual_weights, expected_weights, rtol=1e-5, atol=2e-6)
+
+    for k in range(num_depth_samples):
+        valid = top_ids[..., k] >= 0
+        id_match = all_ids == top_ids[..., k, None]
+        weight_match = torch.isclose(
+            all_weights[..., : all_ids.shape[-1]],
+            top_weights[..., k, None],
+            rtol=1e-5,
+            atol=2e-6,
+        )
+        present = (id_match & weight_match).any(dim=-1)
+        assert bool((present | ~valid).all().item())
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("tile_size", [4, 16])
+@pytest.mark.parametrize("packed", [False, True])
+def test_rasterize_contributing_gaussian_ids(tile_size: int, packed: bool):
+    from gsplat.cuda._wrapper import (
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_contributing_gaussian_ids,
+        rasterize_num_contributing_gaussians,
+    )
+
+    width, height = 18, 17
+    means2d = torch.tensor(
+        [
+            [[4.5, 4.5], [7.5, 4.5], [4.5, 7.5], [12.5, 12.5], [8.0, 8.0]],
+            [[5.5, 5.5], [9.5, 5.5], [5.5, 9.5], [13.5, 13.5], [9.0, 9.0]],
+        ],
+        device=device,
+    )
+    conics = torch.tensor(
+        [
+            [
+                [0.08, 0.00, 0.08],
+                [0.10, 0.02, 0.10],
+                [0.12, -0.01, 0.12],
+                [0.07, 0.00, 0.07],
+                [0.05, 0.01, 0.09],
+            ],
+            [
+                [0.09, 0.01, 0.08],
+                [0.11, -0.02, 0.10],
+                [0.12, 0.00, 0.11],
+                [0.08, 0.01, 0.08],
+                [0.06, -0.01, 0.08],
+            ],
+        ],
+        device=device,
+    )
+    opacities = torch.tensor(
+        [[0.45, 0.70, 0.55, 0.35, 0.60], [0.50, 0.65, 0.40, 0.75, 0.58]],
+        device=device,
+    )
+    radii = torch.full((*opacities.shape, 2), 8, dtype=torch.int32, device=device)
+    depths = torch.tensor(
+        [[1.0, 2.5, 2.0, 4.0, 3.0], [0.8, 2.2, 1.8, 4.4, 3.1]],
+        device=device,
+    )
+
+    I, N = opacities.shape
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    if packed:
+        image_ids = torch.arange(I, device=device, dtype=torch.long).repeat_interleave(
+            N
+        )
+        gaussian_ids = torch.arange(N, device=device, dtype=torch.long).repeat(I)
+        means2d = means2d.reshape(I * N, 2)
+        conics = conics.reshape(I * N, 3)
+        opacities = opacities.reshape(I * N)
+        radii = radii.reshape(I * N, 2)
+        depths = depths.reshape(I * N)
+        _, isect_ids, flatten_ids = isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size,
+            tile_width,
+            tile_height,
+            packed=True,
+            n_images=I,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+    else:
+        _, isect_ids, flatten_ids = isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size,
+            tile_width,
+            tile_height,
+        )
+    tile_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+
+    num_contributing, _ = rasterize_num_contributing_gaussians(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+    )
+    actual_ids, actual_weights = rasterize_contributing_gaussian_ids(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+        num_contributing,
+    )
+    max_num_contributing = int(num_contributing.max().item())
+    max_gaussian_id = means2d.shape[0] if packed else N
+
+    assert actual_ids.shape == num_contributing.shape + (max_num_contributing,)
+    assert bool((actual_ids >= 0).any().item())
+    _assert_contributor_output_invariants(
+        actual_ids,
+        actual_weights,
+        max_gaussian_id,
+        num_contributing,
+    )
+    _assert_contributor_ids_are_depth_ordered(actual_ids, depths, packed)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("tile_size", [4, 16])
+def test_rasterize_contributing_gaussian_ids_early_termination(tile_size: int):
+    from gsplat.cuda._wrapper import (
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_contributing_gaussian_ids,
+        rasterize_num_contributing_gaussians,
+    )
+
+    width, height = 9, 9
+    N = 8
+    means2d = torch.full((1, N, 2), 4.5, device=device)
+    conics = torch.tensor([0.04, 0.0, 0.04], device=device).expand(1, N, 3)
+    opacities = torch.full((1, N), 0.98, device=device)
+    radii = torch.full((1, N, 2), 8, dtype=torch.int32, device=device)
+    depths = torch.arange(1, N + 1, device=device, dtype=torch.float32).reshape(1, N)
+
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    tile_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+    num_contributing, _ = rasterize_num_contributing_gaussians(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+    )
+    actual_ids, actual_weights = rasterize_contributing_gaussian_ids(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+        num_contributing,
+    )
+    max_num_contributing = int(num_contributing.max().item())
+
+    assert actual_ids.shape == num_contributing.shape + (max_num_contributing,)
+    _assert_contributor_output_invariants(
+        actual_ids, actual_weights, N, num_contributing
+    )
+    _assert_contributor_ids_are_depth_ordered(actual_ids, depths, packed=False)
+    assert int(num_contributing[0, 4, 4].item()) < N
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("tile_size", [4, 16])
+def test_rasterize_contributing_gaussian_ids_empty_counts(tile_size: int):
+    from gsplat.cuda._wrapper import rasterize_contributing_gaussian_ids
+
+    width, height = 7, 6
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    means2d = torch.empty((1, 0, 2), device=device)
+    conics = torch.empty((1, 0, 3), device=device)
+    opacities = torch.empty((1, 0), device=device)
+    tile_offsets = torch.zeros(
+        (1, tile_height, tile_width), dtype=torch.int32, device=device
+    )
+    flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
+    num_contributing = torch.zeros((1, height, width), dtype=torch.int32, device=device)
+
+    actual_ids, actual_weights = rasterize_contributing_gaussian_ids(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+        num_contributing,
+    )
+
+    assert actual_ids.shape == (1, height, width, 0)
+    assert actual_weights.shape == actual_ids.shape
+    assert actual_ids.dtype == torch.int32
+    assert actual_weights.dtype == torch.float32
+    _assert_contributor_output_invariants(
+        actual_ids, actual_weights, 0, num_contributing
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("tile_size", [4, 16])
+@pytest.mark.parametrize("num_depth_samples", [1, 3])
+@pytest.mark.parametrize("packed", [False, True])
+def test_rasterize_top_contributing_gaussian_ids(
+    tile_size: int, num_depth_samples: int, packed: bool
+):
+    from gsplat.cuda._wrapper import (
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_contributing_gaussian_ids,
+        rasterize_num_contributing_gaussians,
+        rasterize_top_contributing_gaussian_ids,
+    )
+
+    width, height = 18, 17
+    means2d = torch.tensor(
+        [
+            [[4.5, 4.5], [7.5, 4.5], [4.5, 7.5], [12.5, 12.5], [8.0, 8.0]],
+            [[5.5, 5.5], [9.5, 5.5], [5.5, 9.5], [13.5, 13.5], [9.0, 9.0]],
+        ],
+        device=device,
+    )
+    conics = torch.tensor(
+        [
+            [
+                [0.08, 0.00, 0.08],
+                [0.10, 0.02, 0.10],
+                [0.12, -0.01, 0.12],
+                [0.07, 0.00, 0.07],
+                [0.05, 0.01, 0.09],
+            ],
+            [
+                [0.09, 0.01, 0.08],
+                [0.11, -0.02, 0.10],
+                [0.12, 0.00, 0.11],
+                [0.08, 0.01, 0.08],
+                [0.06, -0.01, 0.08],
+            ],
+        ],
+        device=device,
+    )
+    opacities = torch.tensor(
+        [[0.45, 0.70, 0.55, 0.35, 0.60], [0.50, 0.65, 0.40, 0.75, 0.58]],
+        device=device,
+    )
+    radii = torch.full((*opacities.shape, 2), 8, dtype=torch.int32, device=device)
+    depths = torch.tensor(
+        [[1.0, 2.5, 2.0, 4.0, 3.0], [0.8, 2.2, 1.8, 4.4, 3.1]],
+        device=device,
+    )
+
+    I, N = opacities.shape
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    if packed:
+        image_ids = torch.arange(I, device=device, dtype=torch.long).repeat_interleave(
+            N
+        )
+        gaussian_ids = torch.arange(N, device=device, dtype=torch.long).repeat(I)
+        means2d = means2d.reshape(I * N, 2)
+        conics = conics.reshape(I * N, 3)
+        opacities = opacities.reshape(I * N)
+        radii = radii.reshape(I * N, 2)
+        depths = depths.reshape(I * N)
+        _, isect_ids, flatten_ids = isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size,
+            tile_width,
+            tile_height,
+            packed=True,
+            n_images=I,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+    else:
+        _, isect_ids, flatten_ids = isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size,
+            tile_width,
+            tile_height,
+        )
+    tile_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+
+    actual_ids, actual_weights = rasterize_top_contributing_gaussian_ids(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+        num_depth_samples,
+    )
+    num_contributing, _ = rasterize_num_contributing_gaussians(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+    )
+    all_ids, all_weights = rasterize_contributing_gaussian_ids(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+        num_contributing,
+    )
+    expected_counts = torch.minimum(
+        num_contributing,
+        torch.full_like(num_contributing, num_depth_samples),
+    )
+    max_gaussian_id = means2d.shape[0] if packed else N
+
+    assert actual_ids.shape == num_contributing.shape + (num_depth_samples,)
+    assert bool((actual_ids >= 0).any().item())
+    _assert_contributor_output_invariants(
+        all_ids,
+        all_weights,
+        max_gaussian_id,
+        num_contributing,
+    )
+    _assert_contributor_output_invariants(
+        actual_ids,
+        actual_weights,
+        max_gaussian_id,
+        expected_counts,
+    )
+    _assert_contributor_ids_are_depth_ordered(all_ids, depths, packed)
+    _assert_contributor_ids_are_depth_ordered(actual_ids, depths, packed)
+    _assert_top_contributors_are_largest_weights(
+        actual_ids,
+        actual_weights,
+        all_ids,
+        all_weights,
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("tile_size", [4, 16])
+def test_rasterize_top_contributing_gaussian_ids_early_termination(tile_size: int):
+    from gsplat.cuda._wrapper import (
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_contributing_gaussian_ids,
+        rasterize_num_contributing_gaussians,
+        rasterize_top_contributing_gaussian_ids,
+    )
+
+    width, height = 9, 9
+    num_depth_samples = 4
+    N = 8
+    means2d = torch.full((1, N, 2), 4.5, device=device)
+    conics = torch.tensor([0.04, 0.0, 0.04], device=device).expand(1, N, 3)
+    opacities = torch.full((1, N), 0.98, device=device)
+    radii = torch.full((1, N, 2), 8, dtype=torch.int32, device=device)
+    depths = torch.arange(1, N + 1, device=device, dtype=torch.float32).reshape(1, N)
+
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    tile_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+
+    actual_ids, actual_weights = rasterize_top_contributing_gaussian_ids(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+        num_depth_samples,
+    )
+    num_contributing, _ = rasterize_num_contributing_gaussians(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+    )
+    all_ids, all_weights = rasterize_contributing_gaussian_ids(
+        means2d,
+        conics,
+        opacities,
+        tile_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+        num_contributing,
+    )
+    expected_counts = torch.minimum(
+        num_contributing,
+        torch.full_like(num_contributing, num_depth_samples),
+    )
+
+    assert actual_ids.shape == num_contributing.shape + (num_depth_samples,)
+    _assert_contributor_output_invariants(all_ids, all_weights, N, num_contributing)
+    _assert_contributor_output_invariants(
+        actual_ids,
+        actual_weights,
+        N,
+        expected_counts,
+    )
+    _assert_contributor_ids_are_depth_ordered(all_ids, depths, packed=False)
+    _assert_contributor_ids_are_depth_ordered(actual_ids, depths, packed=False)
+    _assert_top_contributors_are_largest_weights(
+        actual_ids,
+        actual_weights,
+        all_ids,
+        all_weights,
+    )
+    assert int((actual_ids[0, 4, 4] >= 0).sum().item()) < num_depth_samples
 
 
 def _quat_rotation_y(angle_rad: float, device: torch.device):

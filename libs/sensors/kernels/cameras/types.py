@@ -147,6 +147,34 @@ Note:
     dispatching across projection types.
 """
 
+OpenCVFisheyeProjection = torch.classes.gsplat_sensors.OpenCVFisheyeProjection
+"""OpenCV equidistant-fisheye camera projection parameters.
+
+Equidistant fisheye model with an odd-power forward polynomial and an
+anisotropic focal length. Parameters are stored as separate per-component
+tensors on the C++ ``OpenCVFisheyeProjection`` struct (see
+``libs/sensors/kernels/cuda/csrc/camera_torch.h``).
+
+Attributes:
+    principal_point: (2,) ``[cx, cy]`` principal point in pixels.
+    focal_length: (2,) ``[fx, fy]`` anisotropic focal lengths in pixels.
+    forward_poly: (FISHEYE_MAX_FORWARD_POLY_TERMS,) ``[k1, k2, k3, k4]`` equidistant distortion coefficients
+        evaluated as ``theta * (1 + k1*t2 + k2*t4 + k3*t6 + k4*t8)``.
+    approx_backward_factor: (1,) Newton initial-guess factor for inverting the
+        forward polynomial; never receives a gradient.
+    resolution: ``(width, height)`` tuple of ints, image resolution in pixels.
+    newton_iterations: Fixed Newton-iteration count used when inverting the
+        forward polynomial in the pixel->ray direction.
+    max_angle: Maximum valid ray angle in radians; rays beyond this angle are
+        marked invalid by the projection kernels.
+    min_2d_norm: Pixel-radius threshold below which the angle-from-pixel
+        mapping is treated as degenerate.
+
+Note:
+    Use :func:`script_class_name` to retrieve the registered class name when
+    dispatching across projection types.
+"""
+
 NoExternalDistortion = torch.classes.gsplat_sensors.NoExternalDistortion
 """No-op external distortion — identity transformation.
 
@@ -187,6 +215,13 @@ Note:
 # construction.
 FTHETA_MAX_POLYNOMIAL_TERMS = int(FThetaProjection.get_max_polynomial_terms())
 
+# Number of OpenCV-fisheye forward-polynomial coefficients the CUDA kernel reads
+# from forward_poly. The C++ definition is the source of truth; forward_poly must
+# carry exactly this many coefficients.
+FISHEYE_MAX_FORWARD_POLY_TERMS = int(
+    OpenCVFisheyeProjection.get_max_forward_poly_terms()
+)
+
 # Compatibility alias kept as ``Any`` (rather than a Union of the registered
 # torch script classes) on purpose: type-narrowing a Union of
 # ``torch.classes.*`` references inside ``torch.autograd.Function`` is awkward
@@ -216,7 +251,11 @@ Either :class:`NoExternalDistortion` (identity) or
 :class:`BivariateWindshieldDistortion`.
 """
 
-REGISTERED_CAMERA_PROJECTIONS = (OpenCVPinholeProjection, FThetaProjection)
+REGISTERED_CAMERA_PROJECTIONS = (
+    OpenCVPinholeProjection,
+    FThetaProjection,
+    OpenCVFisheyeProjection,
+)
 """Tuple of all supported camera projection classes.
 
 Iterate this tuple to dispatch across projection types without hard-coding
@@ -235,7 +274,11 @@ class names in kernel dispatch logic.
 # torch.classes.* class objects are torch.ScriptClass instances and do not
 # expose a usable __name__ attribute; script_class_name() only works on
 # instances, not on the registered class objects themselves.
-REGISTERED_CAMERA_PROJECTION_NAMES = ("OpenCVPinholeProjection", "FThetaProjection")
+REGISTERED_CAMERA_PROJECTION_NAMES = (
+    "OpenCVPinholeProjection",
+    "FThetaProjection",
+    "OpenCVFisheyeProjection",
+)
 REGISTERED_DISTORTION_NAMES = (
     "NoExternalDistortion",
     "BivariateWindshieldDistortion",
@@ -271,9 +314,11 @@ __all__ = [
     "BivariateWindshieldDistortion",
     "CameraProjection",
     "ExternalDistortion",
+    "FISHEYE_MAX_FORWARD_POLY_TERMS",
     "FTHETA_MAX_POLYNOMIAL_TERMS",
     "FThetaProjection",
     "NoExternalDistortion",
+    "OpenCVFisheyeProjection",
     "OpenCVPinholeProjection",
     "ReferencePolynomial",
     "REGISTERED_CAMERA_PROJECTIONS",

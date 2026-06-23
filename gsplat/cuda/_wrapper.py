@@ -963,6 +963,235 @@ def rasterize_to_pixels(
     return render_colors, render_alphas
 
 
+@torch.no_grad()
+@trace_function("render2D-count")
+def rasterize_num_contributing_gaussians(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    opacities: Tensor,  # [..., N] or [nnz]
+    tile_offsets: Tensor,  # [..., tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+) -> Tuple[Tensor, Tensor]:
+    """Counts contributing Gaussians per pixel and returns accumulated alpha.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] for dense inputs, or [nnz, 2] for packed inputs.
+        conics: Inverse projected covariances. [..., N, 3] for dense inputs, or [nnz, 3] for packed inputs.
+        opacities: Gaussian opacities. [..., N] for dense inputs, or [nnz] for packed inputs.
+        tile_offsets: Intersection offsets from :func:`isect_offset_encode`. [..., tile_height, tile_width].
+        flatten_ids: Flattened Gaussian indices from :func:`isect_tiles`. [n_isects].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+
+    Returns:
+        A tuple:
+
+        - **Number of contributing Gaussians**. [..., image_height, image_width]
+        - **Rendered alphas**. [..., image_height, image_width]
+    """
+    assert tile_size in (
+        4,
+        16,
+    ), f"Only tile_size in {{4, 16}} is supported for 3DGS rasterization, got {tile_size}"
+
+    tile_height, tile_width = tile_offsets.shape[-2:]
+    if means2d.dim() == 2:
+        nnz = means2d.shape[0]
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert conics.shape == (nnz, 3), conics.shape
+        assert opacities.shape == (nnz,), opacities.shape
+    else:
+        image_dims = means2d.shape[:-2]
+        N = means2d.shape[-2]
+        assert means2d.shape == image_dims + (N, 2), means2d.shape
+        assert conics.shape == image_dims + (N, 3), conics.shape
+        assert opacities.shape == image_dims + (N,), opacities.shape
+        assert tile_offsets.shape == image_dims + (
+            tile_height,
+            tile_width,
+        ), tile_offsets.shape
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    return _make_lazy_cuda_func("rasterize_num_contributing_gaussians")(
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+    )
+
+
+@torch.no_grad()
+@trace_function("render2D-contributors")
+def rasterize_contributing_gaussian_ids(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    opacities: Tensor,  # [..., N] or [nnz]
+    tile_offsets: Tensor,  # [..., tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    num_contributing_gaussians: Tensor,  # [..., image_height, image_width]
+) -> Tuple[Tensor, Tensor]:
+    """Returns all contributing Gaussian IDs and weights per pixel.
+
+    The output is padded to ``num_contributing_gaussians.max()`` samples per
+    pixel. Valid entries are in front-to-back order, IDs are padded with ``-1``,
+    and weights are padded with ``0``.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] for dense inputs, or [nnz, 2] for packed inputs.
+        conics: Inverse projected covariances. [..., N, 3] for dense inputs, or [nnz, 3] for packed inputs.
+        opacities: Gaussian opacities. [..., N] for dense inputs, or [nnz] for packed inputs.
+        tile_offsets: Intersection offsets from :func:`isect_offset_encode`. [..., tile_height, tile_width].
+        flatten_ids: Flattened Gaussian indices from :func:`isect_tiles`. [n_isects].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        num_contributing_gaussians: Number of valid contributors per pixel. [..., image_height, image_width].
+
+    Returns:
+        A tuple:
+
+        - **Gaussian IDs**. [..., image_height, image_width, max_num_contributing]
+        - **Radiance weights**. [..., image_height, image_width, max_num_contributing]
+    """
+    assert tile_size in (
+        4,
+        16,
+    ), f"Only tile_size in {{4, 16}} is supported for 3DGS rasterization, got {tile_size}"
+
+    tile_height, tile_width = tile_offsets.shape[-2:]
+    if means2d.dim() == 2:
+        image_dims = tile_offsets.shape[:-2]
+        nnz = means2d.shape[0]
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert conics.shape == (nnz, 3), conics.shape
+        assert opacities.shape == (nnz,), opacities.shape
+    else:
+        image_dims = means2d.shape[:-2]
+        N = means2d.shape[-2]
+        assert means2d.shape == image_dims + (N, 2), means2d.shape
+        assert conics.shape == image_dims + (N, 3), conics.shape
+        assert opacities.shape == image_dims + (N,), opacities.shape
+        assert tile_offsets.shape == image_dims + (
+            tile_height,
+            tile_width,
+        ), tile_offsets.shape
+    assert num_contributing_gaussians.shape == image_dims + (
+        image_height,
+        image_width,
+    ), num_contributing_gaussians.shape
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    return _make_lazy_cuda_func("rasterize_contributing_gaussian_ids")(
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        num_contributing_gaussians.contiguous(),
+    )
+
+
+@torch.no_grad()
+@trace_function("render2D-top-contributors")
+def rasterize_top_contributing_gaussian_ids(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    opacities: Tensor,  # [..., N] or [nnz]
+    tile_offsets: Tensor,  # [..., tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    num_depth_samples: int,
+) -> Tuple[Tensor, Tensor]:
+    """Returns the top radiance-weight Gaussian IDs and weights per pixel.
+
+    The selected samples are the strongest contributors by ``alpha * T`` during
+    front-to-back rasterization, then sorted back into front-to-back order.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] for dense inputs, or [nnz, 2] for packed inputs.
+        conics: Inverse projected covariances. [..., N, 3] for dense inputs, or [nnz, 3] for packed inputs.
+        opacities: Gaussian opacities. [..., N] for dense inputs, or [nnz] for packed inputs.
+        tile_offsets: Intersection offsets from :func:`isect_offset_encode`. [..., tile_height, tile_width].
+        flatten_ids: Flattened Gaussian indices from :func:`isect_tiles`. [n_isects].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        num_depth_samples: Number of contributors to return per pixel.
+
+    Returns:
+        A tuple:
+
+        - **Gaussian IDs**. [..., image_height, image_width, num_depth_samples]
+        - **Radiance weights**. [..., image_height, image_width, num_depth_samples]
+    """
+    assert tile_size in (
+        4,
+        16,
+    ), f"Only tile_size in {{4, 16}} is supported for 3DGS rasterization, got {tile_size}"
+    assert num_depth_samples > 0, "num_depth_samples must be greater than 0"
+
+    tile_height, tile_width = tile_offsets.shape[-2:]
+    if means2d.dim() == 2:
+        nnz = means2d.shape[0]
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert conics.shape == (nnz, 3), conics.shape
+        assert opacities.shape == (nnz,), opacities.shape
+    else:
+        image_dims = means2d.shape[:-2]
+        N = means2d.shape[-2]
+        assert means2d.shape == image_dims + (N, 2), means2d.shape
+        assert conics.shape == image_dims + (N, 3), conics.shape
+        assert opacities.shape == image_dims + (N,), opacities.shape
+        assert tile_offsets.shape == image_dims + (
+            tile_height,
+            tile_width,
+        ), tile_offsets.shape
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    return _make_lazy_cuda_func("rasterize_top_contributing_gaussian_ids")(
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        num_depth_samples,
+    )
+
+
 def rasterize_to_pixels_eval3d(
     means: Tensor,  # [..., N, 3]
     quats: Tensor,  # [..., N, 4]
@@ -1625,7 +1854,7 @@ def fully_fused_projection_with_ut(
     Args:
         global_z_order: Defines how Gaussians are sorted for depth ordering. If True (default),
             Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted
-            by their Euclidean distance from the camera origin.             The z-coordinate sorting is typically
+            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically
             faster and sufficient for most cases, while Euclidean distance can be useful for scenes
             with wide field-of-view or non-standard camera models. Default: True.
     """

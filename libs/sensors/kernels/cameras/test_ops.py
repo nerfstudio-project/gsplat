@@ -13,17 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for OpenCV-pinhole camera kernel ops covering forward/backward correctness and validity logic.
+"""Tests for camera kernel ops covering forward/backward correctness and validity logic.
 
-Exercises camera_rays_to_image_points, image_points_to_camera_rays, project_world_points_*,
-image_points_to_world_rays_*, BivariateWindshieldDistortion construction/pickling, and
-autograd.gradcheck for all public verbs with both NoExternalDistortion and BivariateWindshield.
+Exercises camera_rays_to_image_points, image_points_to_camera_rays,
+project_world_points_*, image_points_to_world_rays_*, parameter-class
+construction/pickling, and autograd.gradcheck for all public verbs with both
+NoExternalDistortion and BivariateWindshield.
 """
 
 # Row mapping: design-tests-opencvpinhole.md §6 rows 3-21 are covered here.
 
 import io
 
+import numpy as np
 import pytest
 import torch
 from torch import Tensor
@@ -31,6 +33,7 @@ from torch import Tensor
 from gsplat_sensors.kernels.cameras import (
     BivariateWindshieldDistortion,
     FThetaProjection,
+    OpenCVFisheyeProjection,
     OpenCVPinholeProjection,
     ReferencePolynomial,
     ShutterType,
@@ -3218,3 +3221,1168 @@ def test_ftheta_bivariate_image_points_to_world_rays_shutter_pose_gradcheck(
         )[0]
 
     assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)
+
+
+# ===========================================================================
+# OpenCV-fisheye tests. Intrinsics are the 4-tuple (principal_point,
+# focal_length, forward_poly, approx_backward_factor); approx_backward_factor
+# never receives a gradient. Gradchecks reuse the float32 FTheta harness
+# tolerances.
+# ===========================================================================
+
+
+def _fisheye_synthetic_rays(device: torch.device, dtype: torch.dtype = torch.float32):
+    return torch.tensor(
+        [
+            [0.05, 0.0, 1.0],
+            [0.0, 0.04, 1.0],
+            [-0.05, 0.04, 1.0],
+        ],
+        device=device,
+        dtype=dtype,
+    )
+
+
+def _fisheye_image_points_f64(projection, n=2):
+    pp = projection.principal_point
+    return (
+        (
+            pp.reshape(1, 2).to(torch.float64)
+            + torch.tensor(
+                [[2.0, 1.5], [-1.5, 0.7]][:n],
+                device=pp.device,
+                dtype=torch.float64,
+            )
+        )
+        .detach()
+        .requires_grad_(True)
+    )
+
+
+def _fisheye_projection_from_grad_tensors(
+    base_projection,
+    principal_point: Tensor,
+    focal_length: Tensor,
+    forward_poly: Tensor,
+    approx_backward_factor: Tensor,
+) -> OpenCVFisheyeProjection:
+    return OpenCVFisheyeProjection(
+        principal_point=principal_point,
+        focal_length=focal_length,
+        forward_poly=forward_poly,
+        approx_backward_factor=approx_backward_factor,
+        resolution=base_projection.resolution,
+        newton_iterations=int(base_projection.newton_iterations),
+        max_angle=float(base_projection.max_angle),
+        min_2d_norm=float(base_projection.min_2d_norm),
+    )
+
+
+def _fisheye_intrinsic_grad_inputs(base_projection):
+    return tuple(
+        tensor.detach().clone().to(torch.float64).requires_grad_(True)
+        for tensor in (
+            base_projection.principal_point,
+            base_projection.focal_length,
+            base_projection.forward_poly,
+        )
+    )
+
+
+def test_camera_rays_to_image_points_fisheye_basic(fisheye_projection, no_external):
+    """Fisheye camera_rays -> image_points: on-axis ray maps to the principal point."""
+    rays = torch.tensor(
+        [[0.0, 0.0, 1.0]], device=fisheye_projection.principal_point.device
+    )
+    image_points, valid_flags = camera_rays_to_image_points(
+        rays, fisheye_projection, no_external
+    )
+    assert valid_flags.all()
+    assert torch.allclose(
+        image_points[0], fisheye_projection.principal_point, atol=1e-4
+    )
+
+
+def test_camera_rays_to_image_points_fisheye_clamps_over_max_angle(
+    fisheye_projection, no_external
+):
+    """Fisheye rays beyond max_angle clamp theta to max_angle and stay valid.
+
+    The reference device math does not reject an over-FOV ray: it clamps theta to
+    max_angle and projects, so the ray lands at the same in-bounds image point as
+    a same-azimuth ray sitting exactly at max_angle.
+    """
+    device = fisheye_projection.principal_point.device
+    max_angle = 0.01
+    projection = OpenCVFisheyeProjection(
+        principal_point=fisheye_projection.principal_point,
+        focal_length=fisheye_projection.focal_length,
+        forward_poly=fisheye_projection.forward_poly,
+        approx_backward_factor=fisheye_projection.approx_backward_factor,
+        resolution=fisheye_projection.resolution,
+        newton_iterations=int(fisheye_projection.newton_iterations),
+        max_angle=max_angle,
+        min_2d_norm=float(fisheye_projection.min_2d_norm),
+    )
+    # theta = atan2(0.1, 1.0) ~= 0.0997 > max_angle -> clamped to max_angle.
+    over_fov = torch.tensor([[0.1, 0.0, 1.0]], device=device)
+    # Same +x azimuth, but sitting exactly at max_angle (not clamped).
+    at_max = torch.tensor(
+        [[float(np.sin(max_angle)), 0.0, float(np.cos(max_angle))]], device=device
+    )
+    over_pts, over_valid = camera_rays_to_image_points(
+        over_fov, projection, no_external
+    )
+    at_pts, at_valid = camera_rays_to_image_points(at_max, projection, no_external)
+
+    assert over_valid.tolist() == [True]
+    assert at_valid.tolist() == [True]
+    assert torch.allclose(over_pts, at_pts, atol=1e-4)
+
+
+def test_image_points_to_camera_rays_fisheye_round_trip(
+    fisheye_projection, no_external
+):
+    """Fisheye project then back-project recovers the original normalized ray."""
+    rays = _fisheye_synthetic_rays(fisheye_projection.principal_point.device)
+    image_points, _ = camera_rays_to_image_points(rays, fisheye_projection, no_external)
+    rays_back = image_points_to_camera_rays(
+        image_points, fisheye_projection, no_external
+    )
+    rays_unit = rays / torch.linalg.norm(rays, dim=-1, keepdim=True)
+    assert torch.allclose(rays_back, rays_unit, atol=1e-4)
+
+
+def test_fisheye_all_public_ops_callable(
+    fisheye_projection, no_external, windshield_distortion, dynamic_pose, static_pose
+):
+    """Every public op dispatches to a fisheye Function for both distortions."""
+    device = fisheye_projection.principal_point.device
+    rays = _fisheye_synthetic_rays(device)
+    pts = fisheye_projection.principal_point.reshape(1, 2) + torch.tensor(
+        [[2.0, 1.5], [-1.5, 0.7]], device=device
+    )
+    world = torch.tensor([[0.17, 0.1, 1.8], [-0.12, 0.16, 2.3]], device=device)
+    for distortion in (no_external, windshield_distortion):
+        camera_rays_to_image_points(rays, fisheye_projection, distortion)
+        image_points_to_camera_rays(pts, fisheye_projection, distortion)
+        project_world_points_mean_pose(
+            world, fisheye_projection, distortion, dynamic_pose, (100, 80)
+        )
+        project_world_points_shutter_pose(
+            world,
+            fisheye_projection,
+            distortion,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            max_iterations=1,
+            initial_relative_time=0.5,
+        )
+        image_points_to_world_rays_static_pose(
+            pts, fisheye_projection, distortion, static_pose
+        )
+        image_points_to_world_rays_shutter_pose(
+            pts,
+            fisheye_projection,
+            distortion,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+        )
+
+
+def test_fisheye_empty_input_returns_shaped_tensors(fisheye_projection, no_external):
+    """N==0 fisheye inputs return correctly shaped empty tensors."""
+    device = fisheye_projection.principal_point.device
+    rays = torch.zeros((0, 3), device=device)
+    pts = torch.zeros((0, 2), device=device)
+    image_points, valid_flags = camera_rays_to_image_points(
+        rays, fisheye_projection, no_external
+    )
+    assert image_points.shape == (0, 2)
+    assert valid_flags.shape == (0,)
+    camera_rays = image_points_to_camera_rays(pts, fisheye_projection, no_external)
+    assert camera_rays.shape == (0, 3)
+
+
+@pytest.mark.gradcheck
+def test_camera_rays_to_image_points_fisheye_gradcheck(fisheye_projection, no_external):
+    """End-to-end autograd.gradcheck for fisheye camera_rays -> image_points."""
+    rays = torch.tensor(
+        [[0.03, 0.02, 1.0], [0.05, -0.01, 1.1], [-0.04, 0.03, 1.2]],
+        device=fisheye_projection.principal_point.device,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+
+    def fn(camera_rays):
+        return camera_rays_to_image_points(
+            camera_rays, fisheye_projection, no_external, allow_device_transfer=True
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (rays,), **GRADCHECK_KWARGS_FTHETA_PROJECT)
+
+
+@pytest.mark.gradcheck
+def test_image_points_to_camera_rays_fisheye_gradcheck(fisheye_projection, no_external):
+    """End-to-end autograd.gradcheck for fisheye image_points -> camera_rays."""
+    image_points = _fisheye_image_points_f64(fisheye_projection)
+
+    def fn(pts):
+        return image_points_to_camera_rays(
+            pts, fisheye_projection, no_external, allow_device_transfer=True
+        )
+
+    assert torch.autograd.gradcheck(fn, (image_points,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_camera_rays_to_image_points_fisheye_intrinsics_gradcheck(
+    fisheye_projection, no_external
+):
+    """Fisheye intrinsic gradcheck over (principal_point, focal_length, forward_poly)."""
+    rays = _fisheye_synthetic_rays(
+        fisheye_projection.principal_point.device, dtype=torch.float64
+    )
+    pp, focal, fw = _fisheye_intrinsic_grad_inputs(fisheye_projection)
+    ab32 = fisheye_projection.approx_backward_factor.detach().to(torch.float32)
+
+    def fn(principal_point, focal_length, forward_poly):
+        # The fisheye projection constructor admits fp32-only intrinsics, so
+        # cast the fp64 gradcheck leaves at the construction boundary; autograd
+        # flows the cotangent back through the cast.
+        projection = _fisheye_projection_from_grad_tensors(
+            fisheye_projection,
+            principal_point.to(torch.float32),
+            focal_length.to(torch.float32),
+            forward_poly.to(torch.float32),
+            ab32,
+        )
+        return camera_rays_to_image_points(
+            rays, projection, no_external, allow_device_transfer=True
+        )[0]
+
+    assert torch.autograd.gradcheck(
+        fn, (pp, focal, fw), **GRADCHECK_KWARGS_FTHETA_PROJECT
+    )
+
+
+@pytest.mark.gradcheck
+def test_fisheye_project_world_points_mean_pose_gradcheck(
+    fisheye_projection, no_external, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for fisheye project_world_points_mean_pose."""
+    points = _ftheta_world_points_f64(fisheye_projection.principal_point.device)
+
+    def fn(p):
+        return project_world_points_mean_pose(
+            p,
+            fisheye_projection,
+            no_external,
+            dynamic_pose,
+            (100, 80),
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (points,), **GRADCHECK_KWARGS_FTHETA_DYNAMIC)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_project_world_points_shutter_pose_gradcheck(
+    fisheye_projection, no_external, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for fisheye project_world_points_shutter_pose."""
+    points = _ftheta_world_points_f64(fisheye_projection.principal_point.device)
+
+    def fn(p):
+        return project_world_points_shutter_pose(
+            p,
+            fisheye_projection,
+            no_external,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            max_iterations=1,
+            initial_relative_time=0.5,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (points,), **GRADCHECK_KWARGS_FTHETA_DYNAMIC)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_image_points_to_world_rays_static_pose_gradcheck(
+    fisheye_projection, no_external, static_pose
+):
+    """End-to-end autograd.gradcheck for fisheye image_points_to_world_rays_static_pose."""
+    pts = _fisheye_image_points_f64(fisheye_projection)
+
+    def fn(p):
+        return image_points_to_world_rays_static_pose(
+            p, fisheye_projection, no_external, static_pose, allow_device_transfer=True
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_image_points_to_world_rays_shutter_pose_gradcheck(
+    fisheye_projection, no_external, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for fisheye image_points_to_world_rays_shutter_pose."""
+    pts = _fisheye_image_points_f64(fisheye_projection)
+
+    def fn(p):
+        return image_points_to_world_rays_shutter_pose(
+            p,
+            fisheye_projection,
+            no_external,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_bivariate_image_points_to_camera_rays_gradcheck(
+    fisheye_projection, windshield_distortion
+):
+    """Bivariate fisheye backprojection gradcheck over inverse distortion coefficients."""
+    image_points = _fisheye_image_points_f64(fisheye_projection)
+    distortion_coeffs = _make_distortion_coeffs_f64(windshield_distortion)
+
+    def fn(coeffs):
+        distortion = _build_distortion(
+            windshield_distortion, ReferencePolynomial.FORWARD, coeffs
+        )
+        return image_points_to_camera_rays(
+            image_points, fisheye_projection, distortion, allow_device_transfer=True
+        )
+
+    assert torch.autograd.gradcheck(fn, (distortion_coeffs,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_bivariate_project_world_points_mean_pose_gradcheck(
+    fisheye_projection, windshield_distortion, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for fisheye project_world_points_mean_pose bivariate."""
+    points = _ftheta_world_points_f64(fisheye_projection.principal_point.device)
+
+    def fn(p):
+        return project_world_points_mean_pose(
+            p,
+            fisheye_projection,
+            windshield_distortion,
+            dynamic_pose,
+            (100, 80),
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (points,), **GRADCHECK_KWARGS_FTHETA_DYNAMIC)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_bivariate_project_world_points_shutter_pose_gradcheck(
+    fisheye_projection, windshield_distortion, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for fisheye project_world_points_shutter_pose bivariate."""
+    points = _ftheta_world_points_f64(fisheye_projection.principal_point.device)
+
+    def fn(p):
+        return project_world_points_shutter_pose(
+            p,
+            fisheye_projection,
+            windshield_distortion,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            max_iterations=1,
+            initial_relative_time=0.5,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (points,), **GRADCHECK_KWARGS_FTHETA_DYNAMIC)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_bivariate_image_points_to_world_rays_static_pose_gradcheck(
+    fisheye_projection, windshield_distortion, static_pose
+):
+    """End-to-end autograd.gradcheck for fisheye image_points_to_world_rays_static_pose bivariate."""
+    pts = _fisheye_image_points_f64(fisheye_projection)
+
+    def fn(p):
+        return image_points_to_world_rays_static_pose(
+            p,
+            fisheye_projection,
+            windshield_distortion,
+            static_pose,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_bivariate_image_points_to_world_rays_shutter_pose_gradcheck(
+    fisheye_projection, windshield_distortion, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for fisheye image_points_to_world_rays_shutter_pose bivariate."""
+    pts = _fisheye_image_points_f64(fisheye_projection)
+
+    def fn(p):
+        return image_points_to_world_rays_shutter_pose(
+            p,
+            fisheye_projection,
+            windshield_distortion,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("branch", ["ordinary", "nlerp", "hemisphere_flip"])
+def test_fisheye_mean_pose_rotation_slerp_branch_gradcheck(
+    fisheye_projection, no_external, branch
+):
+    """Pose-rotation-gradient coverage (xyzw->wxyz store) for fisheye mean-pose projection."""
+    device = fisheye_projection.principal_point.device
+    points = _ftheta_world_points_f64(device, n=1).detach()
+    start_r, end_r = _slerp_branch_rotations(branch, device)
+
+    def fn(q0, q1):
+        return project_world_points_mean_pose(
+            points,
+            fisheye_projection,
+            no_external,
+            _pose_from_rotations(q0, q1, device),
+            (100, 80),
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(
+        fn, (start_r, end_r), **GRADCHECK_KWARGS_FTHETA_DYNAMIC
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("branch", ["ordinary", "nlerp", "hemisphere_flip"])
+def test_fisheye_shutter_pose_rotation_slerp_branch_gradcheck(
+    fisheye_projection, no_external, branch
+):
+    """Pose-rotation-gradient coverage (xyzw->wxyz store) for fisheye shutter-pose projection."""
+    device = fisheye_projection.principal_point.device
+    points = _ftheta_world_points_f64(device, n=1).detach()
+    start_r, end_r = _slerp_branch_rotations(branch, device)
+
+    def fn(q0, q1):
+        return project_world_points_shutter_pose(
+            points,
+            fisheye_projection,
+            no_external,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            _pose_from_rotations(q0, q1, device),
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            max_iterations=1,
+            initial_relative_time=0.5,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(
+        fn, (start_r, end_r), **GRADCHECK_KWARGS_FTHETA_DYNAMIC
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("branch", ["ordinary", "nlerp", "hemisphere_flip"])
+def test_fisheye_world_rays_shutter_pose_rotation_slerp_branch_gradcheck(
+    fisheye_projection, no_external, branch
+):
+    """Pose-rotation-gradient coverage (xyzw->wxyz store) for fisheye world-rays shutter-pose."""
+    device = fisheye_projection.principal_point.device
+    pts = _fisheye_image_points_f64(fisheye_projection, n=1).detach()
+    start_r, end_r = _slerp_branch_rotations(branch, device)
+
+    def fn(q0, q1):
+        return image_points_to_world_rays_shutter_pose(
+            pts,
+            fisheye_projection,
+            no_external,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            _pose_from_rotations(q0, q1, device),
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (start_r, end_r), **GRADCHECK_KWARGS)
+
+
+def test_camera_rays_to_image_points_fisheye_behind_camera_invalid(
+    fisheye_projection, no_external
+):
+    """Rays with z<=0 MUST be marked invalid (the kernel falls back to PP)."""
+    rays = torch.tensor(
+        [
+            [0.0, 0.0, 1.0],  # forward, valid
+            [0.0, 0.0, -1.0],  # behind, invalid
+        ],
+        device=fisheye_projection.principal_point.device,
+    )
+    _, valid_flags = camera_rays_to_image_points(rays, fisheye_projection, no_external)
+    assert valid_flags.tolist() == [True, False]
+
+
+def test_camera_rays_to_image_points_fisheye_out_of_frame_marks_invalid(
+    fisheye_projection, no_external
+):
+    """A ray that projects outside ``[0, W) x [0, H)`` is flagged invalid even when projection succeeds (z > 0)."""
+    proj = fisheye_projection
+    device = proj.principal_point.device
+    in_frame_ray = torch.tensor([[0.0, 0.0, 1.0]], device=device, dtype=torch.float32)
+    far_off_axis = torch.tensor([[1.0, 0.0, 1.0]], device=device, dtype=torch.float32)
+    rays = torch.cat([in_frame_ray, far_off_axis], dim=0)
+    _, valid_flags = camera_rays_to_image_points(rays, proj, no_external)
+    assert bool(valid_flags[0]) is True
+    assert bool(valid_flags[1]) is False, (
+        "out-of-frame pixel must be flagged invalid; got "
+        f"valid_flags={valid_flags.tolist()}"
+    )
+
+
+def test_camera_rays_to_image_points_fisheye_nan_input_propagates_non_finite(
+    fisheye_projection, no_external
+):
+    """A NaN-bearing ray yields a non-finite pixel; the gate checks bounds but not finiteness, so the ray stays flagged valid."""
+    proj = fisheye_projection
+    device = proj.principal_point.device
+    rays = torch.tensor(
+        [[float("nan"), 0.0, 1.0]],
+        device=device,
+        dtype=torch.float32,
+    )
+    image_points, valid_flags = camera_rays_to_image_points(rays, proj, no_external)
+    assert not torch.isfinite(
+        image_points[0]
+    ).all(), (
+        f"NaN-bearing ray must yield a non-finite pixel; got {image_points.tolist()}"
+    )
+    assert (
+        bool(valid_flags[0]) is True
+    ), f"fisheye gate does not reject NaN rays; got valid_flags={valid_flags.tolist()}"
+
+
+def test_camera_rays_to_image_points_fisheye_no_external_scratch_gating(
+    fisheye_projection, no_external, sensor_device: torch.device
+):
+    """When no input requires_grad, scratch tensor must be empty; gradient mode
+    must allocate a scratch tensor sized for the per-row save layout."""
+    rays = _fisheye_synthetic_rays(sensor_device).detach()
+    op = torch.ops.gsplat_sensors.camera_rays_to_image_points_opencv_fisheye_no_external
+
+    _, _, scratch = op(fisheye_projection, no_external, rays)
+    assert scratch.numel() == 0
+
+    _, _, ray_grad_scratch = op(
+        fisheye_projection,
+        no_external,
+        rays.detach().clone().requires_grad_(True),
+    )
+    assert ray_grad_scratch.shape[0] == rays.shape[0]
+    assert ray_grad_scratch.numel() > 0
+
+
+def test_camera_rays_to_image_points_fisheye_no_external_basic_multiray(
+    fisheye_projection, no_external
+):
+    """Verify camera_rays_to_image_points returns finite in-frame points for the synthetic fisheye ray set."""
+    rays = _fisheye_synthetic_rays(fisheye_projection.principal_point.device)
+    image_points, valid_flags = camera_rays_to_image_points(
+        rays, fisheye_projection, no_external
+    )
+    assert image_points.shape == (3, 2)
+    assert valid_flags.dtype == torch.bool
+    assert valid_flags.all()
+
+
+def test_image_points_to_camera_rays_fisheye_scratch_gating(
+    fisheye_projection, no_external, sensor_device: torch.device
+):
+    """Inverse direction gates scratch allocation by requires_grad."""
+    pp = fisheye_projection.principal_point
+    image_points = pp.reshape(1, 2) + torch.tensor([[2.0, 1.0]], device=sensor_device)
+    op = torch.ops.gsplat_sensors.image_points_to_camera_rays_opencv_fisheye_no_external
+
+    _, scratch = op(fisheye_projection, no_external, image_points)
+    assert scratch.numel() == 0
+
+    _, grad_scratch = op(
+        fisheye_projection,
+        no_external,
+        image_points.detach().clone().requires_grad_(True),
+    )
+    assert grad_scratch.shape[0] == image_points.shape[0]
+    assert grad_scratch.numel() > 0
+
+
+@pytest.mark.gradcheck
+def test_image_points_to_camera_rays_fisheye_intrinsics_gradcheck(
+    fisheye_projection, no_external
+):
+    """Fisheye intrinsic gradcheck for image_points -> camera_rays over (principal_point, focal_length, forward_poly)."""
+    image_points = _fisheye_image_points_f64(fisheye_projection)
+    pp, focal, fw = _fisheye_intrinsic_grad_inputs(fisheye_projection)
+    ab32 = fisheye_projection.approx_backward_factor.detach().to(torch.float32)
+
+    def fn(principal_point, focal_length, forward_poly):
+        # The fisheye projection constructor admits fp32-only intrinsics, so
+        # cast the fp64 gradcheck leaves at the construction boundary; autograd
+        # flows the cotangent back through the cast.
+        projection = _fisheye_projection_from_grad_tensors(
+            fisheye_projection,
+            principal_point.to(torch.float32),
+            focal_length.to(torch.float32),
+            forward_poly.to(torch.float32),
+            ab32,
+        )
+        return image_points_to_camera_rays(
+            image_points,
+            projection,
+            no_external,
+            allow_device_transfer=True,
+        )
+
+    assert torch.autograd.gradcheck(
+        fn, (pp, focal, fw), **GRADCHECK_KWARGS_FTHETA_PROJECT
+    )
+
+
+def test_project_world_points_mean_pose_fisheye_scratch_shapes(
+    fisheye_projection, no_external, windshield_distortion, dynamic_pose
+):
+    """Verify fisheye mean-pose scratch is (N, 14) for both no-external and bivariate paths."""
+    device = fisheye_projection.principal_point.device
+    world_points = torch.tensor(
+        [[0.0, 0.0, 1.5], [0.1, -0.1, 2.0]], device=device
+    ).requires_grad_(True)
+    start_t, start_r, end_t, end_r = _ftheta_dynamic_pose_tensors(dynamic_pose, device)
+
+    (
+        *_,
+        scratch_no_external,
+    ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_opencv_fisheye_no_external(
+        fisheye_projection,
+        no_external,
+        world_points,
+        start_t,
+        start_r,
+        end_t,
+        end_r,
+        0,
+        10,
+    )
+    assert scratch_no_external.shape == (world_points.shape[0], 14)
+
+    (
+        *_,
+        scratch_bivariate,
+    ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_opencv_fisheye_bivariate_windshield(
+        fisheye_projection,
+        windshield_distortion,
+        world_points,
+        start_t,
+        start_r,
+        end_t,
+        end_r,
+        0,
+        10,
+    )
+    assert scratch_bivariate.shape == (world_points.shape[0], 14)
+
+
+@pytest.mark.gradcheck
+def test_fisheye_project_world_points_mean_pose_pose_gradcheck(
+    fisheye_projection, windshield_distortion, sensor_device
+):
+    """Gradcheck fisheye project_world_points_mean_pose over dynamic-pose tensors and distortion coefficients."""
+    world_points = torch.tensor(
+        [[0.0, 0.0, 1.0], [0.1, -0.2, 1.5]],
+        device=sensor_device,
+        dtype=torch.float64,
+    )
+    start_translation = torch.zeros(
+        3, device=sensor_device, dtype=torch.float64, requires_grad=True
+    )
+    start_rotation = torch.tensor(
+        [1.0, 0.0, 0.0, 0.0],
+        device=sensor_device,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    end_translation = torch.tensor(
+        [0.1, 0.0, 0.0],
+        device=sensor_device,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    end_rotation = torch.tensor(
+        [1.0, 0.0, 0.0, 0.0],
+        device=sensor_device,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    distortion_coeffs = _make_distortion_coeffs_f64(windshield_distortion)
+
+    def fn(start_t, start_r, end_t, end_r, coeffs):
+        from gsplat_sensors.kernels.common import DynamicPose, Pose
+
+        pose = DynamicPose(
+            Pose(translation=start_t, rotation=start_r),
+            Pose(translation=end_t, rotation=end_r),
+        )
+        distortion = _build_distortion(
+            windshield_distortion, ReferencePolynomial.FORWARD, coeffs
+        )
+        return project_world_points_mean_pose(
+            world_points,
+            fisheye_projection,
+            distortion,
+            pose,
+            (100, 80),
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(
+        fn,
+        (
+            start_translation,
+            start_rotation,
+            end_translation,
+            end_rotation,
+            distortion_coeffs,
+        ),
+        **GRADCHECK_KWARGS_FTHETA_DYNAMIC,
+    )
+
+
+def test_project_world_points_shutter_pose_fisheye_scratch_shapes(
+    fisheye_projection, no_external, windshield_distortion, dynamic_pose
+):
+    """Verify OpenCV-fisheye shutter-pose scratch is (N, 16) for no-external and bivariate paths."""
+    device = fisheye_projection.principal_point.device
+    world_points = torch.tensor(
+        [[0.1, 0.05, 1.6], [-0.1, 0.08, 2.1]], device=device
+    ).requires_grad_(True)
+    start_t, start_r, end_t, end_r = _ftheta_dynamic_pose_tensors(dynamic_pose, device)
+
+    (
+        *_,
+        scratch_no_external,
+    ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_opencv_fisheye_no_external(
+        fisheye_projection,
+        no_external,
+        world_points,
+        start_t,
+        start_r,
+        end_t,
+        end_r,
+        100,
+        80,
+        int(ShutterType.ROLLING_TOP_TO_BOTTOM),
+        0,
+        10,
+        1,
+        0.01,
+        0.01,
+        0.5,
+    )
+    assert scratch_no_external.shape == (world_points.shape[0], 16)
+
+    (
+        *_,
+        scratch_bivariate,
+    ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield(
+        fisheye_projection,
+        windshield_distortion,
+        world_points,
+        start_t,
+        start_r,
+        end_t,
+        end_r,
+        100,
+        80,
+        int(ShutterType.ROLLING_TOP_TO_BOTTOM),
+        0,
+        10,
+        1,
+        0.01,
+        0.01,
+        0.5,
+    )
+    assert scratch_bivariate.shape == (world_points.shape[0], 16)
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize(
+    "reference_polynomial",
+    [ReferencePolynomial.FORWARD, ReferencePolynomial.BACKWARD],
+)
+def test_fisheye_bivariate_image_points_to_world_rays_shutter_pose_image_points_grad_flows(
+    fisheye_projection, windshield_distortion, dynamic_pose, reference_polynomial
+):
+    """Verify rolling shutter keeps the direct image-point VJP for bivariate fisheye."""
+    distortion_coeffs = _make_distortion_coeffs_f64(windshield_distortion)
+    distortion = _build_distortion(
+        windshield_distortion, reference_polynomial, distortion_coeffs
+    )
+    image_points = _fisheye_image_points_f64(fisheye_projection)
+
+    world_rays = image_points_to_world_rays_shutter_pose(
+        image_points,
+        fisheye_projection,
+        distortion,
+        (100, 80),
+        ShutterType.ROLLING_TOP_TO_BOTTOM,
+        dynamic_pose,
+        start_timestamp_us=0,
+        end_timestamp_us=10,
+        allow_device_transfer=True,
+    )[0]
+    loss = world_rays[:, 3].sum() + 0.25 * world_rays[:, 4].sum()
+    loss.backward()
+
+    assert image_points.grad is not None
+    assert image_points.grad.abs().sum() > 0
+
+
+def test_fisheye_identity_windshield_matches_no_external(
+    fisheye_projection, no_external, windshield_distortion
+):
+    """Identity windshield should match no_external within atol=1e-4."""
+    rays = _fisheye_synthetic_rays(fisheye_projection.principal_point.device)
+    no_ext_pts, _ = camera_rays_to_image_points(rays, fisheye_projection, no_external)
+    bw_pts, _ = camera_rays_to_image_points(
+        rays, fisheye_projection, windshield_distortion
+    )
+    assert torch.allclose(no_ext_pts, bw_pts, atol=1e-4, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "reference, active_slice",
+    [
+        (ReferencePolynomial.FORWARD, slice(0, 21)),
+        (ReferencePolynomial.BACKWARD, slice(21, 42)),
+    ],
+)
+def test_fisheye_camera_rays_to_image_points_distortion_grad_slice(
+    fisheye_projection, windshield_distortion, reference, active_slice
+):
+    """Gradient flows into only the active coefficient half, not the inactive one."""
+    coeffs = (
+        windshield_distortion.distortion_coeffs.detach().clone().requires_grad_(True)
+    )
+    distortion = BivariateWindshieldDistortion(
+        coeffs,
+        int(reference),
+        windshield_distortion.h_poly_degree,
+        windshield_distortion.v_poly_degree,
+    )
+    rays = _fisheye_synthetic_rays(fisheye_projection.principal_point.device)
+    image_points, valid = camera_rays_to_image_points(
+        rays, fisheye_projection, distortion, allow_device_transfer=True
+    )
+    assert valid.all()
+    image_points.sum().backward()
+    grad = coeffs.grad
+    assert grad is not None
+    inactive = slice(21, 42) if active_slice.start == 0 else slice(0, 21)
+    assert grad[active_slice].abs().sum() > 0
+    assert torch.count_nonzero(grad[inactive]).item() == 0
+
+
+def test_fisheye_identity_bivariate_backward_smoke_all_public_ops(
+    fisheye_projection, windshield_distortion, dynamic_pose, static_pose
+):
+    """FORWARD reference: each public op accumulates gradient in its expected coefficient half."""
+    device = fisheye_projection.principal_point.device
+    coeffs = (
+        windshield_distortion.distortion_coeffs.detach().clone().requires_grad_(True)
+    )
+    distortion = BivariateWindshieldDistortion(
+        coeffs,
+        int(ReferencePolynomial.FORWARD),
+        windshield_distortion.h_poly_degree,
+        windshield_distortion.v_poly_degree,
+    )
+    rays = _fisheye_synthetic_rays(device)
+    image_points = fisheye_projection.principal_point.reshape(1, 2) + torch.tensor(
+        [[2.0, 1.5], [-1.5, 0.7]], device=device
+    )
+    world_points = torch.tensor([[0.17, 0.1, 1.8], [-0.12, 0.16, 2.3]], device=device)
+
+    checks = [
+        (
+            lambda: camera_rays_to_image_points(
+                rays, fisheye_projection, distortion, allow_device_transfer=True
+            )[0],
+            slice(0, 21),
+        ),
+        (
+            lambda: image_points_to_camera_rays(
+                image_points,
+                fisheye_projection,
+                distortion,
+                allow_device_transfer=True,
+            ),
+            slice(21, 42),
+        ),
+        (
+            lambda: project_world_points_mean_pose(
+                world_points,
+                fisheye_projection,
+                distortion,
+                dynamic_pose,
+                (100, 80),
+                allow_device_transfer=True,
+            )[0],
+            slice(0, 21),
+        ),
+        (
+            lambda: project_world_points_shutter_pose(
+                world_points,
+                fisheye_projection,
+                distortion,
+                (100, 80),
+                ShutterType.GLOBAL,
+                dynamic_pose,
+                max_iterations=1,
+                allow_device_transfer=True,
+            )[0],
+            slice(0, 21),
+        ),
+        (
+            lambda: image_points_to_world_rays_static_pose(
+                image_points,
+                fisheye_projection,
+                distortion,
+                static_pose,
+                allow_device_transfer=True,
+            )[0],
+            slice(21, 42),
+        ),
+        (
+            lambda: image_points_to_world_rays_shutter_pose(
+                image_points,
+                fisheye_projection,
+                distortion,
+                (100, 80),
+                ShutterType.GLOBAL,
+                dynamic_pose,
+                allow_device_transfer=True,
+            )[0],
+            slice(21, 42),
+        ),
+    ]
+    for op, active_slice in checks:
+        coeffs.grad = None
+        op().sum().backward()
+        assert coeffs.grad is not None
+        assert coeffs.grad[active_slice].abs().sum() > 0
+
+
+def test_fisheye_identity_bivariate_backward_smoke_all_public_ops_backward_reference(
+    fisheye_projection, windshield_distortion, dynamic_pose, static_pose
+):
+    """BACKWARD reference: the active gradient half flips, with the other half left at zero."""
+    device = fisheye_projection.principal_point.device
+    coeffs = (
+        windshield_distortion.distortion_coeffs.detach().clone().requires_grad_(True)
+    )
+    distortion = BivariateWindshieldDistortion(
+        coeffs,
+        int(ReferencePolynomial.BACKWARD),
+        windshield_distortion.h_poly_degree,
+        windshield_distortion.v_poly_degree,
+    )
+    rays = _fisheye_synthetic_rays(device)
+    image_points = fisheye_projection.principal_point.reshape(1, 2) + torch.tensor(
+        [[2.0, 1.5], [-1.5, 0.7]], device=device
+    )
+    world_points = torch.tensor([[0.17, 0.1, 1.8], [-0.12, 0.16, 2.3]], device=device)
+
+    forward_slice = slice(21, 42)
+    inverse_slice = slice(0, 21)
+    checks = [
+        (
+            lambda: camera_rays_to_image_points(
+                rays, fisheye_projection, distortion, allow_device_transfer=True
+            )[0],
+            forward_slice,
+        ),
+        (
+            lambda: image_points_to_camera_rays(
+                image_points,
+                fisheye_projection,
+                distortion,
+                allow_device_transfer=True,
+            ),
+            inverse_slice,
+        ),
+        (
+            lambda: project_world_points_mean_pose(
+                world_points,
+                fisheye_projection,
+                distortion,
+                dynamic_pose,
+                (100, 80),
+                allow_device_transfer=True,
+            )[0],
+            forward_slice,
+        ),
+        (
+            lambda: project_world_points_shutter_pose(
+                world_points,
+                fisheye_projection,
+                distortion,
+                (100, 80),
+                ShutterType.GLOBAL,
+                dynamic_pose,
+                max_iterations=1,
+                allow_device_transfer=True,
+            )[0],
+            forward_slice,
+        ),
+        (
+            lambda: image_points_to_world_rays_static_pose(
+                image_points,
+                fisheye_projection,
+                distortion,
+                static_pose,
+                allow_device_transfer=True,
+            )[0],
+            inverse_slice,
+        ),
+        (
+            lambda: image_points_to_world_rays_shutter_pose(
+                image_points,
+                fisheye_projection,
+                distortion,
+                (100, 80),
+                ShutterType.GLOBAL,
+                dynamic_pose,
+                allow_device_transfer=True,
+            )[0],
+            inverse_slice,
+        ),
+    ]
+    for op, active_slice in checks:
+        coeffs.grad = None
+        op().sum().backward()
+        assert coeffs.grad is not None
+        assert coeffs.grad[active_slice].abs().sum() > 0
+        inactive = slice(0, 21) if active_slice.start == 21 else slice(21, 42)
+        assert torch.count_nonzero(coeffs.grad[inactive]).item() == 0
+
+
+def test_fisheye_bivariate_distortion_grad_accumulates_uniformly(
+    fisheye_projection, windshield_distortion, sensor_device
+):
+    """Chunked backward passes accumulate the same coefficient gradient as one batched pass."""
+    rays = torch.randn(64, 3, device=sensor_device) + torch.tensor(
+        [0.0, 0.0, 2.0], device=sensor_device
+    )
+
+    coeffs_full = (
+        windshield_distortion.distortion_coeffs.detach().clone().requires_grad_(True)
+    )
+    distortion_full = BivariateWindshieldDistortion(
+        coeffs_full,
+        int(windshield_distortion.reference_polynomial),
+        windshield_distortion.h_poly_degree,
+        windshield_distortion.v_poly_degree,
+    )
+    camera_rays_to_image_points(
+        rays, fisheye_projection, distortion_full, allow_device_transfer=True
+    )[0].sum().backward()
+
+    coeffs_split = (
+        windshield_distortion.distortion_coeffs.detach().clone().requires_grad_(True)
+    )
+    distortion_split = BivariateWindshieldDistortion(
+        coeffs_split,
+        int(windshield_distortion.reference_polynomial),
+        windshield_distortion.h_poly_degree,
+        windshield_distortion.v_poly_degree,
+    )
+    for chunk in rays.split(16):
+        camera_rays_to_image_points(
+            chunk, fisheye_projection, distortion_split, allow_device_transfer=True
+        )[0].sum().backward()
+
+    assert coeffs_full.grad is not None
+    assert coeffs_split.grad is not None
+    assert torch.allclose(coeffs_full.grad, coeffs_split.grad, atol=1e-4)
+
+
+def test_fisheye_projection_approx_backward_factor_no_grad(
+    fisheye_projection, no_external
+):
+    """The forward fisheye projection never feeds a gradient to approx_backward_factor."""
+    device = fisheye_projection.principal_point.device
+    pp = fisheye_projection.principal_point.detach().clone().requires_grad_(True)
+    focal = fisheye_projection.focal_length.detach().clone().requires_grad_(True)
+    fw = fisheye_projection.forward_poly.detach().clone().requires_grad_(True)
+    ab = fisheye_projection.approx_backward_factor.detach().clone().requires_grad_(True)
+    projection = _fisheye_projection_from_grad_tensors(
+        fisheye_projection, pp, focal, fw, ab
+    )
+    rays = _fisheye_synthetic_rays(device)
+    camera_rays_to_image_points(
+        rays, projection, no_external, allow_device_transfer=True
+    )[0].sum().backward()
+
+    assert ab.grad is None or ab.grad.abs().sum() == 0
+    assert fw.grad is not None and fw.grad.abs().sum() > 0
+    assert focal.grad is not None and focal.grad.abs().sum() > 0
+
+
+def test_fisheye_projection_bindings_readonly(fisheye_projection):
+    """OpenCVFisheyeProjection tensor and resolution bindings are read-only (rebinding raises)."""
+    for attr in (
+        "principal_point",
+        "focal_length",
+        "forward_poly",
+        "approx_backward_factor",
+    ):
+        with pytest.raises((AttributeError, RuntimeError)):
+            setattr(
+                fisheye_projection,
+                attr,
+                torch.zeros(1, device=fisheye_projection.principal_point.device),
+            )
+    with pytest.raises((AttributeError, RuntimeError, TypeError)):
+        fisheye_projection.resolution = (1, 1)

@@ -947,6 +947,9 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("rasterize_to_pixels_3dgs_fwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor isect_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor)");
     m.def("rasterize_to_pixels_3dgs_bwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, bool absgrad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
     m.def("rasterize_to_indices_3dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor conics, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor)");
+    m.def("rasterize_num_contributing_gaussians(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size) -> (Tensor, Tensor)");
+    m.def("rasterize_contributing_gaussian_ids(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size, Tensor num_contributing_gaussians) -> (Tensor, Tensor)");
+    m.def("rasterize_top_contributing_gaussian_ids(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size, int num_depth_samples) -> (Tensor, Tensor)");
 #endif
 
 #if GSPLAT_BUILD_2DGS
@@ -1012,6 +1015,9 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
     m.impl("rasterize_to_pixels_3dgs_fwd", &gsplat::rasterize_to_pixels_3dgs_fwd);
     m.impl("rasterize_to_pixels_3dgs_bwd", &gsplat::rasterize_to_pixels_3dgs_bwd);
     m.impl("rasterize_to_indices_3dgs", &gsplat::rasterize_to_indices_3dgs);
+    m.impl("rasterize_num_contributing_gaussians", &gsplat::rasterize_num_contributing_gaussians);
+    m.impl("rasterize_contributing_gaussian_ids", &gsplat::rasterize_contributing_gaussian_ids);
+    m.impl("rasterize_top_contributing_gaussian_ids", &gsplat::rasterize_top_contributing_gaussian_ids);
 #endif
 
 #if GSPLAT_BUILD_2DGS

@@ -28,6 +28,7 @@ from .cameras.types import (
     BivariateWindshieldDistortion,
     FThetaProjection,
     NoExternalDistortion,
+    OpenCVFisheyeProjection,
     OpenCVPinholeProjection,
     script_class_name,
 )
@@ -51,6 +52,14 @@ _CAMERA_RAYS_TO_IMAGE_POINTS_BACKENDS: dict[DispatchKey, Callable] = {
         FThetaProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.camera_rays_to_image_points,
+    (
+        OpenCVFisheyeProjection,
+        NoExternalDistortion,
+    ): camera_ops.camera_rays_to_image_points,
+    (
+        OpenCVFisheyeProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.camera_rays_to_image_points,
 }
 _IMAGE_POINTS_TO_CAMERA_RAYS_BACKENDS: dict[DispatchKey, Callable] = {
     (
@@ -67,6 +76,14 @@ _IMAGE_POINTS_TO_CAMERA_RAYS_BACKENDS: dict[DispatchKey, Callable] = {
     ): camera_ops.image_points_to_camera_rays,
     (
         FThetaProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.image_points_to_camera_rays,
+    (
+        OpenCVFisheyeProjection,
+        NoExternalDistortion,
+    ): camera_ops.image_points_to_camera_rays,
+    (
+        OpenCVFisheyeProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.image_points_to_camera_rays,
 }
@@ -87,6 +104,14 @@ _PROJECT_WORLD_POINTS_MEAN_POSE_BACKENDS: dict[DispatchKey, Callable] = {
         FThetaProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.project_world_points_mean_pose,
+    (
+        OpenCVFisheyeProjection,
+        NoExternalDistortion,
+    ): camera_ops.project_world_points_mean_pose,
+    (
+        OpenCVFisheyeProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.project_world_points_mean_pose,
 }
 _PROJECT_WORLD_POINTS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
     (
@@ -103,6 +128,14 @@ _PROJECT_WORLD_POINTS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
     ): camera_ops.project_world_points_shutter_pose,
     (
         FThetaProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.project_world_points_shutter_pose,
+    (
+        OpenCVFisheyeProjection,
+        NoExternalDistortion,
+    ): camera_ops.project_world_points_shutter_pose,
+    (
+        OpenCVFisheyeProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.project_world_points_shutter_pose,
 }
@@ -123,6 +156,14 @@ _IMAGE_POINTS_TO_WORLD_RAYS_STATIC_POSE_BACKENDS: dict[DispatchKey, Callable] = 
         FThetaProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.image_points_to_world_rays_static_pose,
+    (
+        OpenCVFisheyeProjection,
+        NoExternalDistortion,
+    ): camera_ops.image_points_to_world_rays_static_pose,
+    (
+        OpenCVFisheyeProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.image_points_to_world_rays_static_pose,
 }
 _IMAGE_POINTS_TO_WORLD_RAYS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
     (
@@ -139,6 +180,14 @@ _IMAGE_POINTS_TO_WORLD_RAYS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] =
     ): camera_ops.image_points_to_world_rays_shutter_pose,
     (
         FThetaProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.image_points_to_world_rays_shutter_pose,
+    (
+        OpenCVFisheyeProjection,
+        NoExternalDistortion,
+    ): camera_ops.image_points_to_world_rays_shutter_pose,
+    (
+        OpenCVFisheyeProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.image_points_to_world_rays_shutter_pose,
 }
@@ -159,6 +208,14 @@ _PIXEL_GRID_TO_WORLD_RAYS_SHUTTER_POSE_BACKENDS: dict[DispatchKey, Callable] = {
         FThetaProjection,
         BivariateWindshieldDistortion,
     ): camera_ops.pixel_grid_to_world_rays_shutter_pose,
+    (
+        OpenCVFisheyeProjection,
+        NoExternalDistortion,
+    ): camera_ops.pixel_grid_to_world_rays_shutter_pose,
+    (
+        OpenCVFisheyeProjection,
+        BivariateWindshieldDistortion,
+    ): camera_ops.pixel_grid_to_world_rays_shutter_pose,
 }
 
 _DISPATCH_TABLES = {
@@ -174,6 +231,7 @@ _DISPATCH_TABLES = {
 _REGISTERED_CLASS_NAMES = {
     OpenCVPinholeProjection: "OpenCVPinholeProjection",
     FThetaProjection: "FThetaProjection",
+    OpenCVFisheyeProjection: "OpenCVFisheyeProjection",
     NoExternalDistortion: "NoExternalDistortion",
     BivariateWindshieldDistortion: "BivariateWindshieldDistortion",
 }

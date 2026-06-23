@@ -21,6 +21,15 @@ extraction).
 """
 
 from .pose import DynamicPose, Pose, Trajectory
+from .pose_interp import (
+    unpack_dynamic_pose_components,
+)
+from .tensor_ops import (
+    raise_or_target_device,
+    timestamp_bounds,
+    to_dev,
+    zero_like,
+)
 from .utils import (
     poses_to_matrix,
     valid_flags_to_indices,
@@ -33,7 +42,12 @@ __all__ = [
     "Pose",
     "Trajectory",
     "poses_to_matrix",
+    "raise_or_target_device",
+    "timestamp_bounds",
+    "to_dev",
+    "unpack_dynamic_pose_components",
     "valid_flags_to_indices",
     "wxyz_to_xyzw",
     "xyzw_to_wxyz",
+    "zero_like",
 ]
