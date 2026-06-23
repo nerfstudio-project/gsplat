@@ -38,21 +38,20 @@ using SensorModelTypes = TypeListCat<CameraModelTypes, LidarModelTypes>;
 using SensorModelKernelParamsVariant = gsplat::TypeListToKernelParamsVariant<SensorModelTypes>;
 
 // Map a KernelParameters type back to its sensor model type.
-template <typename KP>
+template<typename KP>
 using SensorModelFromKernelParams = gsplat::FindByKernelParams<KP, SensorModelTypes>;
 
 // Mapping template compatible with dispatch::MappedTypeParam.
 // Maps a KernelParameters alternative to its full sensor model type.
-template <typename KP>
-struct SensorModelFromKernelParamsMap {
+template<typename KP>
+struct SensorModelFromKernelParamsMap
+{
     using type = SensorModelFromKernelParams<KP>;
 };
 
 // Lift a CameraModelKernelParamsVariant into the wider SensorModelKernelParamsVariant.
-inline auto to_sensor_model_kernel_params(
-    const CameraModelKernelParamsVariant& camera_params
-) -> SensorModelKernelParamsVariant {
-    return std::visit([](const auto& params) -> SensorModelKernelParamsVariant {
-        return params;
-    }, camera_params);
+inline auto to_sensor_model_kernel_params(const CameraModelKernelParamsVariant &camera_params)
+    -> SensorModelKernelParamsVariant
+{
+    return std::visit([](const auto &params) -> SensorModelKernelParamsVariant { return params; }, camera_params);
 }

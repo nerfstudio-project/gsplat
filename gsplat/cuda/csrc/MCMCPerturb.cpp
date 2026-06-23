@@ -7,19 +7,19 @@
 
 #if GSPLAT_BUILD_3DGS
 
-#include <ATen/TensorUtils.h>
-#include <ATen/core/Tensor.h>
-#include <c10/cuda/CUDAGuard.h>
+#    include <ATen/TensorUtils.h>
+#    include <ATen/core/Tensor.h>
+#    include <c10/cuda/CUDAGuard.h>
 
-#include <ATen/Functions.h>
-#include <ATen/NativeFunctions.h>
-#include <torch/library.h>
+#    include <ATen/Functions.h>
+#    include <ATen/NativeFunctions.h>
+#    include <torch/library.h>
 
-#include "MCMCPerturb.h" // where the launch function is declared
-#include "Common.h"      // where all the macros are defined
+#    include "MCMCPerturb.h" // where the launch function is declared
+#    include "Common.h"      // where all the macros are defined
 
-namespace gsplat {
-
+namespace gsplat
+{
 void mcmc_perturb_positions(
     at::Tensor positions,        // [N, 3] in-place, float32
     const at::Tensor &quats,     // [N, 4] wxyz pre-activation
@@ -27,7 +27,8 @@ void mcmc_perturb_positions(
     const at::Tensor &opacities, // [N] logit
     const at::Tensor &noise,     // [N, 3] standard normal
     double scaler
-) {
+)
+{
     DEVICE_GUARD(positions);
     CHECK_INPUT(positions);
     CHECK_INPUT(quats);
@@ -35,10 +36,7 @@ void mcmc_perturb_positions(
     CHECK_INPUT(opacities);
     CHECK_INPUT(noise);
 
-    TORCH_CHECK(
-        positions.scalar_type() == at::kFloat,
-        "mcmc_perturb_positions: positions must be float32"
-    );
+    TORCH_CHECK(positions.scalar_type() == at::kFloat, "mcmc_perturb_positions: positions must be float32");
     TORCH_CHECK(quats.scalar_type() == at::kFloat, "mcmc_perturb_positions: quats must be float32");
     TORCH_CHECK(scales.scalar_type() == at::kFloat, "mcmc_perturb_positions: scales must be float32");
     TORCH_CHECK(opacities.scalar_type() == at::kFloat, "mcmc_perturb_positions: opacities must be float32");
@@ -51,20 +49,13 @@ void mcmc_perturb_positions(
     TORCH_CHECK(opacities.dim() == 1 && opacities.size(0) == N, "mcmc_perturb_positions: opacities must be [N]");
     TORCH_CHECK(noise.sizes() == at::IntArrayRef({N, 3}), "mcmc_perturb_positions: noise must be [N, 3]");
 
-    launch_mcmc_perturb_positions_kernel(
-        positions,
-        quats,
-        scales,
-        opacities,
-        noise,
-        static_cast<float>(scaler)
-    );
+    launch_mcmc_perturb_positions_kernel(positions, quats, scales, opacities, noise, static_cast<float>(scaler));
 }
 
-void register_mcmc_perturb_cuda_impl(torch::Library &m) {
+void register_mcmc_perturb_cuda_impl(torch::Library &m)
+{
     m.impl("mcmc_perturb_positions", &mcmc_perturb_positions);
 }
-
 } // namespace gsplat
 
 #endif

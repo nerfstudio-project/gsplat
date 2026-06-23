@@ -34,8 +34,8 @@
 
 #include <tuple>
 
-namespace gsplat_sensors {
-
+namespace gsplat_sensors
+{
 // TorchScript custom class carrying the structured spinning-LiDAR intrinsics
 // as per-component float32 tensors plus scalar FOV / direction fields.
 // Shape contract:
@@ -43,7 +43,8 @@ namespace gsplat_sensors {
 //   column_azimuths_rad     (n_columns,) — per-column azimuth in radians
 //   row_azimuth_offsets_rad (n_rows,)    — per-row azimuth offset, OR empty (0,)
 //                                          when has_row_offsets is false
-struct RowOffsetStructuredSpinningLidarProjection : public torch::CustomClassHolder {
+struct RowOffsetStructuredSpinningLidarProjection : public torch::CustomClassHolder
+{
     at::Tensor row_elevations_rad;
     at::Tensor column_azimuths_rad;
     at::Tensor row_azimuth_offsets_rad;
@@ -63,50 +64,51 @@ struct RowOffsetStructuredSpinningLidarProjection : public torch::CustomClassHol
         double fov_horiz_start_rad,
         double fov_horiz_span_rad,
         int64_t spinning_direction,
-        bool has_row_offsets);
+        bool has_row_offsets
+    );
 
     RowOffsetStructuredSpinningLidarProjection_KernelParameters to_kernel_params() const;
 };
 
 // Validates projection shape/dtype/scalar fields (CPU-constructible); throws
 // TORCH_CHECK on failure.
-void check_lidar_projection(const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection>& projection);
+void check_lidar_projection(const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection> &projection);
 
 // Launch-time guard: asserts the projection's angle tables are CUDA and share
 // `device`; throws TORCH_CHECK on failure.
 void check_lidar_projection_for_device(
-    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection>& projection,
-    const at::Device& device);
+    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection> &projection, const at::Device &device
+);
 
 // ===========================================================================
 // LIGHT-op wrappers
 // ===========================================================================
 
-at::Tensor sensor_rays_to_sensor_angles(const at::Tensor& sensor_rays);
-at::Tensor sensor_rays_to_sensor_angles_backward(
-    const at::Tensor& sensor_rays, const at::Tensor& grad_sensor_angles);
+at::Tensor sensor_rays_to_sensor_angles(const at::Tensor &sensor_rays);
+at::Tensor sensor_rays_to_sensor_angles_backward(const at::Tensor &sensor_rays, const at::Tensor &grad_sensor_angles);
 
-at::Tensor sensor_angles_to_sensor_rays(const at::Tensor& sensor_angles);
-at::Tensor sensor_angles_to_sensor_rays_backward(
-    const at::Tensor& sensor_angles, const at::Tensor& grad_sensor_rays);
+at::Tensor sensor_angles_to_sensor_rays(const at::Tensor &sensor_angles);
+at::Tensor sensor_angles_to_sensor_rays_backward(const at::Tensor &sensor_angles, const at::Tensor &grad_sensor_rays);
 
 std::tuple<at::Tensor, at::Tensor> elements_to_sensor_angles(
-    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection>& projection,
-    const at::Tensor& elements,
-    const at::Tensor& row_elevations_rad,
-    const at::Tensor& column_azimuths_rad,
-    const at::Tensor& row_azimuth_offsets_rad);
+    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection> &projection,
+    const at::Tensor &elements,
+    const at::Tensor &row_elevations_rad,
+    const at::Tensor &column_azimuths_rad,
+    const at::Tensor &row_azimuth_offsets_rad
+);
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> elements_to_sensor_angles_backward(
-    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection>& projection,
-    const at::Tensor& elements,
-    const at::Tensor& row_elevations_rad,
-    const at::Tensor& column_azimuths_rad,
-    const at::Tensor& row_azimuth_offsets_rad,
-    const at::Tensor& grad_sensor_angles,
+    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection> &projection,
+    const at::Tensor &elements,
+    const at::Tensor &row_elevations_rad,
+    const at::Tensor &column_azimuths_rad,
+    const at::Tensor &row_azimuth_offsets_rad,
+    const at::Tensor &grad_sensor_angles,
     bool need_row_elevations_grad,
     bool need_column_azimuths_grad,
-    bool need_row_offsets_grad);
+    bool need_row_offsets_grad
+);
 
 // ===========================================================================
 // HEAVY-op wrappers: generate_spinning_lidar_rays
@@ -119,33 +121,34 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> elements_to_sensor_angles_backwar
 // the full (n_rows x n_columns) grid is iterated.
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> generate_spinning_lidar_rays(
-    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection>& projection,
-    const at::Tensor& elements,
-    const at::Tensor& row_elevations_rad,
-    const at::Tensor& column_azimuths_rad,
-    const at::Tensor& row_azimuth_offsets_rad,
-    const at::Tensor& control_translations,
-    const at::Tensor& control_rotations,
+    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection> &projection,
+    const at::Tensor &elements,
+    const at::Tensor &row_elevations_rad,
+    const at::Tensor &column_azimuths_rad,
+    const at::Tensor &row_azimuth_offsets_rad,
+    const at::Tensor &control_translations,
+    const at::Tensor &control_rotations,
     bool does_generate_elements,
     int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    int64_t end_timestamp_us
+);
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-generate_spinning_lidar_rays_backward(
-    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection>& projection,
-    const at::Tensor& elements,
-    const at::Tensor& row_elevations_rad,
-    const at::Tensor& column_azimuths_rad,
-    const at::Tensor& row_azimuth_offsets_rad,
-    const at::Tensor& control_translations,
-    const at::Tensor& control_rotations,
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> generate_spinning_lidar_rays_backward(
+    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection> &projection,
+    const at::Tensor &elements,
+    const at::Tensor &row_elevations_rad,
+    const at::Tensor &column_azimuths_rad,
+    const at::Tensor &row_azimuth_offsets_rad,
+    const at::Tensor &control_translations,
+    const at::Tensor &control_rotations,
     bool does_generate_elements,
-    const at::Tensor& grad_world_rays,
+    const at::Tensor &grad_world_rays,
     bool need_row_elevations_grad,
     bool need_column_azimuths_grad,
     bool need_row_offsets_grad,
     bool need_control_translations_grad,
-    bool need_control_rotations_grad);
+    bool need_control_rotations_grad
+);
 
 // ===========================================================================
 // HEAVY-op wrappers: inverse_project_spinning_lidar
@@ -157,31 +160,31 @@ generate_spinning_lidar_rays_backward(
 // on the projection POD.  The forward returns the converged-alpha scratch as the
 // 6th tuple element so autograd can carry it into the IFT backward.
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-inverse_project_spinning_lidar(
-    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection>& projection,
-    const at::Tensor& world_points,
-    const at::Tensor& row_elevations_rad,
-    const at::Tensor& column_azimuths_rad,
-    const at::Tensor& row_azimuth_offsets_rad,
-    const at::Tensor& control_translations,
-    const at::Tensor& control_rotations,
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> inverse_project_spinning_lidar(
+    const c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection> &projection,
+    const at::Tensor &world_points,
+    const at::Tensor &row_elevations_rad,
+    const at::Tensor &column_azimuths_rad,
+    const at::Tensor &row_azimuth_offsets_rad,
+    const at::Tensor &control_translations,
+    const at::Tensor &control_rotations,
     int64_t max_iterations,
     double stop_mean_relative_time_error,
     double stop_delta_mean_relative_time_error,
     double initial_relative_time,
     int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    int64_t end_timestamp_us
+);
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> inverse_project_spinning_lidar_backward(
-    const at::Tensor& world_points,
-    const at::Tensor& control_translations,
-    const at::Tensor& control_rotations,
-    const at::Tensor& valid_flags,
-    const at::Tensor& scratch,
-    const at::Tensor& grad_sensor_angles,
+    const at::Tensor &world_points,
+    const at::Tensor &control_translations,
+    const at::Tensor &control_rotations,
+    const at::Tensor &valid_flags,
+    const at::Tensor &scratch,
+    const at::Tensor &grad_sensor_angles,
     bool need_world_points_grad,
     bool need_control_translations_grad,
-    bool need_control_rotations_grad);
-
+    bool need_control_rotations_grad
+);
 } // namespace gsplat_sensors

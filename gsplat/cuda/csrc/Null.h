@@ -21,12 +21,13 @@
 
 // Forward declaration: Postpone `#include <ATen/core/Tensor.h>` to .cu file,
 // in case .cu file does not need it.
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-
+namespace gsplat
+{
 at::Tensor null(const at::Tensor input);
 
 // This .h file only declares function for launching CUDA kernels. It should be
@@ -37,5 +38,4 @@ at::Tensor null(const at::Tensor input);
 // The .cpp file will define the complete operator, in which this launch
 // function will be called.
 void launch_null_kernel(const at::Tensor input, at::Tensor output);
-
 } // namespace gsplat

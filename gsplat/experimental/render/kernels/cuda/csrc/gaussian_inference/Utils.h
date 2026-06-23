@@ -31,18 +31,18 @@ __device__ __forceinline__ void AssignAs(U &u, const V &v)
 template<uint M, bool MASK_OUT_OUTPUT = true>
 __device__ __forceinline__ __half2 RoundToNearest(const __half2 &v)
 {
-    constexpr uint MANTISSA_MASK = 0x03ff03ff;
+    constexpr uint MANTISSA_MASK = 0x03FF03FF;
     constexpr uint TRUNC_MASK    = ~(((1u << (10 - M)) - 1) * 0x10001u);
     // get rounding offset scale s*2^e (input float with mantissa zeroed out)
-    const uint vn    = reinterpret_cast<const uint &>(v) & ~MANTISSA_MASK;
-    const __half2 vb = reinterpret_cast<const __half2 &>(vn);
+    const uint vn                = reinterpret_cast<const uint &>(v) & ~MANTISSA_MASK;
+    const __half2 vb             = reinterpret_cast<const __half2 &>(vn);
     // get rounding offset
-    const __half2 vs = __float2half2_rn((1 << (10 - M)) / 2048.0f);
+    const __half2 vs             = __float2half2_rn((1 << (10 - M)) / 2048.0f);
     // add to float a scaled rounding offset
-    const __half2 v_r = __hfma2(vb, vs, v);
+    const __half2 v_r            = __hfma2(vb, vs, v);
     // return masked __half2
-    const uint vi_r =
-        MASK_OUT_OUTPUT ? (reinterpret_cast<const uint &>(v_r) & TRUNC_MASK) : reinterpret_cast<const uint &>(v_r);
+    const uint vi_r
+        = MASK_OUT_OUTPUT ? (reinterpret_cast<const uint &>(v_r) & TRUNC_MASK) : reinterpret_cast<const uint &>(v_r);
     return reinterpret_cast<const __half2 &>(vi_r);
 }
 
@@ -53,7 +53,8 @@ __device__ __forceinline__ T __select(const uint32_t &cond, const T &a, const T 
     int rval;
     asm volatile("lop3.b32 %0, %1, %2, %3, 202;"
                  : "=r"(rval)
-                 : "r"(reinterpret_cast<const uint32_t &>(cond)), "r"(reinterpret_cast<const uint32_t &>(a)),
+                 : "r"(reinterpret_cast<const uint32_t &>(cond)),
+                   "r"(reinterpret_cast<const uint32_t &>(a)),
                    "r"(reinterpret_cast<const uint32_t &>(b)));
     return reinterpret_cast<const T &>(rval);
 }
@@ -66,7 +67,8 @@ __device__ __forceinline__ __half2 __h2_copy_sign(const __half2 &v, const __half
 __device__ __forceinline__ __half __h_copy_sign(const __half &v, const __half &sign)
 {
     return __low2half(
-        __h2_copy_sign(__halves2half2(v, __float2half_rn(0.0f)), __halves2half2(sign, __float2half_rn(0.0f))));
+        __h2_copy_sign(__halves2half2(v, __float2half_rn(0.0f)), __halves2half2(sign, __float2half_rn(0.0f)))
+    );
 }
 
 // Approximate exp2 on packed half2 via PTX ex2.approx.f16x2.
@@ -108,6 +110,7 @@ __forceinline__ __device__ void __uint8x4_to_half4(half *dst, uint32_t src)
         uint32_t i;
         half2 f;
     } dp[2];
+
     dp[0].i = __prmt_idx(src, FP16_BASE, 0x5150);
     dp[1].i = __prmt_idx(src, FP16_BASE, 0x5352);
     dp[0].f = __hsub2(dp[0].f, __float2half2_rn(FP16_BASE_FP));
@@ -128,6 +131,7 @@ __forceinline__ __device__ __half2 __uint8x2_to_half2(uint32_t src)
         uint32_t i;
         half2 f;
     } dp;
+
     dp.i = __prmt_idx(src, FP16_BASE, 0x5150);
     dp.f = __hsub2(dp.f, __float2half2_rn(FP16_BASE_FP));
     return dp.f;
@@ -145,7 +149,8 @@ __forceinline__ __device__ uint __cvt_pack_sat_u8_f32(float a0, float a1, float 
         "cvt.rni.s32.f32 i1, %4;\n"
         "cvt.pack.sat.u8.s32.b32 %0, i0, i1, tmp;}\n"
         : "=r"(rval)
-        : "f"(a3), "f"(a2), "f"(a1), "f"(a0));
+        : "f"(a3), "f"(a2), "f"(a1), "f"(a0)
+    );
     return rval;
 }
 

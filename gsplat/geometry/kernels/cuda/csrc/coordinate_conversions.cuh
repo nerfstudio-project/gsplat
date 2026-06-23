@@ -29,21 +29,25 @@
 // sincos_t — one sincos call per angle (float -> sincosf, double -> sincos),
 // so the paired sin/cos of each angle issue a single special-function op
 // instead of two separate transcendentals.
-template <typename T>
-__device__ __forceinline__ void sincos_t(T angle, T& s, T& c);
-template <>
-__device__ __forceinline__ void sincos_t<float>(float angle, float& s, float& c) {
+template<typename T>
+__device__ __forceinline__ void sincos_t(T angle, T &s, T &c);
+
+template<>
+__device__ __forceinline__ void sincos_t<float>(float angle, float &s, float &c)
+{
     sincosf(angle, &s, &c);
 }
-template <>
-__device__ __forceinline__ void sincos_t<double>(double angle, double& s, double& c) {
+
+template<>
+__device__ __forceinline__ void sincos_t<double>(double angle, double &s, double &c)
+{
     sincos(angle, &s, &c);
 }
 
 // spherical_to_cartesian — angles (elevation, azimuth) -> unit ray.
-template <typename T>
-__device__ __forceinline__ void spherical_to_cartesian(
-    T elevation, T azimuth, T& out_x, T& out_y, T& out_z) {
+template<typename T>
+__device__ __forceinline__ void spherical_to_cartesian(T elevation, T azimuth, T &out_x, T &out_y, T &out_z)
+{
     T sin_e, cos_e, sin_a, cos_a;
     sincos_t<T>(elevation, sin_e, cos_e);
     sincos_t<T>(azimuth, sin_a, cos_a);
@@ -53,10 +57,10 @@ __device__ __forceinline__ void spherical_to_cartesian(
 }
 
 // cartesian_to_spherical — ray (x, y, z) -> (elevation, azimuth).
-template <typename T>
-__device__ __forceinline__ void cartesian_to_spherical(
-    T x, T y, T z, T& out_elevation, T& out_azimuth) {
-    T xy_norm = sqrt(x * x + y * y);
+template<typename T>
+__device__ __forceinline__ void cartesian_to_spherical(T x, T y, T z, T &out_elevation, T &out_azimuth)
+{
+    T xy_norm     = sqrt(x * x + y * y);
     out_elevation = atan2(z, xy_norm);
-    out_azimuth = atan2(y, x);
+    out_azimuth   = atan2(y, x);
 }
