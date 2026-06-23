@@ -310,11 +310,33 @@ def test_elements_table_grad_accumulates_on_shared_index(lidar_projection_from_j
     angles.backward(torch.ones_like(angles))
     # elevation output is column 0 -> d(elevation)/d(row_elevations[0]) = 1 per
     # element reading row 0; n_share elements all read row 0.
-    assert re.grad[0].item() == pytest.approx(float(n_share))
-    assert re.grad[1:].abs().sum().item() == pytest.approx(0.0)
-    assert torch.allclose(
-        ca.grad[:n_share], torch.ones(n_share, device=ca.device), atol=1e-6
-    )
+    expected_re_grad = torch.zeros_like(re)
+    expected_re_grad[0] = float(n_share)
+    expected_ca_grad = torch.zeros_like(ca)
+    expected_ca_grad[:n_share] = 1.0
+    with expect_group("elements_to_sensor_angles table gradients"):
+        expect_grad_reference_close(
+            re.grad,
+            expected_re_grad,
+            rtol=0.0,
+            atol=0.0,
+            max_rel_l2=0.0,
+            max_rel_l1=0.0,
+            min_cosine=1.0 - 1e-15,
+            max_signed_bias=0.0,
+            msg="row_elevations shared-index gradient",
+        )
+        expect_grad_reference_close(
+            ca.grad,
+            expected_ca_grad,
+            rtol=0.0,
+            atol=1e-6,
+            max_rel_l2=1e-6,
+            max_rel_l1=1e-6,
+            min_cosine=1.0 - 1e-12,
+            max_signed_bias=1e-6,
+            msg="column_azimuths gathered gradient",
+        )
 
 
 def test_projection_bindings_readonly(lidar_projection_from_json):
