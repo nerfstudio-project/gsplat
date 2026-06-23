@@ -29,10 +29,122 @@
 #include "Common.h"    // where all the macros are defined
 #include "Config.h"
 #include "Intersect.h" // where the launch function is declared
+#include "TorchUtils.h" // to_torch_op, TorchArgDef
 
 namespace gsplat {
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
+template <>
+struct TorchArgDef<TileIntersectResult> {
+    static auto to(const TileIntersectResult &r) {
+        return to_torch_args(r.tiles_per_gauss, r.isect_ids, r.flatten_ids);
+    }
+};
+
+namespace {
+
+// Validates intersect_tile inputs. Each checked assumption is a precondition
+// of the tile-intersection kernel.
+void check_intersect_tile_inputs(
+    const at::Tensor &means2d,
+    const at::Tensor &radii,
+    const at::Tensor &depths,
+    const at::optional<at::Tensor> &conics,
+    const at::optional<at::Tensor> &opacities,
+    const at::optional<at::Tensor> &image_ids,
+    const at::optional<at::Tensor> &gaussian_ids,
+    bool packed
+) {
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(depths);
+    if (conics.has_value()) { CHECK_INPUT(conics.value()); }
+    if (opacities.has_value()) { CHECK_INPUT(opacities.value()); }
+
+    if (packed) {
+        int64_t nnz = means2d.size(0);
+        TORCH_CHECK(means2d.size(1) == 2,
+                    "means2d must be [nnz, 2], got ", means2d.sizes());
+        TORCH_CHECK(radii.dim() == 2 && radii.size(0) == nnz && radii.size(1) == 2,
+                    "radii must be [nnz, 2], got ", radii.sizes());
+        TORCH_CHECK(depths.dim() == 1 && depths.size(0) == nnz,
+                    "depths must be [nnz], got ", depths.sizes());
+        if (conics.has_value()) {
+            TORCH_CHECK(conics->dim() == 2 && conics->size(0) == nnz && conics->size(1) == 3,
+                        "conics must be [nnz, 3], got ", conics->sizes());
+        }
+        if (opacities.has_value()) {
+            TORCH_CHECK(opacities->dim() == 1 && opacities->size(0) == nnz,
+                        "opacities must be [nnz], got ", opacities->sizes());
+        }
+        TORCH_CHECK(
+            image_ids.has_value() && gaussian_ids.has_value(),
+            "When packed is set, image_ids and gaussian_ids must be provided."
+        );
+        CHECK_INPUT(image_ids.value());
+        CHECK_INPUT(gaussian_ids.value());
+    } else {
+        TORCH_CHECK(means2d.dim() >= 2 && means2d.size(-1) == 2,
+                    "means2d must be [..., N, 2], got ", means2d.sizes());
+        auto lead = means2d.sizes().slice(0, means2d.dim() - 1);
+        TORCH_CHECK(radii.sizes() == means2d.sizes(),
+                    "radii must be [..., N, 2] matching means2d, got ", radii.sizes());
+        TORCH_CHECK(depths.sizes() == lead,
+                    "depths must be [..., N], got ", depths.sizes());
+        if (conics.has_value()) {
+            TORCH_CHECK(conics->dim() == means2d.dim() && conics->size(-1) == 3 &&
+                            conics->sizes().slice(0, conics->dim() - 1) == lead,
+                        "conics must be [..., N, 3], got ", conics->sizes());
+        }
+        if (opacities.has_value()) {
+            TORCH_CHECK(opacities->sizes() == lead,
+                        "opacities must be [..., N], got ", opacities->sizes());
+        }
+    }
+}
+
+#if GSPLAT_BUILD_3DGUT
+// Validates intersect_tile_lidar inputs. Each checked assumption is a
+// precondition of the lidar tile-intersection kernel.
+void check_intersect_tile_lidar_inputs(
+    const at::Tensor &means2d,
+    const at::Tensor &radii,
+    const at::Tensor &depths,
+    const at::optional<at::Tensor> &image_ids,
+    const at::optional<at::Tensor> &gaussian_ids,
+    bool packed
+) {
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(depths);
+    if (packed) {
+        int64_t nnz = means2d.size(0);
+        TORCH_CHECK(means2d.size(1) == 2,
+                    "means2d must be [nnz, 2], got ", means2d.sizes());
+        TORCH_CHECK(radii.dim() == 2 && radii.size(0) == nnz && radii.size(1) == 2,
+                    "radii must be [nnz, 2], got ", radii.sizes());
+        TORCH_CHECK(depths.dim() == 1 && depths.size(0) == nnz,
+                    "depths must be [nnz], got ", depths.sizes());
+        TORCH_CHECK(
+            image_ids.has_value() && gaussian_ids.has_value(),
+            "When packed is set, image_ids and gaussian_ids must be provided."
+        );
+        CHECK_INPUT(image_ids.value());
+        CHECK_INPUT(gaussian_ids.value());
+    } else {
+        TORCH_CHECK(means2d.dim() >= 2 && means2d.size(-1) == 2,
+                    "means2d must be [..., N, 2], got ", means2d.sizes());
+        auto lead = means2d.sizes().slice(0, means2d.dim() - 1);
+        TORCH_CHECK(radii.sizes() == means2d.sizes(),
+                    "radii must be [..., N, 2] matching means2d, got ", radii.sizes());
+        TORCH_CHECK(depths.sizes() == lead,
+                    "depths must be [..., N], got ", depths.sizes());
+    }
+}
+#endif
+
+} // namespace
+
+TileIntersectResult intersect_tile(
     const at::Tensor &means2d,                           // [..., N, 2] or [nnz, 2]
     const at::Tensor &radii,                             // [..., N, 2] or [nnz, 2]
     const at::Tensor &depths,                            // [..., N] or [nnz]
@@ -40,7 +152,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const at::optional<at::Tensor> &opacities,           // [..., N] or [nnz]        
     const at::optional<at::Tensor> &image_ids,           // [nnz]
     const at::optional<at::Tensor> &gaussian_ids,        // [nnz]
-    int64_t I,
+    std::optional<int64_t> n_images,
     int64_t tile_size,
     int64_t tile_width,
     int64_t tile_height,
@@ -48,22 +160,25 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     bool segmented
 ) {
     DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(radii);
-    CHECK_INPUT(depths);
-    if (conics.has_value()) { CHECK_INPUT(conics.value()); }
-    if (opacities.has_value()) { CHECK_INPUT(opacities.value()); }
 
     auto opt = depths.options();
     uint32_t n_elements = means2d.numel() / 2;
     bool packed = means2d.dim() == 2;
+    check_intersect_tile_inputs(
+        means2d, radii, depths, conics, opacities, image_ids, gaussian_ids,
+        packed
+    );
+
+    // Flattened image count. For the non-packed [..., N, 2] layout it is the
+    // product of the leading image dims; the packed [nnz, 2] layout flattens
+    // those dims away, so the caller must supply it.
+    int64_t I;
     if (packed) {
-        TORCH_CHECK(
-            image_ids.has_value() && gaussian_ids.has_value(),
-            "When packed is set, image_ids and gaussian_ids must be provided."
-        );
-        CHECK_INPUT(image_ids.value());
-        CHECK_INPUT(gaussian_ids.value());
+        TORCH_CHECK(n_images.has_value(),
+                    "n_images is required when means2d is packed ([nnz, 2]).");
+        I = n_images.value();
+    } else {
+        I = c10::multiply_integers(means2d.sizes().slice(0, means2d.dim() - 2));
     }
 
     // packed-mode `offsets` (below) reduce a 1-D [nnz] tiles_per_gauss and
@@ -182,20 +297,22 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
                 flatten_ids_sorted
             );
         }
-        return std::make_tuple(tiles_per_gauss, isect_ids_sorted, flatten_ids_sorted);
+        return {.tiles_per_gauss = tiles_per_gauss,
+                .isect_ids = isect_ids_sorted, .flatten_ids = flatten_ids_sorted};
     } else {
-        return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+        return {.tiles_per_gauss = tiles_per_gauss,
+                .isect_ids = isect_ids, .flatten_ids = flatten_ids};
     }
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
+TileIntersectResult intersect_tile_lidar(
     const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &lidar,
     const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
     const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
     const at::Tensor depths,                     // [..., N] or [nnz]
     const at::optional<at::Tensor> image_ids,    // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
-    const int64_t I,
+    std::optional<int64_t> n_images,
     const bool sort,
     const bool segmented
 ) {
@@ -204,20 +321,24 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
     return {};
 #else
     DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(radii);
-    CHECK_INPUT(depths);
 
     auto opt = depths.options();
     uint32_t n_elements = means2d.numel() / 2;
     bool packed = means2d.dim() == 2;
+    check_intersect_tile_lidar_inputs(
+        means2d, radii, depths, image_ids, gaussian_ids, packed
+    );
+
+    // Flattened image count. For the non-packed [..., N, 2] layout it is the
+    // product of the leading image dims; the packed [nnz, 2] layout flattens
+    // those dims away, so the caller must supply it.
+    int64_t I;
     if (packed) {
-        TORCH_CHECK(
-            image_ids.has_value() && gaussian_ids.has_value(),
-            "When packed is set, image_ids and gaussian_ids must be provided."
-        );
-        CHECK_INPUT(image_ids.value());
-        CHECK_INPUT(gaussian_ids.value());
+        TORCH_CHECK(n_images.has_value(),
+                    "n_images is required when means2d is packed ([nnz, 2]).");
+        I = n_images.value();
+    } else {
+        I = c10::multiply_integers(means2d.sizes().slice(0, means2d.dim() - 2));
     }
 
     // packed-mode `offsets` (below) reduce a 1-D [nnz] tiles_per_gauss and
@@ -338,9 +459,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
                 flatten_ids_sorted
             );
         }
-        return std::make_tuple(tiles_per_gauss, isect_ids_sorted, flatten_ids_sorted);
+        return {.tiles_per_gauss = tiles_per_gauss,
+                .isect_ids = isect_ids_sorted, .flatten_ids = flatten_ids_sorted};
     } else {
-        return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+        return {.tiles_per_gauss = tiles_per_gauss,
+                .isect_ids = isect_ids, .flatten_ids = flatten_ids};
     }
 #endif // !GSPLAT_BUILD_3DGUT
 }
@@ -606,9 +729,9 @@ build_sparse_tile_layout(
 }
 
 void register_intersect_cuda_impl(torch::Library &m) {
-    m.impl("intersect_tile", &intersect_tile);
-    m.impl("intersect_tile_lidar", &intersect_tile_lidar);
-    m.impl("intersect_offset", &intersect_offset);
+    m.impl("intersect_tile", to_torch_op<&intersect_tile>);
+    m.impl("intersect_tile_lidar", to_torch_op<&intersect_tile_lidar>);
+    m.impl("intersect_offset", to_torch_op<&intersect_offset>);
     m.impl("intersect_tile_sparse", &intersect_tile_sparse);
     m.impl("build_sparse_tile_layout", &build_sparse_tile_layout);
 }

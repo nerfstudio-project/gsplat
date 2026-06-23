@@ -23,25 +23,23 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/csrc/autograd/custom_function.h>
 #include <torch/library.h>
 
 #include "Common.h"             // where all the macros are defined
 #include "SphericalHarmonics.h" // where the launch function is declared
+#include "TorchUtils.h"
 
 namespace gsplat {
 
-at::Tensor spherical_harmonics_fwd(
+namespace {
+
+void check_spherical_harmonics_inputs(
     int64_t degrees_to_use,
-    const at::Tensor &dirs,               // [..., N, 3]
-    const at::Tensor &coeffs,             // [N, K, D]
-    const at::optional<at::Tensor> &masks // [..., N]
+    const at::Tensor &dirs,
+    const at::Tensor &coeffs,
+    const at::optional<at::Tensor> &masks
 ) {
-    DEVICE_GUARD(dirs);
-    CHECK_INPUT(dirs);
-    CHECK_INPUT(coeffs);
-    if (masks.has_value()) {
-        CHECK_INPUT(masks.value());
-    }
     TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
     TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
     TORCH_CHECK(
@@ -62,6 +60,75 @@ at::Tensor spherical_harmonics_fwd(
         coeffs.size(-3),
         ")"
     );
+    TORCH_CHECK(
+        (degrees_to_use + 1) * (degrees_to_use + 1) <= coeffs.size(-2),
+        "degrees_to_use requires more SH coefficients than provided; degree ",
+        degrees_to_use,
+        ", coeffs shape ",
+        coeffs.sizes()
+    );
+    if (masks.has_value()) {
+        at::DimVector mask_shape(dirs.sizes().slice(0, dirs.dim() - 1));
+        TORCH_CHECK(
+            masks.value().sizes() == mask_shape,
+            "masks must match dirs.shape[:-1]; got masks ",
+            masks.value().sizes(),
+            " and dirs ",
+            dirs.sizes()
+        );
+    }
+    CHECK_INPUT(dirs);
+    CHECK_INPUT(coeffs);
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+}
+
+} // namespace
+
+// Spherical harmonics
+struct SphericalHarmonicsFwdResult {
+    at::Tensor colors;
+};
+template <> struct TorchArgDef<SphericalHarmonicsFwdResult> {
+    static auto to(const SphericalHarmonicsFwdResult &r) { return to_torch_args(r.colors); }
+    template <class TT>
+    static SphericalHarmonicsFwdResult from(TT &&t) {
+        return {.colors = t};
+    }
+};
+
+struct SphericalHarmonicsBwdResult {
+    at::Tensor v_coeffs;
+    at::optional<at::Tensor> v_dirs;
+};
+template <> struct TorchArgDef<SphericalHarmonicsBwdResult> {
+    static auto to(const SphericalHarmonicsBwdResult &r) {
+        return to_torch_args(r.v_coeffs, r.v_dirs);
+    }
+};
+
+// Gradients of the differentiable forward outputs.
+struct SphericalHarmonicsGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor colors; // [..., N, D]
+};
+template <> struct TorchArgDef<SphericalHarmonicsGrad> {
+    static auto to(const SphericalHarmonicsGrad &g) { return to_torch_args(g.colors); }
+    template <class TT>
+    static SphericalHarmonicsGrad from(TT &&t) {
+        return {.colors = t};
+    }
+};
+
+SphericalHarmonicsFwdResult spherical_harmonics_fwd(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &coeffs,             // [N, K, D]
+    const at::optional<at::Tensor> &masks // [..., N]
+) {
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
 
     // colors dtype follows dirs; the kernel converts fp16 coeffs to fp32 on read.
     auto out_shape = dirs.sizes().vec();
@@ -71,50 +138,34 @@ at::Tensor spherical_harmonics_fwd(
     launch_spherical_harmonics_fwd_kernel(
         degrees_to_use, dirs, coeffs, masks, colors
     );
-    return colors; // [..., N, D]
+    return SphericalHarmonicsFwdResult{
+        .colors = colors,
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
+// Full backward for spherical_harmonics.
+// `compute_v_dirs` selects whether to compute the direction gradient. It is an
+// explicit argument rather than something inferred from a tensor's
+// requires_grad, so this functional op's behavior follows only from its inputs.
+SphericalHarmonicsBwdResult spherical_harmonics_bwd(
     int64_t degrees_to_use,
     const at::Tensor &dirs,                // [..., N, 3]
     const at::Tensor &coeffs,              // [N, K, D]
     const at::optional<at::Tensor> &masks, // [..., N]
-    const at::Tensor &v_colors,            // [..., N, D]
+    const SphericalHarmonicsGrad &grad,
     bool compute_v_dirs
 ) {
     DEVICE_GUARD(dirs);
-    CHECK_INPUT(dirs);
-    CHECK_INPUT(coeffs);
-    CHECK_INPUT(v_colors);
-    if (masks.has_value()) {
-        CHECK_INPUT(masks.value());
-    }
-    TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
-    TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
+    check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
+    TORCH_INTERNAL_ASSERT(grad.colors.defined());
+    CHECK_DENSE(grad.colors);
+    CHECK_INPUT(grad.colors);
     TORCH_CHECK(
-        coeffs.dim() == 3,
-        "coeffs must have shape [N, K, D], got ",
-        coeffs.sizes()
-    );
-    TORCH_CHECK(
-        coeffs.size(-1) >= 1,
-        "coeffs last dim D must be >= 1, got ",
-        coeffs.size(-1)
-    );
-    TORCH_CHECK(
-        v_colors.size(-1) == coeffs.size(-1),
+        grad.colors.size(-1) == coeffs.size(-1),
         "v_colors last dim (",
-        v_colors.size(-1),
+        grad.colors.size(-1),
         ") must match coeffs last dim (",
         coeffs.size(-1),
-        ")"
-    );
-    TORCH_CHECK(
-        dirs.size(-2) == coeffs.size(-3),
-        "dirs N (",
-        dirs.size(-2),
-        ") must match coeffs N (",
-        coeffs.size(-3),
         ")"
     );
 
@@ -133,20 +184,36 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
         dirs,
         coeffs,
         masks,
-        v_colors,
+        grad.colors,
         v_coeffs_accum,
-        v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
+        as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_coeffs = (coeffs.scalar_type() == at::kFloat)
         ? v_coeffs_accum
         : v_coeffs_accum.to(coeffs.scalar_type());
-    return std::make_tuple(v_coeffs, v_dirs); // [N, K, D], [..., N, 3]
+    return SphericalHarmonicsBwdResult{
+        .v_coeffs = v_coeffs,
+        .v_dirs = as_optional_tensor(v_dirs),
+    };
+}
+
+// The C++ autograd operator. Dispatches through the registered
+// `gsplat::spherical_harmonics` op so the Python-side register_autograd kernel
+// makes it differentiable.
+at::Tensor spherical_harmonics(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs, const at::Tensor &coeffs,
+    const at::optional<at::Tensor> &masks
+) {
+    return call_torch_op<&spherical_harmonics_fwd>(
+        "gsplat::spherical_harmonics", degrees_to_use, dirs, coeffs, masks
+    ).colors;
 }
 
 void register_spherical_harmonics_cuda_impl(torch::Library &m) {
-    m.impl("spherical_harmonics_fwd", &spherical_harmonics_fwd);
-    m.impl("spherical_harmonics_bwd", &spherical_harmonics_bwd);
+    m.impl("spherical_harmonics", to_torch_op<&spherical_harmonics_fwd>);
+    m.impl("spherical_harmonics_bwd", to_torch_op<&spherical_harmonics_bwd>);
 }
 
 } // namespace gsplat

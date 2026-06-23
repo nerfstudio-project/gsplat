@@ -106,14 +106,14 @@ public:
         , m_sizes(sizes)
         , m_strides(strides)
     {
-        // Get expected sizes from SHAPE pack (integral values or -1 for dynamic dimensions)
+        // Positive integral values are fixed sizes. Negative values are
+        // dynamic dimension labels such as CAMERA/RAY/POINT.
         constexpr auto expected = std::array{
             ([]() constexpr {
                 using DimType = decltype(SHAPE);
-                if constexpr (std::is_integral_v<DimType>)
+                if constexpr (std::is_integral_v<DimType> && SHAPE > 0)
                     return static_cast<int64_t>(SHAPE);
                 else
-                    // Dynamic size (e.g., CAMERA tag)
                     return static_cast<int64_t>(-1);
             }())...
         };
@@ -244,14 +244,15 @@ TensorView<T, SHAPE...> make_tensor_view(T* data,
                                          std::string_view tensor_name = "Tensor")
 {
     // Validate dimensions
-    // Get expected sizes from SHAPE pack (integral values or -1 for dynamic dimensions)
+    // Positive integral values are fixed sizes. Negative values are dynamic
+    // dimension labels such as CAMERA/RAY/POINT.
     constexpr auto expected = std::array{
         ([]() constexpr {
             using DimType = decltype(SHAPE);
-            if constexpr (std::is_integral_v<DimType>)
+            if constexpr (std::is_integral_v<DimType> && SHAPE > 0)
                 return static_cast<int>(SHAPE);
             else
-                return -1;  // Dynamic size (e.g., CAMERA tag)
+                return -1;
         }())...
     };
 
@@ -268,4 +269,3 @@ TensorView<T, SHAPE...> make_tensor_view(T* data,
 }
 
 } // namespace gsplat
-

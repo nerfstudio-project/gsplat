@@ -142,6 +142,84 @@ def test_rasterization_rejects_parallel_renderer_config_without_eval3d():
         )
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterization_3dgut_only_build_shape():
+    """Public UT/from-world rasterization must work without GSPLAT_BUILD_3DGS.
+
+    The 3DGUT path routes through the C++ ``rasterization_3dgs`` op, which is
+    guarded ``GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT``. A 3dgut-only build
+    (``BUILD_3DGUT=1`` with ``BUILD_3DGS=0`` — a shape Config.h documents) must
+    still resolve and run it; this guards against the op being re-narrowed to
+    3DGS-only, which silently breaks that build shape. When 3DGS is absent, the
+    classic (non-UT) path must reject cleanly rather than fail to resolve the op.
+    """
+    from gsplat.rendering import rasterization
+
+    device = "cuda"
+    torch.manual_seed(0)
+    N, C, H, W = 200, 1, 64, 64
+    means = torch.randn(N, 3, device=device) * 0.3
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.rand(N, 3, device=device) * 0.05 + 0.01
+    opacities = torch.rand(N, device=device)
+    colors = torch.rand(N, 3, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0).repeat(C, 1, 1)
+    viewmats[:, 2, 3] = 3.0  # world->cam: gaussians near origin land in front (+z)
+    focal = 50.0
+    Ks = torch.tensor(
+        [[[focal, 0.0, W / 2], [0.0, focal, H / 2], [0.0, 0.0, 1.0]]],
+        device=device,
+    ).repeat(C, 1, 1)
+
+    # The UT / from-world path must resolve and render in any 3DGUT build,
+    # including a 3dgut-only one. (packed is invalid with eval3d.)
+    with torch.no_grad():
+        renders, alphas, _ = rasterization(
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,
+            colors=colors,
+            viewmats=viewmats,
+            Ks=Ks,
+            width=W,
+            height=H,
+            sh_degree=None,
+            render_mode="RGB",
+            camera_model="pinhole",
+            with_ut=True,
+            with_eval3d=True,
+            packed=False,
+        )
+    assert renders.shape == (C, H, W, 3)
+    assert alphas.shape == (C, H, W, 1)
+    assert torch.isfinite(renders).all()
+
+    # Without 3DGS, the classic (non-UT) projection path must reject cleanly with
+    # an actionable error, not fail to resolve the rasterization_3dgs op.
+    if not gsplat.has_3dgs():
+        with pytest.raises(RuntimeError, match="GSPLAT_BUILD_3DGS"):
+            with torch.no_grad():
+                rasterization(
+                    means=means,
+                    quats=quats,
+                    scales=scales,
+                    opacities=opacities,
+                    colors=colors,
+                    viewmats=viewmats,
+                    Ks=Ks,
+                    width=W,
+                    height=H,
+                    sh_degree=None,
+                    render_mode="RGB",
+                    camera_model="pinhole",
+                    with_ut=False,
+                    with_eval3d=False,
+                    packed=False,
+                )
+
+
 def _rasterization_param_id(value):
     if type(value) is RendererConfig_MixedBatch:
         return "mixed_batch"
@@ -621,16 +699,17 @@ def _make_distributed_validation_scene() -> dict:
         ("batch_dims", "batch dimensions"),
         ("with_eval3d", "with_eval3d=True"),
         ("with_ut", "with_ut=True"),
-        ("camera_model", "camera_model='ortho'"),
+        ("camera_model", "camera_model"),
         ("sparse_grad", "sparse_grad=True"),
         ("absgrad", "absgrad=True"),
         ("rolling_shutter", "rolling shutter"),
         ("distortion", "camera distortion"),
         ("global_z_order", "global_z_order=False"),
         ("per_view_color", "per-Gaussian colors"),
-        ("rays", "rays"),
+        ("rays", "does not support rays"),
         ("return_normals", "return_normals=True"),
         ("lidar", "lidar coefficients"),
+        ("wrong_n_color", "colors must have shape"),
     ],
 )
 def test_rasterization_distributed_rejects_unsupported_configs(
@@ -675,30 +754,88 @@ def test_rasterization_distributed_rejects_unsupported_configs(
     elif case == "return_normals":
         kwargs["return_normals"] = True
     elif case == "lidar":
-        from types import SimpleNamespace
-
-        # SimpleNamespace satisfies the n_columns/n_rows read that happens before
-        # the distributed-rejection block; the ValueError fires before any deeper
-        # lidar processing that would require a real LiDAR object.
-        kwargs["lidar_coeffs"] = SimpleNamespace(
-            n_columns=kwargs["width"], n_rows=kwargs["height"]
+        lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(
+            "at128", (), 0, 0, device=device, seed=42
         )
+        kwargs[
+            "lidar_coeffs"
+        ] = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+            lidar_params, angles_to_columns_map, tiling
+        )
+    elif case == "wrong_n_color":
+        kwargs["colors"] = torch.rand((N + 1, 3), device=device)
     else:
         raise AssertionError(f"unhandled case {case}")
 
-    with pytest.raises(ValueError, match=match):
+    # Distributed validation now lives in the C++ op, which raises via TORCH_CHECK
+    # (surfaced as RuntimeError) rather than the former Python ValueError.
+    with pytest.raises(RuntimeError, match=match):
         gsplat.rasterization(**kwargs, distributed=True)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_external_distortion_requires_ut():
+    from gsplat.cuda._wrapper import BivariateWindshieldModelParameters
+
     kwargs = _make_distributed_validation_scene()
-    # The validation fires on `external_distortion_coeffs is not None` before
-    # any CUDA call, so any sentinel object suffices here.
-    kwargs["external_distortion_coeffs"] = object()
-    with pytest.raises(
-        (ValueError, AssertionError),
-        match="with_ut=True",
-    ):
+    # Pass a real bound custom-class instance so marshalling reaches the C++
+    # validation that owns this gate.
+    kwargs["external_distortion_coeffs"] = BivariateWindshieldModelParameters()
+    with pytest.raises(RuntimeError, match="with_ut=True"):
         gsplat.rasterization(**kwargs, with_ut=False)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("packed", [True, False])
+def test_rasterization_distributed_single_rank_matches_local(
+    packed: bool,
+    dist_init,
+):
+    """``distributed=True`` at world_size==1 must equal ``distributed=False``.
+
+    At one rank the all-gather / all-to-all / id-remap are identities over the
+    same kernels and data, so this exercises the full distributed seam +
+    collective plumbing (forward and backward) and asserts it does not perturb
+    the result. Cross-rank routing correctness needs >=2 ranks.
+    """
+    if not torch.distributed.is_initialized():
+        pytest.skip("distributed process group not initialized")
+    if torch.distributed.get_world_size() != 1:
+        pytest.skip("single-rank parity requires world_size == 1")
+
+    scene = _make_distributed_validation_scene()
+    grad_keys = ("means", "quats", "scales", "opacities", "colors")
+
+    def make_inputs() -> dict:
+        return {key: scene[key].clone().requires_grad_(True) for key in grad_keys}
+
+    static = dict(
+        viewmats=scene["viewmats"],
+        Ks=scene["Ks"],
+        width=scene["width"],
+        height=scene["height"],
+        packed=packed,
+    )
+
+    local_in = make_inputs()
+    dist_in = make_inputs()
+    colors_local, alphas_local, _ = gsplat.rasterization(
+        **local_in, **static, distributed=False
+    )
+    colors_dist, alphas_dist, _ = gsplat.rasterization(
+        **dist_in, **static, distributed=True
+    )
+
+    torch.testing.assert_close(colors_dist, colors_local)
+    torch.testing.assert_close(alphas_dist, alphas_local)
+
+    colors_local.sum().backward()
+    colors_dist.sum().backward()
+    for key in grad_keys:
+        torch.testing.assert_close(
+            dist_in[key].grad,
+            local_in[key].grad,
+            msg=lambda m, key=key: f"gradient mismatch for {key}: {m}",
+        )
