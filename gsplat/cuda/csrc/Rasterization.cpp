@@ -241,7 +241,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
 
     auto opt = means2d.options();
     uint32_t N = means2d.size(-2); // number of gaussians
-    uint32_t I = means2d.numel() / (2 * N); // number of images
+    uint32_t I = (N == 0) ? 0 : means2d.numel() / (2 * N); // number of images
 
     uint32_t n_isects = flatten_ids.size(0);
 
@@ -558,7 +558,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 
     auto opt = means2d.options();
     uint32_t N = means2d.size(-2); // number of gaussians
-    uint32_t I = means2d.numel() / (2 * N); // number of images
+    uint32_t I = (N == 0) ? 0 : means2d.numel() / (2 * N); // number of images
 
     uint32_t n_isects = flatten_ids.size(0);
 
@@ -691,15 +691,6 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     }
     if (masks.has_value()) {
         CHECK_INPUT(masks.value());
-    }
-
-    if (external_distortion_params.has_value()) {
-        const auto& params = external_distortion_params.value();
-        TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
-        CHECK_CONTIGUOUS(params->horizontal_poly);
-        CHECK_CONTIGUOUS(params->vertical_poly);
-        CHECK_CONTIGUOUS(params->horizontal_poly_inverse);
-        CHECK_CONTIGUOUS(params->vertical_poly_inverse);
     }
 
     if (sample_counts.has_value()) {
@@ -1300,15 +1291,6 @@ public:
         }
         if (v_render_normals.has_value()) {
             CHECK_INPUT(v_render_normals.value());
-        }
-
-        if (external_distortion_params.has_value()) {
-            const auto& params = external_distortion_params.value();
-            TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
-            CHECK_CONTIGUOUS(params->horizontal_poly);
-            CHECK_CONTIGUOUS(params->vertical_poly);
-            CHECK_CONTIGUOUS(params->horizontal_poly_inverse);
-            CHECK_CONTIGUOUS(params->vertical_poly_inverse);
         }
 
         at::Tensor v_means = at::zeros_like(means);

@@ -478,3 +478,135 @@ def test_parse_renderer_config_override_keeps_non_string(load_profile):
 def test_parse_renderer_config_override_rejects_unknown(load_profile, raw):
     with pytest.raises(ValueError, match="renderer_config override"):
         load_profile._parse_renderer_config_override(raw)
+
+
+def test_apply_channel_override_slices_and_tiles(load_profile):
+    # Slice when the target count is below the source channel count, ...
+    inputs = {"colors": torch.zeros(1, 5, 8), "sh_degree": None}
+    load_profile._apply_channel_override(inputs, 3)
+    assert inputs["colors"].shape[-1] == 3
+    # ... tile-and-truncate when above it.
+    inputs = {"colors": torch.zeros(1, 5, 3), "sh_degree": None}
+    load_profile._apply_channel_override(inputs, 8)
+    assert inputs["colors"].shape[-1] == 8
+
+
+def test_apply_channel_override_tiles_by_wrapping_channels(load_profile):
+    # Tiling above the source count repeats the channel block then truncates,
+    # so channels wrap: [c0, c1, c2, c0, c1, c2, c0, c1] for cur=3 -> 8.
+    colors = torch.arange(3, dtype=torch.float32).reshape(1, 1, 3)
+    inputs = {"colors": colors, "sh_degree": None}
+    load_profile._apply_channel_override(inputs, 8)
+    expected = torch.tensor([0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0])
+    assert torch.equal(inputs["colors"].reshape(-1), expected)
+
+
+def test_apply_channel_override_preserves_grad_leaf(load_profile):
+    # The resized tensor must stay a leaf carrying requires_grad so backward
+    # replay can clear `.grad` through `_clear_replay_grads()`.
+    colors = torch.zeros(1, 5, 4, requires_grad=True)
+    inputs = {"colors": colors, "sh_degree": None}
+    load_profile._apply_channel_override(inputs, 8)
+    out = inputs["colors"]
+    assert out.is_leaf and out.requires_grad
+
+
+def test_apply_channel_override_then_normalize_is_camera_shaped(load_profile):
+    # End-to-end shape contract: --channels followed by the 2DGS normalize step
+    # must leave colors camera-shaped [..., C, N, channels], which
+    # rasterize_to_pixels_2dgs requires. This pins the ordering of the two
+    # steps, which is the load-bearing part of the feature.
+    n_gaussians, n_cameras, channels = 5, 2, 3
+    inputs = {
+        "means": torch.zeros(n_gaussians, 3),
+        "viewmats": torch.zeros(n_cameras, 4, 4),
+        "colors": torch.zeros(n_gaussians, 8),
+        "sh_degree": None,
+        "packed": False,
+    }
+    load_profile._apply_channel_override(inputs, channels)
+    load_profile._normalize_2dgs_replay_inputs(inputs)
+    assert inputs["colors"].shape == (n_cameras, n_gaussians, channels)
+
+
+def test_apply_channel_override_collapses_sh_to_dc_band(load_profile):
+    # SH input [N, K, D] collapses to its DC band [N, D] and clears sh_degree
+    # so the rasterizer templates on the post-activation channel count. K=4 is
+    # consistent with sh_degree=1 ((sh_degree+1)**2 == 4).
+    inputs = {"colors": torch.zeros(1, 5, 4, 3), "sh_degree": 1}
+    load_profile._apply_channel_override(inputs, 3)
+    assert inputs["sh_degree"] is None
+    assert inputs["colors"].shape == (1, 5, 3)
+
+
+def test_apply_channel_override_reserves_extra_signal_channels(load_profile):
+    # extra_signals stays at its captured width and the color block absorbs the
+    # remainder, so the post-concat templated count equals --channels exactly.
+    inputs = {
+        "colors": torch.zeros(1, 5, 8),
+        "extra_signals": torch.zeros(1, 5, 2),
+        "sh_degree": None,
+    }
+    load_profile._apply_channel_override(inputs, 6)
+    assert inputs["colors"].shape[-1] == 4  # 6 - 2 extra-signal channels
+    assert inputs["extra_signals"].shape[-1] == 2  # untouched
+
+
+def test_apply_channel_override_resizes_backgrounds(load_profile):
+    # backgrounds is asserted against the pre-depth feature width, so it must
+    # track the color resize or the wrapper's shape assert fires.
+    inputs = {
+        "colors": torch.zeros(1, 5, 8),
+        "backgrounds": torch.zeros(1, 8),
+        "sh_degree": None,
+    }
+    load_profile._apply_channel_override(inputs, 3)
+    assert inputs["backgrounds"].shape[-1] == 3
+
+
+def test_apply_channel_override_accounts_for_depth_channel(load_profile):
+    # A color+depth render_mode appends one depth channel onto the feature
+    # tensor, so the color block is sized to channels - 1.
+    inputs = {"colors": torch.zeros(1, 5, 8), "sh_degree": None, "render_mode": "RGB+D"}
+    load_profile._apply_channel_override(inputs, 4)
+    assert inputs["colors"].shape[-1] == 3
+
+
+def test_apply_channel_override_rejects_depth_only_render_mode(load_profile):
+    # Depth-only modes discard colors before the kernel, so --channels would be
+    # a silent no-op; reject it instead.
+    inputs = {"colors": torch.zeros(1, 5, 8), "sh_degree": None, "render_mode": "D"}
+    with pytest.raises(ValueError):
+        load_profile._apply_channel_override(inputs, 3)
+
+
+def test_apply_channel_override_rejects_channels_too_small(load_profile):
+    # No room left for a color channel after reserving extra-signal + depth.
+    inputs = {
+        "colors": torch.zeros(1, 5, 8),
+        "extra_signals": torch.zeros(1, 5, 2),
+        "sh_degree": None,
+        "render_mode": "RGB+D",
+    }
+    with pytest.raises(ValueError):
+        load_profile._apply_channel_override(inputs, 2)
+
+
+def test_apply_channel_override_rejects_malformed_sh(load_profile):
+    with pytest.raises(ValueError):  # K=4 inconsistent with sh_degree=2 (needs 9)
+        load_profile._apply_channel_override(
+            {"colors": torch.zeros(1, 5, 4, 3), "sh_degree": 2}, 3
+        )
+    with pytest.raises(ValueError):  # already-activated [N, D] is not SH-shaped
+        load_profile._apply_channel_override(
+            {"colors": torch.zeros(5, 3), "sh_degree": 1}, 3
+        )
+
+
+def test_apply_channel_override_rejects_bad_input(load_profile):
+    with pytest.raises(ValueError):  # colors is None
+        load_profile._apply_channel_override({"colors": None}, 3)
+    with pytest.raises(ValueError):  # target count must be >= 1
+        load_profile._apply_channel_override({"colors": torch.zeros(1, 5, 3)}, 0)
+    with pytest.raises(ValueError):  # zero-channel source must not divide by zero
+        load_profile._apply_channel_override({"colors": torch.zeros(1, 5, 0)}, 3)

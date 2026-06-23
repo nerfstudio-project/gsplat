@@ -114,10 +114,11 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
         }
     }
 
-    // when the mask is provided, render the background color and return
-    // if this tile is labeled as False. Check each pixel individually: a
-    // single thread can straddle the image boundary when the tile is
-    // partially clipped, so some of its pixels may be in-bounds while
+    // when this tile is masked off (masks[tile_id] == False), write the
+    // background color and zero every other per-pixel output, then return —
+    // so no output buffer is left uninitialized. Check each pixel
+    // individually: a single thread can straddle the image boundary when the
+    // tile is partially clipped, so some of its pixels may be in-bounds while
     // others are OOB.
     if (masks != nullptr && !masks[tile_id]) {
 #pragma unroll
@@ -130,6 +131,8 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
                 render_colors[pix_id[p] * CDIM + k] =
                     backgrounds == nullptr ? 0.0f : backgrounds[k];
             }
+            render_alphas[pix_id[p]] = 0.0f;
+            last_ids[pix_id[p]] = 0;
         }
         return;
     }

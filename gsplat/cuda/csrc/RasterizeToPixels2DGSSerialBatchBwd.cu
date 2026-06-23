@@ -442,6 +442,10 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
             vec3 v_v_M_local = {0.f, 0.f, 0.f};
             vec3 v_w_M_local = {0.f, 0.f, 0.f};
 
+            // densification gradient: depth-scaled ray-transform gradient,
+            // reduced and atomic-accumulated like v_ray_transforms below.
+            vec2 v_densify_local = {0.f, 0.f};
+
             // 2D mean gradients, used if 2d gaussian weight is applied
             vec2 v_xy_local = {0.f, 0.f};
 
@@ -633,6 +637,15 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 }
             }
 
+            // Scale each lane's ray-transform z-gradient by depth (w_M.z) while
+            // w_M still holds the valid per-lane value; the reduction and
+            // atomicAdd below then accumulate the full densification gradient.
+            if (valid) {
+                v_densify_local = {
+                    v_u_M_local.z * w_M.z, v_v_M_local.z * w_M.z
+                };
+            }
+
             /**
              * ==================================================
              * Warp-level reduction to compute the sum of the gradients for each
@@ -645,6 +658,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
             warpSum(v_u_M_local, warp);
             warpSum(v_v_M_local, warp);
             warpSum(v_w_M_local, warp);
+            warpSum(v_densify_local, warp);
             if (v_means2d_abs != nullptr) {
                 warpSum(v_xy_abs_local, warp);
             }
@@ -681,6 +695,10 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 gpuAtomicAdd(v_ray_transforms_ptr + 7, v_w_M_local.y);
                 gpuAtomicAdd(v_ray_transforms_ptr + 8, v_w_M_local.z);
 
+                float *v_densify_ptr = (float *)(v_densify) + 2 * g;
+                gpuAtomicAdd(v_densify_ptr + 0, v_densify_local.x);
+                gpuAtomicAdd(v_densify_ptr + 1, v_densify_local.y);
+
                 float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
                 gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
                 gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
@@ -694,14 +712,6 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 gpuAtomicAdd(v_opacities + g, v_opacity_local);
             }
 
-            if (valid) {
-                float *v_densify_ptr = (float *)(v_densify) + 2 * g;
-                float *v_ray_transforms_ptr =
-                    (float *)(v_ray_transforms) + 9 * g;
-                float depth = w_M.z;
-                v_densify_ptr[0] = v_ray_transforms_ptr[2] * depth;
-                v_densify_ptr[1] = v_ray_transforms_ptr[5] * depth;
-            }
         }
     }
 }

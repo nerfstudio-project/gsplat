@@ -227,9 +227,13 @@ __global__ void projection_2dgs_fused_fwd_kernel(
     // https://github.com/hbb1/diff-surfel-rasterization/issues/8#issuecomment-2138069016
     const float distance = sum(temp_point * M2 * M2);
 
-    // ill-conditioned primitives will have distance = 0.0f, we ignore them
-    if (distance == 0.0f)
+    // ill-conditioned primitives will have distance = 0.0f, we ignore them;
+    // zero radii so the culled-primitive sentinel matches the other cull paths.
+    if (distance == 0.0f) {
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
+    }
 
     const vec3 f = (1 / distance) * temp_point;
     const vec2 mean2d = vec2(sum(f * M0 * M2), sum(f * M1 * M2));

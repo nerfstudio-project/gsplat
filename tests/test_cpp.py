@@ -264,12 +264,16 @@ extern "C" const char *gsplat_cpp_tests_jit_object_digest() {{
 
 
 def _gtest_sources() -> list[str]:
-    """Return vendored GoogleTest sources used by the standalone test binary."""
+    """Return vendored GoogleTest + GoogleMock sources for the test binary."""
     # Build GoogleTest from source inside the same JIT target. That avoids a
     # separate CMake/configure step and lets PyTorch/Ninja use one compiler mode.
+    # gmock-all.cc is compiled in too so tests can use GoogleMock matchers (e.g.
+    # ThrowsMessage); gtest_main provides main() and is sufficient for matchers.
     gtest_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googletest")
+    gmock_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googlemock")
     sources = [
         os.path.join(gtest_root, "src", "gtest-all.cc"),
+        os.path.join(gmock_root, "src", "gmock-all.cc"),
         os.path.join(gtest_root, "src", "gtest_main.cc"),
     ]
     if not all(os.path.exists(source) for source in sources):
@@ -293,12 +297,15 @@ def _include_paths(build_params) -> list[str]:
     # Include both the repository root and csrc directories so tests can include
     # public gsplat CUDA headers without mirroring extension-relative paths.
     gtest_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googletest")
+    gmock_root = os.path.join(REPO_ROOT, "third_party", "googletest", "googlemock")
     return [
         REPO_ROOT,
         os.path.join(REPO_ROOT, "gsplat", "cuda"),
         os.path.join(REPO_ROOT, "gsplat", "cuda", "csrc"),
         os.path.join(gtest_root, "include"),
         gtest_root,
+        os.path.join(gmock_root, "include"),
+        gmock_root,
     ] + build_params.extra_include_paths
 
 
@@ -307,6 +314,22 @@ def _cflags(build_params) -> list[str]:
     # Reuse gsplat's extension flags, but do not impose gsplat's -Werror policy
     # on vendored GoogleTest or test-only translation units.
     return [flag for flag in build_params.extra_cflags if flag != "-Werror"]
+
+
+def _cuda_cflags(build_params) -> list[str]:
+    """Return CUDA compile flags compatible with both gsplat and test sources."""
+    # Mirror _cflags for nvcc. gsplat's CUDA flags carry the C++ standard, the
+    # gsplat -D defines, and diagnostic suppressions; without them a test .cu
+    # falls back to PyTorch's default nvcc standard (one behind the rest of the
+    # build) and misses gsplat's macros. Drop only the -Werror policy so it never
+    # applies to test-only CUDA TUs -- nvcc spells it `-Xcompiler=-Werror` and
+    # `--Werror all-warnings`.
+    werror = {"-Xcompiler=-Werror", "--Werror", "all-warnings"}
+    from gsplat.cuda.build import format_jit_cuda_cflags
+
+    return format_jit_cuda_cflags(
+        [flag for flag in build_params.extra_cuda_cflags if flag not in werror]
+    )
 
 
 def _python_link_flags() -> list[str]:
@@ -388,6 +411,7 @@ def build_cpp_tests() -> str:
                 name=CPP_TEST_TARGET,
                 sources=_gtest_sources() + _test_sources() + [stamp_source],
                 extra_cflags=_cflags(build_params),
+                extra_cuda_cflags=_cuda_cflags(build_params),
                 extra_include_paths=_include_paths(build_params),
                 extra_ldflags=_ldflags(build_params, core_objects),
                 build_directory=build_dir,

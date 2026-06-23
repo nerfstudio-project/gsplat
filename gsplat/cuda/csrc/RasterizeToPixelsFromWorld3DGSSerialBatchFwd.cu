@@ -512,7 +512,13 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
     TORCH_CHECK(!packed, "packed mode not supported for 3DGUT forward rasterization");
 
     const uint32_t N = packed ? 0 : means.size(-2);   // number of gaussians
-    const uint32_t B = means.numel() / (N * 3);       // number of batches
+    // Number of batches: product of the leading dims. Computed this way rather
+    // than means.numel()/(N*3) because:
+    // - the division is undefined for an empty gaussian set (N == 0)
+    // - the leading-dim product matches how the calling op sizes its outputs,
+    //   so an empty input renders a clean background image instead of crashing
+    const uint32_t B = static_cast<uint32_t>(
+        c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)));
     const uint32_t C = viewmats0.size(-3);            // number of cameras
     const uint32_t I = B * C;                         // number of images
     const uint32_t grid_h = isect_offsets.size(-2);
@@ -520,12 +526,17 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
     const uint32_t n_isects = flatten_ids.size(0);
 
     TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
-    TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
-    FThetaCameraDistortionDeviceParams ftheta_device_coeffs(*ftheta_coeffs);
+    FThetaCameraDistortionDeviceParams ftheta_device_coeffs(
+        gsplat::checked_deref(ftheta_coeffs, "ftheta_coeffs"));
     cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
     if (external_distortion_params.has_value()) {
-        TORCH_CHECK(external_distortion_params.value(), "external_distortion_params intrusive_ptr is null");
-        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(*external_distortion_params.value());
+        const auto& params = gsplat::checked_deref(
+            external_distortion_params.value(), "external_distortion_params");
+        CHECK_CONTIGUOUS(params.horizontal_poly);
+        CHECK_CONTIGUOUS(params.vertical_poly);
+        CHECK_CONTIGUOUS(params.horizontal_poly_inverse);
+        CHECK_CONTIGUOUS(params.vertical_poly_inverse);
+        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(params);
     }
 
     cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> lidar_device_coeffs = cuda::std::nullopt;

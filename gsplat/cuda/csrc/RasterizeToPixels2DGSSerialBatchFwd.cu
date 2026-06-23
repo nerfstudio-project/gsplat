@@ -160,14 +160,25 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     bool inside = (i < image_height && j < image_width);
     bool done = !inside;
 
-    // when the mask is provided, render the background color and return
-    // if this tile is labeled as False
+    // when this tile is masked off (masks[tile_id] == False), write the
+    // background color and zero every other per-pixel output, then return —
+    // so no output buffer is left uninitialized.
     if (masks != nullptr && !masks[tile_id]) {
         if (inside) {
             for (uint32_t k = 0; k < CDIM; ++k) {
                 render_colors[pix_id * CDIM + k] =
                     backgrounds == nullptr ? 0.0f : backgrounds[k];
             }
+            render_alphas[pix_id] = 0.0f;
+            for (uint32_t k = 0; k < 3; ++k) {
+                render_normals[pix_id * 3 + k] = 0.0f;
+            }
+            if (render_distort != nullptr) {
+                render_distort[pix_id] = 0.0f;
+            }
+            render_median[pix_id] = 0.0f;
+            last_ids[pix_id] = 0;
+            median_ids[pix_id] = 0;
         }
         return;
     }

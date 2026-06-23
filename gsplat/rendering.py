@@ -61,10 +61,10 @@ from .distributed import (
 )
 from .utils import depth_to_normal, get_projection_matrix
 
+
 # Gaussian depth modes (D/ED): use projection depth (controlled by global_z_order)
 # Hit distance modes (d/Ed): compute along-ray distance in rasterization
 RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"]
-
 RasterizeMode = Literal["classic", "antialiased"]
 
 
@@ -178,6 +178,71 @@ def _validate_3dgut_rasterize_mode(
         )
 
 
+def _validate_nccl_process_group() -> None:
+    """Validate that the default process group is available and uses NCCL."""
+
+    if not torch.distributed.is_available():
+        raise ValueError("distributed=True requires torch.distributed to be available.")
+    if not torch.distributed.is_initialized():
+        raise ValueError(
+            "distributed=True requires an initialized default torch.distributed "
+            "process group."
+        )
+
+    backend = torch.distributed.get_backend()
+    if str(backend).lower() != "nccl":
+        raise ValueError(
+            "distributed=True currently supports only the default NCCL process "
+            f"group; got backend '{backend}'."
+        )
+
+
+def normalize_features_layout(
+    features: Tensor,
+    batch_dims: tuple,
+    C: int,
+    trailing_dims: tuple,
+    batch_ids: Optional[Tensor] = None,
+    camera_ids: Optional[Tensor] = None,
+    feature_ids: Optional[Tensor] = None,
+) -> Tensor:
+    """Normalize per-view or per-gaussian feature tensor layout to (nnz, *trailing) or (*batch_dims, C, *trailing)."""
+    B = math.prod(batch_dims)
+    N = features.shape[-(len(trailing_dims) + 1)]
+
+    # per-view features?
+    if (
+        features.shape
+        == batch_dims
+        + (
+            C,
+            N,
+        )
+        + trailing_dims
+    ):
+        # packed?
+        if feature_ids is not None:
+            # [..., C, N, *trailing] -> [nnz, *trailing]
+            return features.view(B, C, N, *trailing_dims)[
+                batch_ids, camera_ids, feature_ids
+            ]
+        else:
+            # already (..., C, N, *trailing)
+            return features
+    # per-gaussian features?
+    else:
+        assert features.shape == (*batch_dims, N, *trailing_dims)
+        # packed?
+        if feature_ids is not None:
+            # [..., N, *trailing] -> [nnz, *trailing]
+            return features.view(B, N, *trailing_dims)[batch_ids, feature_ids]
+        else:
+            # (..., N, *trailing) -> (..., C, N, *trailing)
+            return torch.broadcast_to(
+                features.unsqueeze(len(batch_dims)), batch_dims + (C, N, *trailing_dims)
+            )
+
+
 def _compute_view_dirs_packed(
     means: Tensor,  # [..., N, 3]
     campos: Tensor,  # [..., C, 3]
@@ -253,52 +318,6 @@ def _compute_view_dirs_packed(
     return dirs
 
 
-def normalize_features_layout(
-    features: Tensor,
-    batch_dims: tuple,
-    C: int,
-    trailing_dims: tuple,
-    batch_ids: Optional[Tensor] = None,
-    camera_ids: Optional[Tensor] = None,
-    feature_ids: Optional[Tensor] = None,
-) -> Tensor:
-    """Normalize per-view or per-gaussian feature tensor layout to (nnz, *trailing) or (*batch_dims, C, *trailing)."""
-    B = math.prod(batch_dims)
-    N = features.shape[-(len(trailing_dims) + 1)]
-
-    # per-view features?
-    if (
-        features.shape
-        == batch_dims
-        + (
-            C,
-            N,
-        )
-        + trailing_dims
-    ):
-        # packed?
-        if feature_ids is not None:
-            # [..., C, N, *trailing] -> [nnz, *trailing]
-            return features.view(B, C, N, *trailing_dims)[
-                batch_ids, camera_ids, feature_ids
-            ]
-        else:
-            # already (..., C, N, *trailing)
-            return features
-    # per-gaussian features?
-    else:
-        assert features.shape == (*batch_dims, N, *trailing_dims)
-        # packed?
-        if feature_ids is not None:
-            # [..., N, *trailing] -> [nnz, *trailing]
-            return features.view(B, N, *trailing_dims)[batch_ids, feature_ids]
-        else:
-            # (..., N, *trailing) -> (..., C, N, *trailing)
-            return torch.broadcast_to(
-                features.unsqueeze(len(batch_dims)), batch_dims + (C, N, *trailing_dims)
-            )
-
-
 def viewmat_to_camera_position(viewmats: Tensor) -> Tensor:
     """Camera position in world from world-to-camera 4x4 matrix without full inverse.
 
@@ -329,13 +348,20 @@ def compute_directions(
         campos = 0.5 * (campos + campos_rs)
 
     # Compute the direction of each gaussian wrt. its camera
-    if gaussian_ids is None:
+    if gaussian_ids is None and camera_ids is None and batch_ids is None:
         dirs = means[..., None, :, :] - campos[..., None, :]
     else:
         B = math.prod(batch_dims)
         C = campos.shape[-2]
         dirs = _compute_view_dirs_packed(
-            means, campos, batch_ids, camera_ids, gaussian_ids, indptr, B, C
+            means,
+            campos,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            indptr,
+            B,
+            C,
         )  # [nnz, 3]
     return F.normalize(dirs, p=2, dim=-1)
 
@@ -725,6 +751,49 @@ def rasterization(
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     if rays is not None:
         assert_shape("rays", rays, batch_dims + (C, H, W, 6))
+
+    if distributed:
+        # Distributed rasterization supports only classic 3DGS pinhole; the other
+        # modes have no correct distributed path, so reject them here.
+        unsupported_reasons = []
+        if batch_dims != ():
+            unsupported_reasons.append("batch dimensions")
+        if sparse_grad:
+            unsupported_reasons.append("sparse_grad=True")
+        if absgrad:
+            unsupported_reasons.append("absgrad=True")
+        if with_ut:
+            unsupported_reasons.append("with_ut=True")
+        if with_eval3d:
+            unsupported_reasons.append("with_eval3d=True")
+        if return_normals:
+            unsupported_reasons.append("return_normals=True")
+        if rays is not None:
+            unsupported_reasons.append("rays")
+        if camera_model != "pinhole":
+            unsupported_reasons.append(f"camera_model='{camera_model}'")
+        if not global_z_order:
+            unsupported_reasons.append("global_z_order=False")
+        if rolling_shutter != RollingShutterType.GLOBAL or viewmats_rs is not None:
+            unsupported_reasons.append("rolling shutter")
+        if (
+            radial_coeffs is not None
+            or tangential_coeffs is not None
+            or thin_prism_coeffs is not None
+            or ftheta_coeffs is not None
+            or external_distortion_coeffs is not None
+        ):
+            unsupported_reasons.append("camera distortion")
+        if lidar_coeffs is not None:
+            unsupported_reasons.append("lidar coefficients")
+        if unsupported_reasons:
+            raise ValueError(
+                "distributed=True currently supports only unbatched classic 3DGS "
+                "pinhole rasterization with the default NCCL process group. "
+                "Unsupported option(s): " + ", ".join(unsupported_reasons) + "."
+            )
+        _validate_nccl_process_group()
+
     assert global_z_order or with_ut, "global_z_order can be false only if with_ut=True"
     assert (camera_model == "lidar") == (
         lidar_coeffs is not None
@@ -752,9 +821,10 @@ def rasterization(
                 and features.shape[:-1] == (*batch_dims, C, N)
             ), f"{name}'s shape {features.shape=} must be either {(*batch_dims, N, channels)} or {(*batch_dims, C, N, channels)}"
             if distributed:
-                assert (
-                    features.dim() == num_batch_dims + 2
-                ), f"Distributed mode only supports per-Gaussian {name}."
+                if features.dim() != num_batch_dims + 2:
+                    raise ValueError(
+                        f"distributed=True only supports per-Gaussian {name}."
+                    )
         else:
             # treat features as SH coefficients in the deduplicated [N, K, D] layout,
             # shared across batch and camera dims. Allowing for activating partial SH bands.
@@ -770,14 +840,12 @@ def rasterization(
     if extra_signals is not None:
         check_features(extra_signals, extra_signals_sh_degree, "extra signals")
 
-    if absgrad:
-        assert not distributed, "AbsGrad is not supported in distributed mode."
-
     if (
         radial_coeffs is not None
         or tangential_coeffs is not None
         or thin_prism_coeffs is not None
         or ftheta_coeffs is not None
+        or external_distortion_coeffs is not None
         or rolling_shutter != RollingShutterType.GLOBAL
     ):
         assert (
@@ -2178,11 +2246,10 @@ def rasterization_2dgs(
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
         backgrounds: The background colors. [C, D]. Default is None.
-        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED",
-            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image.
-            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance
-            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)
-            are normalized by opacity. Default is "RGB".
+        render_mode: The rendering mode. Supported modes are "RGB", "Ed", "D", "ED",
+            "RGB+D", and "RGB+ED". "RGB" renders the colored image.
+            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth.
+            Expected modes (Ed, ED) are normalized by opacity. Default is "RGB".
         sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means

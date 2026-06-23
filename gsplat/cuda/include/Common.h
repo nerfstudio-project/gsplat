@@ -84,6 +84,12 @@ enum RendererConfig {
 };
 
 #define N_THREADS_PACKED 256
+
+// CUDA caps grid.y (and grid.z) at 65535; only grid.x reaches 2^31 - 1. Kernels
+// that map a batch (or batch-camera) dimension onto grid.y must reject launches
+// that would exceed this.
+constexpr uint32_t kMaxCudaGridDimY = 65535;
+
 #define ALPHA_THRESHOLD (1.f / 255.f)
 // GAUSSIAN_EXTEND determines where the gaussian is truncated in standard deviations."
 #define GAUSSIAN_EXTEND 3.33f

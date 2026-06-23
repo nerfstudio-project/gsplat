@@ -24,6 +24,7 @@
 
 #include "CameraWrappers.h"
 #include "TensorView.h"
+#include "TorchUtils.h"
 #include <c10/cuda/CUDAStream.h>
 
 namespace gsplat {
@@ -282,8 +283,8 @@ c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
         TORCH_CHECK_ARG(!focal_lengths, "focal_lengths", "not allowed for ftheta camera model");
 
         // Get FThetaCameraDistortionParameters
-        TORCH_CHECK(ftheta_coeffs.value(), "ftheta_coeffs intrusive_ptr is null");
-        const FThetaCameraDistortionParameters& params = *ftheta_coeffs.value();
+        const FThetaCameraDistortionParameters& params =
+            gsplat::checked_deref(ftheta_coeffs, "ftheta_coeffs");
 
         // Convert polynomial arrays to tensors using from_blob
         torch::Tensor pixeldist_to_angle_poly = torch::from_blob(

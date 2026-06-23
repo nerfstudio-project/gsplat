@@ -135,7 +135,7 @@ def build_and_load_geometry_cuda():
 
     module_exists = os.path.exists(
         os.path.join(build_dir, f"{build_params.name}.so")
-    ) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.lib"))
+    ) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.pyd"))
 
     ctx = (
         _status_context(
