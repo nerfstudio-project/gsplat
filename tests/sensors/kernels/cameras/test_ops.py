@@ -686,7 +686,13 @@ def test_bivariate_camera_rays_to_image_points_distortion_grad_slice(
     assert grad is not None
     inactive = slice(21, 42) if active_slice.start == 0 else slice(0, 21)
     assert grad[active_slice].abs().sum() > 0
-    assert torch.count_nonzero(grad[inactive]).item() == 0
+    assert_grad_reference_close(
+        grad[inactive],
+        torch.zeros_like(grad[inactive]),
+        rtol=0.0,
+        atol=0.0,
+        msg="inactive bivariate coeff gradient slice",
+    )
 
 
 def test_identity_bivariate_backward_smoke_all_public_ops(
@@ -4160,7 +4166,13 @@ def test_fisheye_camera_rays_to_image_points_distortion_grad_slice(
     assert grad is not None
     inactive = slice(21, 42) if active_slice.start == 0 else slice(0, 21)
     assert grad[active_slice].abs().sum() > 0
-    assert torch.count_nonzero(grad[inactive]).item() == 0
+    assert_grad_reference_close(
+        grad[inactive],
+        torch.zeros_like(grad[inactive]),
+        rtol=0.0,
+        atol=0.0,
+        msg="inactive fisheye bivariate coeff gradient slice",
+    )
 
 
 def test_fisheye_identity_bivariate_backward_smoke_all_public_ops(
