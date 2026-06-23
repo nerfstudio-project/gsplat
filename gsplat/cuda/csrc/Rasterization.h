@@ -369,6 +369,17 @@ template <> struct TorchArgDef<RasterizeToPixelsFromWorld3DGSResult> {
     static auto to(const RasterizeToPixelsFromWorld3DGSResult &r) { return to_torch_args(
         r.renders, r.alphas, r.last_ids, r.sample_counts, r.normals
     ); }
+
+    template <class TT>
+    static RasterizeToPixelsFromWorld3DGSResult from(TT &&t) {
+        return {
+            .renders = std::get<0>(std::forward<TT>(t)),
+            .alphas = std::get<1>(std::forward<TT>(t)),
+            .last_ids = std::get<2>(std::forward<TT>(t)),
+            .sample_counts = std::get<3>(std::forward<TT>(t)),
+            .normals = std::get<4>(std::forward<TT>(t)),
+        };
+    }
 };
 
 // Dispatcher entry for rasterize_to_pixels_from_world_3dgs, registered for both

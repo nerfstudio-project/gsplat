@@ -38,12 +38,6 @@
 
 namespace gsplat {
 
-template <> struct TorchArgDef<ProjectionUT3DGSFusedResult> {
-    static auto to(const ProjectionUT3DGSFusedResult &r) { return to_torch_args(
-        r.radii, r.means2d, r.depths, r.conics, r.compensations
-    ); }
-};
-
 #if GSPLAT_BUILD_3DGS
 
 namespace {
