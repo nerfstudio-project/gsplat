@@ -693,9 +693,30 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
         0,
         100000,
     )
-    angles2.sum().backward()
-    for table_grad in (re_g.grad, ca_g.grad, ro_g.grad):
-        assert table_grad is None or table_grad.abs().max() == 0
+    table_grads = torch.autograd.grad(
+        angles2.sum(),
+        (re_g, ca_g, ro_g),
+        allow_unused=True,
+    )
+    for name, source, table_grad in (
+        ("row_elevations", re_g, table_grads[0]),
+        ("column_azimuths", ca_g, table_grads[1]),
+        ("row_offsets", ro_g, table_grads[2]),
+    ):
+        materialized_grad = (
+            torch.zeros_like(source) if table_grad is None else table_grad
+        )
+        expect_grad_reference_close(
+            materialized_grad,
+            torch.zeros_like(source),
+            rtol=0.0,
+            atol=0.0,
+            max_rel_l2=0.0,
+            max_rel_l1=0.0,
+            min_cosine=1.0,
+            max_signed_bias=0.0,
+            msg=f"inverse lidar {name} table grad",
+        )
 
     # retrieve the exact converged alpha (scratch) the CUDA forward saved.
     with torch.no_grad():
