@@ -947,6 +947,7 @@ TORCH_LIBRARY(gsplat, m) {
 
     m.def("spherical_harmonics(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks) -> Tensor");
     m.def("spherical_harmonics_bwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks, Tensor v_colors, bool compute_v_dirs) -> (Tensor, Tensor?)");
+    m.def("assemble_proj_features_unpacked_fwd(int degrees_to_use, int B, int C, int N, int Dc, int E, int color_post, int extra_post, bool has_depth, bool depth_is_zero, bool extra_has_c, Tensor means, Tensor campos, Tensor coeffs, Tensor? extra, Tensor? depths, Tensor? masks, Tensor(a!) out, Tensor(b!)? relu_mask) -> ()");
 
     m.def("intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? conics, Tensor? opacities, Tensor? image_ids, Tensor? gaussian_ids, int? n_images, int tile_size, int tile_width, int tile_height, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
     m.def("intersect_offset(Tensor isect_ids, int I, int tile_width, int tile_height) -> Tensor");
