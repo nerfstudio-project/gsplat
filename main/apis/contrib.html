@@ -1,0 +1,872 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Rasterization" href="rasterization.html"><link rel="prev" title="Compression" href="compression.html">
+
+    <!-- Generated with Sphinx 8.1.3 and Furo 2025.12.19 -->
+        <title>gsplat.contrib (experimental) - gsplat documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">gsplat  documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+     
+    <span class="sidebar-brand-text">gsplat  documentation</span> 
+</a>
+
+<!-- Dropdown for different versions of the docs. Slightly hacky. -->
+<div style="padding: 0 1em;">
+    <script>
+      var DocsVersionsPopulated = false;
+
+      async function getVersionList() {
+        // This index.txt file is written by the docs.yml GitHub action.
+        // https://github.com/nerfstudio-project/gsplat/blob/main/.github/workflows/doc.yml
+        const response = await fetch(
+          "https://docs.gsplat.studio/versions/index.txt",
+          { cache: "no-cache" }
+        );
+        return await response.text();
+      }
+      async function DocsPopulateVersionDropDown () {
+        // Load the version list lazily...
+        if (DocsVersionsPopulated) {
+          return;
+        }
+        DocsVersionsPopulated = true;
+
+        console.log("Populating docs version list!")
+        const versions = (await getVersionList()).trim().split("\n").reverse();
+        console.log(versions);
+        let htmlString = "<ul style='margin: 0.5rem 0 0 0'>";
+        htmlString += `<li><a href="https://docs.gsplat.studio/main">main</a></li>`;
+        for (let version of versions) {
+          htmlString += `<li><a href="https://docs.gsplat.studio/versions/${version}">${version}</a></li>`;
+        }
+
+        htmlString += "</ul>";
+        document.getElementById("version-dropdown").innerHTML = htmlString;
+      }
+    </script>
+    <details
+        style="padding: 0.5rem; background: var(--color-background-primary); border-radius: 0.5rem; border: 1px solid var(--color-sidebar-background-border);"
+        ontoggle="DocsPopulateVersionDropDown()"
+    >
+    <summary style="cursor: pointer;"><strong>Version:</strong> <em>main</em></summary>
+      <div id="version-dropdown"></div>
+    </details>
+    <!-- End dropdown -->
+</div>
+
+<div style="text-align: left; padding: 1em">
+    <script async defer src="https://buttons.github.io/buttons.js"></script>
+    <a class="github-button" href="https://github.com/nerfstudio-project/gsplat"
+        data-color-scheme="no-preference: light; light: light; dark: light;" data-size="large" data-show-count="true"
+        aria-label="Download buttons/github-buttons on GitHub">
+        Github
+    </a>
+</div><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/colmap.html">Fit a COLMAP Capture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/dynamic_surgical.html">Dynamic Surgical Scene Reconstruction (G-SHARP port, experimental)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/image.html">Fit a Single Image</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/large_scale.html">Render a Large Scene</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/ncore.html">Train on an NCore v4 Capture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Conventions</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../conventions/data_conventions.html">Data Conventions</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="compression.html">Compression</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">gsplat.contrib (experimental)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="rasterization.html">Rasterization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="strategy.html">Densification</a></li>
+<li class="toctree-l1"><a class="reference internal" href="utils.html">Utils</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Tests</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../tests/eval.html">Evaluation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tests/profile.html">Profiling</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tests/tests.html">Tests</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Migration</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../migration/migration_inria.html">Migrate from diff-gaussian-rasterization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../migration/migration_legacy.html">Migrate from gsplat v0.1.11</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Proposals</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../proposals/gsharp_v0_2_port.html">G-SHARP v0.2 Integration Proposal</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/apis/contrib.rst.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="gsplat-contrib-experimental">
+<h1>gsplat.contrib (experimental)<a class="headerlink" href="#gsplat-contrib-experimental" title="Link to this heading">¶</a></h1>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Everything under <a class="reference internal" href="#module-gsplat.contrib" title="gsplat.contrib"><code class="xref py py-mod docutils literal notranslate"><span class="pre">gsplat.contrib</span></code></a> is <strong>experimental</strong>. APIs may change
+or be removed between releases.</p>
+</div>
+<p id="module-gsplat.contrib">gsplat experimental / research-grade components.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Everything under <a class="reference internal" href="#module-gsplat.contrib" title="gsplat.contrib"><code class="xref py py-mod docutils literal notranslate"><span class="pre">gsplat.contrib</span></code></a> is <strong>experimental</strong>. APIs may change
+or be removed between releases. Pin a version if you depend on it in
+production.</p>
+</div>
+<p>Contents:</p>
+<ul class="simple">
+<li><p><code class="xref py py-mod docutils literal notranslate"><span class="pre">gsplat.contrib.dynamic</span></code> — deformable / 4D Gaussian Splatting
+(HexPlane field, MLP deformation network, <code class="xref py py-class docutils literal notranslate"><span class="pre">DynamicStrategy</span></code>).</p></li>
+</ul>
+<section id="module-gsplat.contrib.dynamic.hexplane">
+<span id="dynamic-4d-gaussians"></span><h2>Dynamic / 4D Gaussians<a class="headerlink" href="#module-gsplat.contrib.dynamic.hexplane" title="Link to this heading">¶</a></h2>
+<p>HexPlane spatio-temporal feature field (experimental).</p>
+<p>Multi-resolution 6-plane decomposition of a 4D <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y,</span> <span class="pre">z,</span> <span class="pre">t)</span></code> feature
+field, ported from G-SHARP v0.2 (<cite>training/scene/hexplane.py</cite>), itself
+derived from the K-Planes / 4DGaussians formulation.</p>
+<p>Six 2D feature planes — one for each pair of input axes <code class="docutils literal notranslate"><span class="pre">(xy,</span> <span class="pre">xz,</span> <span class="pre">xt,</span>
+<span class="pre">yz,</span> <span class="pre">yt,</span> <span class="pre">zt)</span></code> — are sampled with bilinear interpolation, multiplied
+element-wise across planes (giving a per-scale feature vector), and
+concatenated across multi-resolution scales to produce the final feature.</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.hexplane.HexPlaneField">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">HexPlaneField</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">bounds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.6</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">planes_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.14)"><span class="pre">dict</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">multires</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Sequence" title="(in Python v3.14)"><span class="pre">Sequence</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/hexplane.html#HexPlaneField"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField" title="Link to this definition">¶</a></dt>
+<dd><p>Multi-resolution 6-plane decomposition of a 4D feature field.</p>
+<p>For each scale, six 2D feature planes covering every pair of the four
+input axes <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y,</span> <span class="pre">z,</span> <span class="pre">t)</span></code> are sampled bilinearly and multiplied
+element-wise to produce a per-scale feature vector. With
+<code class="docutils literal notranslate"><span class="pre">concat_features=True</span></code> (the default and only mode currently supported)
+feature vectors from all scales are concatenated; the resulting feature
+dimensionality is <code class="docutils literal notranslate"><span class="pre">output_coordinate_dim</span> <span class="pre">*</span> <span class="pre">len(multires)</span></code>.</p>
+<p>Spatial coordinates are normalized into <code class="docutils literal notranslate"><span class="pre">[-1,</span> <span class="pre">1]</span></code> using the
+axis-aligned bounding box <code class="docutils literal notranslate"><span class="pre">[-bounds,</span> <span class="pre">bounds]</span></code> along x/y/z; the time
+coordinate is passed through unchanged (callers should pre-normalize it
+into a sensible range — values outside the grid are clamped via
+<code class="docutils literal notranslate"><span class="pre">padding_mode=&quot;border&quot;</span></code> in <code class="xref py py-func docutils literal notranslate"><span class="pre">torch.nn.functional.grid_sample()</span></code>).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>bounds</strong> – Half-extent of the spatial AABB along each axis (default
+<code class="docutils literal notranslate"><span class="pre">1.6</span></code>, matching G-SHARP).</p></li>
+<li><p><strong>planes_config</strong> – Optional dict with keys <code class="docutils literal notranslate"><span class="pre">grid_dimensions</span></code>,
+<code class="docutils literal notranslate"><span class="pre">input_coordinate_dim</span></code>, <code class="docutils literal notranslate"><span class="pre">output_coordinate_dim</span></code>,
+<code class="docutils literal notranslate"><span class="pre">resolution</span></code>. The default is suitable for surgical-scene
+4D fields (32 features per plane, <code class="docutils literal notranslate"><span class="pre">[64,</span> <span class="pre">64,</span> <span class="pre">64,</span> <span class="pre">25]</span></code>
+resolution).</p></li>
+<li><p><strong>multires</strong> – Iterable of integer multipliers applied to the <em>spatial</em>
+grid resolution for each scale; the temporal resolution is
+kept fixed across scales. Default <code class="docutils literal notranslate"><span class="pre">(1,</span> <span class="pre">2)</span></code>.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.hexplane.HexPlaneField.forward">
+<span class="sig-name descname"><span class="pre">forward</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">xyzt</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/hexplane.html#HexPlaneField.forward"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField.forward" title="Link to this definition">¶</a></dt>
+<dd><p>Sample the multi-resolution HexPlane at the given 4D points.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>xyzt</strong> – <code class="docutils literal notranslate"><span class="pre">(N,</span> <span class="pre">4)</span></code> (or any shape ending in 4) with <code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">:3]</span></code>
+being world-space spatial coordinates inside the AABB and
+<code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">3]</span></code> being the temporal coordinate.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><code class="docutils literal notranslate"><span class="pre">(N,</span> <span class="pre">feat_dim)</span></code> feature tensor where <code class="docutils literal notranslate"><span class="pre">feat_dim</span> <span class="pre">==</span>
+<span class="pre">output_coordinate_dim</span> <span class="pre">*</span> <span class="pre">len(multires)</span></code> under
+<code class="docutils literal notranslate"><span class="pre">concat_features=True</span></code>.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.hexplane.HexPlaneField.spatial_planes">
+<span class="sig-name descname"><span class="pre">spatial_planes</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/hexplane.html#HexPlaneField.spatial_planes"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField.spatial_planes" title="Link to this definition">¶</a></dt>
+<dd><p>Return the flat list of spatial planes across all multi-res scales.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.hexplane.HexPlaneField.temporal_planes">
+<span class="sig-name descname"><span class="pre">temporal_planes</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><span class="pre">list</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/hexplane.html#HexPlaneField.temporal_planes"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField.temporal_planes" title="Link to this definition">¶</a></dt>
+<dd><p>Return the flat list of spatio-temporal planes across all scales.</p>
+</dd></dl>
+
+</dd></dl>
+
+<p id="module-gsplat.contrib.dynamic.deformation">Deformation network and per-Gaussian deformation table (experimental).</p>
+<p>Public API:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformNetwork" title="gsplat.contrib.dynamic.deformation.DeformNetwork"><code class="xref py py-class docutils literal notranslate"><span class="pre">DeformNetwork</span></code></a> — MLP that consumes HexPlane features and emits
+per-Gaussian deltas on <code class="docutils literal notranslate"><span class="pre">(means,</span> <span class="pre">quats,</span> <span class="pre">opacities)</span></code> at a given time. Heads
+are zero-initialised so the at-construction behaviour is the identity map
+on its inputs.</p></li>
+<li><p><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable" title="gsplat.contrib.dynamic.deformation.DeformationTable"><code class="xref py py-class docutils literal notranslate"><span class="pre">DeformationTable</span></code></a> — per-Gaussian boolean flag indicating whether
+each Gaussian is animated by the deform-net. Provides
+<code class="xref py py-meth docutils literal notranslate"><span class="pre">prune()</span></code> / <code class="xref py py-meth docutils literal notranslate"><span class="pre">duplicate()</span></code> / <code class="xref py py-meth docutils literal notranslate"><span class="pre">split()</span></code> for lock-step resize
+with <code class="docutils literal notranslate"><span class="pre">DefaultStrategy</span></code>-style densification.</p></li>
+</ul>
+<p>Port targets:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">holohub/applications/surgical_scene_recon/training/scene/deformation.py</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">_deformation_table</span></code> / <code class="docutils literal notranslate"><span class="pre">update_deformation_table_with_tool_masks</span></code> in
+<code class="docutils literal notranslate"><span class="pre">holohub/applications/surgical_scene_recon/training/gsplat_train.py</span></code></p></li>
+</ul>
+<dl class="py class">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.deformation.DeformNetwork">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">DeformNetwork</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">feature_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">hidden_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">64</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_layers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">3</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/deformation.html#DeformNetwork"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.deformation.DeformNetwork" title="Link to this definition">¶</a></dt>
+<dd><p>MLP head emitting per-Gaussian deltas on means / quats / opacities.</p>
+<p>Architecture: a <em>num_layers</em>-deep ReLU trunk consuming
+<code class="docutils literal notranslate"><span class="pre">plane_features</span></code> (typically the output of
+<code class="xref py py-class docutils literal notranslate"><span class="pre">gsplat.contrib.dynamic.HexPlaneField</span></code>), followed by three linear
+heads — 3-d for the position delta, 4-d for the quaternion delta, and
+1-d for the opacity delta. The three heads are zero-initialised so the
+at-construction forward pass returns <code class="docutils literal notranslate"><span class="pre">(means,</span> <span class="pre">quats,</span> <span class="pre">opacities)</span></code>
+unchanged (identity map). Locked by
+<code class="docutils literal notranslate"><span class="pre">test_deform_net_zero_init_is_identity</span></code>.</p>
+<p>The <em>t</em> argument is reserved for future time-aware extensions; the
+current implementation expects time information to already be encoded
+into <code class="docutils literal notranslate"><span class="pre">plane_features</span></code> via <code class="xref py py-class docutils literal notranslate"><span class="pre">HexPlaneField</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>feature_dim</strong> – Dimensionality of <code class="docutils literal notranslate"><span class="pre">plane_features</span></code> (must match
+the producing <code class="xref py py-class docutils literal notranslate"><span class="pre">HexPlaneField</span></code>’s <code class="docutils literal notranslate"><span class="pre">feat_dim</span></code>).</p></li>
+<li><p><strong>hidden_dim</strong> – Trunk width. Default <code class="docutils literal notranslate"><span class="pre">64</span></code>.</p></li>
+<li><p><strong>num_layers</strong> – Number of <code class="docutils literal notranslate"><span class="pre">Linear</span> <span class="pre">+</span> <span class="pre">ReLU</span></code> blocks in the trunk
+(must be <code class="docutils literal notranslate"><span class="pre">&gt;=</span> <span class="pre">1</span></code>). Default <code class="docutils literal notranslate"><span class="pre">3</span></code>.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.deformation.DeformNetwork.forward">
+<span class="sig-name descname"><span class="pre">forward</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">means</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">opacities</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">t</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plane_features</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.14)"><span class="pre">Tuple</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/deformation.html#DeformNetwork.forward"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.deformation.DeformNetwork.forward" title="Link to this definition">¶</a></dt>
+<dd><p>Apply the per-Gaussian deformation deltas.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>means</strong> – <code class="docutils literal notranslate"><span class="pre">(N,</span> <span class="pre">3)</span></code> Gaussian centres.</p></li>
+<li><p><strong>quats</strong> – <code class="docutils literal notranslate"><span class="pre">(N,</span> <span class="pre">4)</span></code> rotation quaternions (any layout; deltas are
+added in the same layout).</p></li>
+<li><p><strong>opacities</strong> – <code class="docutils literal notranslate"><span class="pre">(N,</span> <span class="pre">1)</span></code> opacity values (raw or activated; the
+delta is added in the same space).</p></li>
+<li><p><strong>t</strong> – <code class="docutils literal notranslate"><span class="pre">(N,</span> <span class="pre">1)</span></code> (or broadcastable) time stamp. Currently ignored;
+kept in the signature for forward-compatibility with
+time-aware variants.</p></li>
+<li><p><strong>plane_features</strong> – <code class="docutils literal notranslate"><span class="pre">(N,</span> <span class="pre">feature_dim)</span></code> features sampled from the
+HexPlane field. Must share dtype with the other tensors.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><code class="docutils literal notranslate"><span class="pre">(means_new,</span> <span class="pre">quats_new,</span> <span class="pre">opacities_new)</span></code> — same shapes as the
+inputs.</p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.14)"><strong>ValueError</strong></a> – on batch-dim mismatch, plane-feature-dim mismatch,
+    or dtype mismatch among the four tensors.</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.deformation.DeformationTable">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">DeformationTable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">num_gaussians</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">device</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/deformation.html#DeformationTable"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.deformation.DeformationTable" title="Link to this definition">¶</a></dt>
+<dd><p>Per-Gaussian boolean table marking which Gaussians are dynamic.</p>
+<p>Used by <code class="xref py py-class docutils literal notranslate"><span class="pre">gsplat.contrib.dynamic.DynamicStrategy</span></code> to decide which
+Gaussians get fed through <a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformNetwork" title="gsplat.contrib.dynamic.deformation.DeformNetwork"><code class="xref py py-class docutils literal notranslate"><span class="pre">DeformNetwork</span></code></a> each step. Resize
+lock-step with the gsplat <code class="docutils literal notranslate"><span class="pre">DefaultStrategy</span></code> densification ops via
+<a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable.prune" title="gsplat.contrib.dynamic.deformation.DeformationTable.prune"><code class="xref py py-meth docutils literal notranslate"><span class="pre">prune()</span></code></a>, <a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable.duplicate" title="gsplat.contrib.dynamic.deformation.DeformationTable.duplicate"><code class="xref py py-meth docutils literal notranslate"><span class="pre">duplicate()</span></code></a>, and <a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable.split" title="gsplat.contrib.dynamic.deformation.DeformationTable.split"><code class="xref py py-meth docutils literal notranslate"><span class="pre">split()</span></code></a>.</p>
+<p>The table is a plain <code class="docutils literal notranslate"><span class="pre">torch.bool</span></code> tensor (no autograd, no parameters)
+so it adds zero overhead to the optimiser state.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>num_gaussians</strong> – Initial Gaussian count.</p></li>
+<li><p><strong>device</strong> – Optional device (defaults to CPU).</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.deformation.DeformationTable.duplicate">
+<span class="sig-name descname"><span class="pre">duplicate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">indices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/deformation.html#DeformationTable.duplicate"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.deformation.DeformationTable.duplicate" title="Link to this definition">¶</a></dt>
+<dd><p>Append duplicates of the given indices (DefaultStrategy duplicate op).</p>
+<p>Originals stay; one duplicate is appended per index, inheriting
+the parent’s dynamic flag.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.deformation.DeformationTable.prune">
+<span class="sig-name descname"><span class="pre">prune</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keep_mask</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/deformation.html#DeformationTable.prune"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.deformation.DeformationTable.prune" title="Link to this definition">¶</a></dt>
+<dd><p>Drop Gaussians where <em>keep_mask</em> is False (DefaultStrategy prune op).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>keep_mask</strong> – <code class="docutils literal notranslate"><span class="pre">(N,)</span></code> bool tensor with <code class="docutils literal notranslate"><span class="pre">True</span></code> for surviving
+Gaussians. Length must equal current table size.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.deformation.DeformationTable.set_indices">
+<span class="sig-name descname"><span class="pre">set_indices</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">indices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/deformation.html#DeformationTable.set_indices"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.deformation.DeformationTable.set_indices" title="Link to this definition">¶</a></dt>
+<dd><p>Mark the given Gaussian indices as dynamic (or static if <em>value</em> is False).</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.deformation.DeformationTable.split">
+<span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">indices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">factor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/deformation.html#DeformationTable.split"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.deformation.DeformationTable.split" title="Link to this definition">¶</a></dt>
+<dd><p>Replace each index with <em>factor</em> children (DefaultStrategy split op).</p>
+<p>Original indices are removed; <code class="docutils literal notranslate"><span class="pre">factor</span></code> children are appended per
+split index, each inheriting the parent’s dynamic flag.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>indices</strong> – <code class="docutils literal notranslate"><span class="pre">(S,)</span></code> indices to split.</p></li>
+<li><p><strong>factor</strong> – Children per split. Default <code class="docutils literal notranslate"><span class="pre">2</span></code> (matches the gsplat
+<code class="docutils literal notranslate"><span class="pre">DefaultStrategy</span></code> convention).</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<p id="module-gsplat.contrib.dynamic.regulation">HexPlane regularizers (experimental).</p>
+<p>Three regularizers ported from G-SHARP v0.2’s
+<code class="docutils literal notranslate"><span class="pre">training/scene/regulation.py</span></code>. They operate on lists of feature-plane
+tensors of shape <code class="docutils literal notranslate"><span class="pre">(B,</span> <span class="pre">C,</span> <span class="pre">H,</span> <span class="pre">W)</span></code> — typically the per-scale
+<code class="xref py py-class docutils literal notranslate"><span class="pre">gsplat.contrib.dynamic.HexPlaneField</span></code> planes.</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#gsplat.contrib.dynamic.regulation.plane_smoothness" title="gsplat.contrib.dynamic.regulation.plane_smoothness"><code class="xref py py-func docutils literal notranslate"><span class="pre">plane_smoothness()</span></code></a> and <a class="reference internal" href="#gsplat.contrib.dynamic.regulation.time_smoothness" title="gsplat.contrib.dynamic.regulation.time_smoothness"><code class="xref py py-func docutils literal notranslate"><span class="pre">time_smoothness()</span></code></a> share the same math
+(sum of squared second-difference along the H axis); the distinction is
+<em>which</em> planes the caller passes. For HexPlane outputs, the spatial
+planes <code class="docutils literal notranslate"><span class="pre">[xy,</span> <span class="pre">xz,</span> <span class="pre">yz]</span></code> (combo indices <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1,</span> <span class="pre">3]</span></code>) are smoothed
+spatially, and the spatio-temporal planes <code class="docutils literal notranslate"><span class="pre">[xt,</span> <span class="pre">yt,</span> <span class="pre">zt]</span></code> (combo
+indices <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">4,</span> <span class="pre">5]</span></code>) are smoothed in time.</p></li>
+<li><p><a class="reference internal" href="#gsplat.contrib.dynamic.regulation.time_l1" title="gsplat.contrib.dynamic.regulation.time_l1"><code class="xref py py-func docutils literal notranslate"><span class="pre">time_l1()</span></code></a> regularizes spatio-temporal planes toward 1.0 (their
+initialization), encouraging static regions to stay put — matches
+<code class="docutils literal notranslate"><span class="pre">L1TimePlanes</span></code> in the G-SHARP source.</p></li>
+</ul>
+<p>Caller selects which planes go where; these functions just iterate the
+input list and sum the result.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.regulation.hexplane_regularization">
+<span class="sig-name descname"><span class="pre">hexplane_regularization</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">field</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField" title="gsplat.contrib.dynamic.hexplane.HexPlaneField"><span class="pre">HexPlaneField</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">lambda_plane_smooth</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lambda_time_smooth</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lambda_time_l1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/regulation.html#hexplane_regularization"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.regulation.hexplane_regularization" title="Link to this definition">¶</a></dt>
+<dd><p>Convenience wrapper: applies the three HexPlane regularizers using the
+field’s own spatial / temporal plane accessors.</p>
+<p>Use this instead of calling <a class="reference internal" href="#gsplat.contrib.dynamic.regulation.plane_smoothness" title="gsplat.contrib.dynamic.regulation.plane_smoothness"><code class="xref py py-func docutils literal notranslate"><span class="pre">plane_smoothness()</span></code></a>,
+<a class="reference internal" href="#gsplat.contrib.dynamic.regulation.time_smoothness" title="gsplat.contrib.dynamic.regulation.time_smoothness"><code class="xref py py-func docutils literal notranslate"><span class="pre">time_smoothness()</span></code></a>, <a class="reference internal" href="#gsplat.contrib.dynamic.regulation.time_l1" title="gsplat.contrib.dynamic.regulation.time_l1"><code class="xref py py-func docutils literal notranslate"><span class="pre">time_l1()</span></code></a> with hand-partitioned plane
+lists — the spatial / temporal partition is a property of the
+HexPlane construction and lives on
+<code class="xref py py-class docutils literal notranslate"><span class="pre">gsplat.contrib.dynamic.HexPlaneField</span></code>. Hand-rolled partitions
+drift when HexPlaneField is refactored.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>field</strong> – A <code class="xref py py-class docutils literal notranslate"><span class="pre">HexPlaneField</span></code> instance.</p></li>
+<li><p><strong>lambda_plane_smooth</strong> – Scalar weight for the spatial smoothness term.</p></li>
+<li><p><strong>lambda_time_smooth</strong> – Scalar weight for the temporal smoothness term.</p></li>
+<li><p><strong>lambda_time_l1</strong> – Scalar weight for the temporal L1 deviation term.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Scalar tensor — weighted sum of the three regularizers.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.regulation.plane_smoothness">
+<span class="sig-name descname"><span class="pre">plane_smoothness</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">planes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Sequence" title="(in Python v3.14)"><span class="pre">Sequence</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/regulation.html#plane_smoothness"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.regulation.plane_smoothness" title="Link to this definition">¶</a></dt>
+<dd><p>Spatial 2D smoothness — sum of mean squared second-difference along H.</p>
+<p>Pass the <em>spatial</em> HexPlane planes (combo indices <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1,</span> <span class="pre">3]</span></code> of a
+4D HexPlane: <code class="docutils literal notranslate"><span class="pre">xy</span></code>, <code class="docutils literal notranslate"><span class="pre">xz</span></code>, <code class="docutils literal notranslate"><span class="pre">yz</span></code>) for the spatial-smoothness
+regularizer described in the G-SHARP proposal.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>planes</strong> – Iterable of 4D <code class="docutils literal notranslate"><span class="pre">(B,</span> <span class="pre">C,</span> <span class="pre">H,</span> <span class="pre">W)</span></code> plane tensors.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Scalar tensor (sum across planes; mean within each plane).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.regulation.time_l1">
+<span class="sig-name descname"><span class="pre">time_l1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">planes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Sequence" title="(in Python v3.14)"><span class="pre">Sequence</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/regulation.html#time_l1"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.regulation.time_l1" title="Link to this definition">¶</a></dt>
+<dd><p>L1 deviation from 1.0 on spatio-temporal planes.</p>
+<p>HexPlane spatio-temporal planes are initialised to 1.0 so deformation
+starts identity-like. <code class="docutils literal notranslate"><span class="pre">time_l1</span></code> penalises their deviation from 1.0,
+encouraging static tissue to keep an identity (no-time-deformation)
+response. Matches G-SHARP’s <code class="docutils literal notranslate"><span class="pre">L1TimePlanes</span></code> regularizer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>planes</strong> – Iterable of plane tensors (any shape with <code class="docutils literal notranslate"><span class="pre">mean()</span></code>).</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Scalar L1 deviation summed across planes (mean within each plane).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.regulation.time_smoothness">
+<span class="sig-name descname"><span class="pre">time_smoothness</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">planes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Sequence" title="(in Python v3.14)"><span class="pre">Sequence</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/regulation.html#time_smoothness"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.regulation.time_smoothness" title="Link to this definition">¶</a></dt>
+<dd><p>Temporal smoothness — same math as <a class="reference internal" href="#gsplat.contrib.dynamic.regulation.plane_smoothness" title="gsplat.contrib.dynamic.regulation.plane_smoothness"><code class="xref py py-func docutils literal notranslate"><span class="pre">plane_smoothness()</span></code></a>.</p>
+<p>Pass the <em>spatio-temporal</em> HexPlane planes (combo indices
+<code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">4,</span> <span class="pre">5]</span></code> of a 4D HexPlane: <code class="docutils literal notranslate"><span class="pre">xt</span></code>, <code class="docutils literal notranslate"><span class="pre">yt</span></code>, <code class="docutils literal notranslate"><span class="pre">zt</span></code>). For these
+planes the H axis is the temporal axis (per the
+<code class="xref py py-func docutils literal notranslate"><span class="pre">HexPlaneField._init_grid_param()</span></code> reversed-order layout), so
+the second-difference squared is the per-plane temporal smoothness.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>planes</strong> – Iterable of 4D <code class="docutils literal notranslate"><span class="pre">(B,</span> <span class="pre">C,</span> <span class="pre">H,</span> <span class="pre">W)</span></code> spatio-temporal plane tensors.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Scalar tensor.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<p id="module-gsplat.contrib.dynamic.strategy">DynamicStrategy — deformable extension of <code class="xref py py-class docutils literal notranslate"><span class="pre">DefaultStrategy</span></code>.</p>
+<p>Public API:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy" title="gsplat.contrib.dynamic.strategy.DynamicStrategy"><code class="xref py py-class docutils literal notranslate"><span class="pre">DynamicStrategy</span></code></a> — subclass of <code class="xref py py-class docutils literal notranslate"><span class="pre">gsplat.strategy.DefaultStrategy</span></code>
+that additionally tracks a <code class="xref py py-class docutils literal notranslate"><span class="pre">DeformationTable</span></code> and resizes it
+in lock-step with each densify / prune op so that subsequent forward
+passes can route only the dynamic Gaussians through the deform-net.</p></li>
+</ul>
+<p>Design notes:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">gsplat.rasterization</span></code> has no time axis. The deformation pass itself
+(HexPlane → <code class="xref py py-class docutils literal notranslate"><span class="pre">DeformNetwork</span></code> → <code class="docutils literal notranslate"><span class="pre">(means,</span> <span class="pre">quats,</span> <span class="pre">opacities)</span></code>) lives
+in the trainer (<code class="docutils literal notranslate"><span class="pre">examples/dynamic_surgical_trainer.py</span></code>) and runs <em>before</em>
+<code class="docutils literal notranslate"><span class="pre">rasterization(...)</span></code> is called, mirroring G-SHARP’s <code class="docutils literal notranslate"><span class="pre">rasterize_splats</span></code>.
+This strategy class only owns the densification policy + deformation-table
+bookkeeping; it does <strong>not</strong> apply the deform-net itself.</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">&#64;dataclass</span></code> decorator is intentionally not applied here: no new
+fields are added with defaults, so we inherit the parent’s auto-generated
+<code class="docutils literal notranslate"><span class="pre">__init__</span></code> cleanly without dataclass-field ordering errors.</p></li>
+</ul>
+<dl class="py class">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.strategy.DynamicStrategy">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">DynamicStrategy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">prune_opa</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.005</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">grow_grad2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.0002</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">grow_scale3d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.01</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">grow_scale2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.05</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prune_scale3d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prune_scale2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.15</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">refine_scale2d_stop_iter</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">refine_start_iter</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">500</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">refine_stop_iter</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">15000</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reset_every</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">3000</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">refine_every</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">100</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pause_refine_after_reset</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">absgrad</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">revised_opacity</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key_for_gradient</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Literal" title="(in Python v3.14)"><span class="pre">Literal</span></a><span class="p"><span class="pre">[</span></span><span class="s"><span class="pre">'means2d'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'gradient_2dgs'</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'means2d'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/strategy.html#DynamicStrategy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy" title="Link to this definition">¶</a></dt>
+<dd><p>Deformable-aware densification / pruning strategy.</p>
+<p>Extra invariants on top of <code class="xref py py-class docutils literal notranslate"><span class="pre">DefaultStrategy</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">state[&quot;dynamic_mask&quot;]</span></code> is a per-Gaussian <code class="docutils literal notranslate"><span class="pre">torch.bool</span></code> tensor of
+shape <code class="docutils literal notranslate"><span class="pre">(num_gaussians,)</span></code> that flags which Gaussians the trainer
+should route through the DeformNet. Resized in lock-step with
+<code class="docutils literal notranslate"><span class="pre">params[&quot;means&quot;]</span></code> by gsplat’s strategy ops (which iterate every
+tensor in <em>state</em> and apply the per-Gaussian split / duplicate /
+prune permutation — see <code class="docutils literal notranslate"><span class="pre">gsplat/strategy/ops.py:135,</span> <span class="pre">191-195,</span>
+<span class="pre">223-225</span></code>). Identity is preserved across split (children inherit
+the parent’s flag).</p></li>
+</ul>
+<p>Note that the HexPlane and DeformNet trainables are <strong>not</strong> part of
+<em>params</em>. gsplat’s densification ops blindly iterate every entry in
+<em>params</em> and split/duplicate/prune them per-Gaussian; non-per-Gaussian
+tensors (HexPlane plane grids, DeformNet MLP weights) would be indexed
+with out-of-bounds per-Gaussian indices. Keep those trainables in
+their own optimizers, wired separately by the trainer (see
+<code class="docutils literal notranslate"><span class="pre">examples/dynamic_surgical_trainer.py:build_deform_modules</span></code>).</p>
+<p>Historical note: an earlier version of this strategy stored a
+<code class="xref py py-class docutils literal notranslate"><span class="pre">DeformationTable</span></code> wrapper at <code class="docutils literal notranslate"><span class="pre">state[&quot;deformation_table&quot;]</span></code>
+and resized it via a custom <code class="docutils literal notranslate"><span class="pre">_resize_table</span></code> hook. That hook did
+not preserve survivor identity across split, and the trainer never
+consulted the mask anyway. Wiring it through <em>state</em> as a plain
+tensor (so gsplat’s ops do the right thing) closes both gaps. The
+wrapper class is still importable for back-compat; the canonical
+mask is the tensor in <em>state</em>.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.strategy.DynamicStrategy.check_sanity">
+<span class="sig-name descname"><span class="pre">check_sanity</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">params</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Parameter</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ParameterDict</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optimizers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Optimizer</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/strategy.html#DynamicStrategy.check_sanity"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.check_sanity" title="Link to this definition">¶</a></dt>
+<dd><p>Sanity-check identical to <code class="xref py py-meth docutils literal notranslate"><span class="pre">DefaultStrategy.check_sanity()</span></code>.</p>
+<p>The HexPlane / DeformNet trainables live outside <em>params</em> (see the
+class docstring), so this method has no extra requirements beyond
+the parent’s “params and optimizers share keys, and per-Gaussian
+keys means/scales/quats/opacities are present” check.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.strategy.DynamicStrategy.initialize_state">
+<span class="sig-name descname"><span class="pre">initialize_state</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">scene_scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_gaussians</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">device</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">init_dynamic</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.14)"><span class="pre">Any</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/strategy.html#DynamicStrategy.initialize_state"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.initialize_state" title="Link to this definition">¶</a></dt>
+<dd><p>Extend <code class="xref py py-meth docutils literal notranslate"><span class="pre">DefaultStrategy.initialize_state()</span></code> with a per-Gaussian
+dynamic mask.</p>
+<p>The mask is stored under <code class="docutils literal notranslate"><span class="pre">state[&quot;dynamic_mask&quot;]</span></code> as a plain bool
+tensor (shape <code class="docutils literal notranslate"><span class="pre">(num_gaussians,)</span></code>). It is <strong>not</strong> wrapped in a
+<code class="xref py py-class docutils literal notranslate"><span class="pre">DeformationTable</span></code> so that gsplat’s densification ops in
+<code class="xref py py-mod docutils literal notranslate"><span class="pre">gsplat.strategy.ops</span></code> (which iterate every tensor in <em>state</em>
+and apply the per-Gaussian split / duplicate / prune permutation
+automatically — see ops.py:135, 191-195, 223-225) can resize it in
+lock-step with <code class="docutils literal notranslate"><span class="pre">params[&quot;means&quot;]</span></code> with identity preservation
+across split. The wrapper class is still exposed for callers that
+want the helper API (see <code class="xref py py-class docutils literal notranslate"><span class="pre">DeformationTable</span></code>), but the
+canonical mask now lives in <em>state</em>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>scene_scale</strong> – Forwarded to the parent.</p></li>
+<li><p><strong>num_gaussians</strong> – Initial Gaussian count.</p></li>
+<li><p><strong>device</strong> – Device for the mask tensor (defaults to CPU).</p></li>
+<li><p><strong>init_dynamic</strong> – Initial value for every flag. <code class="docutils literal notranslate"><span class="pre">True</span></code> matches the
+current trainer behaviour (every Gaussian goes through
+<code class="xref py py-class docutils literal notranslate"><span class="pre">DeformNetwork</span></code>); set <code class="docutils literal notranslate"><span class="pre">False</span></code> if you have a
+static-by-default workflow and intend to flip dynamic
+indices manually.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The strategy state dict with the additional <code class="docutils literal notranslate"><span class="pre">dynamic_mask</span></code>
+entry (a <code class="docutils literal notranslate"><span class="pre">torch.bool</span></code> tensor of shape <code class="docutils literal notranslate"><span class="pre">(num_gaussians,)</span></code>).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.strategy.DynamicStrategy.step_post_backward">
+<span class="sig-name descname"><span class="pre">step_post_backward</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">params</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Parameter</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ParameterDict</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optimizers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Optimizer</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.14)"><span class="pre">Any</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">info</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.14)"><span class="pre">Any</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">packed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/strategy.html#DynamicStrategy.step_post_backward"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.step_post_backward" title="Link to this definition">¶</a></dt>
+<dd><p>Post-backward hook — defers to the parent.</p>
+<p><code class="docutils literal notranslate"><span class="pre">state[&quot;dynamic_mask&quot;]</span></code> is resized in lock-step with the per-Gaussian
+parameters automatically by gsplat’s densification ops (which iterate
+every tensor in <em>state</em> and apply the same per-Gaussian permutation
+as the params — see <code class="docutils literal notranslate"><span class="pre">gsplat/strategy/ops.py:135</span></code>). No extra hook
+needed here.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.14)"><strong>RuntimeError</strong></a> – if <code class="docutils literal notranslate"><span class="pre">state[&quot;dynamic_mask&quot;]</span></code> is missing (i.e.
+    <a class="reference internal" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.initialize_state" title="gsplat.contrib.dynamic.strategy.DynamicStrategy.initialize_state"><code class="xref py py-meth docutils literal notranslate"><span class="pre">initialize_state()</span></code></a> wasn’t called first).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.contrib.dynamic.strategy.DynamicStrategy.step_pre_backward">
+<span class="sig-name descname"><span class="pre">step_pre_backward</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">params</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Parameter</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ParameterDict</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optimizers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Optimizer</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.14)"><span class="pre">Any</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">info</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.14)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.14)"><span class="pre">Any</span></a><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/contrib/dynamic/strategy.html#DynamicStrategy.step_pre_backward"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.step_pre_backward" title="Link to this definition">¶</a></dt>
+<dd><p>Pre-backward hook — passthrough to the parent.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="rasterization.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Rasterization</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="compression.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Compression</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2023, nerfstudio team
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">gsplat.contrib (experimental)</a><ul>
+<li><a class="reference internal" href="#module-gsplat.contrib.dynamic.hexplane">Dynamic / 4D Gaussians</a><ul>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField"><code class="docutils literal notranslate"><span class="pre">HexPlaneField</span></code></a><ul>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField.forward"><code class="docutils literal notranslate"><span class="pre">HexPlaneField.forward()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField.spatial_planes"><code class="docutils literal notranslate"><span class="pre">HexPlaneField.spatial_planes()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.hexplane.HexPlaneField.temporal_planes"><code class="docutils literal notranslate"><span class="pre">HexPlaneField.temporal_planes()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformNetwork"><code class="docutils literal notranslate"><span class="pre">DeformNetwork</span></code></a><ul>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformNetwork.forward"><code class="docutils literal notranslate"><span class="pre">DeformNetwork.forward()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable"><code class="docutils literal notranslate"><span class="pre">DeformationTable</span></code></a><ul>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable.duplicate"><code class="docutils literal notranslate"><span class="pre">DeformationTable.duplicate()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable.prune"><code class="docutils literal notranslate"><span class="pre">DeformationTable.prune()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable.set_indices"><code class="docutils literal notranslate"><span class="pre">DeformationTable.set_indices()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.deformation.DeformationTable.split"><code class="docutils literal notranslate"><span class="pre">DeformationTable.split()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.regulation.hexplane_regularization"><code class="docutils literal notranslate"><span class="pre">hexplane_regularization()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.regulation.plane_smoothness"><code class="docutils literal notranslate"><span class="pre">plane_smoothness()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.regulation.time_l1"><code class="docutils literal notranslate"><span class="pre">time_l1()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.regulation.time_smoothness"><code class="docutils literal notranslate"><span class="pre">time_smoothness()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy"><code class="docutils literal notranslate"><span class="pre">DynamicStrategy</span></code></a><ul>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.check_sanity"><code class="docutils literal notranslate"><span class="pre">DynamicStrategy.check_sanity()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.initialize_state"><code class="docutils literal notranslate"><span class="pre">DynamicStrategy.initialize_state()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.step_post_backward"><code class="docutils literal notranslate"><span class="pre">DynamicStrategy.step_post_backward()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.contrib.dynamic.strategy.DynamicStrategy.step_pre_backward"><code class="docutils literal notranslate"><span class="pre">DynamicStrategy.step_pre_backward()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
+</html>

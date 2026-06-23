@@ -243,6 +243,7 @@
   <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="examples/colmap.html">Fit a COLMAP Capture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples/dynamic_surgical.html">Dynamic Surgical Scene Reconstruction (G-SHARP port, experimental)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/image.html">Fit a Single Image</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/large_scale.html">Render a Large Scene</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/ncore.html">Train on an NCore v4 Capture</a></li>
@@ -254,6 +255,7 @@
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="apis/compression.html">Compression</a></li>
+<li class="toctree-l1"><a class="reference internal" href="apis/contrib.html">gsplat.contrib (experimental)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="apis/rasterization.html">Rasterization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="apis/strategy.html">Densification</a></li>
 <li class="toctree-l1"><a class="reference internal" href="apis/utils.html">Utils</a></li>
@@ -268,6 +270,10 @@
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="migration/migration_inria.html">Migrate from diff-gaussian-rasterization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="migration/migration_legacy.html">Migrate from gsplat v0.1.11</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Proposals</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="proposals/gsharp_v0_2_port.html">G-SHARP v0.2 Integration Proposal</a></li>
 </ul>
 
 </div>
@@ -303,7 +309,7 @@
           
 <section class="genindex-section">
   <h1 id="index">Index</h1>
-  <div class="genindex-jumpbox"><a href="#A"><strong>A</strong></a> | <a href="#C"><strong>C</strong></a> | <a href="#D"><strong>D</strong></a> | <a href="#F"><strong>F</strong></a> | <a href="#I"><strong>I</strong></a> | <a href="#M"><strong>M</strong></a> | <a href="#P"><strong>P</strong></a> | <a href="#Q"><strong>Q</strong></a> | <a href="#R"><strong>R</strong></a> | <a href="#S"><strong>S</strong></a> | <a href="#W"><strong>W</strong></a></div>
+  <div class="genindex-jumpbox"><a href="#A"><strong>A</strong></a> | <a href="#C"><strong>C</strong></a> | <a href="#D"><strong>D</strong></a> | <a href="#F"><strong>F</strong></a> | <a href="#G"><strong>G</strong></a> | <a href="#H"><strong>H</strong></a> | <a href="#I"><strong>I</strong></a> | <a href="#M"><strong>M</strong></a> | <a href="#P"><strong>P</strong></a> | <a href="#Q"><strong>Q</strong></a> | <a href="#R"><strong>R</strong></a> | <a href="#S"><strong>S</strong></a> | <a href="#T"><strong>T</strong></a> | <a href="#W"><strong>W</strong></a></div>
 </section>
 <section id="A" class="genindex-section">
   <h2>A</h2>
@@ -326,6 +332,8 @@
         <li><a href="apis/strategy.html#gsplat.DefaultStrategy.check_sanity">check_sanity() (DefaultStrategy method)</a>
 
         <ul>
+          <li><a href="apis/contrib.html#gsplat.contrib.dynamic.strategy.DynamicStrategy.check_sanity">(DynamicStrategy method)</a>
+</li>
           <li><a href="apis/strategy.html#gsplat.MCMCStrategy.check_sanity">(MCMCStrategy method)</a>
 </li>
         </ul></li>
@@ -343,9 +351,17 @@
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="apis/compression.html#gsplat.PngCompression.decompress">decompress() (PngCompression method)</a>
 </li>
+        <li><a href="apis/strategy.html#gsplat.DefaultStrategy">DefaultStrategy (class in gsplat)</a>
+</li>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable">DeformationTable (class in gsplat.contrib.dynamic.deformation)</a>
+</li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
-        <li><a href="apis/strategy.html#gsplat.DefaultStrategy">DefaultStrategy (class in gsplat)</a>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformNetwork">DeformNetwork (class in gsplat.contrib.dynamic.deformation)</a>
+</li>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable.duplicate">duplicate() (DeformationTable method)</a>
+</li>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.strategy.DynamicStrategy">DynamicStrategy (class in gsplat.contrib.dynamic.strategy)</a>
 </li>
     </ul></td>
   </tr></table>
@@ -355,11 +371,76 @@
   <h2>F</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformNetwork.forward">forward() (DeformNetwork method)</a>
+
+        <ul>
+          <li><a href="apis/contrib.html#gsplat.contrib.dynamic.hexplane.HexPlaneField.forward">(HexPlaneField method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="apis/utils.html#gsplat.fully_fused_projection">fully_fused_projection() (in module gsplat)</a>
+</li>
+        <li><a href="apis/utils.html#gsplat.fully_fused_projection_2dgs">fully_fused_projection_2dgs() (in module gsplat)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="G" class="genindex-section">
+  <h2>G</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li>
+    gsplat.contrib
+
+        <ul>
+          <li><a href="apis/contrib.html#module-gsplat.contrib">module</a>
+</li>
+        </ul></li>
+        <li>
+    gsplat.contrib.dynamic.deformation
+
+        <ul>
+          <li><a href="apis/contrib.html#module-gsplat.contrib.dynamic.deformation">module</a>
+</li>
+        </ul></li>
+        <li>
+    gsplat.contrib.dynamic.hexplane
+
+        <ul>
+          <li><a href="apis/contrib.html#module-gsplat.contrib.dynamic.hexplane">module</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li>
+    gsplat.contrib.dynamic.regulation
+
+        <ul>
+          <li><a href="apis/contrib.html#module-gsplat.contrib.dynamic.regulation">module</a>
+</li>
+        </ul></li>
+        <li>
+    gsplat.contrib.dynamic.strategy
+
+        <ul>
+          <li><a href="apis/contrib.html#module-gsplat.contrib.dynamic.strategy">module</a>
+</li>
+        </ul></li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="H" class="genindex-section">
+  <h2>H</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.regulation.hexplane_regularization">hexplane_regularization() (in module gsplat.contrib.dynamic.regulation)</a>
 </li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
-        <li><a href="apis/utils.html#gsplat.fully_fused_projection_2dgs">fully_fused_projection_2dgs() (in module gsplat)</a>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.hexplane.HexPlaneField">HexPlaneField (class in gsplat.contrib.dynamic.hexplane)</a>
 </li>
     </ul></td>
   </tr></table>
@@ -372,6 +453,8 @@
         <li><a href="apis/strategy.html#gsplat.DefaultStrategy.initialize_state">initialize_state() (DefaultStrategy method)</a>
 
         <ul>
+          <li><a href="apis/contrib.html#gsplat.contrib.dynamic.strategy.DynamicStrategy.initialize_state">(DynamicStrategy method)</a>
+</li>
           <li><a href="apis/strategy.html#gsplat.MCMCStrategy.initialize_state">(MCMCStrategy method)</a>
 </li>
         </ul></li>
@@ -391,6 +474,21 @@
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="apis/strategy.html#gsplat.MCMCStrategy">MCMCStrategy (class in gsplat)</a>
 </li>
+        <li>
+    module
+
+        <ul>
+          <li><a href="apis/contrib.html#module-gsplat.contrib">gsplat.contrib</a>
+</li>
+          <li><a href="apis/contrib.html#module-gsplat.contrib.dynamic.deformation">gsplat.contrib.dynamic.deformation</a>
+</li>
+          <li><a href="apis/contrib.html#module-gsplat.contrib.dynamic.hexplane">gsplat.contrib.dynamic.hexplane</a>
+</li>
+          <li><a href="apis/contrib.html#module-gsplat.contrib.dynamic.regulation">gsplat.contrib.dynamic.regulation</a>
+</li>
+          <li><a href="apis/contrib.html#module-gsplat.contrib.dynamic.strategy">gsplat.contrib.dynamic.strategy</a>
+</li>
+        </ul></li>
     </ul></td>
   </tr></table>
 </section>
@@ -399,11 +497,15 @@
   <h2>P</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.regulation.plane_smoothness">plane_smoothness() (in module gsplat.contrib.dynamic.regulation)</a>
+</li>
         <li><a href="apis/compression.html#gsplat.PngCompression">PngCompression (class in gsplat)</a>
 </li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="apis/utils.html#gsplat.proj">proj() (in module gsplat)</a>
+</li>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable.prune">prune() (DeformationTable method)</a>
 </li>
     </ul></td>
   </tr></table>
@@ -449,17 +551,45 @@
   <h2>S</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable.set_indices">set_indices() (DeformationTable method)</a>
+</li>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.hexplane.HexPlaneField.spatial_planes">spatial_planes() (HexPlaneField method)</a>
+</li>
         <li><a href="apis/utils.html#gsplat.spherical_harmonics">spherical_harmonics() (in module gsplat)</a>
 </li>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.deformation.DeformationTable.split">split() (DeformationTable method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="apis/strategy.html#gsplat.DefaultStrategy.step_post_backward">step_post_backward() (DefaultStrategy method)</a>
 
         <ul>
+          <li><a href="apis/contrib.html#gsplat.contrib.dynamic.strategy.DynamicStrategy.step_post_backward">(DynamicStrategy method)</a>
+</li>
           <li><a href="apis/strategy.html#gsplat.MCMCStrategy.step_post_backward">(MCMCStrategy method)</a>
 </li>
         </ul></li>
+        <li><a href="apis/strategy.html#gsplat.DefaultStrategy.step_pre_backward">step_pre_backward() (DefaultStrategy method)</a>
+
+        <ul>
+          <li><a href="apis/contrib.html#gsplat.contrib.dynamic.strategy.DynamicStrategy.step_pre_backward">(DynamicStrategy method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="T" class="genindex-section">
+  <h2>T</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.hexplane.HexPlaneField.temporal_planes">temporal_planes() (HexPlaneField method)</a>
+</li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
-        <li><a href="apis/strategy.html#gsplat.DefaultStrategy.step_pre_backward">step_pre_backward() (DefaultStrategy method)</a>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.regulation.time_l1">time_l1() (in module gsplat.contrib.dynamic.regulation)</a>
+</li>
+        <li><a href="apis/contrib.html#gsplat.contrib.dynamic.regulation.time_smoothness">time_smoothness() (in module gsplat.contrib.dynamic.regulation)</a>
 </li>
     </ul></td>
   </tr></table>

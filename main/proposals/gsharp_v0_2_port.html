@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Migrate from diff-gaussian-rasterization" href="../migration/migration_inria.html"><link rel="prev" title="Profiling" href="profile.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="prev" title="Migrate from gsplat v0.1.11" href="../migration/migration_legacy.html">
 
     <!-- Generated with Sphinx 8.1.3 and Furo 2025.12.19 -->
-        <title>Tests - gsplat documentation</title>
+        <title>G-SHARP v0.2 Integration Proposal - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -263,10 +263,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../apis/utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
-<ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="eval.html">Evaluation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="profile.html">Profiling</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Tests</a></li>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../tests/eval.html">Evaluation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tests/profile.html">Profiling</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tests/tests.html">Tests</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Migration</span></p>
 <ul>
@@ -274,8 +274,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../migration/migration_legacy.html">Migrate from gsplat v0.1.11</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Proposals</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../proposals/gsharp_v0_2_port.html">G-SHARP v0.2 Integration Proposal</a></li>
+<ul class="current">
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">G-SHARP v0.2 Integration Proposal</a></li>
 </ul>
 
 </div>
@@ -296,7 +296,7 @@
         </a>
         <div class="content-icon-container">
           <div class="view-this-page">
-  <a class="muted-link" href="../_sources/tests/tests.rst.txt" title="View this page">
+  <a class="muted-link" href="../_sources/proposals/gsharp_v0_2_port.rst.txt" title="View this page">
     <svg><use href="#svg-eye"></use></svg>
     <span class="visually-hidden">View this page</span>
   </a>
@@ -314,19 +314,202 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="tests">
-<h1>Tests<a class="headerlink" href="#tests" title="Link to this heading">¶</a></h1>
-<section id="testing-and-verifying-cuda-implementations">
-<h2>Testing and verifying CUDA implementations<a class="headerlink" href="#testing-and-verifying-cuda-implementations" title="Link to this heading">¶</a></h2>
-<p>The <cite>tests/</cite> folder provides automatic test scripts that are ran to verify that the CUDA implementations agree with native PyTorch ones.
-They are also ran with any pull-requests into main branch on our github repository.</p>
-<p>The tests include:</p>
-<div class="literal-block-wrapper docutils container" id="id1">
-<div class="code-block-caption"><span class="caption-text">tests/</span><a class="headerlink" href="#id1" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>./test_basic.py
-</pre></div>
+          <section id="g-sharp-v0-2-integration-proposal">
+<h1>G-SHARP v0.2 Integration Proposal<a class="headerlink" href="#g-sharp-v0-2-integration-proposal" title="Link to this heading">¶</a></h1>
+<dl class="field-list simple">
+<dt class="field-odd">Status<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Implemented on branch <code class="docutils literal notranslate"><span class="pre">vnath_gsharp</span></code> (under <code class="docutils literal notranslate"><span class="pre">gsplat.contrib.dynamic</span></code>); experimental, APIs may change</p>
+</dd>
+<dt class="field-even">Source<span class="colon">:</span></dt>
+<dd class="field-even"><p><code class="docutils literal notranslate"><span class="pre">holohub/applications/surgical_scene_recon/</span></code> (G-SHARP v0.2)</p>
+</dd>
+<dt class="field-odd">Destination<span class="colon">:</span></dt>
+<dd class="field-odd"><p><code class="docutils literal notranslate"><span class="pre">gsplat/</span></code> (branch <code class="docutils literal notranslate"><span class="pre">vnath_gsharp</span></code>)</p>
+</dd>
+</dl>
+<section id="goals">
+<h2>Goals<a class="headerlink" href="#goals" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Port all <strong>training-time algorithmic</strong> contributions of G-SHARP v0.2 natively
+into gsplat.</p></li>
+<li><p>Keep the deformable / 4D Gaussian machinery behind a clearly experimental
+<code class="docutils literal notranslate"><span class="pre">gsplat/contrib/</span></code> namespace.</p></li>
+<li><p>Ship test-first: every ported unit has positive + negative pytest cases.</p></li>
+<li><p>Provide a runnable end-to-end tutorial on the EndoNeRF sample.</p></li>
+</ul>
+</section>
+<section id="non-goals">
+<h2>Non-goals<a class="headerlink" href="#non-goals" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>No Holoscan / HoloHub imports anywhere.</p></li>
+<li><p>No Depth Anything V2 / MedSAM3 / VGGT code inside the <code class="docutils literal notranslate"><span class="pre">gsplat/</span></code> package.
+These are external pretrained nets; the tutorial only <em>references</em> them as
+optional upstream preprocessing.</p></li>
+<li><p>No compression / rate-distortion work (not present in G-SHARP v0.2).</p></li>
+<li><p>No camera-pose optimization (G-SHARP v0.2 doesn’t do it either).</p></li>
+</ul>
+</section>
+<section id="component-map">
+<h2>Component map<a class="headerlink" href="#component-map" title="Link to this heading">¶</a></h2>
+<p>Core (stable) additions:</p>
+<div class="table-wrapper colwidths-given docutils container">
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 30.0%" />
+<col style="width: 30.0%" />
+<col style="width: 40.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Component</p></th>
+<th class="head"><p>New file</p></th>
+<th class="head"><p>G-SHARP source</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Binocular disparity L1 loss</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/losses.py</span></code> (added alongside existing depth losses)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">EndoRunner.compute_depth_loss</span></code>, <code class="docutils literal notranslate"><span class="pre">training/gsplat_train.py</span></code> 906–960</p></td>
+</tr>
+<tr class="row-odd"><td><p>Pearson depth loss (mono)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/losses.py</span></code> (added alongside existing depth losses)</p></td>
+<td><p>same</p></td>
+</tr>
+<tr class="row-even"><td><p>Masked L1 / SSIM wrappers</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/losses.py</span></code> (added alongside existing depth losses)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">training/gsplat_train.py</span></code> 1059–1101</p></td>
+</tr>
+<tr class="row-odd"><td><p>Occlusion-TV regularizer</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/regularizers.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">compute_tv_loss_targeted</span></code>, 1925–2028</p></td>
+</tr>
+<tr class="row-even"><td><p>Torch mask dilation</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/regularizers.py</span></code></p></td>
+<td><p>OpenCV dilation replaced by max-pool</p></td>
+</tr>
+<tr class="row-odd"><td><p>Invisible-mask builder</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/regularizers.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">create_invisible_mask_from_paths</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>Multi-frame depth unprojection</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/init_utils.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">accumulate_multiframe_pointcloud</span></code>, 2036–2159</p></td>
+</tr>
+<tr class="row-odd"><td><p>KNN scale init</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/init_utils.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">create_splats_with_optimizers</span></code>, 1796–1906</p></td>
+</tr>
+<tr class="row-even"><td><p>Two-stage scheduler</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/training/schedulers.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">EndoRunner._train_stage</span></code>, 1007–1050</p></td>
+</tr>
+</tbody>
+</table>
 </div>
+<p>Experimental contrib additions (<code class="docutils literal notranslate"><span class="pre">gsplat.contrib.dynamic</span></code>):</p>
+<div class="table-wrapper colwidths-given docutils container">
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 30.0%" />
+<col style="width: 30.0%" />
+<col style="width: 40.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Component</p></th>
+<th class="head"><p>New file</p></th>
+<th class="head"><p>G-SHARP source</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>HexPlane field</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/contrib/dynamic/hexplane.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">training/scene/hexplane.py</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Deform MLP + per-Gaussian deformation table</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/contrib/dynamic/deformation.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">training/scene/deformation.py</span></code>, <code class="docutils literal notranslate"><span class="pre">gsplat_train.py</span></code> 1376–1664</p></td>
+</tr>
+<tr class="row-even"><td><p>Plane / time smoothness regularizers</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/contrib/dynamic/regulation.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">training/scene/regulation.py</span></code>, loop 1233–1272</p></td>
+</tr>
+<tr class="row-odd"><td><p>DynamicStrategy</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">gsplat/contrib/dynamic/strategy.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">rasterize_splats</span></code>, 864–896</p></td>
+</tr>
+</tbody>
+</table>
 </div>
+<p>Examples / docs:</p>
+<div class="table-wrapper colwidths-given docutils container">
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40.0%" />
+<col style="width: 60.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Deliverable</p></th>
+<th class="head"><p>Path</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>EndoNeRF/SCARED dataset loader</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">examples/datasets/endonerf.py</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Dynamic-scene trainer recipe</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">examples/dynamic_surgical_trainer.py</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>Tutorial</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">docs/source/examples/dynamic_surgical.rst</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Contrib API docs</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">docs/source/apis/contrib.rst</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="why-this-layout">
+<h2>Why this layout<a class="headerlink" href="#why-this-layout" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>The core library stays pure splatting math. Depth losses / occlusion-TV /
+multi-frame init / two-stage schedule are generic and low-risk, so they live
+alongside existing <code class="docutils literal notranslate"><span class="pre">losses.py</span></code>, <code class="docutils literal notranslate"><span class="pre">rendering.py</span></code>, <code class="docutils literal notranslate"><span class="pre">strategy/</span></code>.</p></li>
+<li><p>4D / deformable pieces add new public surfaces (<code class="docutils literal notranslate"><span class="pre">HexPlane</span></code>, <code class="docutils literal notranslate"><span class="pre">DeformNet</span></code>,
+<code class="docutils literal notranslate"><span class="pre">DynamicStrategy</span></code>) that are still research-grade → <code class="docutils literal notranslate"><span class="pre">gsplat/contrib/dynamic/</span></code>
+signals “ships with the wheel, API may change”. Pattern follows the
+well-known <code class="docutils literal notranslate"><span class="pre">torchvision.prototype</span></code> convention.</p></li>
+<li><p>EndoNeRF/SCARED loader is domain-specific dataset glue → belongs with
+<code class="docutils literal notranslate"><span class="pre">colmap.py</span></code> / <code class="docutils literal notranslate"><span class="pre">ncore.py</span></code> under <code class="docutils literal notranslate"><span class="pre">examples/datasets/</span></code>, not in the
+library.</p></li>
+<li><p>DA2 / MedSAM3 / VGGT <strong>do not enter the tree</strong>; the tutorial explains “get
+<code class="docutils literal notranslate"><span class="pre">poses_bounds.npy</span></code>, <code class="docutils literal notranslate"><span class="pre">masks/</span></code>, <code class="docutils literal notranslate"><span class="pre">depth/</span></code> some way” and points at the
+(unported) holohub folder for reference.</p></li>
+</ul>
+</section>
+<section id="test-plan">
+<h2>Test plan<a class="headerlink" href="#test-plan" title="Link to this heading">¶</a></h2>
+<p>Every new module gets a <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> with both positive and negative
+cases. Tests follow the flat layout and pytest conventions already in
+<code class="docutils literal notranslate"><span class="pre">gsplat/tests/</span></code> (<code class="docutils literal notranslate"><span class="pre">conftest.py</span></code>, seed 42, CUDA-aware).</p>
+<p>See the component × test-case matrix in
+<code class="docutils literal notranslate"><span class="pre">planning/gsharp_gsplat_plan.md</span></code>. (A shareable HTML preview can be
+rendered from that markdown locally; it is intentionally not tracked in
+the repo.)</p>
+</section>
+<section id="risks">
+<h2>Risks<a class="headerlink" href="#risks" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><strong>Deformation + ``rasterization()`` coupling.</strong> <code class="docutils literal notranslate"><span class="pre">gsplat.rasterization</span></code> has
+no time axis. Solution: <code class="docutils literal notranslate"><span class="pre">DynamicStrategy</span></code> applies the deform-net to
+<code class="docutils literal notranslate"><span class="pre">(means,</span> <span class="pre">quats,</span> <span class="pre">opacities)</span></code> <em>before</em> <code class="docutils literal notranslate"><span class="pre">rasterization(...)</span></code> is called
+(same pattern as G-SHARP’s <code class="docutils literal notranslate"><span class="pre">rasterize_splats</span></code>).</p></li>
+<li><p><strong>CUDA-only tests.</strong> HexPlane/DeformNet tests run on CPU for determinism;
+GPU smoke tests are marked CUDA-only.</p></li>
+<li><p><strong>EndoNeRF sample license.</strong> Documented in the tutorial, not redistributed
+in-tree.</p></li>
+<li><p><strong>sklearn optional dep.</strong> Pure-torch fallback for KNN init keeps the
+required-dep list unchanged.</p></li>
+</ul>
 </section>
 </section>
 
@@ -335,23 +518,15 @@ They are also ran with any pull-requests into main branch on our github reposito
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="../migration/migration_inria.html">
-              <div class="page-info">
-                <div class="context">
-                  <span>Next</span>
-                </div>
-                <div class="title">Migrate from diff-gaussian-rasterization</div>
-              </div>
-              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
-            </a>
-          <a class="prev-page" href="profile.html">
+          
+          <a class="prev-page" href="../migration/migration_legacy.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Profiling</div>
+                <div class="title">Migrate from gsplat v0.1.11</div>
                 
               </div>
             </a>
@@ -385,8 +560,13 @@ They are also ran with any pull-requests into main branch on our github reposito
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Tests</a><ul>
-<li><a class="reference internal" href="#testing-and-verifying-cuda-implementations">Testing and verifying CUDA implementations</a></li>
+<li><a class="reference internal" href="#">G-SHARP v0.2 Integration Proposal</a><ul>
+<li><a class="reference internal" href="#goals">Goals</a></li>
+<li><a class="reference internal" href="#non-goals">Non-goals</a></li>
+<li><a class="reference internal" href="#component-map">Component map</a></li>
+<li><a class="reference internal" href="#why-this-layout">Why this layout</a></li>
+<li><a class="reference internal" href="#test-plan">Test plan</a></li>
+<li><a class="reference internal" href="#risks">Risks</a></li>
 </ul>
 </li>
 </ul>
