@@ -416,6 +416,35 @@
     <span class="k">return</span> <span class="n">obj</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">renderer_config_mixed_batch</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the CUDA enum value for the MixedBatch renderer config.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">&quot;RendererConfig.MIXED_BATCH&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">renderer_config_parallel_batch</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the CUDA enum value for the ParallelBatch renderer config.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">&quot;RendererConfig.PARALLEL_BATCH&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_renderer_config_to_cuda</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">renderer_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">renderer_config_mixed_batch</span><span class="p">()</span>
+
+    <span class="c1"># RendererConfig lives in gsplat.rendering, which imports this module.</span>
+    <span class="c1"># Import lazily here so the public low-level wrapper accepts the same</span>
+    <span class="c1"># config objects as gsplat.rasterization without creating an import cycle.</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.rendering</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># pylint: disable=import-outside-toplevel</span>
+        <span class="n">RendererConfig</span><span class="p">,</span>
+        <span class="n">_renderer_config_type</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig</span><span class="p">):</span>
+        <span class="c1"># Delegate the config -&gt; CUDA enum mapping to the single source of</span>
+        <span class="c1"># truth in gsplat.rendering (which raises for unknown subtypes).</span>
+        <span class="k">return</span> <span class="n">_renderer_config_type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">renderer_config</span>
+
+
 <span class="k">class</span><span class="w"> </span><span class="nc">RollingShutterType</span><span class="p">(</span><span class="n">IntEnum</span><span class="p">):</span>
     <span class="n">ROLLING_TOP_TO_BOTTOM</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="n">ROLLING_LEFT_TO_RIGHT</span> <span class="o">=</span> <span class="mi">1</span>
@@ -1298,6 +1327,7 @@
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
     <span class="n">use_hit_distance</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">return_normals</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">renderer_config</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to pixels.</span>
 
@@ -1308,6 +1338,12 @@
 <span class="sd">    ``colors.shape[-1]`` must be one of the channel counts compiled into</span>
 <span class="sd">    ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA</span>
 <span class="sd">    kernel raises ``ValueError``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        renderer_config: Eval3d renderer selector. ``None`` uses the default</span>
+<span class="sd">            ``RendererConfig_MixedBatch`` policy. Pass public</span>
+<span class="sd">            ``RendererConfig_MixedBatch`` / ``RendererConfig_ParallelBatch``</span>
+<span class="sd">            instances, or the already-translated low-level CUDA config value.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple:</span>
@@ -1344,9 +1380,11 @@
         <span class="n">external_distortion_coeffs</span><span class="o">=</span><span class="n">external_distortion_coeffs</span><span class="p">,</span>
         <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
         <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
+        <span class="n">return_last_ids</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="n">return_sample_counts</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">use_hit_distance</span><span class="p">,</span>
         <span class="n">return_normals</span><span class="o">=</span><span class="n">return_normals</span><span class="p">,</span>
+        <span class="n">renderer_config</span><span class="o">=</span><span class="n">renderer_config</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">colors</span><span class="p">,</span> <span class="n">alphas</span>
 
@@ -1383,34 +1421,47 @@
     <span class="n">return_sample_counts</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">use_hit_distance</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">return_normals</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
+    <span class="n">renderer_config</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">return_last_ids</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">unsafe_masked_tile_outputs</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to pixels, returning extra information for debugging.</span>
 
-<span class="sd">    Similar to `rasterize_to_pixels_eval3d()`, but returns turns the last gaussian id</span>
-<span class="sd">    accumulated in a pixel, and optionally the number of accumulated samples per pixel.</span>
+<span class="sd">    Similar to `rasterize_to_pixels_eval3d()`, but can return the last gaussian id</span>
+<span class="sd">    accumulated in a pixel and optionally the number of accumulated samples per pixel.</span>
 
 <span class="sd">    ``colors.shape[-1]`` must be one of the channel counts compiled into</span>
 <span class="sd">    ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA</span>
 <span class="sd">    kernel raises ``ValueError``.</span>
 
 <span class="sd">    Args:</span>
-<span class="sd">        return_last_ids: If True, also return last flatten_idx per pixel. Default: False.</span>
+<span class="sd">        return_last_ids: If True, also return last flatten_idx per pixel. Default: True.</span>
 <span class="sd">        return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.</span>
 <span class="sd">        return_normals: If True, compute and return accumulated normals per pixel.</span>
 <span class="sd">            Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)</span>
 <span class="sd">            transformed by rotation, flipped if facing away from ray). Default: False.</span>
+<span class="sd">        renderer_config: Eval3d renderer selector. ``None`` uses the default</span>
+<span class="sd">            ``RendererConfig_MixedBatch`` policy. Pass public</span>
+<span class="sd">            ``RendererConfig_MixedBatch`` / ``RendererConfig_ParallelBatch``</span>
+<span class="sd">            instances, or the already-translated low-level CUDA config value.</span>
+<span class="sd">        unsafe_masked_tile_outputs: If True, outputs for masked tiles are left undefined</span>
+<span class="sd">            and must not be read by the caller. Default False writes per-pixel safe</span>
+<span class="sd">            values for masked tiles: render_colors = backgrounds (or 0.0 when no</span>
+<span class="sd">            backgrounds are provided), render_alphas = 0.0, render_normals = 0.0,</span>
+<span class="sd">            last_ids = -1, sample_counts = 0.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple (contents depend on return flags):</span>
 
 <span class="sd">        - **Rendered colors**. [..., C, image_height, image_width, channels]</span>
 <span class="sd">        - **Rendered alphas**. [..., C, image_height, image_width, 1]</span>
-<span class="sd">        - **Last flatten_idx**. [..., C, image_height, image_width]</span>
+<span class="sd">        - **Last flatten_idx** (optional). [..., C, image_height, image_width]. If return_last_ids=True.</span>
 <span class="sd">        - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.</span>
 <span class="sd">        - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">ut_params</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">ut_params</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">()</span>
+    <span class="n">renderer_config</span> <span class="o">=</span> <span class="n">_renderer_config_to_cuda</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span>
 
     <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">num_batch_dims</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
@@ -1532,11 +1583,12 @@
         <span class="n">external_distortion_coeffs</span><span class="p">,</span>
         <span class="n">isect_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="c1"># Forward is always collecting the last_ids for the backward pass,</span>
-        <span class="c1"># no need to tell it to do it.</span>
         <span class="n">return_sample_counts</span><span class="p">,</span>  <span class="c1"># Pass flag to forward</span>
         <span class="n">use_hit_distance</span><span class="p">,</span>
         <span class="n">return_normals</span><span class="p">,</span>  <span class="c1"># Pass return_normals flag to forward</span>
+        <span class="n">renderer_config</span><span class="p">,</span>
+        <span class="n">return_last_ids</span><span class="p">,</span>
+        <span class="n">unsafe_masked_tile_outputs</span><span class="p">,</span>
     <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span><span class="p">,</span> <span class="n">sample_counts</span><span class="p">,</span> <span class="n">render_normals</span>

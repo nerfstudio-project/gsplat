@@ -325,8 +325,9 @@
 <span class="c1"># limitations under the License.</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">contextlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">nullcontext</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">cast</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">cast</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch.distributed</span>
@@ -358,6 +359,8 @@
     <span class="n">rasterize_to_pixels_2dgs</span><span class="p">,</span>
     <span class="n">rasterize_to_pixels_eval3d</span><span class="p">,</span>
     <span class="n">rasterize_to_pixels_eval3d_extra</span><span class="p">,</span>
+    <span class="n">renderer_config_mixed_batch</span><span class="p">,</span>
+    <span class="n">renderer_config_parallel_batch</span><span class="p">,</span>
     <span class="n">spherical_harmonics</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.distributed</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -373,6 +376,81 @@
 <span class="n">RenderMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span>
 
 <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span>
+
+
+<div class="viewcode-block" id="RendererConfig">
+<a class="viewcode-back" href="../../apis/rasterization.html#gsplat.RendererConfig">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">RendererConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Base class for public rasterizer selection configs.</span>
+
+<span class="sd">    Instantiate one of the concrete renderer configs instead of this base</span>
+<span class="sd">    class. Unsupported subclasses remain possible so future policies can fail</span>
+<span class="sd">    with an explicit &quot;unsupported&quot; error at the validation boundary.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">cls</span> <span class="ow">is</span> <span class="n">RendererConfig</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+                <span class="s2">&quot;RendererConfig is a base class; instantiate &quot;</span>
+                <span class="s2">&quot;RendererConfig_MixedBatch or RendererConfig_ParallelBatch.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="RendererConfig_MixedBatch">
+<a class="viewcode-back" href="../../apis/rasterization.html#gsplat.RendererConfig_MixedBatch">[docs]</a>
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">RendererConfig_MixedBatch</span><span class="p">(</span><span class="n">RendererConfig</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eval3d rasterizer: serial-batch forward, batch-parallel backward.</span>
+
+<span class="sd">    &quot;Mixed&quot; = the two passes batch differently. The forward composites each</span>
+<span class="sd">    tile&#39;s depth-sorted Gaussian batches serially (one CTA per tile, front to</span>
+<span class="sd">    back); the backward is batch-parallel (one CTA per batch).</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+
+
+
+<div class="viewcode-block" id="RendererConfig_ParallelBatch">
+<a class="viewcode-back" href="../../apis/rasterization.html#gsplat.RendererConfig_ParallelBatch">[docs]</a>
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">RendererConfig_ParallelBatch</span><span class="p">(</span><span class="n">RendererConfig</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eval3d rasterizer: batch-parallel forward and backward.</span>
+
+<span class="sd">    Both passes are batch-parallel (one CTA per batch); the forward adds a</span>
+<span class="sd">    partials/scan/replay pipeline so independent batches composite concurrently,</span>
+<span class="sd">    at the cost of per-batch forward state persisted for the backward. The</span>
+<span class="sd">    backward kernel is shared with MixedBatch.</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_renderer_config</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">:</span> <span class="n">RendererConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">renderer_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;renderer_config must be a RendererConfig instance, got None.&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+            <span class="s2">&quot;renderer_config must be a RendererConfig instance, &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">.&quot;</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_MixedBatch</span><span class="p">):</span>
+        <span class="k">return</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_ParallelBatch</span><span class="p">):</span>
+        <span class="k">return</span>
+    <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;Unsupported renderer_config type: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">.&quot;</span>
+    <span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_renderer_config_type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">:</span> <span class="n">RendererConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="n">_validate_renderer_config</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_MixedBatch</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">renderer_config_mixed_batch</span><span class="p">()</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_ParallelBatch</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">renderer_config_parallel_batch</span><span class="p">()</span>
+    <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;unreachable renderer_config: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="p">)</span>
 
 
 <span class="c1"># TODO: RenderMode should be an enum so that we can add these query methods to it.</span>
@@ -671,6 +749,7 @@
     <span class="n">extra_signals_sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
         <span class="nb">int</span>
     <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Currently only None or 3 is accepted.</span>
+    <span class="n">renderer_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">RendererConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).</span>
 
@@ -857,6 +936,10 @@
 <span class="sd">        rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means</span>
 <span class="sd">            global shutter.</span>
 <span class="sd">        viewmats_rs: The second viewmat when rolling shutter is used. Default is None.</span>
+<span class="sd">        renderer_config: The eval3d rasterizer implementation selector. Default is</span>
+<span class="sd">            :class:`RendererConfig_MixedBatch`, which uses the existing mixed-batch</span>
+<span class="sd">            rasterizer implementation. Non-default configs require</span>
+<span class="sd">            ``with_eval3d=True``.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple:</span>
@@ -897,11 +980,23 @@
 <span class="sd">        &#39;flatten_ids&#39;, &#39;isect_offsets&#39;, &#39;width&#39;, &#39;height&#39;, &#39;tile_size&#39;])</span>
 
 <span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">renderer_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">renderer_config</span> <span class="o">=</span> <span class="n">RendererConfig_MixedBatch</span><span class="p">()</span>
+    <span class="n">_validate_renderer_config</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span>
+
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="n">has_color</span> <span class="o">=</span> <span class="n">render_mode_has_color</span><span class="p">(</span><span class="n">render_mode</span><span class="p">)</span>
 
     <span class="n">_validate_3dgut_rasterize_mode</span><span class="p">(</span>
         <span class="n">rasterize_mode</span><span class="p">,</span> <span class="n">with_ut</span><span class="o">=</span><span class="n">with_ut</span><span class="p">,</span> <span class="n">with_eval3d</span><span class="o">=</span><span class="n">with_eval3d</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">with_eval3d</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">,</span> <span class="n">RendererConfig_MixedBatch</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> requires with_eval3d=True; &quot;</span>
+            <span class="s2">&quot;non-eval3d rasterization only supports RendererConfig_MixedBatch.&quot;</span>
+        <span class="p">)</span>
+    <span class="n">renderer_config_impl</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">_renderer_config_type</span><span class="p">(</span><span class="n">renderer_config</span><span class="p">)</span> <span class="k">if</span> <span class="n">with_eval3d</span> <span class="k">else</span> <span class="kc">None</span>
     <span class="p">)</span>
 
     <span class="k">if</span> <span class="n">colors</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">has_color</span><span class="p">:</span>
@@ -1553,8 +1648,10 @@
                     <span class="n">external_distortion_coeffs</span><span class="o">=</span><span class="n">external_distortion_coeffs</span><span class="p">,</span>
                     <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
                     <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
+                    <span class="n">return_last_ids</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                     <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">render_mode_has_hit_distance</span><span class="p">(</span><span class="n">render_mode</span><span class="p">),</span>
                     <span class="n">return_normals</span><span class="o">=</span><span class="n">return_normals_chunk</span><span class="p">,</span>
+                    <span class="n">renderer_config</span><span class="o">=</span><span class="n">renderer_config_impl</span><span class="p">,</span>
                 <span class="p">)</span>
                 <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">render_normals_</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="n">render_normals</span> <span class="o">=</span> <span class="n">render_normals_</span>
@@ -1617,8 +1714,10 @@
                 <span class="n">external_distortion_coeffs</span><span class="o">=</span><span class="n">external_distortion_coeffs</span><span class="p">,</span>
                 <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
                 <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
+                <span class="n">return_last_ids</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                 <span class="n">use_hit_distance</span><span class="o">=</span><span class="n">render_mode_has_hit_distance</span><span class="p">(</span><span class="n">render_mode</span><span class="p">),</span>
                 <span class="n">return_normals</span><span class="o">=</span><span class="n">return_normals</span><span class="p">,</span>
+                <span class="n">renderer_config</span><span class="o">=</span><span class="n">renderer_config_impl</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -2650,7 +2749,7 @@
             <span class="n">depth_for_normal</span> <span class="o">=</span> <span class="n">render_median</span>
 
         <span class="n">render_normals_from_depth</span> <span class="o">=</span> <span class="n">depth_to_normal</span><span class="p">(</span>
-            <span class="n">depth_for_normal</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">viewmats</span><span class="p">),</span> <span class="n">Ks</span>
+            <span class="n">depth_for_normal</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv_ex</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span><span class="o">.</span><span class="n">inverse</span><span class="p">,</span> <span class="n">Ks</span>
         <span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
     <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
@@ -2677,7 +2776,9 @@
     <span class="p">}</span>
 
     <span class="n">render_normals</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span>
-        <span class="s2">&quot;...ij,...hwj-&gt;...hwi&quot;</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">],</span> <span class="n">render_normals</span>
+        <span class="s2">&quot;...ij,...hwj-&gt;...hwi&quot;</span><span class="p">,</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv_ex</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span><span class="o">.</span><span class="n">inverse</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">],</span>
+        <span class="n">render_normals</span><span class="p">,</span>
     <span class="p">)</span>
 
     <span class="k">return</span> <span class="p">(</span>
@@ -2822,7 +2923,9 @@
         <span class="n">render_depth_expected</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">depth_ratio</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">depth_ratio</span><span class="p">)</span> <span class="o">*</span> <span class="n">render_depth_median</span>
     <span class="p">)</span>
 
-    <span class="n">normals_surf</span> <span class="o">=</span> <span class="n">depth_to_normal</span><span class="p">(</span><span class="n">render_depth</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">viewmats</span><span class="p">),</span> <span class="n">Ks</span><span class="p">)</span>
+    <span class="n">normals_surf</span> <span class="o">=</span> <span class="n">depth_to_normal</span><span class="p">(</span>
+        <span class="n">render_depth</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv_ex</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span><span class="o">.</span><span class="n">inverse</span><span class="p">,</span> <span class="n">Ks</span>
+    <span class="p">)</span>
     <span class="n">normals_surf</span> <span class="o">=</span> <span class="n">normals_surf</span> <span class="o">*</span> <span class="p">(</span><span class="n">render_alphas</span><span class="p">)</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span>
 
     <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">render_colors</span><span class="p">,</span> <span class="n">render_depth</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
