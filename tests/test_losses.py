@@ -23,8 +23,6 @@ import torch.nn.functional as F
 
 import gsplat.losses as _losses_module
 
-_losses_module.ENFORCE_CONTRACTS = True
-
 from gsplat.losses import (
     create_ssim_window,
     depth_l1_loss,
@@ -40,6 +38,23 @@ from gsplat.losses import (
     torch_ssim_loss,
     total_variation_loss,
 )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _enforce_contracts():
+    """Enable losses-module contract checks for this module's tests only.
+
+    pytest imports every test module during collection, so setting
+    ``ENFORCE_CONTRACTS = True`` at module scope leaks into unrelated test
+    modules for the whole session. Scoping the override to an autouse fixture
+    (and restoring the prior, env-driven value on teardown) keeps it local.
+    """
+    prev = _losses_module.ENFORCE_CONTRACTS
+    _losses_module.ENFORCE_CONTRACTS = True
+    try:
+        yield
+    finally:
+        _losses_module.ENFORCE_CONTRACTS = prev
 
 
 # ---------------------------------------------------------------------------
