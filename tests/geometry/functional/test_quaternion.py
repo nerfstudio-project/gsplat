@@ -184,7 +184,13 @@ class TestQuaternionOperations(unittest.TestCase):
         q = torch.zeros(6, 4, device="cuda", dtype=torch.float64, requires_grad=True)
         y = QuatNormalizeSafeFunction.apply(q)
         y.backward(torch.randn_like(y))
-        self.assertTrue(torch.allclose(q.grad, torch.zeros_like(q), atol=ATOL))
+        assert_grad_reference_close(
+            q.grad,
+            torch.zeros_like(q),
+            rtol=0.0,
+            atol=ATOL,
+            msg="quat_normalize_safe degenerate backward",
+        )
 
     def test_conjugate(self):
         """Test quaternion conjugate."""
