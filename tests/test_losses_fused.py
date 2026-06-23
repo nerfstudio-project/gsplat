@@ -22,7 +22,11 @@ forward values and backward gradients.
 import pytest
 import torch
 
-from gsplat._helper import assert_grad_reference_close
+from gsplat._helper import (
+    assert_grad_reference_close,
+    expect_grad_reference_close,
+    expect_group,
+)
 from gsplat import has_losses
 from gsplat.losses import (
     gaussian_density_reg,
@@ -307,10 +311,24 @@ class TestFusedGaussianLossesCUDA:
         assert torch.equal(ld_none, ld_ones)
         assert torch.equal(lz_none, lz_ones)
         assert torch.equal(lo_none, lo_ones)
-        assert torch.equal(s1.grad, s2.grad)
-        assert torch.equal(d1.grad, d2.grad)
-        assert torch.equal(z1.grad, z2.grad)
-        assert torch.equal(p1.grad, p2.grad)
+        with expect_group("visibility=None vs all-ones gradients"):
+            for name, actual, expected in (
+                ("scales", s1.grad, s2.grad),
+                ("densities", d1.grad, d2.grad),
+                ("z_scales", z1.grad, z2.grad),
+                ("positions", p1.grad, p2.grad),
+            ):
+                expect_grad_reference_close(
+                    actual,
+                    expected,
+                    rtol=0.0,
+                    atol=0.0,
+                    max_rel_l2=0.0,
+                    max_rel_l1=0.0,
+                    min_cosine=1.0 - 1e-15,
+                    max_signed_bias=0.0,
+                    msg=f"{name} visibility gradient",
+                )
 
     def test_visibility_shape_N1(self):
         """Tier 1 accepts visibility as `[N]` or `[N, 1]`; the wrapper
