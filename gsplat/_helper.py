@@ -16,6 +16,8 @@
 
 import os
 import warnings
+from contextvars import ContextVar
+from functools import lru_cache
 from typing import Optional, Tuple
 
 import numpy as np
@@ -228,6 +230,96 @@ def assert_close(
     )
 
 
+_ACTIVE_EXPECT_GROUP = ContextVar("gsplat_active_expect_group", default=None)
+
+
+def _record_expect_result(passed: bool) -> bool:
+    """Track a pytest-check result for an active :func:`expect_group`."""
+
+    group = _ACTIVE_EXPECT_GROUP.get()
+    if group is not None and not passed:
+        group._record_failure()
+    return passed
+
+
+@lru_cache(maxsize=128)
+def _checked(assert_func):
+    """Return the cached pytest-check wrapper for an assert helper."""
+
+    # pytest-check is a test-only dependency; keep runtime imports of this
+    # shared helper module independent of pytest plugins.
+    from pytest_check import check
+
+    return check.check_func(assert_func)
+
+
+def _assert_true(condition, msg=""):
+    """Assert a boolean condition for :func:`expect_true`."""
+
+    assert bool(condition), msg or "expected condition to be true"
+
+
+class _ExpectGroup:
+    """Scoped soft-check collector with a hard barrier at context exit."""
+
+    def __init__(self, name: str = "expect group"):
+        self.name = name
+        self._token = None
+        self._n_failures = 0
+
+    def __enter__(self):
+        self._token = _ACTIVE_EXPECT_GROUP.set(self)
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        assert self._token is not None
+        _ACTIVE_EXPECT_GROUP.reset(self._token)
+        if exc_type is not None:
+            return False
+        assert self._n_failures == 0, (
+            f"{self.name}: {self._n_failures} soft check(s) failed; "
+            "see pytest-check diagnostics above"
+        )
+        return False
+
+    def _record_failure(self) -> None:
+        self._n_failures += 1
+
+
+def expect_group(name: str = "expect group") -> _ExpectGroup:
+    """Create a scoped group of soft checks with a hard exit barrier.
+
+    All ``expect`` calls inside the context run to completion. If any of them
+    records a pytest-check failure, exiting the context raises once so later
+    dependent test-body code does not run.
+    """
+
+    return _ExpectGroup(name)
+
+
+def expect_call(assert_func, *args, **kwargs):
+    """Soft-check an arbitrary assert-style callable."""
+
+    return _record_expect_result(_checked(assert_func)(*args, **kwargs))
+
+
+def expect_true(condition, msg=""):
+    """Soft-check that ``condition`` is truthy."""
+
+    return _record_expect_result(_checked(_assert_true)(condition, msg=msg))
+
+
+def expect_close(*args, **kwargs):
+    """Soft-check counterpart to :func:`assert_close`.
+
+    Failures are recorded through pytest-check and the caller continues
+    executing. At the end of the test, pytest-check reports any collected
+    failures and marks the test failed.
+    """
+
+    return _record_expect_result(_checked(assert_close)(*args, **kwargs))
+
+
 def assert_mismatch_ratio(actual, expected, *, max=1e-5):
     """
     Assert that the mismatch ratio is less than a given tolerance.
@@ -245,6 +337,12 @@ def assert_mismatch_ratio(actual, expected, *, max=1e-5):
     assert (
         mismatch_ratio <= max
     ), f"Too many validity mismatches: {mismatch}/{total} ({mismatch_ratio*100:.2f}%) "
+
+
+def expect_mismatch_ratio(*args, **kwargs):
+    """Soft-check counterpart to :func:`assert_mismatch_ratio`."""
+
+    return _record_expect_result(_checked(assert_mismatch_ratio)(*args, **kwargs))
 
 
 def assert_grad_sparsity(
@@ -330,6 +428,12 @@ def assert_grad_sparsity(
             f"actual_smaller={int(actual_smaller.sum().item())}, "
             f"expected_smaller={int(expected_smaller.sum().item())})"
         )
+
+
+def expect_grad_sparsity(*args, **kwargs):
+    """Soft-check counterpart to :func:`assert_grad_sparsity`."""
+
+    return _record_expect_result(_checked(assert_grad_sparsity)(*args, **kwargs))
 
 
 def assert_grad_reference_close(
@@ -489,6 +593,12 @@ def assert_grad_reference_close(
         assert (
             signed_bias <= max_signed_bias
         ), f"{metrics_msg}; signed_bias exceeds {max_signed_bias:.6e}"
+
+
+def expect_grad_reference_close(*args, **kwargs):
+    """Soft-check counterpart to :func:`assert_grad_reference_close`."""
+
+    return _record_expect_result(_checked(assert_grad_reference_close)(*args, **kwargs))
 
 
 def assert_close_with_boundary_band(
@@ -740,3 +850,11 @@ def assert_close_with_boundary_band(
                 f"|mean(sign(a-e))|={sign_mean:.3f} > "
                 f"{boundary_symmetry_tol:.3f}"
             )
+
+
+def expect_close_with_boundary_band(*args, **kwargs):
+    """Soft-check counterpart to :func:`assert_close_with_boundary_band`."""
+
+    return _record_expect_result(
+        _checked(assert_close_with_boundary_band)(*args, **kwargs)
+    )
