@@ -24,10 +24,140 @@
 #include "Cameras.cuh"
 #include "ExternalDistortion.cuh"
 #include "Lidars.cuh"
-#include "RasterizeChunkCSR.h"
+#include "RasterizeCSR.cuh"
 #include "Utils.cuh"
+#include "Dispatch.h"
 
 namespace gsplat {
+
+////////////////////////////////////////////////////////////////
+// Compact-CTA __launch_bounds__ occupancy hint, shared by the serial- and
+// parallel-batch world-space 3DGS forward kernels (both #include this header).
+////////////////////////////////////////////////////////////////
+
+// Per-architecture hardware cap on thread blocks per SM. ptxas rejects
+// min_blocks_per_sm > HW cap under --warning-as-error.
+//   sm_90, sm_100, sm_120: 32 blocks/SM
+//   everything else:       16 blocks/SM (covers Ampere/Ada and anything older)
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 32
+#else
+    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 16
+#endif
+
+// Range endpoints of the CDIM-indexed schedule. The schedule plateaus at
+// `high` blocks/SM for CDIM in [1, MIN_CDIM_FOR_HINT], then linearly descends
+// to `low` at MAX_CDIM_FOR_HINT. The plateau covers the camera-inference
+// CDIM=4 path so it sustains max occupancy alongside CDIM={1,2,3}.
+#define GSPLAT_MIN_CDIM_FOR_HINT 4u
+#define GSPLAT_MAX_CDIM_FOR_HINT 24u
+
+// Target min_blocks at the endpoints of the schedule.
+//   - CDIM <= MIN_CDIM_FOR_HINT (plateau): push occupancy up to the HW cap,
+//              but not above 24 (beyond this the kernel's natural register
+//              usage forces ptxas to spill).
+//   - CDIM=24: 16. HW cap on pre-sm_90, 25% occ on sm_90+; fits within the
+//              kernel's register footprint at full SH + extras.
+#define GSPLAT_MIN_BLOCKS_AT_MIN_CDIM \
+    (GSPLAT_ARCH_MAX_BLOCKS_PER_SM < 24 ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM : 24)
+#define GSPLAT_MIN_BLOCKS_AT_MAX_CDIM 16u
+
+// Per-CDIM occupancy hint for __launch_bounds__ min_blocks_per_sm.
+// Plateau at `high` for CDIM in [1, MIN_CDIM_FOR_HINT]; linear descent from
+// `high` (at MIN_CDIM_FOR_HINT) to `low` (at MAX_CDIM_FOR_HINT) above. Beyond
+// MAX_CDIM_FOR_HINT we emit min_blocks=1, high-channel kernels carry enough
+// register pressure that forcing occupancy would spill.
+//   cdim_excess     = max(0, CDIM - MIN_CDIM_FOR_HINT)   (saturating sub)
+//   blocks_at_cta32 = high - cdim_excess * (high - low) / (max_cdim - min_cdim)
+// Collapses to the constant low value on archs where high == low.
+//
+// The schedule was tuned at CTA_SIZE=32. To use the same kernel at larger
+// CTAs, we preserve the threads/SM target (= blocks_at_cta32 * 32) and
+// re-derive min_blocks at the actual CTA_SIZE; otherwise asking 16-24
+// blocks/SM at CTA=256 yields physically impossible 4096-6144 threads/SM
+// and ptxas either rejects (under -Werror) or produces a degenerate spill.
+
+// Here's a table of the different values you can expect per variables and arch
+//  CDIM | sm90+ CTA=32 | sm90+ CTA=256 | < sm90 CTA=32 | < sm90 CTA=256
+// ----------------------------------------------------------------------
+//     1 |      24      |       3       |      16       |       2
+//     2 |      24      |       3       |      16       |       2
+//     3 |      24      |       3       |      16       |       2
+//     4 |      24      |       3       |      16       |       2
+//     5 |      24      |       3       |      16       |       2
+//     6 |      24      |       3       |      16       |       2
+//     7 |      23      |       2       |      16       |       2
+//     8 |      23      |       2       |      16       |       2
+//     9 |      22      |       2       |      16       |       2
+//    10 |      22      |       2       |      16       |       2
+//    11 |      22      |       2       |      16       |       2
+//    12 |      21      |       2       |      16       |       2
+//    13 |      21      |       2       |      16       |       2
+//    14 |      20      |       2       |      16       |       2
+//    15 |      20      |       2       |      16       |       2
+//    16 |      20      |       2       |      16       |       2
+//    17 |      19      |       2       |      16       |       2
+//    18 |      19      |       2       |      16       |       2
+//    19 |      18      |       2       |      16       |       2
+//    20 |      18      |       2       |      16       |       2
+//    21 |      18      |       2       |      16       |       2
+//    22 |      17      |       2       |      16       |       2
+//    23 |      17      |       2       |      16       |       2
+//    24 |      16      |       2       |      16       |       2
+//   >24 |       1      |       1       |       1       |       1
+
+template <uint32_t CDIM, uint32_t CTA_SIZE>
+constexpr uint32_t min_blocks_for_cdim() {
+    if constexpr (CDIM > GSPLAT_MAX_CDIM_FOR_HINT) {
+        return 1;
+    } else {
+        constexpr uint32_t high = GSPLAT_MIN_BLOCKS_AT_MIN_CDIM;
+        constexpr uint32_t low = GSPLAT_MIN_BLOCKS_AT_MAX_CDIM;
+        constexpr uint32_t cdim_excess =
+            (CDIM > GSPLAT_MIN_CDIM_FOR_HINT)
+                ? (CDIM - GSPLAT_MIN_CDIM_FOR_HINT)
+                : 0u;
+        constexpr uint32_t cdim_span =
+            GSPLAT_MAX_CDIM_FOR_HINT - GSPLAT_MIN_CDIM_FOR_HINT;
+        constexpr uint32_t block_span = (high >= low) ? (high - low) : 0;
+        constexpr uint32_t decrement = (cdim_excess * block_span) / cdim_span;
+        constexpr uint32_t blocks_at_cta32 =
+            (high > decrement) ? (high - decrement) : low;
+        constexpr uint32_t threads_target = blocks_at_cta32 * 32u;
+        constexpr uint32_t blocks = threads_target / CTA_SIZE;
+        constexpr uint32_t lo_clamped = (blocks == 0u) ? 1u : blocks;
+        constexpr uint32_t hi_clamped =
+            (lo_clamped > GSPLAT_ARCH_MAX_BLOCKS_PER_SM)
+                ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM
+                : lo_clamped;
+        return hi_clamped;
+    }
+}
+
+#undef GSPLAT_ARCH_MAX_BLOCKS_PER_SM
+#undef GSPLAT_MIN_CDIM_FOR_HINT
+#undef GSPLAT_MAX_CDIM_FOR_HINT
+#undef GSPLAT_MIN_BLOCKS_AT_MIN_CDIM
+#undef GSPLAT_MIN_BLOCKS_AT_MAX_CDIM
+
+// TILE_SIZE and CTA_SIZE are a tuned launch-variant pair. Add a specialization
+// here whenever a new supported tile size needs its own CTA size.
+template <uint32_t TILE_SIZE>
+struct CtaSizeForTile;
+
+template <>
+struct CtaSizeForTile<8u> {
+    static constexpr uint32_t value = 32u;
+};
+
+template <>
+struct CtaSizeForTile<16u> {
+    static constexpr uint32_t value = 256u;
+};
+
+// Supported forward tile sizes, shared so the serial- and parallel-batch
+// launchers select tile_size through the same compile-time dispatch set.
+using SupportedTileSizes = dispatch::IntParam<8, 16>;
 
 ////////////////////////////////////////////////////////////////
 // Reusable building blocks for the world-space 3DGS rasterizer
@@ -36,7 +166,7 @@ namespace gsplat {
 // `compute_pixel_coords` and `compute_world_ray` are shared by
 // both the forward and backward kernels. The remaining helpers
 // (cooperative_load_fetch_round / process_fetch_round_blend /
-// process_logical_batch_gaussians / persist_chunk_state, plus
+// process_logical_batch_gaussians / persist_batch_state, plus
 // the cta_sync wrappers they call) are specific to the forward
 // kernel's compact-CTA path.
 //
@@ -48,14 +178,27 @@ namespace gsplat {
 //   - Logical batch: TILE_SIZE * TILE_SIZE gaussians, processed
 //     as FETCHES_PER_BATCH = LOGICAL_BATCH / FETCH_SIZE rounds.
 //     This is the unit the bwd's per-batch view expects, so the
-//     fwd's chunk-state persist boundaries land at the same
+//     fwd's batch-state persist boundaries land at the same
 //     gaussian positions.
-//   - Depth chunk (defined in RasterizeChunkCSR.h as CHUNK_BATCHES
-//     logical batches): the CSR persistence unit, also the unit
-//     the future depth-parallel kernel will have CTAs claim.
-//     Not directly represented here — orchestrated one logical
-//     batch at a time via process_logical_batch_gaussians.
 ////////////////////////////////////////////////////////////////
+
+enum class SaturationTPolicy {
+    // Leave T at its pre-saturation value when the threshold is crossed.
+    // SerialBatch and batch-replay use this when the post-saturation T is not
+    // needed outside the local blend loop.
+    KeepPreSaturationT,
+
+    // Store the post-saturation T in T itself. Exact ParallelBatch uses this
+    // so batch-scan sees a non-negative walk product and hands the boundary
+    // to batch-replay for exact metadata replay.
+    StorePostSaturationT,
+
+    // Leave T at its pre-saturation value, but also expose the post-saturation
+    // T through saturating_T. Fwd-only ParallelBatch uses this to publish the
+    // renderable terminal partial while still priming downstream batches with
+    // the saturated chain state.
+    KeepPreAndCapturePostSaturationT,
+};
 
 // CTA-wide barrier with the same warp-vs-block behaviour the
 // kernel uses inline. CTA_SIZE_T == 32 collapses the whole CTA
@@ -331,6 +474,7 @@ __device__ __forceinline__ WorldRay compute_world_ray(
 template <
     uint32_t FETCH_SIZE_T,
     uint32_t CTA_SIZE_T,
+    bool ReturnNormals,
     typename scalar_t
 >
 __device__ __forceinline__ void cooperative_load_fetch_round(
@@ -348,8 +492,7 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
     const vec3 *__restrict__ scales,
     const scalar_t *__restrict__ opacities,
     const uint32_t C,
-    const uint32_t N,
-    const bool return_normals
+    const uint32_t N
 ) {
     // FETCH_SIZE_T > CTA_SIZE_T would leave shared-memory slots in
     // [CTA_SIZE_T, FETCH_SIZE_T) unloaded; downstream readers would
@@ -401,7 +544,7 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
         scale_batch[tid] = scale;
 
         // Normal = R * (0, 0, 1) = third column of R.
-        if (return_normals) {
+        if constexpr (ReturnNormals) {
             normal_batch[tid] = R[2];
         }
     }
@@ -416,11 +559,16 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
 // own bit in done_mask.
 //
 // CHECK_THRESHOLD enables the per-pixel transmittance early-mark:
-// when next_T <= TRANSMITTANCE_THRESHOLD the pixel's bit in
-// done_mask is set and the gaussian's contribution is dropped.
-// Always instantiated `true` in the current sequential kernel;
-// reserved as `false` for the depth-parallel kernel's
-// run-without-threshold-then-replay path.
+// when next_T <= the per-pixel transmittance_threshold[p] supplied by the
+// caller, the pixel's bit in done_mask is set and the gaussian's
+// contribution is dropped. (In the parallel-batch partials kernel that
+// threshold is the priming-tightened bound TRANSMITTANCE_THRESHOLD / T_init.)
+// Always instantiated `true` by both the serial-batch and parallel-batch
+// forward kernels; `false` is not currently instantiated.
+//
+// SaturationPolicy controls what survives after a gaussian crosses the
+// threshold: keep pre-saturation T, store post-saturation T in T, or keep the
+// pre-saturation T while also capturing the post-saturation T in saturating_T.
 //
 // Caller must run cta_sync between the cooperative load and this
 // call so all threads see the loaded shared batches.
@@ -428,6 +576,9 @@ template <
     uint32_t CDIM,
     uint32_t PIXELS_PER_THREAD_T,
     bool CHECK_THRESHOLD,
+    SaturationTPolicy SaturationPolicy,
+    bool UseHitDistance,
+    bool ReturnNormals,
     typename scalar_t
 >
 __device__ __forceinline__ void process_fetch_round_blend(
@@ -441,16 +592,22 @@ __device__ __forceinline__ void process_fetch_round_blend(
     const scalar_t *__restrict__ colors,
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
     const vec3 (&ray_d)[PIXELS_PER_THREAD_T],
-    const bool use_hit_distance,
-    const bool return_normals,
     const uint32_t ALL_DONE,
+    const float (&transmittance_threshold)[PIXELS_PER_THREAD_T],
     float (&T)[PIXELS_PER_THREAD_T],
+    float (&saturating_T)[PIXELS_PER_THREAD_T],
     float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     vec3 (&normal_out)[PIXELS_PER_THREAD_T],
     int32_t (&cur_idx)[PIXELS_PER_THREAD_T],
     int32_t (&n_accumulated)[PIXELS_PER_THREAD_T],
     uint32_t &done_mask
 ) {
+    constexpr bool store_post_saturation_t =
+        SaturationPolicy == SaturationTPolicy::StorePostSaturationT;
+    constexpr bool capture_post_saturation_t =
+        SaturationPolicy ==
+            SaturationTPolicy::KeepPreAndCapturePostSaturationT;
+
     for (uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t) {
         const vec4 xyz_opac = xyz_opacity_batch[t];
         const float opac = xyz_opac[3];
@@ -482,14 +639,20 @@ __device__ __forceinline__ void process_fetch_round_blend(
             }
 
             float hit_distance = 0.0f;
-            if (use_hit_distance) {
+            if constexpr (UseHitDistance) {
                 const vec3 grds = scale * (grd * hit_t);
                 hit_distance = glm::length(grds);
             }
 
             const float next_T = T[p] * (1.0f - alpha);
             if constexpr (CHECK_THRESHOLD) {
-                if (next_T <= TRANSMITTANCE_THRESHOLD) {
+                if (next_T <= transmittance_threshold[p]) {
+                    if constexpr (capture_post_saturation_t) {
+                        saturating_T[p] = next_T;
+                    }
+                    if constexpr (store_post_saturation_t) {
+                        T[p] = next_T;
+                    }
                     done_mask |= (1u << p);
                     continue;
                 }
@@ -499,7 +662,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
             const float vis = alpha * T[p];
             const float *c_ptr = colors + isect_id * CDIM;
 
-            if (use_hit_distance) {
+            if constexpr (UseHitDistance) {
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     const float value = (k == CDIM - 1) ? hit_distance : c_ptr[k];
@@ -512,7 +675,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
                 }
             }
 
-            if (return_normals) {
+            if constexpr (ReturnNormals) {
                 const vec3 unnormalized_normal = normal_batch[t];
                 const bool flipped = glm::dot(unnormalized_normal, ray_d[p]) > 0.0f;
                 const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
@@ -550,6 +713,9 @@ template <
     uint32_t CTA_SIZE_T,
     uint32_t PIXELS_PER_THREAD_T,
     bool CHECK_THRESHOLD,
+    SaturationTPolicy SaturationPolicy,
+    bool UseHitDistance,
+    bool ReturnNormals,
     typename scalar_t
 >
 __device__ __forceinline__ bool process_logical_batch_gaussians(
@@ -571,10 +737,10 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     const uint32_t N,
     const vec3 (&ray_o)[PIXELS_PER_THREAD_T],
     const vec3 (&ray_d)[PIXELS_PER_THREAD_T],
-    const bool use_hit_distance,
-    const bool return_normals,
     const uint32_t ALL_DONE,
+    const float (&transmittance_threshold)[PIXELS_PER_THREAD_T],
     float (&T)[PIXELS_PER_THREAD_T],
+    float (&saturating_T)[PIXELS_PER_THREAD_T],
     float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     vec3 (&normal_out)[PIXELS_PER_THREAD_T],
     int32_t (&cur_idx)[PIXELS_PER_THREAD_T],
@@ -585,6 +751,13 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
                   "LOGICAL_BATCH_T must be a multiple of FETCH_SIZE_T");
     constexpr uint32_t FETCHES_PER_BATCH = LOGICAL_BATCH_T / FETCH_SIZE_T;
     static_assert(FETCHES_PER_BATCH >= 1, "FETCHES_PER_BATCH must be >= 1");
+    // The multi-fetch path (FETCHES_PER_BATCH > 1) carries no inter-round
+    // barrier and is race-free only at warp width. Both forward kernels honor
+    // this: tile8 -> CTA_SIZE 32 (FETCHES 2), tile16 -> CTA_SIZE 256 (FETCHES 1).
+    static_assert(
+        CTA_SIZE_T == 32 || FETCHES_PER_BATCH == 1,
+        "CTA_SIZE_T > 32 requires FETCHES_PER_BATCH == 1; the multi-fetch path "
+        "relies on warp-synchronous execution (no inter-round barrier).");
 
 #pragma unroll
     for (uint32_t r = 0; r < FETCHES_PER_BATCH; ++r) {
@@ -599,25 +772,28 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
             break;
         }
 
-        cooperative_load_fetch_round<FETCH_SIZE_T, CTA_SIZE_T, scalar_t>(
+        cooperative_load_fetch_round<FETCH_SIZE_T, CTA_SIZE_T, ReturnNormals, scalar_t>(
             tid,
             id_batch, xyz_opacity_batch, iscl_rot_batch,
             scale_batch, normal_batch,
             batch_start, range_end,
             flatten_ids, means, quats, scales, opacities,
-            C, N, return_normals);
+            C, N);
 
         cta_sync<CTA_SIZE_T>();
 
         const uint32_t batch_size = min(FETCH_SIZE_T, ((uint32_t)range_end - batch_start));
-        process_fetch_round_blend<CDIM, PIXELS_PER_THREAD_T, CHECK_THRESHOLD, scalar_t>(
+        process_fetch_round_blend<
+            CDIM, PIXELS_PER_THREAD_T, CHECK_THRESHOLD,
+            SaturationPolicy,
+            UseHitDistance, ReturnNormals, scalar_t>(
             id_batch, xyz_opacity_batch, iscl_rot_batch,
             scale_batch, normal_batch,
             batch_start, batch_size,
             colors, ray_o, ray_d,
-            use_hit_distance, return_normals,
             ALL_DONE,
-            T, pix_out, normal_out,
+            transmittance_threshold,
+            T, saturating_T, pix_out, normal_out,
             cur_idx, n_accumulated, done_mask);
 
         // CTA-wide early stop: if every pixel in the CTA has crossed
@@ -632,58 +808,66 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     return false;
 }
 
-// Persist the CURRENT per-pixel cumulative state (T, pix_out, normal_out)
-// into one chunk slot of the CSR `fwd_chunk_state` buffer. Caller is
-// responsible for gating on `fwd_chunk_state != nullptr` (no internal
-// early-return) and for selecting the correct chunk index `c`.
+// Persist the CURRENT per-pixel cumulative state
+// (T, pix_out, and optional normal_out) into one batch slot of the CSR
+// `fwd_batch_state` buffer. Caller is
+// responsible for gating on `fwd_batch_state != nullptr` (no internal
+// early-return) and for selecting the correct forward depth-walk batch index
+// `c`.
 //
-// Layout: each (slot, thread_row=tid + p*CTA_SIZE_T) writes
-// `state_dim = FWD_CHUNK_STATE_PIX_OFFSET + CDIM + FWD_CHUNK_STATE_NORMAL_EXTRA`
-// = 1 + CDIM + 3 floats. The normal slot is zero-filled when
-// `return_normals == false` so bwd consumers can read it unconditionally.
+// SOA layout: each (slot, state element, thread_row=tid + p*CTA_SIZE_T) writes
+// `state_dim = FWD_BATCH_STATE_PIX_OFFSET + CDIM +
+// (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0)`. Pixels are
+// fastest-varying so each warp writes a contiguous span for one state element.
 //
-// `c=0` corresponds to the terminal state (what bwd chunk 0 starts from);
-// `c=num_chunks-1` corresponds to the earliest persistable state. The
-// boundary-formula derivation is documented in `RasterizeChunkCSR.h`.
+// `c=0` corresponds to the front-most batch boundary; `c=num_batches-1`
+// corresponds to the terminal state. The CSR slot layout these indices
+// follow is defined in `RasterizeCSR.cuh`.
 template <
     uint32_t CDIM,
     uint32_t PIXELS_PER_THREAD_T,
-    uint32_t CTA_SIZE_T
+    uint32_t CTA_SIZE_T,
+    bool ReturnNormals
 >
-__device__ __forceinline__ void persist_chunk_state(
+__device__ __forceinline__ void persist_batch_state(
     uint32_t c,
-    int64_t chunk_base_slot,
+    int64_t batch_base_slot,
     uint32_t pixels_per_tile,
     uint32_t tid,
-    bool return_normals,
     const float (&T)[PIXELS_PER_THREAD_T],
     const float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
     const vec3  (&normal_out)[PIXELS_PER_THREAD_T],
-    float *__restrict__ fwd_chunk_state
+    float *__restrict__ fwd_batch_state
 ) {
     constexpr uint32_t state_dim =
-        FWD_CHUNK_STATE_PIX_OFFSET + CDIM + FWD_CHUNK_STATE_NORMAL_EXTRA;
+        FWD_BATCH_STATE_PIX_OFFSET + CDIM +
+        (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0u);
+    const int64_t ppt64 = static_cast<int64_t>(pixels_per_tile);
 #pragma unroll
     for (uint32_t p = 0; p < PIXELS_PER_THREAD_T; ++p) {
         const uint32_t tr = tid + p * CTA_SIZE_T;
-        const int64_t slot = chunk_base_slot + static_cast<int64_t>(c);
-        const int64_t base = slot * static_cast<int64_t>(pixels_per_tile) *
-                                static_cast<int64_t>(state_dim) +
-                            static_cast<int64_t>(tr) *
-                                static_cast<int64_t>(state_dim);
-        fwd_chunk_state[base + FWD_CHUNK_STATE_T_OFFSET] = T[p];
+        const int64_t slot = batch_base_slot + static_cast<int64_t>(c);
+        const int64_t slot_base =
+            slot * static_cast<int64_t>(state_dim) * ppt64;
+        const int64_t pix64 = static_cast<int64_t>(tr);
+        fwd_batch_state[slot_base + FWD_BATCH_STATE_T_OFFSET * ppt64 + pix64] =
+            T[p];
 #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + k] = pix_out[p][k];
+            fwd_batch_state[
+                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + k) * ppt64 + pix64] =
+                pix_out[p][k];
         }
-        if (return_normals) {
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = normal_out[p].x;
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = normal_out[p].y;
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = normal_out[p].z;
-        } else {
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 0] = 0.0f;
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 1] = 0.0f;
-            fwd_chunk_state[base + FWD_CHUNK_STATE_PIX_OFFSET + CDIM + 2] = 0.0f;
+        if constexpr (ReturnNormals) {
+            fwd_batch_state[
+                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 0) * ppt64 +
+                    pix64] = normal_out[p].x;
+            fwd_batch_state[
+                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 1) * ppt64 +
+                    pix64] = normal_out[p].y;
+            fwd_batch_state[
+                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 2) * ppt64 +
+                    pix64] = normal_out[p].z;
         }
     }
 }

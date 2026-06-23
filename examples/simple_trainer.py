@@ -155,6 +155,9 @@ class Config:
     init_extent: float = 3.0
     # Degree of spherical harmonics
     sh_degree: int = 3
+    # Cast SH coefficients to fp16 before feeding the SH kernel.
+    # Parameters and Adam state stay fp32.
+    sh_fp16: bool = False
     # Turn on another SH degree every this steps
     sh_degree_interval: int = 1000
     # Initial opacity of GS
@@ -678,7 +681,13 @@ class Runner:
             colors = colors + splats["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
+            # Cast before the cat so both the cat and the SH kernel run on fp16.
+            if self.cfg.sh_fp16:
+                colors = torch.cat(
+                    [splats["sh0"].half(), splats["shN"].half()], 1
+                )  # [N, K, 3]
+            else:
+                colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
 
         if rasterize_mode is None:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -717,7 +726,7 @@ class Runner:
             scales=scales,
             opacities=opacities,
             colors=colors,
-            viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+            viewmats=torch.linalg.inv_ex(camtoworlds).inverse,  # [C, 4, 4]
             Ks=Ks,  # [C, 3, 3]
             width=width,
             height=height,

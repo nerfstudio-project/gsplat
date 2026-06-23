@@ -37,6 +37,14 @@ namespace gsplat {
 #define DEVICE_GUARD(_ten)                                                     \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 
+// Host/device qualifier for helpers shared between host (tests, host-side
+// setup) and device code. Expands to nothing under a non-CUDA compiler.
+#ifdef __CUDACC__
+#define GSPLAT_HOST_DEVICE __host__ __device__
+#else
+#define GSPLAT_HOST_DEVICE
+#endif
+
 // https://github.com/pytorch/pytorch/blob/233305a852e1cd7f319b15b5137074c9eac455f6/aten/src/ATen/cuda/cub.cuh#L38-L46
 // handle the temporary storage and 'twice' calls for cub API
 #define CUB_WRAPPER(func, ...)                                                 \
@@ -68,6 +76,11 @@ enum CameraModelType {
     FISHEYE = 2,
     FTHETA = 3,
     LIDAR = 4,
+};
+
+enum RendererConfig {
+    MIXED_BATCH = 0,
+    PARALLEL_BATCH = 1,
 };
 
 #define N_THREADS_PACKED 256

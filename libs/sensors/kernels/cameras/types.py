@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from __future__ import annotations
 
@@ -71,7 +83,7 @@ class ReferencePolynomial(IntEnum):
     BACKWARD = 1
 
 
-# These three names are bound to the TorchScript custom classes registered by
+# These names are bound to the TorchScript custom classes registered by
 # the gsplat_sensors C++ extension via ``torch::class_<T>``.  They behave like
 # Python dataclasses but are actually ``torch.classes.*`` descriptors — created
 # by the extension at import time and stored in ``torch.classes.gsplat_sensors``.
@@ -90,6 +102,45 @@ Attributes:
     tangential_coeffs: (2,) ``[p1, p2]`` tangential distortion coefficients.
     thin_prism_coeffs: (4,) ``[s1, s2, s3, s4]`` thin prism distortion coefficients.
     resolution: ``(width, height)`` tuple of ints, image resolution in pixels.
+
+Note:
+    Use :func:`script_class_name` to retrieve the registered class name when
+    dispatching across projection types.
+"""
+
+FThetaProjection = torch.classes.gsplat_sensors.FThetaProjection
+"""FTheta fisheye camera projection parameters.
+
+Polynomial fisheye model with a forward (ray-to-angle) and backward
+(angle-to-ray) polynomial pair and a 2x2 affine pixel transform. Parameters
+are stored as separate per-component tensors on the C++ ``FThetaProjection``
+struct (see ``libs/sensors/kernels/cuda/csrc/camera_torch.h``).
+
+Attributes:
+    principal_point: (2,) ``[cx, cy]`` principal point in pixels.
+    fw_poly: (FTHETA_MAX_POLYNOMIAL_TERMS,) forward polynomial coefficients
+        (ray angle -> radial pixel distance); coefficients beyond
+        ``fw_poly_degree`` are zero-padded.
+    bw_poly: (FTHETA_MAX_POLYNOMIAL_TERMS,) backward polynomial coefficients
+        (radial pixel distance -> ray angle); coefficients beyond
+        ``bw_poly_degree`` are zero-padded.
+    A: (4,) row-major 2x2 affine pixel transform applied after the radial polynomial.
+        ``Ainv`` is exposed as a read-only property derived from ``A``
+        (closed-form 2x2 inverse).
+    resolution: ``(width, height)`` tuple of ints, image resolution in pixels.
+    reference_polynomial: :class:`ReferencePolynomial` selecting which
+        polynomial direction is authoritative when both are evaluated.
+    fw_poly_degree: Degree of ``fw_poly`` (active coefficients);
+        must satisfy ``fw_poly_degree <= FTHETA_MAX_POLYNOMIAL_TERMS - 1``.
+    bw_poly_degree: Degree of ``bw_poly`` (active coefficients);
+        must satisfy ``bw_poly_degree <= FTHETA_MAX_POLYNOMIAL_TERMS - 1``.
+    newton_iterations: Number of Newton iterations used when inverting the
+        forward polynomial in the ray->pixel direction.
+    max_angle: Maximum valid ray angle in radians; rays beyond this angle are
+        marked invalid by the projection kernels.
+    min_2d_norm: Pixel-radius threshold below which the angle-from-pixel
+        mapping is treated as degenerate (avoids division by zero near the
+        principal point).
 
 Note:
     Use :func:`script_class_name` to retrieve the registered class name when
@@ -130,14 +181,32 @@ Note:
     Use :func:`from_components` to construct this class from unpacked tensors.
 """
 
-# Phase-1 compatibility alias. There is no registered abstract C++ base class.
-CameraProjection: Any = OpenCVPinholeProjection
+# Maximum number of polynomial coefficients the FTheta CUDA kernel reads from
+# fw_poly / bw_poly. The C++ definition is the source of truth; polynomials with
+# degree greater than ``FTHETA_MAX_POLYNOMIAL_TERMS - 1`` are rejected at
+# construction.
+FTHETA_MAX_POLYNOMIAL_TERMS = int(FThetaProjection.get_max_polynomial_terms())
+
+# Compatibility alias kept as ``Any`` (rather than a Union of the registered
+# torch script classes) on purpose: type-narrowing a Union of
+# ``torch.classes.*`` references inside ``torch.autograd.Function`` is awkward
+# because each entry is a ``ScriptClass`` instance, not a regular Python type;
+# callers should use :func:`script_class_name` for runtime dispatch instead of
+# ``isinstance`` checks. The registered set lives in
+# ``REGISTERED_CAMERA_PROJECTIONS``.
+#
+# The runtime value is bound to ``object`` (not to one of the registered
+# projection classes) so the symbol does not falsely imply that any single
+# projection is canonical. The annotation ``Any`` is what callers see; the
+# right-hand side is required only so ``from .types import CameraProjection``
+# resolves at import time.
+CameraProjection: Any = object
 """Type alias for a camera projection parameter object.
 
-In Phase 1 only :class:`OpenCVPinholeProjection` is supported, so this alias
-resolves directly to it.  Code that dispatches across projection types should
-use :data:`REGISTERED_CAMERA_PROJECTIONS` and :func:`script_class_name` rather
-than an ``isinstance`` check against this alias.
+This is kept as ``Any`` for type-checking ergonomics with TorchScript custom
+classes. Code that dispatches across projection types should use
+:data:`REGISTERED_CAMERA_PROJECTIONS` and :func:`script_class_name` rather than
+an ``isinstance`` check against this alias.
 """
 
 ExternalDistortion = Union[NoExternalDistortion, BivariateWindshieldDistortion]
@@ -147,7 +216,7 @@ Either :class:`NoExternalDistortion` (identity) or
 :class:`BivariateWindshieldDistortion`.
 """
 
-REGISTERED_CAMERA_PROJECTIONS = (OpenCVPinholeProjection,)
+REGISTERED_CAMERA_PROJECTIONS = (OpenCVPinholeProjection, FThetaProjection)
 """Tuple of all supported camera projection classes.
 
 Iterate this tuple to dispatch across projection types without hard-coding
@@ -160,6 +229,17 @@ REGISTERED_DISTORTIONS = (NoExternalDistortion, BivariateWindshieldDistortion)
 Iterate this tuple to dispatch across distortion types without hard-coding
 class names in kernel dispatch logic.
 """
+
+# Registered TorchScript class names, parallel to REGISTERED_CAMERA_PROJECTIONS
+# and REGISTERED_DISTORTIONS. Kept as explicit string tuples because the
+# torch.classes.* class objects are torch.ScriptClass instances and do not
+# expose a usable __name__ attribute; script_class_name() only works on
+# instances, not on the registered class objects themselves.
+REGISTERED_CAMERA_PROJECTION_NAMES = ("OpenCVPinholeProjection", "FThetaProjection")
+REGISTERED_DISTORTION_NAMES = (
+    "NoExternalDistortion",
+    "BivariateWindshieldDistortion",
+)
 
 
 def script_class_name(obj: object) -> str:
@@ -191,11 +271,15 @@ __all__ = [
     "BivariateWindshieldDistortion",
     "CameraProjection",
     "ExternalDistortion",
+    "FTHETA_MAX_POLYNOMIAL_TERMS",
+    "FThetaProjection",
     "NoExternalDistortion",
     "OpenCVPinholeProjection",
     "ReferencePolynomial",
     "REGISTERED_CAMERA_PROJECTIONS",
+    "REGISTERED_CAMERA_PROJECTION_NAMES",
     "REGISTERED_DISTORTIONS",
+    "REGISTERED_DISTORTION_NAMES",
     "script_class_name",
     "ShutterType",
 ]

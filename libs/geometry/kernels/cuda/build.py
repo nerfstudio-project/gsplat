@@ -50,10 +50,16 @@ def get_build_parameters() -> SimpleNamespace:
     extra_ldflags: list[str] = []
 
     if sys.platform == "win32":
-        extra_cflags = ["/std=c++17", "-DWIN32_LEAN_AND_MEAN"]
-        extra_cuda_cflags += ["-allow-unsupported-compiler"]
+        extra_cflags += ["/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN"]
+        extra_cuda_cflags += [
+            "-std=c++20",
+            "-allow-unsupported-compiler",
+            "-Xcompiler",
+            "/Zc:preprocessor",
+            "-DWIN32_LEAN_AND_MEAN",
+        ]
     else:
-        extra_cflags = ["-std=c++17"]
+        extra_cflags = ["-std=c++20"]
 
     extra_cuda_cflags += ["--forward-unknown-opts"]
     extra_cflags += ["-g", "-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
@@ -68,7 +74,8 @@ def get_build_parameters() -> SimpleNamespace:
     else:
         extra_cuda_cflags += ["--expt-relaxed-constexpr"]
 
-    extra_cuda_cflags += extra_cflags
+    if sys.platform != "win32":
+        extra_cuda_cflags += extra_cflags
     extra_cuda_cflags += [] if NVCC_FLAGS == "" else NVCC_FLAGS.split(" ")
 
     return SimpleNamespace(

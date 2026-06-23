@@ -15,13 +15,17 @@
  * limitations under the License.
  */
 
-#include <ATen/Dispatch.h>
+#include <ATen/Dispatch_v2.h>
+#include <ATen/OpMathType.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
+#include <type_traits>
+#include <variant>
 
 #include "Common.h"
+#include "Dispatch.h"
 #include "SphericalHarmonics.h"
 #include "Utils.cuh"
 
@@ -42,9 +46,10 @@ __device__ void sh_coeffs_to_color_fast(
     const vec3 &dir,        // [3]
     const scalar_t *coeffs, // [K, D]
     // output
-    scalar_t *colors // [D]
+    at::opmath_type<scalar_t> *colors // [D]
 ) {
-    float result = 0.2820947917738781f * coeffs[c];
+    using opmath_t = at::opmath_type<scalar_t>;
+    opmath_t result = 0.2820947917738781f * static_cast<opmath_t>(coeffs[c]);
     if (degree >= 1) {
         // Normally rsqrt is faster than sqrt, but --use_fast_math will optimize
         // sqrt on single precision, so we use sqrt here.
@@ -54,8 +59,8 @@ __device__ void sh_coeffs_to_color_fast(
         float z = dir.z * inorm;
 
         result +=
-            0.48860251190292f * (-y * coeffs[1 * D + c] +
-                                 z * coeffs[2 * D + c] - x * coeffs[3 * D + c]);
+            0.48860251190292f * (-y * static_cast<opmath_t>(coeffs[1 * D + c]) +
+                                 z * static_cast<opmath_t>(coeffs[2 * D + c]) - x * static_cast<opmath_t>(coeffs[3 * D + c]));
         if (degree >= 2) {
             float z2 = z * z;
 
@@ -68,9 +73,9 @@ __device__ void sh_coeffs_to_color_fast(
             float pSH8 = 0.5462742152960395f * fC1;
             float pSH4 = 0.5462742152960395f * fS1;
 
-            result += pSH4 * coeffs[4 * D + c] + pSH5 * coeffs[5 * D + c] +
-                      pSH6 * coeffs[6 * D + c] + pSH7 * coeffs[7 * D + c] +
-                      pSH8 * coeffs[8 * D + c];
+            result += pSH4 * static_cast<opmath_t>(coeffs[4 * D + c]) + pSH5 * static_cast<opmath_t>(coeffs[5 * D + c]) +
+                      pSH6 * static_cast<opmath_t>(coeffs[6 * D + c]) + pSH7 * static_cast<opmath_t>(coeffs[7 * D + c]) +
+                      pSH8 * static_cast<opmath_t>(coeffs[8 * D + c]);
             if (degree >= 3) {
                 float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
                 float fTmp1B = 1.445305721320277f * z;
@@ -86,10 +91,10 @@ __device__ void sh_coeffs_to_color_fast(
                 float pSH9 = -0.5900435899266435f * fS2;
 
                 result +=
-                    pSH9 * coeffs[9 * D + c] + pSH10 * coeffs[10 * D + c] +
-                    pSH11 * coeffs[11 * D + c] + pSH12 * coeffs[12 * D + c] +
-                    pSH13 * coeffs[13 * D + c] + pSH14 * coeffs[14 * D + c] +
-                    pSH15 * coeffs[15 * D + c];
+                    pSH9 * static_cast<opmath_t>(coeffs[9 * D + c]) + pSH10 * static_cast<opmath_t>(coeffs[10 * D + c]) +
+                    pSH11 * static_cast<opmath_t>(coeffs[11 * D + c]) + pSH12 * static_cast<opmath_t>(coeffs[12 * D + c]) +
+                    pSH13 * static_cast<opmath_t>(coeffs[13 * D + c]) + pSH14 * static_cast<opmath_t>(coeffs[14 * D + c]) +
+                    pSH15 * static_cast<opmath_t>(coeffs[15 * D + c]);
 
                 if (degree >= 4) {
                     float fTmp0D =
@@ -110,15 +115,15 @@ __device__ void sh_coeffs_to_color_fast(
                     float pSH24 = 0.6258357354491763f * fC3;
                     float pSH16 = 0.6258357354491763f * fS3;
 
-                    result += pSH16 * coeffs[16 * D + c] +
-                              pSH17 * coeffs[17 * D + c] +
-                              pSH18 * coeffs[18 * D + c] +
-                              pSH19 * coeffs[19 * D + c] +
-                              pSH20 * coeffs[20 * D + c] +
-                              pSH21 * coeffs[21 * D + c] +
-                              pSH22 * coeffs[22 * D + c] +
-                              pSH23 * coeffs[23 * D + c] +
-                              pSH24 * coeffs[24 * D + c];
+                    result += pSH16 * static_cast<opmath_t>(coeffs[16 * D + c]) +
+                              pSH17 * static_cast<opmath_t>(coeffs[17 * D + c]) +
+                              pSH18 * static_cast<opmath_t>(coeffs[18 * D + c]) +
+                              pSH19 * static_cast<opmath_t>(coeffs[19 * D + c]) +
+                              pSH20 * static_cast<opmath_t>(coeffs[20 * D + c]) +
+                              pSH21 * static_cast<opmath_t>(coeffs[21 * D + c]) +
+                              pSH22 * static_cast<opmath_t>(coeffs[22 * D + c]) +
+                              pSH23 * static_cast<opmath_t>(coeffs[23 * D + c]) +
+                              pSH24 * static_cast<opmath_t>(coeffs[24 * D + c]);
                 }
             }
         }
@@ -129,17 +134,19 @@ __device__ void sh_coeffs_to_color_fast(
 
 template <typename scalar_t>
 __device__ void sh_coeffs_to_color_fast_vjp(
-    const uint32_t degree,    // degree of SH to be evaluated
-    const uint32_t D,         // channels (coeffs last dim)
-    const uint32_t c,         // output channel
-    const vec3 &dir,          // [3]
-    const scalar_t *coeffs,   // [K, D]
-    const scalar_t *v_colors, // [D]
+    const uint32_t degree,                     // degree of SH to be evaluated
+    const uint32_t D,                          // channels (coeffs last dim)
+    const uint32_t c,                          // output channel
+    const vec3 &dir,                           // [3]
+    const scalar_t *coeffs,                    // [K, D]
+    const at::opmath_type<scalar_t> *v_colors, // [D]
     // output
-    scalar_t *v_coeffs, // [K, D]
-    vec3 *v_dir         // [3] optional
+    // v_coeffs is fp32; caller casts back to the coeff dtype after all atomic adds.
+    float *v_coeffs,   // [K, D]
+    vec3 *v_dir        // [3] optional
 ) {
-    float v_colors_local = v_colors[c];
+    using opmath_t = at::opmath_type<scalar_t>;
+    opmath_t v_colors_local = v_colors[c];
 
     gpuAtomicAdd(&v_coeffs[c], 0.2820947917738781f * v_colors_local);
     if (degree < 1) {
@@ -156,9 +163,9 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     gpuAtomicAdd(&v_coeffs[3 * D + c], -0.48860251190292f * x * v_colors_local);
 
     if (v_dir != nullptr) {
-        v_x += -0.48860251190292f * coeffs[3 * D + c] * v_colors_local;
-        v_y += -0.48860251190292f * coeffs[1 * D + c] * v_colors_local;
-        v_z += 0.48860251190292f * coeffs[2 * D + c] * v_colors_local;
+        v_x += -0.48860251190292f * static_cast<opmath_t>(coeffs[3 * D + c]) * v_colors_local;
+        v_y += -0.48860251190292f * static_cast<opmath_t>(coeffs[1 * D + c]) * v_colors_local;
+        v_z += 0.48860251190292f * static_cast<opmath_t>(coeffs[2 * D + c]) * v_colors_local;
     }
     if (degree < 2) {
         if (v_dir != nullptr) {
@@ -207,14 +214,14 @@ __device__ void sh_coeffs_to_color_fast_vjp(
         pSH4_y = 0.5462742152960395f * fS1_y;
 
         v_x += v_colors_local *
-               (pSH4_x * coeffs[4 * D + c] + pSH8_x * coeffs[8 * D + c] +
-                pSH7_x * coeffs[7 * D + c]);
+               (pSH4_x * static_cast<opmath_t>(coeffs[4 * D + c]) + pSH8_x * static_cast<opmath_t>(coeffs[8 * D + c]) +
+                pSH7_x * static_cast<opmath_t>(coeffs[7 * D + c]));
         v_y += v_colors_local *
-               (pSH4_y * coeffs[4 * D + c] + pSH8_y * coeffs[8 * D + c] +
-                pSH5_y * coeffs[5 * D + c]);
+               (pSH4_y * static_cast<opmath_t>(coeffs[4 * D + c]) + pSH8_y * static_cast<opmath_t>(coeffs[8 * D + c]) +
+                pSH5_y * static_cast<opmath_t>(coeffs[5 * D + c]));
         v_z += v_colors_local *
-               (pSH6_z * coeffs[6 * D + c] + pSH7_z * coeffs[7 * D + c] +
-                pSH5_z * coeffs[5 * D + c]);
+               (pSH6_z * static_cast<opmath_t>(coeffs[6 * D + c]) + pSH7_z * static_cast<opmath_t>(coeffs[7 * D + c]) +
+                pSH5_z * static_cast<opmath_t>(coeffs[5 * D + c]));
     }
 
     if (degree < 3) {
@@ -276,19 +283,19 @@ __device__ void sh_coeffs_to_color_fast_vjp(
         pSH9_y = -0.5900435899266435f * fS2_y;
 
         v_x += v_colors_local *
-               (pSH9_x * coeffs[9 * D + c] + pSH15_x * coeffs[15 * D + c] +
-                pSH10_x * coeffs[10 * D + c] + pSH14_x * coeffs[14 * D + c] +
-                pSH13_x * coeffs[13 * D + c]);
+               (pSH9_x * static_cast<opmath_t>(coeffs[9 * D + c]) + pSH15_x * static_cast<opmath_t>(coeffs[15 * D + c]) +
+                pSH10_x * static_cast<opmath_t>(coeffs[10 * D + c]) + pSH14_x * static_cast<opmath_t>(coeffs[14 * D + c]) +
+                pSH13_x * static_cast<opmath_t>(coeffs[13 * D + c]));
 
         v_y += v_colors_local *
-               (pSH9_y * coeffs[9 * D + c] + pSH15_y * coeffs[15 * D + c] +
-                pSH10_y * coeffs[10 * D + c] + pSH14_y * coeffs[14 * D + c] +
-                pSH11_y * coeffs[11 * D + c]);
+               (pSH9_y * static_cast<opmath_t>(coeffs[9 * D + c]) + pSH15_y * static_cast<opmath_t>(coeffs[15 * D + c]) +
+                pSH10_y * static_cast<opmath_t>(coeffs[10 * D + c]) + pSH14_y * static_cast<opmath_t>(coeffs[14 * D + c]) +
+                pSH11_y * static_cast<opmath_t>(coeffs[11 * D + c]));
 
         v_z += v_colors_local *
-               (pSH12_z * coeffs[12 * D + c] + pSH13_z * coeffs[13 * D + c] +
-                pSH11_z * coeffs[11 * D + c] + pSH14_z * coeffs[14 * D + c] +
-                pSH10_z * coeffs[10 * D + c]);
+               (pSH12_z * static_cast<opmath_t>(coeffs[12 * D + c]) + pSH13_z * static_cast<opmath_t>(coeffs[13 * D + c]) +
+                pSH11_z * static_cast<opmath_t>(coeffs[11 * D + c]) + pSH14_z * static_cast<opmath_t>(coeffs[14 * D + c]) +
+                pSH10_z * static_cast<opmath_t>(coeffs[10 * D + c]));
     }
 
     if (degree < 4) {
@@ -364,20 +371,20 @@ __device__ void sh_coeffs_to_color_fast_vjp(
         pSH16_y = 0.6258357354491763f * fS3_y;
 
         v_x += v_colors_local *
-               (pSH16_x * coeffs[16 * D + c] + pSH24_x * coeffs[24 * D + c] +
-                pSH17_x * coeffs[17 * D + c] + pSH23_x * coeffs[23 * D + c] +
-                pSH18_x * coeffs[18 * D + c] + pSH22_x * coeffs[22 * D + c] +
-                pSH21_x * coeffs[21 * D + c]);
+               (pSH16_x * static_cast<opmath_t>(coeffs[16 * D + c]) + pSH24_x * static_cast<opmath_t>(coeffs[24 * D + c]) +
+                pSH17_x * static_cast<opmath_t>(coeffs[17 * D + c]) + pSH23_x * static_cast<opmath_t>(coeffs[23 * D + c]) +
+                pSH18_x * static_cast<opmath_t>(coeffs[18 * D + c]) + pSH22_x * static_cast<opmath_t>(coeffs[22 * D + c]) +
+                pSH21_x * static_cast<opmath_t>(coeffs[21 * D + c]));
         v_y += v_colors_local *
-               (pSH16_y * coeffs[16 * D + c] + pSH24_y * coeffs[24 * D + c] +
-                pSH17_y * coeffs[17 * D + c] + pSH23_y * coeffs[23 * D + c] +
-                pSH18_y * coeffs[18 * D + c] + pSH22_y * coeffs[22 * D + c] +
-                pSH19_y * coeffs[19 * D + c]);
+               (pSH16_y * static_cast<opmath_t>(coeffs[16 * D + c]) + pSH24_y * static_cast<opmath_t>(coeffs[24 * D + c]) +
+                pSH17_y * static_cast<opmath_t>(coeffs[17 * D + c]) + pSH23_y * static_cast<opmath_t>(coeffs[23 * D + c]) +
+                pSH18_y * static_cast<opmath_t>(coeffs[18 * D + c]) + pSH22_y * static_cast<opmath_t>(coeffs[22 * D + c]) +
+                pSH19_y * static_cast<opmath_t>(coeffs[19 * D + c]));
         v_z += v_colors_local *
-               (pSH20_z * coeffs[20 * D + c] + pSH21_z * coeffs[21 * D + c] +
-                pSH19_z * coeffs[19 * D + c] + pSH22_z * coeffs[22 * D + c] +
-                pSH18_z * coeffs[18 * D + c] + pSH23_z * coeffs[23 * D + c] +
-                pSH17_z * coeffs[17 * D + c]);
+               (pSH20_z * static_cast<opmath_t>(coeffs[20 * D + c]) + pSH21_z * static_cast<opmath_t>(coeffs[21 * D + c]) +
+                pSH19_z * static_cast<opmath_t>(coeffs[19 * D + c]) + pSH22_z * static_cast<opmath_t>(coeffs[22 * D + c]) +
+                pSH18_z * static_cast<opmath_t>(coeffs[18 * D + c]) + pSH23_z * static_cast<opmath_t>(coeffs[23 * D + c]) +
+                pSH17_z * static_cast<opmath_t>(coeffs[17 * D + c]));
 
         vec3 dir_n = vec3(x, y, z);
         vec3 v_dir_n = vec3(v_x, v_y, v_z);
@@ -389,7 +396,9 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     }
 }
 
-template <typename scalar_t>
+// Generic forward kernel: any K, one thread per (Gaussian, channel).
+// scalar_t is fp16 or fp32; reads are upcast to opmath_t (fp32) inside the helper.
+template <typename scalar_t, typename opmath_t>
 __global__ void spherical_harmonics_fwd_kernel(
     const uint32_t B,
     const uint32_t N,
@@ -399,7 +408,7 @@ __global__ void spherical_harmonics_fwd_kernel(
     const vec3 *__restrict__ dirs,       // [..., N, 3]
     const scalar_t *__restrict__ coeffs, // [N, K, D]
     const bool *__restrict__ masks,      // [..., N]
-    scalar_t *__restrict__ colors        // [..., N, D]
+    opmath_t *__restrict__ colors        // [..., N, D]
 ) {
     // parallelize over B * N * D
     uint32_t idx = cg::this_grid().thread_rank();
@@ -412,7 +421,7 @@ __global__ void spherical_harmonics_fwd_kernel(
     if (masks != nullptr && !masks[elem_id]) {
         return;
     }
-    sh_coeffs_to_color_fast(
+    sh_coeffs_to_color_fast<scalar_t>(
         degrees_to_use,
         D,
         c,
@@ -420,6 +429,69 @@ __global__ void spherical_harmonics_fwd_kernel(
         coeffs + gaussian_id * K * D,
         colors + elem_id * D
     );
+}
+
+// K=16, D=3 forward kernel for the RGB SH hot path. One thread per
+// (batch, Gaussian), processes all 3 color channels with uint4 / ushort4
+// wide loads. DEGREE is a template parameter so each instantiation sizes
+// sh_coeffs[] to exactly what it needs.
+template <typename scalar_t, typename opmath_t, int DEGREE>
+__global__ void __launch_bounds__(256, 4)
+spherical_harmonics_fwd_kernel_k16_3channel(
+    const uint32_t B,
+    const uint32_t N,
+    const vec3 *__restrict__ dirs,          // [..., N, 3]
+    const scalar_t *__restrict__ coeffs,    // [N, 16, 3]
+    const bool *__restrict__ masks,         // [..., N]
+    opmath_t *__restrict__ colors           // [..., N, 3]
+) {
+    uint32_t idx = cg::this_grid().thread_rank();
+    if (idx >= B * N) {
+        return;
+    }
+    uint32_t gaussian_id = idx % N;
+    if (masks != nullptr && !masks[idx]) {
+        return;
+    }
+
+    coeffs += gaussian_id * 16 * 3;
+
+    constexpr bool COEFFS_FP32 = std::is_same_v<scalar_t, float>;
+
+    // Wide-load shape per (DEGREE, coeff dtype):
+    //  DEGREE 0/1 (small payload): ushort4 for fp16, uint4 for fp32, PACK_SIZE = 4.
+    //  DEGREE 2/3 (larger payload): always uint4, PACK_SIZE = 4 (fp32) or 8 (fp16).
+    constexpr int PACK_SIZE = (DEGREE <= 1) ? 4 : (COEFFS_FP32 ? 4 : 8);
+    constexpr int LOAD_COUNT =
+        (DEGREE == 0) ? 1 :
+        (DEGREE == 1) ? 3 :
+        (DEGREE == 2) ? (COEFFS_FP32 ? 7 : 4) :
+                        (COEFFS_FP32 ? 12 : 6);
+    constexpr int N_COEFFS = LOAD_COUNT * PACK_SIZE;
+
+    using V = std::conditional_t<(DEGREE <= 1) && !COEFFS_FP32, ushort4, uint4>;
+
+    opmath_t out_color[3];
+    opmath_t sh_coeffs[N_COEFFS];
+
+    #pragma unroll
+    for (int i = 0; i < LOAD_COUNT; ++i) {
+        alignas(alignof(V)) scalar_t mem[PACK_SIZE];
+        reinterpret_cast<V *>(mem)[0] = reinterpret_cast<const V *>(coeffs)[i];
+        #pragma unroll
+        for (int j = 0; j < PACK_SIZE; ++j) {
+            sh_coeffs[i * PACK_SIZE + j] = static_cast<opmath_t>(mem[j]);
+        }
+    }
+
+    // K=16 path is gated on D=3 in the host launcher; pass D=3 explicitly here.
+    sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 0, dirs[idx], sh_coeffs, out_color);
+    sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 1, dirs[idx], sh_coeffs, out_color);
+    sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 2, dirs[idx], sh_coeffs, out_color);
+
+    colors[idx * 3 + 0] = out_color[0];
+    colors[idx * 3 + 1] = out_color[1];
+    colors[idx * 3 + 2] = out_color[2];
 }
 
 void launch_spherical_harmonics_fwd_kernel(
@@ -437,56 +509,117 @@ void launch_spherical_harmonics_fwd_kernel(
     const uint32_t B =
         c10::multiply_integers(dirs.sizes().slice(0, dirs.dim() - 2));
 
-    // parallelize over B * N * D
-    int64_t n_elements = static_cast<int64_t>(B) * N * D;
-    dim3 threads(256);
-    dim3 grid((n_elements + threads.x - 1) / threads.x);
-    int64_t shmem_size = 0; // No shared memory used in this kernel
-
-    if (n_elements == 0) {
+    if (B * N == 0) {
         // skip the kernel launch if there are no elements
         return;
     }
 
-    AT_DISPATCH_FLOATING_TYPES(
-        dirs.scalar_type(),
-        "spherical_harmonics_fwd_kernel",
-        [&]() {
-            spherical_harmonics_fwd_kernel<scalar_t>
-                <<<grid,
-                   threads,
-                   shmem_size,
-                   at::cuda::getCurrentCUDAStream()>>>(
-                    B,
-                    N,
-                    K,
-                    D,
-                    degrees_to_use,
-                    reinterpret_cast<const vec3 *>(
-                        dirs.const_data_ptr<scalar_t>()
-                    ),
-                    coeffs.const_data_ptr<scalar_t>(),
-                    masks.has_value() ? masks.value().const_data_ptr<bool>()
-                                      : nullptr,
-                    colors.data_ptr<scalar_t>()
-                );
+    auto stream = at::cuda::getCurrentCUDAStream();
+
+    // K=16 wide loads need D == 3 and natural alignment; misaligned tensors
+    // fall through to the scalar generic kernel.
+    const bool uses_ushort4 =
+        (coeffs.scalar_type() == at::kHalf) && (degrees_to_use <= 1);
+    const size_t coeffs_align =
+        uses_ushort4 ? alignof(ushort4) : alignof(uint4);
+    const bool wide_load_aligned =
+        (reinterpret_cast<uintptr_t>(coeffs.const_data_ptr()) %
+         coeffs_align) == 0;
+
+    if (K == 16 && D == 3 && wide_load_aligned) {
+        int64_t n_threads = B * N;
+        dim3 threads(256);
+        dim3 grid((n_threads + threads.x - 1) / threads.x);
+
+        auto *masks_ptr = masks.has_value()
+            ? masks.value().const_data_ptr<bool>()
+            : nullptr;
+
+        std::variant<float, at::Half> coeff_variant;
+        switch (coeffs.scalar_type()) {
+        case at::kFloat: coeff_variant.emplace<float>(); break;
+        case at::kHalf:  coeff_variant.emplace<at::Half>(); break;
+        default:
+            TORCH_CHECK(
+                false,
+                "spherical_harmonics_fwd_kernel_k16_3channel: unsupported coeffs dtype ",
+                coeffs.scalar_type()
+            );
         }
-    );
+
+        const int deg = std::min<int>(degrees_to_use, 3);
+
+        // coeff dtype and DEGREE resolved at compile time; colors/dirs use
+        // opmath_t = at::opmath_type<coeff dtype> (float for both fp16 and fp32).
+        const bool dispatched = dispatch::dispatch(
+            dispatch::IntParam<0, 1, 2, 3>{deg},
+            dispatch::TypeParam<float, at::Half>{coeff_variant},
+            [&]<typename DegConst, typename CoeffT>() {
+                using opmath_t = at::opmath_type<CoeffT>;
+                constexpr int DEGREE = DegConst::value;
+                auto *dirs_ptr = reinterpret_cast<const vec3 *>(
+                    dirs.const_data_ptr<opmath_t>()
+                );
+                auto *colors_ptr = colors.data_ptr<opmath_t>();
+                spherical_harmonics_fwd_kernel_k16_3channel<CoeffT, opmath_t, DEGREE>
+                    <<<grid, threads, 0, stream>>>(
+                        B, N, dirs_ptr,
+                        coeffs.const_data_ptr<CoeffT>(),
+                        masks_ptr, colors_ptr
+                    );
+            }
+        );
+        TORCH_CHECK(
+            dispatched,
+            "spherical_harmonics_fwd_kernel_k16_3channel: dispatch failed for sh_degree=",
+            degrees_to_use
+        );
+    } else {
+        int64_t n_elements = static_cast<int64_t>(B) * N * D;
+        dim3 threads(256);
+        dim3 grid((n_elements + threads.x - 1) / threads.x);
+        int64_t shmem_size = 0; // No shared memory used in this kernel
+
+        // Dispatch on the coeff dtype (fp16/fp32); dirs/colors read as opmath_t (float).
+        AT_DISPATCH_V2(
+            coeffs.scalar_type(),
+            "spherical_harmonics_fwd_kernel",
+            AT_WRAP([&]() {
+                using opmath_t = at::opmath_type<scalar_t>;
+                auto *dirs_ptr = reinterpret_cast<const vec3 *>(
+                    dirs.const_data_ptr<opmath_t>()
+                );
+                auto *masks_ptr = masks.has_value()
+                    ? masks.value().const_data_ptr<bool>()
+                    : nullptr;
+                auto *colors_ptr = colors.data_ptr<opmath_t>();
+
+                spherical_harmonics_fwd_kernel<scalar_t, opmath_t>
+                    <<<grid, threads, shmem_size, stream>>>(
+                        B, N, K, D, degrees_to_use, dirs_ptr,
+                        coeffs.const_data_ptr<scalar_t>(),
+                        masks_ptr, colors_ptr
+                    );
+            }),
+            at::kFloat,
+            at::kHalf
+        );
+    }
 }
 
-template <typename scalar_t>
+template <typename scalar_t, typename opmath_t>
 __global__ void spherical_harmonics_bwd_kernel(
     const uint32_t B,
     const uint32_t N,
     const uint32_t K,
     const uint32_t D,
     const uint32_t degrees_to_use,
-    const vec3 *__restrict__ dirs,         // [..., N, 3]
-    const scalar_t *__restrict__ coeffs,   // [N, K, D]
-    const bool *__restrict__ masks,        // [..., N]
-    const scalar_t *__restrict__ v_colors, // [..., N, D]
-    scalar_t *__restrict__ v_coeffs,       // [N, K, D]
-    scalar_t *__restrict__ v_dirs          // [..., N, 3] optional
+    const vec3 *__restrict__ dirs,          // [..., N, 3]
+    const scalar_t *__restrict__ coeffs,    // [N, K, D]
+    const bool *__restrict__ masks,         // [..., N]
+    const opmath_t *__restrict__ v_colors,  // [..., N, D]
+    float *__restrict__ v_coeffs,           // [N, K, D]
+    opmath_t *__restrict__ v_dirs           // [..., N, 3] optional
 ) {
     // parallelize over B * N * D
     uint32_t idx = cg::this_grid().thread_rank();
@@ -501,7 +634,7 @@ __global__ void spherical_harmonics_bwd_kernel(
     }
 
     vec3 v_dir = {0.f, 0.f, 0.f};
-    sh_coeffs_to_color_fast_vjp(
+    sh_coeffs_to_color_fast_vjp<scalar_t>(
         degrees_to_use,
         D,
         c,
@@ -511,6 +644,7 @@ __global__ void spherical_harmonics_bwd_kernel(
         v_coeffs + gaussian_id * K * D,
         v_dirs == nullptr ? nullptr : &v_dir
     );
+
     if (v_dirs != nullptr) {
         gpuAtomicAdd(v_dirs + elem_id * 3, v_dir.x);
         gpuAtomicAdd(v_dirs + elem_id * 3 + 1, v_dir.y);
@@ -535,6 +669,8 @@ void launch_spherical_harmonics_bwd_kernel(
     const uint32_t B =
         c10::multiply_integers(dirs.sizes().slice(0, dirs.dim() - 2));
 
+    auto stream = at::cuda::getCurrentCUDAStream();
+
     // parallelize over B * N * D
     int64_t n_elements = static_cast<int64_t>(B) * N * D;
     dim3 threads(256);
@@ -546,32 +682,35 @@ void launch_spherical_harmonics_bwd_kernel(
         return;
     }
 
-    AT_DISPATCH_FLOATING_TYPES(
-        dirs.scalar_type(),
+    // Dispatch on the coeff dtype (fp16/fp32). v_coeffs accumulates in fp32;
+    // dirs/v_colors/v_dirs read as opmath_t (float).
+    AT_DISPATCH_V2(
+        coeffs.scalar_type(),
         "spherical_harmonics_bwd_kernel",
-        [&]() {
-            spherical_harmonics_bwd_kernel<scalar_t>
-                <<<grid,
-                   threads,
-                   shmem_size,
-                   at::cuda::getCurrentCUDAStream()>>>(
-                    B,
-                    N,
-                    K,
-                    D,
-                    degrees_to_use,
-                    reinterpret_cast<const vec3 *>(
-                        dirs.const_data_ptr<scalar_t>()
-                    ),
+        AT_WRAP([&]() {
+            using opmath_t = at::opmath_type<scalar_t>;
+            auto *dirs_ptr = reinterpret_cast<const vec3 *>(
+                dirs.const_data_ptr<opmath_t>()
+            );
+            auto *masks_ptr = masks.has_value()
+                ? masks.value().const_data_ptr<bool>()
+                : nullptr;
+            auto *v_colors_ptr = v_colors.const_data_ptr<opmath_t>();
+            auto *v_dirs_ptr = v_dirs.has_value()
+                ? v_dirs.value().data_ptr<opmath_t>()
+                : nullptr;
+
+            spherical_harmonics_bwd_kernel<scalar_t, opmath_t>
+                <<<grid, threads, shmem_size, stream>>>(
+                    B, N, K, D, degrees_to_use, dirs_ptr,
                     coeffs.const_data_ptr<scalar_t>(),
-                    masks.has_value() ? masks.value().const_data_ptr<bool>()
-                                      : nullptr,
-                    v_colors.const_data_ptr<scalar_t>(),
-                    v_coeffs.data_ptr<scalar_t>(),
-                    v_dirs.has_value() ? v_dirs.value().data_ptr<scalar_t>()
-                                       : nullptr
+                    masks_ptr, v_colors_ptr,
+                    v_coeffs.data_ptr<float>(),
+                    v_dirs_ptr
                 );
-        }
+        }),
+        at::kFloat,
+        at::kHalf
     );
 }
 

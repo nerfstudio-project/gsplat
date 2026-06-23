@@ -54,6 +54,9 @@ from .exporter import export_splats
 from .optimizers import SelectiveAdam
 from .rendering import (
     RasterizeMode,
+    RendererConfig,
+    RendererConfig_MixedBatch,
+    RendererConfig_ParallelBatch,
     RenderMode,
     rasterization,
     rasterization_2dgs,
@@ -100,6 +103,9 @@ __all__ = [
     "ExternalDistortionModelMeta",
     "ExternalDistortionModelParameters",
     "RasterizeMode",
+    "RendererConfig",
+    "RendererConfig_MixedBatch",
+    "RendererConfig_ParallelBatch",
     "RenderMode",
     "rasterization",
     "rasterization_2dgs",

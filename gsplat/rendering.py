@@ -15,8 +15,9 @@
 # limitations under the License.
 
 from contextlib import nullcontext
+from dataclasses import dataclass
 import math
-from typing import Dict, Optional, Tuple, cast
+from typing import Any, Dict, Optional, Tuple, cast
 
 import torch
 import torch.distributed
@@ -48,6 +49,8 @@ from .cuda._wrapper import (
     rasterize_to_pixels_2dgs,
     rasterize_to_pixels_eval3d,
     rasterize_to_pixels_eval3d_extra,
+    renderer_config_mixed_batch,
+    renderer_config_parallel_batch,
     spherical_harmonics,
 )
 from .distributed import (
@@ -63,6 +66,72 @@ from .utils import depth_to_normal, get_projection_matrix
 RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"]
 
 RasterizeMode = Literal["classic", "antialiased"]
+
+
+class RendererConfig:
+    """Base class for public rasterizer selection configs.
+
+    Instantiate one of the concrete renderer configs instead of this base
+    class. Unsupported subclasses remain possible so future policies can fail
+    with an explicit "unsupported" error at the validation boundary.
+    """
+
+    def __new__(cls, *args, **kwargs):
+        if cls is RendererConfig:
+            raise TypeError(
+                "RendererConfig is a base class; instantiate "
+                "RendererConfig_MixedBatch or RendererConfig_ParallelBatch."
+            )
+        return super().__new__(cls)
+
+
+@dataclass
+class RendererConfig_MixedBatch(RendererConfig):
+    """Eval3d rasterizer: serial-batch forward, batch-parallel backward.
+
+    "Mixed" = the two passes batch differently. The forward composites each
+    tile's depth-sorted Gaussian batches serially (one CTA per tile, front to
+    back); the backward is batch-parallel (one CTA per batch).
+    """
+
+
+@dataclass
+class RendererConfig_ParallelBatch(RendererConfig):
+    """Eval3d rasterizer: batch-parallel forward and backward.
+
+    Both passes are batch-parallel (one CTA per batch); the forward adds a
+    partials/scan/replay pipeline so independent batches composite concurrently,
+    at the cost of per-batch forward state persisted for the backward. The
+    backward kernel is shared with MixedBatch.
+    """
+
+
+def _validate_renderer_config(renderer_config: RendererConfig) -> None:
+    if renderer_config is None:
+        raise TypeError("renderer_config must be a RendererConfig instance, got None.")
+    if not isinstance(renderer_config, RendererConfig):
+        raise TypeError(
+            "renderer_config must be a RendererConfig instance, "
+            f"got {type(renderer_config).__name__}."
+        )
+    if isinstance(renderer_config, RendererConfig_MixedBatch):
+        return
+    if isinstance(renderer_config, RendererConfig_ParallelBatch):
+        return
+    raise NotImplementedError(
+        f"Unsupported renderer_config type: {type(renderer_config).__name__}."
+    )
+
+
+def _renderer_config_type(renderer_config: RendererConfig) -> Any:
+    _validate_renderer_config(renderer_config)
+    if isinstance(renderer_config, RendererConfig_MixedBatch):
+        return renderer_config_mixed_batch()
+    if isinstance(renderer_config, RendererConfig_ParallelBatch):
+        return renderer_config_parallel_batch()
+    raise AssertionError(
+        f"unreachable renderer_config: {type(renderer_config).__name__}"
+    )
 
 
 # TODO: RenderMode should be an enum so that we can add these query methods to it.
@@ -359,6 +428,7 @@ def rasterization(
     extra_signals_sh_degree: Optional[
         int
     ] = None,  # Currently only None or 3 is accepted.
+    renderer_config: Optional[RendererConfig] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -545,6 +615,10 @@ def rasterization(
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
+        renderer_config: The eval3d rasterizer implementation selector. Default is
+            :class:`RendererConfig_MixedBatch`, which uses the existing mixed-batch
+            rasterizer implementation. Non-default configs require
+            ``with_eval3d=True``.
 
     Returns:
         A tuple:
@@ -585,11 +659,23 @@ def rasterization(
         'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
 
     """
+    if renderer_config is None:
+        renderer_config = RendererConfig_MixedBatch()
+    _validate_renderer_config(renderer_config)
+
     meta = {}
     has_color = render_mode_has_color(render_mode)
 
     _validate_3dgut_rasterize_mode(
         rasterize_mode, with_ut=with_ut, with_eval3d=with_eval3d
+    )
+    if not with_eval3d and not isinstance(renderer_config, RendererConfig_MixedBatch):
+        raise ValueError(
+            f"{type(renderer_config).__name__} requires with_eval3d=True; "
+            "non-eval3d rasterization only supports RendererConfig_MixedBatch."
+        )
+    renderer_config_impl = (
+        _renderer_config_type(renderer_config) if with_eval3d else None
     )
 
     if colors is None and has_color:
@@ -1241,8 +1327,10 @@ def rasterization(
                     external_distortion_coeffs=external_distortion_coeffs,
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
+                    return_last_ids=False,
                     use_hit_distance=render_mode_has_hit_distance(render_mode),
                     return_normals=return_normals_chunk,
+                    renderer_config=renderer_config_impl,
                 )
                 if i == 0 and render_normals_ is not None:
                     render_normals = render_normals_
@@ -1305,8 +1393,10 @@ def rasterization(
                 external_distortion_coeffs=external_distortion_coeffs,
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
+                return_last_ids=False,
                 use_hit_distance=render_mode_has_hit_distance(render_mode),
                 return_normals=return_normals,
+                renderer_config=renderer_config_impl,
             )
         else:
             if rays is not None:
@@ -2332,7 +2422,7 @@ def rasterization_2dgs(
             depth_for_normal = render_median
 
         render_normals_from_depth = depth_to_normal(
-            depth_for_normal, torch.linalg.inv(viewmats), Ks
+            depth_for_normal, torch.linalg.inv_ex(viewmats).inverse, Ks
         ).squeeze(0)
 
     meta = {
@@ -2359,7 +2449,9 @@ def rasterization_2dgs(
     }
 
     render_normals = torch.einsum(
-        "...ij,...hwj->...hwi", torch.linalg.inv(viewmats)[..., :3, :3], render_normals
+        "...ij,...hwj->...hwi",
+        torch.linalg.inv_ex(viewmats).inverse[..., :3, :3],
+        render_normals,
     )
 
     return (
@@ -2501,7 +2593,9 @@ def rasterization_2dgs_inria_wrapper(
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
 
-    normals_surf = depth_to_normal(render_depth, torch.linalg.inv(viewmats), Ks)
+    normals_surf = depth_to_normal(
+        render_depth, torch.linalg.inv_ex(viewmats).inverse, Ks
+    )
     normals_surf = normals_surf * (render_alphas).detach()
 
     render_colors = torch.cat([render_colors, render_depth], dim=-1)

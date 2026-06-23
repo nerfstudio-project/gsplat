@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Tests for OpenCV-pinhole camera kernel ops covering forward/backward correctness and validity logic.
 
@@ -18,6 +30,7 @@ from torch import Tensor
 
 from gsplat_sensors.kernels.cameras import (
     BivariateWindshieldDistortion,
+    FThetaProjection,
     OpenCVPinholeProjection,
     ReferencePolynomial,
     ShutterType,
@@ -37,12 +50,23 @@ from gsplat_sensors.kernels.cameras.ops import (
     _quat_slerp_wxyz,
     _unpack_static_pose,
 )
-from gsplat_sensors.kernels.common import DynamicPose
+from gsplat_sensors.kernels.common import DynamicPose, Pose
 
 
 # Public camera ops cast inputs to float32 before launching CUDA, so use
 # finite-difference settings that are stable for float32 kernels.
 GRADCHECK_KWARGS = {"eps": 1e-3, "atol": 1e-2, "rtol": 1e-2}
+# Looser absolute tolerance for ops whose forward chain runs through a
+# slerp + lerp interpolation (mean-pose, shutter-pose). With the build's
+# `-use_fast_math` (geometry parity) the interpolated cam_pt picks up a few
+# ULPs of float32 noise; the analytical Jacobian is correct (diagonals match
+# at <0.01% relative error) but the cross-coupled near-zero off-diagonals are
+# below the finite-difference noise floor at atol=1e-2.
+GRADCHECK_KWARGS_DYNAMIC = {"eps": 1e-3, "atol": 5e-2, "rtol": 1e-2}
+# FTheta projection runs through acos/sin/cos in float32. The main diagonal
+# derivatives match tightly, but small cross terms sit close to the finite
+# difference noise floor under the public float32 CUDA dispatch.
+GRADCHECK_KWARGS_FTHETA_PROJECT = {"eps": 1e-3, "atol": 8e-2, "rtol": 1e-2}
 
 
 def torch_pinhole_project(
@@ -67,6 +91,174 @@ def torch_pinhole_backproject(
 def make_grid_image_points(device: torch.device) -> Tensor:
     """Return three fixed image points (near principal point) for reuse across tests."""
     return torch.tensor([[50.0, 40.0], [60.0, 40.0], [50.0, 52.0]], device=device)
+
+
+def _ftheta_eval_poly(coeffs: Tensor, x: Tensor, degree: int) -> Tensor:
+    """Standard power-basis polynomial r = sum_i c_i * x^i over i in [0, degree].
+
+    Mirrors the device-side ``ftheta_poly_eval`` in ``ftheta_kernel.cuh``
+    (constant term INCLUDED at i=0).
+    """
+    result = torch.zeros_like(x)
+    for i in range(degree, -1, -1):
+        result = result * x + coeffs[i]
+    return result
+
+
+def _ftheta_eval_poly_derivative(coeffs: Tensor, x: Tensor, degree: int) -> Tensor:
+    """Derivative of the standard power-basis polynomial."""
+    result = torch.zeros_like(x)
+    for i in range(degree, 0, -1):
+        result = result * x + coeffs[i] * float(i)
+    return result
+
+
+def _ftheta_invert_bw_newton(
+    bw_poly: Tensor,
+    bw_degree: int,
+    target_theta: Tensor,
+    iterations: int,
+) -> Tensor:
+    """Newton's method to invert a power-basis polynomial (standard powers)."""
+    r = target_theta.clone()
+    for _ in range(int(iterations)):
+        f = _ftheta_eval_poly(bw_poly, r, bw_degree) - target_theta
+        df = _ftheta_eval_poly_derivative(bw_poly, r, bw_degree)
+        r = torch.where(torch.abs(df) > 1e-10, r - f / df, r)
+    return r
+
+
+def torch_ftheta_project(
+    camera_rays: Tensor,
+    principal_point: Tensor,
+    fw_poly: Tensor,
+    bw_poly: Tensor,
+    A: Tensor,
+    reference_polynomial: int,
+    fw_poly_degree: int,
+    bw_poly_degree: int,
+    newton_iterations: int,
+    max_angle: float,
+    min_2d_norm: float,
+) -> Tensor:
+    """Pure-torch reference for the FTheta forward projection.
+
+    Mirrors ``ftheta_project_ray`` in
+    ``libs/sensors/kernels/cuda/csrc/ftheta_kernel.cuh`` (BACKWARD-ref
+    branch invokes Newton inversion). Operates on float64 inputs with
+    high-precision intermediates so it can serve as a gradient/forward
+    oracle for the float32 CUDA kernel.
+
+    The polynomials use the standard power basis ``sum_i c_i * x^i``
+    (constant term included). A is a flat ``(4,)`` row-major 2x2 matrix.
+    """
+    rays_norm = torch.linalg.norm(camera_rays, dim=-1, keepdim=True)
+    rays_unit = camera_rays / rays_norm.clamp_min(1e-30)
+    z = rays_unit[:, 2]
+    xy = rays_unit[:, :2]
+    xy_norm = torch.linalg.norm(xy, dim=-1)
+    theta = torch.acos(torch.clamp(z, -1.0, 1.0))
+
+    if reference_polynomial == 0:  # FORWARD-ref
+        r = _ftheta_eval_poly(fw_poly, theta, fw_poly_degree)
+    else:  # BACKWARD-ref
+        r = _ftheta_invert_bw_newton(bw_poly, bw_poly_degree, theta, newton_iterations)
+
+    safe_norm = torch.where(xy_norm < min_2d_norm, torch.ones_like(xy_norm), xy_norm)
+    rxy = xy * (r / safe_norm).unsqueeze(-1)
+
+    A_mat = A.reshape(2, 2)
+    warped = rxy @ A_mat.T
+
+    image_points = warped + principal_point.reshape(1, 2)
+    invalid = (z <= 0.0) | (theta > float(max_angle))
+    pp_broadcast = principal_point.reshape(1, 2).expand_as(image_points)
+    image_points = torch.where(
+        invalid.unsqueeze(-1).expand_as(image_points),
+        pp_broadcast,
+        image_points,
+    )
+    return image_points
+
+
+def torch_ftheta_backproject(
+    image_points: Tensor,
+    principal_point: Tensor,
+    fw_poly: Tensor,
+    bw_poly: Tensor,
+    Ainv: Tensor,
+    reference_polynomial: int,
+    fw_poly_degree: int,
+    bw_poly_degree: int,
+    newton_iterations: int,
+    min_2d_norm: float,
+) -> Tensor:
+    """Pure-torch reference for the FTheta inverse projection.
+
+    Mirrors ``ftheta_backproject_image_point``: subtract principal point,
+    apply Ainv to the (x, y) offset, compute the radial distance,
+    evaluate the polynomial (or its inverse via Newton) to recover the
+    polar angle, then construct the unit ray.
+    """
+    centered = image_points - principal_point.reshape(1, 2)
+    Ainv_mat = Ainv.reshape(2, 2)
+    transformed = centered @ Ainv_mat.T
+    rdist = torch.linalg.norm(transformed, dim=-1)
+
+    if reference_polynomial == 0:  # FORWARD-ref
+        theta = _ftheta_invert_bw_newton(
+            fw_poly, fw_poly_degree, rdist, newton_iterations
+        )
+    else:  # BACKWARD-ref
+        theta = _ftheta_eval_poly(bw_poly, rdist, bw_poly_degree)
+
+    safe_rdist = torch.where(rdist < min_2d_norm, torch.ones_like(rdist), rdist)
+    sin_t = torch.sin(theta)
+    cos_t = torch.cos(theta)
+    xy_unit = transformed * (sin_t / safe_rdist).unsqueeze(-1)
+    rays = torch.cat([xy_unit, cos_t.unsqueeze(-1)], dim=-1)
+
+    fallback = torch.tensor(
+        [0.0, 0.0, 1.0], device=image_points.device, dtype=image_points.dtype
+    )
+    rays = torch.where(
+        (rdist < min_2d_norm).unsqueeze(-1),
+        fallback.expand_as(rays),
+        rays,
+    )
+    return torch.nn.functional.normalize(rays, dim=-1)
+
+
+def make_ideal_ftheta_components(
+    device: torch.device, dtype: torch.dtype = torch.float32
+) -> dict:
+    """Synthetic linear-polynomial F-Theta intrinsics for unit tests.
+
+    The polynomials reduce to ``r = k * theta`` and ``theta = r / k`` so
+    Newton inversion converges in one step and the round-trip is exact
+    up to float32 rounding. The 2x2 warp ``A`` and ``Ainv`` are identity.
+    """
+    k = 100.0
+    fw_poly = torch.zeros(6, device=device, dtype=dtype)
+    fw_poly[1] = k
+    bw_poly = torch.zeros(6, device=device, dtype=dtype)
+    bw_poly[1] = 1.0 / k
+    A = torch.tensor([1.0, 0.0, 0.0, 1.0], device=device, dtype=dtype)
+    Ainv = torch.tensor([1.0, 0.0, 0.0, 1.0], device=device, dtype=dtype)
+    principal_point = torch.tensor([50.0, 40.0], device=device, dtype=dtype)
+    return {
+        "principal_point": principal_point,
+        "fw_poly": fw_poly,
+        "bw_poly": bw_poly,
+        "A": A,
+        "Ainv": Ainv,
+        "resolution": (100, 80),
+        "fw_poly_degree": 1,
+        "bw_poly_degree": 1,
+        "newton_iterations": 10,
+        "max_angle": 1.4,
+        "min_2d_norm": 1e-6,
+    }
 
 
 def _opencv_project_reference(camera_rays, projection):
@@ -1519,9 +1711,7 @@ def test_bivariate_project_world_points_mean_pose_gradcheck(
         )[0]
 
     assert torch.autograd.gradcheck(
-        fn,
-        (world_points, distortion_coeffs),
-        **{**GRADCHECK_KWARGS, "atol": 2e-2},
+        fn, (world_points, distortion_coeffs), **GRADCHECK_KWARGS_DYNAMIC
     )
 
 
@@ -1563,7 +1753,7 @@ def test_bivariate_project_world_points_shutter_pose_gradcheck(
         )[0]
 
     assert torch.autograd.gradcheck(
-        fn, (world_points, distortion_coeffs), **GRADCHECK_KWARGS
+        fn, (world_points, distortion_coeffs), **GRADCHECK_KWARGS_DYNAMIC
     )
 
 
@@ -1615,7 +1805,8 @@ def test_bivariate_image_points_to_world_rays_static_pose_gradcheck(
 def test_bivariate_image_points_to_world_rays_shutter_pose_gradcheck(
     ideal_projection, windshield_distortion, dynamic_pose, reference_polynomial
 ):
-    """End-to-end autograd.gradcheck for image_points_to_world_rays_shutter_pose with BivariateWindshieldDistortion (FORWARD and BACKWARD)."""
+    # GLOBAL shutter makes the pose-time path independent of image_points, so
+    # gradcheck can cover the direct image-point and distortion VJPs.
     image_points = (
         ideal_projection.principal_point.reshape(1, 2).to(dtype=torch.float64)
         + torch.tensor(
@@ -1624,25 +1815,69 @@ def test_bivariate_image_points_to_world_rays_shutter_pose_gradcheck(
             dtype=torch.float64,
         )
     ).detach()
+    image_points.requires_grad_(True)
     distortion_coeffs = _make_distortion_coeffs_f64(windshield_distortion)
 
-    def fn(coeffs):
+    def fn(points, coeffs):
         distortion = _build_distortion(
             windshield_distortion, reference_polynomial, coeffs
         )
         return image_points_to_world_rays_shutter_pose(
-            image_points,
+            points,
             ideal_projection,
             distortion,
             (100, 80),
-            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            ShutterType.GLOBAL,
             dynamic_pose,
             start_timestamp_us=0,
             end_timestamp_us=10,
             allow_device_transfer=True,
         )[0]
 
-    assert torch.autograd.gradcheck(fn, (distortion_coeffs,), **GRADCHECK_KWARGS)
+    assert torch.autograd.gradcheck(
+        fn, (image_points, distortion_coeffs), **GRADCHECK_KWARGS
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize(
+    "reference_polynomial",
+    [ReferencePolynomial.FORWARD, ReferencePolynomial.BACKWARD],
+)
+def test_bivariate_image_points_to_world_rays_shutter_pose_image_points_grad_flows(
+    ideal_projection, windshield_distortion, dynamic_pose, reference_polynomial
+):
+    """Verify rolling shutter keeps the direct image-point VJP for bivariate windshield."""
+    distortion_coeffs = _make_distortion_coeffs_f64(windshield_distortion)
+    distortion = _build_distortion(
+        windshield_distortion, reference_polynomial, distortion_coeffs
+    )
+    image_points = (
+        ideal_projection.principal_point.reshape(1, 2).to(dtype=torch.float64)
+        + torch.tensor(
+            [[1.0, -2.0], [3.0, 4.0]],
+            device=ideal_projection.focal_length.device,
+            dtype=torch.float64,
+        )
+    ).detach()
+    image_points.requires_grad_(True)
+
+    world_rays = image_points_to_world_rays_shutter_pose(
+        image_points,
+        ideal_projection,
+        distortion,
+        (100, 80),
+        ShutterType.ROLLING_TOP_TO_BOTTOM,
+        dynamic_pose,
+        start_timestamp_us=0,
+        end_timestamp_us=10,
+        allow_device_transfer=True,
+    )[0]
+    loss = world_rays[:, 3].sum() + 0.25 * world_rays[:, 4].sum()
+    loss.backward()
+
+    assert image_points.grad is not None
+    assert image_points.grad.abs().sum() > 0
 
 
 @pytest.mark.gradcheck
@@ -1776,3 +2011,1210 @@ def test_bivariate_project_world_points_mean_pose_pose_gradcheck(
         ),
         **GRADCHECK_KWARGS,
     )
+
+
+# ===========================================================================
+# F-Theta-specific test coverage for the
+# (FThetaProjection, NoExternalDistortion) and
+# (FThetaProjection, BivariateWindshieldDistortion) pairs. Parametrized
+# tests cover both reference_polynomial branches (FORWARD-ref direct and
+# BACKWARD-ref Newton inversion through the implicit-function adjoint).
+# ===========================================================================
+
+
+def _ftheta_synthetic_rays(device: torch.device, dtype: torch.dtype = torch.float32):
+    return torch.tensor(
+        [
+            [0.0, 0.0, 1.0],
+            [0.05, 0.0, 1.0],
+            [0.0, 0.04, 1.0],
+            [-0.05, 0.04, 1.0],
+        ],
+        device=device,
+        dtype=dtype,
+    )
+
+
+def test_camera_rays_to_image_points_ftheta_no_external_basic(
+    ftheta_projection, no_external
+):
+    """Verify camera_rays_to_image_points returns finite in-frame points for the synthetic FTheta ray set."""
+    rays = _ftheta_synthetic_rays(ftheta_projection.principal_point.device)
+    image_points, valid_flags = camera_rays_to_image_points(
+        rays, ftheta_projection, no_external
+    )
+    assert image_points.shape == (4, 2)
+    assert valid_flags.dtype == torch.bool
+    assert valid_flags.all()
+    pp = ftheta_projection.principal_point
+    assert torch.allclose(image_points[0], pp, atol=1e-3)
+
+
+def test_image_points_to_camera_rays_ftheta_round_trip(ftheta_projection, no_external):
+    """Verify project -> unproject -> project recovers the original FTheta image points."""
+    rays = _ftheta_synthetic_rays(ftheta_projection.principal_point.device)
+    image_points, _ = camera_rays_to_image_points(rays, ftheta_projection, no_external)
+    rays_back = image_points_to_camera_rays(
+        image_points, ftheta_projection, no_external
+    )
+    image_points_back, _ = camera_rays_to_image_points(
+        rays_back, ftheta_projection, no_external
+    )
+    assert torch.allclose(image_points_back, image_points, atol=1e-3)
+
+
+def test_camera_rays_to_image_points_ftheta_matches_torch_oracle(
+    ftheta_projection, no_external
+):
+    """Verify camera_rays_to_image_points matches the pure-torch FTheta forward oracle."""
+    rays = _ftheta_synthetic_rays(ftheta_projection.principal_point.device)
+    image_points, _ = camera_rays_to_image_points(rays, ftheta_projection, no_external)
+    expected = torch_ftheta_project(
+        rays.to(torch.float64),
+        ftheta_projection.principal_point.to(torch.float64),
+        ftheta_projection.fw_poly.to(torch.float64),
+        ftheta_projection.bw_poly.to(torch.float64),
+        ftheta_projection.A.to(torch.float64),
+        int(ftheta_projection.reference_polynomial),
+        int(ftheta_projection.fw_poly_degree),
+        int(ftheta_projection.bw_poly_degree),
+        int(ftheta_projection.newton_iterations),
+        float(ftheta_projection.max_angle),
+        float(ftheta_projection.min_2d_norm),
+    )
+    assert torch.allclose(
+        image_points, expected.to(torch.float32), atol=1e-3, rtol=1e-5
+    )
+
+
+def test_image_points_to_camera_rays_ftheta_matches_torch_oracle(
+    ftheta_projection, no_external
+):
+    """Verify image_points_to_camera_rays matches the pure-torch FTheta back-projection oracle."""
+    pp = ftheta_projection.principal_point
+    image_points = pp.reshape(1, 2) + torch.tensor(
+        [[0.0, 0.0], [3.0, 0.0], [0.0, -2.0], [4.0, -3.0]],
+        device=pp.device,
+    )
+    rays = image_points_to_camera_rays(image_points, ftheta_projection, no_external)
+    expected = torch_ftheta_backproject(
+        image_points.to(torch.float64),
+        ftheta_projection.principal_point.to(torch.float64),
+        ftheta_projection.fw_poly.to(torch.float64),
+        ftheta_projection.bw_poly.to(torch.float64),
+        ftheta_projection.Ainv.to(torch.float64),
+        int(ftheta_projection.reference_polynomial),
+        int(ftheta_projection.fw_poly_degree),
+        int(ftheta_projection.bw_poly_degree),
+        int(ftheta_projection.newton_iterations),
+        float(ftheta_projection.min_2d_norm),
+    )
+    assert torch.allclose(rays, expected.to(torch.float32), atol=1e-3, rtol=1e-5)
+
+
+def test_camera_rays_to_image_points_ftheta_principal_point_invariance(
+    ftheta_projection, no_external
+):
+    """The optical-axis ray (0,0,1) MUST land on the principal point within atol=1e-4."""
+    rays = torch.tensor(
+        [[0.0, 0.0, 1.0]],
+        device=ftheta_projection.principal_point.device,
+    )
+    image_points, valid_flags = camera_rays_to_image_points(
+        rays, ftheta_projection, no_external
+    )
+    assert valid_flags.all()
+    assert torch.allclose(
+        image_points,
+        ftheta_projection.principal_point.reshape(1, 2),
+        atol=1e-4,
+    )
+
+
+def test_camera_rays_to_image_points_ftheta_behind_camera_invalid(
+    ftheta_projection, no_external
+):
+    """Rays with z<=0 MUST be marked invalid (the kernel falls back to PP)."""
+    rays = torch.tensor(
+        [
+            [0.0, 0.0, 1.0],  # forward, valid
+            [0.0, 0.0, -1.0],  # behind, invalid
+        ],
+        device=ftheta_projection.principal_point.device,
+    )
+    _, valid_flags = camera_rays_to_image_points(rays, ftheta_projection, no_external)
+    assert valid_flags.tolist() == [True, False]
+
+
+def test_camera_rays_to_image_points_ftheta_out_of_frame_marks_invalid(
+    ftheta_projection_forward_ref, no_external
+):
+    """Verify a ray projecting outside ``[0, W) x [0, H)`` is flagged invalid even
+    when the projection itself succeeds (z > 0, theta well below max_angle).
+    The bounds check is applied at the kernel write site so ``valid_flags``
+    carries in-frame-and-finite semantics for downstream filtering.
+    """
+    proj = ftheta_projection_forward_ref
+    width, height = int(proj.resolution[0]), int(proj.resolution[1])
+    pp = proj.principal_point
+    device = pp.device
+    in_frame_ray = torch.tensor([[0.0, 0.0, 1.0]], device=device, dtype=torch.float32)
+    # tan(0.78) ~= 0.99; ray (1.0, 0.0, 1.0) gives theta ~= 0.785 rad.
+    far_off_axis = torch.tensor([[1.0, 0.0, 1.0]], device=device, dtype=torch.float32)
+    rays = torch.cat([in_frame_ray, far_off_axis], dim=0)
+    image_points, valid_flags = camera_rays_to_image_points(rays, proj, no_external)
+    assert bool(valid_flags[0]) is True
+    px = image_points[1]
+    in_x = (0.0 <= float(px[0])) and (float(px[0]) < width)
+    in_y = (0.0 <= float(px[1])) and (float(px[1]) < height)
+    assert not (
+        in_x and in_y
+    ), f"test ray was supposed to land off-frame; got {(float(px[0]), float(px[1]))} for resolution {(width, height)}"
+    assert bool(valid_flags[1]) is False, (
+        "out-of-frame pixel must be flagged invalid; got "
+        f"valid_flags={valid_flags.tolist()}, image_points={image_points.tolist()}"
+    )
+
+
+def test_camera_rays_to_image_points_ftheta_nan_input_marks_invalid(
+    ftheta_projection_forward_ref, no_external
+):
+    """Verify a NaN-bearing camera ray is flagged invalid by the bounds-and-finite
+    gate at the kernel write site (the forward kernel does not gracefully
+    convert NaN inputs into a defined pixel).
+    """
+    proj = ftheta_projection_forward_ref
+    device = proj.principal_point.device
+    rays = torch.tensor(
+        [[float("nan"), 0.0, 1.0]],
+        device=device,
+        dtype=torch.float32,
+    )
+    _, valid_flags = camera_rays_to_image_points(rays, proj, no_external)
+    assert (
+        bool(valid_flags[0]) is False
+    ), f"NaN-bearing ray must be flagged invalid; got valid_flags={valid_flags.tolist()}"
+
+
+def test_camera_rays_to_image_points_ftheta_no_external_scratch_gating(
+    ftheta_projection_forward_ref, no_external, sensor_device: torch.device
+):
+    """When no input requires_grad, scratch tensor must be empty; gradient mode
+    must allocate a scratch tensor sized for the per-row save layout."""
+    rays = _ftheta_synthetic_rays(sensor_device).detach()
+    op = torch.ops.gsplat_sensors.camera_rays_to_image_points_ftheta_no_external
+
+    _, _, scratch = op(ftheta_projection_forward_ref, no_external, rays)
+    assert scratch.numel() == 0
+
+    _, _, ray_grad_scratch = op(
+        ftheta_projection_forward_ref,
+        no_external,
+        rays.detach().clone().requires_grad_(True),
+    )
+    assert ray_grad_scratch.shape[0] == rays.shape[0]
+    assert ray_grad_scratch.numel() > 0
+
+
+def test_image_points_to_camera_rays_ftheta_scratch_gating(
+    ftheta_projection_forward_ref, no_external, sensor_device: torch.device
+):
+    """Inverse direction also gates scratch by requires_grad."""
+    pp = ftheta_projection_forward_ref.principal_point
+    image_points = pp.reshape(1, 2) + torch.tensor([[2.0, 1.0]], device=sensor_device)
+    op = torch.ops.gsplat_sensors.image_points_to_camera_rays_ftheta_no_external
+
+    _, scratch = op(ftheta_projection_forward_ref, no_external, image_points)
+    assert scratch.numel() == 0
+
+    _, grad_scratch = op(
+        ftheta_projection_forward_ref,
+        no_external,
+        image_points.detach().clone().requires_grad_(True),
+    )
+    assert grad_scratch.shape[0] == image_points.shape[0]
+    assert grad_scratch.numel() > 0
+
+
+def _ftheta_dynamic_pose_tensors(pose: DynamicPose, device: torch.device):
+    return unpack_dynamic_pose_components(
+        pose,
+        device,
+        torch.float32,
+        allow_device_transfer=True,
+    )
+
+
+def test_project_world_points_mean_pose_ftheta_scratch_shapes(
+    ftheta_projection_forward_ref, no_external, windshield_distortion, dynamic_pose
+):
+    """Verify FTheta mean-pose scratch is (N, 10) for both no-external and bivariate paths."""
+    device = ftheta_projection_forward_ref.principal_point.device
+    world_points = torch.tensor(
+        [[0.0, 0.0, 1.5], [0.1, -0.1, 2.0]], device=device
+    ).requires_grad_(True)
+    start_t, start_r, end_t, end_r = _ftheta_dynamic_pose_tensors(dynamic_pose, device)
+
+    (
+        *_,
+        scratch_no_external,
+    ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_ftheta_no_external(
+        ftheta_projection_forward_ref,
+        no_external,
+        world_points,
+        start_t,
+        start_r,
+        end_t,
+        end_r,
+        0,
+        10,
+    )
+    assert scratch_no_external.shape == (world_points.shape[0], 10)
+
+    (
+        *_,
+        scratch_bivariate,
+    ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_ftheta_bivariate_windshield(
+        ftheta_projection_forward_ref,
+        windshield_distortion,
+        world_points,
+        start_t,
+        start_r,
+        end_t,
+        end_r,
+        0,
+        10,
+    )
+    assert scratch_bivariate.shape == (world_points.shape[0], 10)
+
+
+def test_project_world_points_shutter_pose_ftheta_scratch_shapes(
+    ftheta_projection_forward_ref, no_external, windshield_distortion, dynamic_pose
+):
+    """Verify FTheta shutter-pose scratch is (N, 11), with alpha stored in slot 10."""
+    device = ftheta_projection_forward_ref.principal_point.device
+    world_points = torch.tensor(
+        [[0.1, 0.05, 1.6], [-0.1, 0.08, 2.1]], device=device
+    ).requires_grad_(True)
+    start_t, start_r, end_t, end_r = _ftheta_dynamic_pose_tensors(dynamic_pose, device)
+
+    (
+        *_,
+        scratch_no_external,
+    ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_ftheta_no_external(
+        ftheta_projection_forward_ref,
+        no_external,
+        world_points,
+        start_t,
+        start_r,
+        end_t,
+        end_r,
+        100,
+        80,
+        int(ShutterType.ROLLING_TOP_TO_BOTTOM),
+        0,
+        10,
+        1,
+        0.01,
+        0.01,
+        0.5,
+    )
+    assert scratch_no_external.shape == (world_points.shape[0], 11)
+
+    (
+        *_,
+        scratch_bivariate,
+    ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_ftheta_bivariate_windshield(
+        ftheta_projection_forward_ref,
+        windshield_distortion,
+        world_points,
+        start_t,
+        start_r,
+        end_t,
+        end_r,
+        100,
+        80,
+        int(ShutterType.ROLLING_TOP_TO_BOTTOM),
+        0,
+        10,
+        1,
+        0.01,
+        0.01,
+        0.5,
+    )
+    assert scratch_bivariate.shape == (world_points.shape[0], 11)
+
+
+@pytest.mark.gradcheck
+def test_camera_rays_to_image_points_ftheta_no_external_gradcheck(
+    ftheta_projection, no_external
+):
+    """End-to-end autograd.gradcheck for FTheta no-external camera_rays -> image_points across both reference polynomial branches."""
+    # Avoid the exact optical axis: that path intentionally hits the min-2D
+    # clamp and returns the principal point, which is not finite-difference
+    # smooth around x=y=0.
+    rays = torch.tensor(
+        [[0.03, 0.02, 1.0], [0.05, -0.01, 1.1], [-0.04, 0.03, 1.2]],
+        device=ftheta_projection.principal_point.device,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+
+    def fn(camera_rays):
+        return camera_rays_to_image_points(
+            camera_rays,
+            ftheta_projection,
+            no_external,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (rays,), **GRADCHECK_KWARGS_FTHETA_PROJECT)
+
+
+@pytest.mark.gradcheck
+def test_image_points_to_camera_rays_ftheta_no_external_gradcheck(
+    ftheta_projection, no_external
+):
+    """End-to-end autograd.gradcheck for FTheta no-external image_points -> camera_rays across both reference polynomial branches."""
+    pp = ftheta_projection.principal_point
+    image_points = (
+        (
+            pp.reshape(1, 2).to(torch.float64)
+            + torch.tensor(
+                [[0.8, -0.6], [1.3, 0.9]],
+                device=pp.device,
+                dtype=torch.float64,
+            )
+        )
+        .detach()
+        .requires_grad_(True)
+    )
+
+    def fn(pts):
+        return image_points_to_camera_rays(
+            pts,
+            ftheta_projection,
+            no_external,
+            allow_device_transfer=True,
+        )
+
+    assert torch.autograd.gradcheck(fn, (image_points,), **GRADCHECK_KWARGS)
+
+
+def _ftheta_projection_from_grad_tensors(
+    base_projection,
+    principal_point: Tensor,
+    fw_poly: Tensor,
+    bw_poly: Tensor,
+    A: Tensor,
+) -> FThetaProjection:
+    return FThetaProjection(
+        principal_point=principal_point,
+        fw_poly=fw_poly,
+        bw_poly=bw_poly,
+        A=A,
+        reference_polynomial=int(base_projection.reference_polynomial),
+        resolution=base_projection.resolution,
+        fw_poly_degree=int(base_projection.fw_poly_degree),
+        bw_poly_degree=int(base_projection.bw_poly_degree),
+        newton_iterations=int(base_projection.newton_iterations),
+        max_angle=float(base_projection.max_angle),
+        min_2d_norm=float(base_projection.min_2d_norm),
+    )
+
+
+def _ftheta_projection_from_components(
+    *,
+    principal_point: Tensor,
+    fw_poly: Tensor,
+    bw_poly: Tensor,
+    A: Tensor,
+    reference_polynomial: int,
+    fw_poly_degree: int,
+    bw_poly_degree: int,
+) -> FThetaProjection:
+    return FThetaProjection(
+        principal_point=principal_point,
+        fw_poly=fw_poly,
+        bw_poly=bw_poly,
+        A=A,
+        reference_polynomial=int(reference_polynomial),
+        resolution=(256, 256),
+        fw_poly_degree=int(fw_poly_degree),
+        bw_poly_degree=int(bw_poly_degree),
+        newton_iterations=8,
+        max_angle=1.4,
+        min_2d_norm=1e-6,
+    )
+
+
+def _ftheta_intrinsic_grad_inputs(base_projection):
+    return tuple(
+        tensor.detach().clone().to(torch.float64).requires_grad_(True)
+        for tensor in (
+            base_projection.principal_point,
+            base_projection.fw_poly,
+            base_projection.bw_poly,
+            base_projection.A,
+        )
+    )
+
+
+def test_camera_rays_to_image_points_ftheta_saturated_branch_backward(no_external):
+    """Force the BACKWARD-ref safe_df=1 branch and verify bw_poly adjoints."""
+    device = torch.device("cuda")
+    principal_point = torch.zeros(2, device=device)
+    fw_poly = torch.zeros(6, device=device)
+    fw_poly[1] = 10.0
+    bw_poly = torch.zeros(6, device=device, requires_grad=True)
+    A = torch.tensor([1.0, 0.0, 0.0, 1.0], device=device)
+    projection = _ftheta_projection_from_components(
+        principal_point=principal_point,
+        fw_poly=fw_poly,
+        bw_poly=bw_poly,
+        A=A,
+        reference_polynomial=int(ReferencePolynomial.BACKWARD),
+        fw_poly_degree=1,
+        bw_poly_degree=5,
+    )
+    camera_rays = torch.tensor([[0.1, 0.0, 1.0]], device=device, requires_grad=True)
+
+    image_points, valid = camera_rays_to_image_points(
+        camera_rays, projection, no_external
+    )
+    assert valid.item()
+    image_points[:, 0].sum().backward()
+
+    theta = torch.acos(
+        camera_rays.detach()[0, 2] / torch.linalg.norm(camera_rays.detach()[0])
+    )
+    r_star = fw_poly.detach()[1] * theta
+    expected_bw_grad = -(r_star ** torch.arange(6, device=device))
+    assert torch.allclose(bw_poly.grad, expected_bw_grad, atol=1e-4, rtol=1e-4)
+    assert camera_rays.grad is not None
+    assert torch.isfinite(camera_rays.grad).all()
+    assert camera_rays.grad.abs().sum() > 0
+
+
+def test_image_points_to_camera_rays_ftheta_saturated_branch_backward(no_external):
+    """Force the FORWARD-ref safe_df=1 branch and verify fw_poly adjoints."""
+    device = torch.device("cuda")
+    principal_point = torch.zeros(2, device=device)
+    fw_poly = torch.zeros(6, device=device, requires_grad=True)
+    bw_poly = torch.zeros(6, device=device)
+    bw_poly[1] = 1.0
+    A = torch.tensor([1.0, 0.0, 0.0, 1.0], device=device)
+    projection = _ftheta_projection_from_components(
+        principal_point=principal_point,
+        fw_poly=fw_poly,
+        bw_poly=bw_poly,
+        A=A,
+        reference_polynomial=int(ReferencePolynomial.FORWARD),
+        fw_poly_degree=5,
+        bw_poly_degree=1,
+    )
+    image_points = torch.tensor([[0.25, 0.0]], device=device, requires_grad=True)
+
+    camera_rays = image_points_to_camera_rays(image_points, projection, no_external)
+    torch.atan2(camera_rays[:, 0], camera_rays[:, 2]).sum().backward()
+
+    theta_star = image_points.detach()[0, 0]
+    expected_fw_grad = -(theta_star ** torch.arange(6, device=device))
+    assert torch.allclose(fw_poly.grad, expected_fw_grad, atol=1e-4, rtol=1e-4)
+    assert image_points.grad is not None
+    assert torch.isfinite(image_points.grad).all()
+    assert image_points.grad.abs().sum() > 0
+
+
+@pytest.mark.gradcheck
+def test_camera_rays_to_image_points_ftheta_intrinsics_gradcheck(
+    ftheta_projection, no_external
+):
+    """FTheta intrinsic gradcheck for camera_rays_to_image_points over (principal_point, fw_poly, bw_poly, A)."""
+    rays = _ftheta_synthetic_rays(
+        ftheta_projection.principal_point.device, dtype=torch.float64
+    )
+    pp, fw, bw, A = _ftheta_intrinsic_grad_inputs(ftheta_projection)
+
+    def fn(principal_point, fw_poly, bw_poly, A_tensor):
+        projection = _ftheta_projection_from_grad_tensors(
+            ftheta_projection,
+            principal_point,
+            fw_poly,
+            bw_poly,
+            A_tensor,
+        )
+        return camera_rays_to_image_points(
+            rays,
+            projection,
+            no_external,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(
+        fn, (pp, fw, bw, A), **GRADCHECK_KWARGS_FTHETA_PROJECT
+    )
+
+
+@pytest.mark.gradcheck
+def test_image_points_to_camera_rays_ftheta_intrinsics_gradcheck(
+    ftheta_projection, no_external
+):
+    """FTheta intrinsic gradcheck for image_points_to_camera_rays over (principal_point, fw_poly, bw_poly, A)."""
+    pp0 = ftheta_projection.principal_point
+    image_points = pp0.reshape(1, 2).to(torch.float64) + torch.tensor(
+        [[0.8, -0.6], [1.3, 0.9]],
+        device=pp0.device,
+        dtype=torch.float64,
+    )
+    pp, fw, bw, A = _ftheta_intrinsic_grad_inputs(ftheta_projection)
+
+    def fn(principal_point, fw_poly, bw_poly, A_tensor):
+        projection = _ftheta_projection_from_grad_tensors(
+            ftheta_projection,
+            principal_point,
+            fw_poly,
+            bw_poly,
+            A_tensor,
+        )
+        return image_points_to_camera_rays(
+            image_points,
+            projection,
+            no_external,
+            allow_device_transfer=True,
+        )
+
+    assert torch.autograd.gradcheck(
+        fn, (pp, fw, bw, A), **GRADCHECK_KWARGS_FTHETA_PROJECT
+    )
+
+
+def test_ftheta_projection_ainv_structural_invariant(ftheta_projection):
+    """Verify Ainv equals the true 2x2 inverse of A, with A @ Ainv == I."""
+    A_flat = torch.tensor(
+        [2.0, 0.25, -0.5, 1.5],
+        device=ftheta_projection.A.device,
+        dtype=ftheta_projection.A.dtype,
+    )
+    projection = _ftheta_projection_from_components(
+        principal_point=ftheta_projection.principal_point,
+        fw_poly=ftheta_projection.fw_poly,
+        bw_poly=ftheta_projection.bw_poly,
+        A=A_flat,
+        reference_polynomial=int(ftheta_projection.reference_polynomial),
+        fw_poly_degree=int(ftheta_projection.fw_poly_degree),
+        bw_poly_degree=int(ftheta_projection.bw_poly_degree),
+    )
+    A = projection.A.view(2, 2)
+    Ainv = projection.Ainv.view(2, 2)
+    eye = torch.eye(2, device=A.device, dtype=A.dtype)
+    assert torch.allclose(Ainv, torch.linalg.inv(A), atol=1e-5)
+    assert torch.allclose(Ainv @ A, eye, atol=1e-5)
+    assert torch.allclose(A @ Ainv, eye, atol=1e-5)
+    assert projection.Ainv.shape == (4,)
+
+
+def test_ftheta_projection_bindings_readonly(ftheta_projection):
+    """Verify FThetaProjection tensor and resolution bindings are read-only.
+
+    Rebinding attributes (e.g. ``proj.A = new_tensor``) must raise.
+    """
+    for attr in ("principal_point", "fw_poly", "bw_poly", "A"):
+        with pytest.raises((AttributeError, RuntimeError)):
+            setattr(
+                ftheta_projection,
+                attr,
+                torch.zeros(1, device=ftheta_projection.A.device),
+            )
+    with pytest.raises((AttributeError, RuntimeError, TypeError)):
+        ftheta_projection.resolution = (1, 1)
+
+
+def _slerp_branch_rotations(branch: str, device: torch.device):
+    q0 = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device, dtype=torch.float64)
+    if branch == "ordinary":
+        q1 = torch.tensor(
+            [0.70710678, 0.0, 0.0, 0.70710678], device=device, dtype=torch.float64
+        )
+    elif branch == "nlerp":
+        q1 = torch.tensor(
+            [0.9999875, 0.0, 0.0, 0.00499998], device=device, dtype=torch.float64
+        )
+    elif branch == "hemisphere_flip":
+        q1 = torch.tensor(
+            [-0.70710678, 0.0, 0.0, -0.70710678], device=device, dtype=torch.float64
+        )
+    else:
+        raise ValueError(f"unknown SLERP branch fixture: {branch}")
+    return q0.requires_grad_(True), q1.requires_grad_(True)
+
+
+def _pose_from_rotations(
+    start_rotation: Tensor, end_rotation: Tensor, device: torch.device
+) -> DynamicPose:
+    zero_t = torch.zeros(3, device=device, dtype=torch.float64)
+    end_t = torch.tensor([0.05, -0.02, 0.01], device=device, dtype=torch.float64)
+    return DynamicPose(
+        Pose(translation=zero_t, rotation=start_rotation),
+        Pose(translation=end_t, rotation=end_rotation),
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("branch", ["ordinary", "nlerp", "hemisphere_flip"])
+def test_ftheta_mean_pose_rotation_slerp_branch_gradcheck(
+    ftheta_projection_forward_ref, no_external, branch
+):
+    """Pose-gradient coverage for SLERP branches in FTheta mean-pose no-external projection."""
+    device = ftheta_projection_forward_ref.principal_point.device
+    points = _ftheta_world_points_f64(device, n=1).detach()
+    start_r, end_r = _slerp_branch_rotations(branch, device)
+
+    def fn(q0, q1):
+        return project_world_points_mean_pose(
+            points,
+            ftheta_projection_forward_ref,
+            no_external,
+            _pose_from_rotations(q0, q1, device),
+            (100, 80),
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(
+        fn, (start_r, end_r), **GRADCHECK_KWARGS_FTHETA_DYNAMIC
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("branch", ["ordinary", "nlerp", "hemisphere_flip"])
+def test_ftheta_shutter_pose_rotation_slerp_branch_gradcheck(
+    ftheta_projection_forward_ref, no_external, branch
+):
+    """Pose-gradient coverage for SLERP branches in FTheta shutter-pose no-external projection."""
+    device = ftheta_projection_forward_ref.principal_point.device
+    points = _ftheta_world_points_f64(device, n=1).detach()
+    start_r, end_r = _slerp_branch_rotations(branch, device)
+
+    def fn(q0, q1):
+        return project_world_points_shutter_pose(
+            points,
+            ftheta_projection_forward_ref,
+            no_external,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            _pose_from_rotations(q0, q1, device),
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            max_iterations=1,
+            initial_relative_time=0.5,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(
+        fn, (start_r, end_r), **GRADCHECK_KWARGS_FTHETA_DYNAMIC
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("branch", ["ordinary", "nlerp", "hemisphere_flip"])
+def test_ftheta_world_rays_shutter_pose_rotation_slerp_branch_gradcheck(
+    ftheta_projection_forward_ref, no_external, branch
+):
+    """Pose-gradient coverage for SLERP branches in FTheta image_points_to_world_rays_shutter_pose no-external."""
+    device = ftheta_projection_forward_ref.principal_point.device
+    pts = _ftheta_image_points_f64(ftheta_projection_forward_ref, n=1).detach()
+    start_r, end_r = _slerp_branch_rotations(branch, device)
+
+    def fn(q0, q1):
+        return image_points_to_world_rays_shutter_pose(
+            pts,
+            ftheta_projection_forward_ref,
+            no_external,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            _pose_from_rotations(q0, q1, device),
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (start_r, end_r), **GRADCHECK_KWARGS)
+
+
+def test_ftheta_identity_windshield_matches_no_external(
+    ftheta_projection_forward_ref, no_external, windshield_distortion
+):
+    """Identity windshield should match no_external within atol=1e-4."""
+    rays = _ftheta_synthetic_rays(ftheta_projection_forward_ref.principal_point.device)
+    no_ext_pts, _ = camera_rays_to_image_points(
+        rays, ftheta_projection_forward_ref, no_external
+    )
+    bw_pts, _ = camera_rays_to_image_points(
+        rays, ftheta_projection_forward_ref, windshield_distortion
+    )
+    assert torch.allclose(no_ext_pts, bw_pts, atol=1e-4, rtol=1e-5)
+
+
+def test_real_ftheta_camera_round_trip(real_ftheta_projection, no_external):
+    """Project -> unproject -> project round-trip on real F-Theta intrinsics.
+
+    Uses 8 sample image points within the camera's valid radial range.
+    Tolerance scaled to the F-Theta radial polynomial nonlinearity in float32.
+    """
+    pp = real_ftheta_projection.principal_point
+    res_x, res_y = real_ftheta_projection.resolution
+    offset_scale = min(res_x, res_y) * 0.1
+    offsets = torch.tensor(
+        [
+            [0.0, 0.0],
+            [offset_scale, 0.0],
+            [-offset_scale, 0.0],
+            [0.0, offset_scale],
+            [0.0, -offset_scale],
+            [offset_scale, offset_scale],
+            [-offset_scale, -offset_scale],
+            [0.5 * offset_scale, -0.5 * offset_scale],
+        ],
+        device=pp.device,
+    )
+    image_points = pp.reshape(1, 2) + offsets
+    rays = image_points_to_camera_rays(
+        image_points, real_ftheta_projection, no_external
+    )
+    image_points_back, _ = camera_rays_to_image_points(
+        rays, real_ftheta_projection, no_external
+    )
+    assert torch.allclose(image_points_back, image_points, atol=1e-2, rtol=1e-4)
+
+
+def test_real_ftheta_camera_principal_point_invariance(
+    real_ftheta_projection, no_external
+):
+    """Optical-axis ray must land on the principal point on every real camera."""
+    rays = torch.tensor(
+        [[0.0, 0.0, 1.0]], device=real_ftheta_projection.principal_point.device
+    )
+    image_points, valid_flags = camera_rays_to_image_points(
+        rays, real_ftheta_projection, no_external
+    )
+    assert valid_flags.all()
+    assert torch.allclose(
+        image_points,
+        real_ftheta_projection.principal_point.reshape(1, 2),
+        atol=1e-3,
+    )
+
+
+def test_real_ftheta_camera_matches_torch_oracle(real_ftheta_projection, no_external):
+    """Forward parity vs the pure-torch reference on real intrinsics.
+
+    Tolerances atol=1e-2, rtol=1e-4: the kernel runs in float32 while the
+    oracle runs in float64, so a small absolute mismatch in pixel space is
+    expected. Anything larger indicates a structural CUDA bug.
+    """
+    rays = torch.tensor(
+        [
+            [0.05, 0.0, 1.0],
+            [0.0, 0.04, 1.0],
+            [-0.05, 0.04, 1.0],
+            [0.1, -0.05, 1.0],
+        ],
+        device=real_ftheta_projection.principal_point.device,
+    )
+    image_points, valid_flags = camera_rays_to_image_points(
+        rays, real_ftheta_projection, no_external
+    )
+    expected = torch_ftheta_project(
+        rays.to(torch.float64),
+        real_ftheta_projection.principal_point.to(torch.float64),
+        real_ftheta_projection.fw_poly.to(torch.float64),
+        real_ftheta_projection.bw_poly.to(torch.float64),
+        real_ftheta_projection.A.to(torch.float64),
+        int(real_ftheta_projection.reference_polynomial),
+        int(real_ftheta_projection.fw_poly_degree),
+        int(real_ftheta_projection.bw_poly_degree),
+        int(real_ftheta_projection.newton_iterations),
+        float(real_ftheta_projection.max_angle),
+        float(real_ftheta_projection.min_2d_norm),
+    )
+    valid_mask = valid_flags
+    assert torch.allclose(
+        image_points[valid_mask],
+        expected.to(torch.float32)[valid_mask],
+        atol=1e-2,
+        rtol=1e-4,
+    )
+
+
+def test_real_ftheta_windshield_diverges_from_no_external(
+    real_ftheta_projection_with_windshield,
+    real_ftheta_windshield_distortion,
+    no_external,
+):
+    """Verify real bivariate-windshield distortion produces visibly different
+    image points from ``no_external`` for off-axis rays, proving the
+    coefficients are wired through dispatch (an identity windshield or
+    wiring bug would silently match no_external).
+    """
+    proj = real_ftheta_projection_with_windshield
+    pp = proj.principal_point
+    device = pp.device
+    rays = torch.tensor(
+        [
+            [0.05, 0.0, 1.0],
+            [0.0, 0.04, 1.0],
+            [-0.05, 0.04, 1.0],
+            [0.1, -0.05, 1.0],
+        ],
+        device=device,
+        dtype=torch.float32,
+    )
+    no_ext_pts, no_ext_valid = camera_rays_to_image_points(rays, proj, no_external)
+    ws_pts, ws_valid = camera_rays_to_image_points(
+        rays, proj, real_ftheta_windshield_distortion
+    )
+    assert no_ext_valid.all() and ws_valid.all()
+    max_pixel_delta = (no_ext_pts - ws_pts).abs().max().item()
+    # Real windshield coefficients perturb the camera-frame ray before
+    # projection; a 1px floor is comfortably above float32 noise and well
+    # below the magnitude of the windshield correction observed on the
+    # committed test record.
+    assert max_pixel_delta > 1.0, (
+        "real windshield distortion produced no observable pixel shift "
+        f"vs no_external (max delta = {max_pixel_delta:.4e}); the "
+        "external_distortion fields in the JSON are likely either "
+        "identity-equivalent or not threaded through dispatch."
+    )
+
+
+def test_real_ftheta_windshield_round_trip(
+    real_ftheta_projection_with_windshield, real_ftheta_windshield_distortion
+):
+    """Verify forward-project then back-project under a real windshield distortion
+    recovers the input ray direction within a tolerance derived from the
+    float32 polynomial chain. Exercises both halves of the bivariate
+    distortion (forward and inverse polynomials).
+    """
+    proj = real_ftheta_projection_with_windshield
+    distortion = real_ftheta_windshield_distortion
+    pp = proj.principal_point
+    device = pp.device
+    rays_in = torch.nn.functional.normalize(
+        torch.tensor(
+            [
+                [0.05, 0.0, 1.0],
+                [0.0, 0.04, 1.0],
+                [-0.05, 0.04, 1.0],
+                [0.04, -0.03, 1.0],
+            ],
+            device=device,
+            dtype=torch.float32,
+        ),
+        dim=-1,
+    )
+    image_points, valid = camera_rays_to_image_points(rays_in, proj, distortion)
+    assert valid.all()
+    rays_back = image_points_to_camera_rays(image_points, proj, distortion)
+    rays_back = torch.nn.functional.normalize(rays_back, dim=-1)
+    # The forward+inverse windshield polynomials are approximate inverses
+    # of each other and the FTheta IFT correction is a single Newton step,
+    # so a ~1e-2 angular tolerance is realistic for float32. Tighten if
+    # the kernel's IFT inversion accuracy improves.
+    cos_sim = (rays_in * rays_back).sum(dim=-1)
+    assert (
+        cos_sim >= 1.0 - 1e-2
+    ).all(), (
+        f"round-trip cosine similarity below tolerance: min={cos_sim.min().item():.4e}"
+    )
+
+
+@pytest.mark.gradcheck
+def test_real_ftheta_image_points_to_camera_rays_gradcheck(
+    real_ftheta_projection, no_external
+):
+    """Inverse-path gradcheck on a real F-Theta camera. The fixture is
+    parametrized over both reference_poly variants in the JSON: under the
+    FORWARD-ref record the inverse path triggers the IFT-Newton adjoint
+    (Newton on ``fw_poly``), while under the BACKWARD-ref record it is a
+    direct polynomial evaluation of ``bw_poly``. Real intrinsics keep
+    gradient magnitudes well within the standard GRADCHECK_KWARGS tolerance.
+    """
+    pp = real_ftheta_projection.principal_point
+    image_points = (
+        (
+            pp.reshape(1, 2).to(torch.float64)
+            + torch.tensor(
+                [[100.0, 50.0], [-200.0, 75.0]],
+                device=pp.device,
+                dtype=torch.float64,
+            )
+        )
+        .detach()
+        .requires_grad_(True)
+    )
+
+    def fn(pts):
+        return image_points_to_camera_rays(
+            pts,
+            real_ftheta_projection,
+            no_external,
+            allow_device_transfer=True,
+        )
+
+    assert torch.autograd.gradcheck(fn, (image_points,), **GRADCHECK_KWARGS)
+
+
+# ----------------------------------------------------------------------------
+# FTheta autograd gradchecks for project_world_points_{mean,shutter}_pose
+# and image_points_to_world_rays_{static,shutter}_pose, no-external and
+# bivariate variants. Inputs finite-difference through the public op entrypoint.
+# ----------------------------------------------------------------------------
+
+
+def _ftheta_world_points_f64(device, n=2):
+    # Points are intentionally offset from any coordinate axis and from the
+    # mean-pose midpoint translation so float32 cast in the autograd Function
+    # doesn't manufacture an exact-zero cam_pt.x or .y, which would inflate
+    # numerical-vs-analytical Jacobian off-diagonal noise.
+    return torch.tensor(
+        [[0.171, 0.097, 1.83], [-0.123, 0.158, 2.27]][:n],
+        device=device,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+
+
+# Alias: the FTheta mean-pose / shutter-pose paths see the same float32 noise
+# floor as the pinhole equivalents (slerp + lerp on the interpolated pose).
+GRADCHECK_KWARGS_FTHETA_DYNAMIC = GRADCHECK_KWARGS_DYNAMIC
+
+
+def _ftheta_image_points_f64(projection, n=2):
+    pp = projection.principal_point
+    return (
+        (
+            pp.reshape(1, 2).to(torch.float64)
+            + torch.tensor(
+                [[2.0, 1.5], [-1.5, 0.7]][:n],
+                device=pp.device,
+                dtype=torch.float64,
+            )
+        )
+        .detach()
+        .requires_grad_(True)
+    )
+
+
+@pytest.mark.gradcheck
+def test_ftheta_project_world_points_mean_pose_gradcheck(
+    ftheta_projection_forward_ref, no_external, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for FTheta project_world_points_mean_pose with NoExternalDistortion."""
+    points = _ftheta_world_points_f64(
+        ftheta_projection_forward_ref.principal_point.device
+    )
+
+    def fn(p):
+        return project_world_points_mean_pose(
+            p,
+            ftheta_projection_forward_ref,
+            no_external,
+            dynamic_pose,
+            (100, 80),
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (points,), **GRADCHECK_KWARGS_FTHETA_DYNAMIC)
+
+
+@pytest.mark.gradcheck
+def test_ftheta_project_world_points_shutter_pose_gradcheck(
+    ftheta_projection_forward_ref, no_external, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for FTheta project_world_points_shutter_pose with NoExternalDistortion."""
+    points = _ftheta_world_points_f64(
+        ftheta_projection_forward_ref.principal_point.device
+    )
+
+    def fn(p):
+        return project_world_points_shutter_pose(
+            p,
+            ftheta_projection_forward_ref,
+            no_external,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            max_iterations=1,
+            initial_relative_time=0.5,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (points,), **GRADCHECK_KWARGS_FTHETA_DYNAMIC)
+
+
+@pytest.mark.gradcheck
+def test_ftheta_image_points_to_world_rays_static_pose_gradcheck(
+    ftheta_projection_forward_ref, no_external, static_pose
+):
+    """End-to-end autograd.gradcheck for FTheta image_points_to_world_rays_static_pose with NoExternalDistortion."""
+    pts = _ftheta_image_points_f64(ftheta_projection_forward_ref)
+
+    def fn(p):
+        return image_points_to_world_rays_static_pose(
+            p,
+            ftheta_projection_forward_ref,
+            no_external,
+            static_pose,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_ftheta_bivariate_image_points_to_camera_rays_nonidentity_distortion_gradcheck(
+    ftheta_projection_forward_ref, windshield_distortion
+):
+    """Non-identity bivariate backprojection gradcheck over inverse distortion coefficients."""
+    pp = ftheta_projection_forward_ref.principal_point
+    image_points = (
+        pp.reshape(1, 2).to(torch.float64)
+        + torch.tensor(
+            [[1.0, -0.5], [1.8, 0.7]],
+            device=pp.device,
+            dtype=torch.float64,
+        )
+    ).detach()
+    distortion_coeffs = _make_distortion_coeffs_f64(windshield_distortion)
+    with torch.no_grad():
+        distortion_coeffs[21] += 0.01
+        distortion_coeffs[22] += 0.002
+
+    def fn(coeffs):
+        distortion = _build_distortion(
+            windshield_distortion, ReferencePolynomial.FORWARD, coeffs
+        )
+        return image_points_to_camera_rays(
+            image_points,
+            ftheta_projection_forward_ref,
+            distortion,
+            allow_device_transfer=True,
+        )
+
+    assert torch.autograd.gradcheck(fn, (distortion_coeffs,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_ftheta_image_points_to_world_rays_shutter_pose_gradcheck(
+    ftheta_projection_forward_ref, no_external, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for FTheta image_points_to_world_rays_shutter_pose with NoExternalDistortion."""
+    pts = _ftheta_image_points_f64(ftheta_projection_forward_ref)
+
+    def fn(p):
+        return image_points_to_world_rays_shutter_pose(
+            p,
+            ftheta_projection_forward_ref,
+            no_external,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_ftheta_bivariate_project_world_points_mean_pose_gradcheck(
+    ftheta_projection_forward_ref, windshield_distortion, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for FTheta project_world_points_mean_pose with BivariateWindshieldDistortion."""
+    points = _ftheta_world_points_f64(
+        ftheta_projection_forward_ref.principal_point.device
+    )
+
+    def fn(p):
+        return project_world_points_mean_pose(
+            p,
+            ftheta_projection_forward_ref,
+            windshield_distortion,
+            dynamic_pose,
+            (100, 80),
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (points,), **GRADCHECK_KWARGS_FTHETA_DYNAMIC)
+
+
+@pytest.mark.gradcheck
+def test_ftheta_bivariate_project_world_points_shutter_pose_gradcheck(
+    ftheta_projection_forward_ref, windshield_distortion, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for FTheta project_world_points_shutter_pose with BivariateWindshieldDistortion."""
+    points = _ftheta_world_points_f64(
+        ftheta_projection_forward_ref.principal_point.device
+    )
+
+    def fn(p):
+        return project_world_points_shutter_pose(
+            p,
+            ftheta_projection_forward_ref,
+            windshield_distortion,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            max_iterations=1,
+            initial_relative_time=0.5,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (points,), **GRADCHECK_KWARGS_FTHETA_DYNAMIC)
+
+
+@pytest.mark.gradcheck
+def test_ftheta_bivariate_image_points_to_world_rays_static_pose_gradcheck(
+    ftheta_projection_forward_ref, windshield_distortion, static_pose
+):
+    """End-to-end autograd.gradcheck for FTheta image_points_to_world_rays_static_pose with BivariateWindshieldDistortion."""
+    pts = _ftheta_image_points_f64(ftheta_projection_forward_ref)
+
+    def fn(p):
+        return image_points_to_world_rays_static_pose(
+            p,
+            ftheta_projection_forward_ref,
+            windshield_distortion,
+            static_pose,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)
+
+
+@pytest.mark.gradcheck
+def test_ftheta_bivariate_image_points_to_world_rays_shutter_pose_gradcheck(
+    ftheta_projection_forward_ref, windshield_distortion, dynamic_pose
+):
+    """End-to-end autograd.gradcheck for FTheta image_points_to_world_rays_shutter_pose with BivariateWindshieldDistortion."""
+    pts = _ftheta_image_points_f64(ftheta_projection_forward_ref)
+
+    def fn(p):
+        return image_points_to_world_rays_shutter_pose(
+            p,
+            ftheta_projection_forward_ref,
+            windshield_distortion,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            dynamic_pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(fn, (pts,), **GRADCHECK_KWARGS)

@@ -44,6 +44,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("LIDAR", gsplat::CameraModelType::LIDAR)
         .export_values();
 
+    py::enum_<gsplat::RendererConfig>(m, "RendererConfig", py::module_local())
+        .value("MIXED_BATCH", gsplat::RendererConfig::MIXED_BATCH)
+        .value("PARALLEL_BATCH", gsplat::RendererConfig::PARALLEL_BATCH)
+        .export_values();
+
     py::enum_<gsplat::extdist::ModelType>(m, "ExternalDistortionModelType", py::module_local())
         .value("BIVARIATE_WINDSHIELD", gsplat::extdist::ModelType::BIVARIATE_WINDSHIELD);
 
@@ -968,7 +973,7 @@ TORCH_LIBRARY(gsplat, m) {
     // Schema only: the CUDA and AutogradCUDA implementations are registered
     // below, after custom-class registration, while their bodies remain in
     // Rasterization.cpp.
-    m.def("rasterize_to_pixels_from_world_3dgs(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool return_sample_counts, bool use_hit_distance, bool return_normals) -> (Tensor, Tensor, Tensor, Tensor?, Tensor?)");
+    m.def("rasterize_to_pixels_from_world_3dgs(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool return_sample_counts, bool use_hit_distance, bool return_normals, int renderer_config, bool return_last_ids, bool unsafe_masked_tile_outputs=False) -> (Tensor, Tensor, Tensor?, Tensor?, Tensor?)");
 
 #if GSPLAT_BUILD_3DGS
     m.def("mcmc_perturb_positions(Tensor(a!) positions, Tensor quats, Tensor scales, Tensor opacities, Tensor noise, float scaler) -> ()");

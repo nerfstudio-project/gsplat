@@ -25,6 +25,7 @@ pytest <THIS_PY_FILE> -s
 import math
 import struct
 import os
+from enum import Enum
 from itertools import chain, product
 from types import SimpleNamespace
 
@@ -2558,6 +2559,7 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
         isect_offsets,
         flatten_ids,
         use_hit_distance=True,
+        return_last_ids=False,
         return_sample_counts=False,
         return_normals=False,
     )
@@ -2954,6 +2956,16 @@ def test_rasterize_to_pixels_eval3d(
     assert not (count_mismatch & vis_mismatch).any()
     assert not (count_match & vis_mismatch).any()
     assert not (count_mismatch & count_match).any()
+
+    # On count-matched pixels, the last contributing gaussian's flatten_idx
+    # must match exactly. An off-by-one, such as over-counting the saturating
+    # gaussian past TRANSMITTANCE_THRESHOLD, can shift last_ids by 1 while
+    # sample_counts still coincidentally match.
+    last_ids_match = render_last_ids[count_match] == _render_last_ids[count_match]
+    assert last_ids_match.all(), (
+        f"last_ids diverge on {(~last_ids_match).sum().item()} of "
+        f"{count_match.sum().item()} count-matched pixels"
+    )
 
     count_match = count_match.unsqueeze(-1).float()
     count_mismatch = count_mismatch.unsqueeze(-1).float()
@@ -3362,7 +3374,7 @@ def test_rasterize_to_pixels_eval3d(
         # while CUDA >= 12.9 stays within 2.5e-2. Keep a small margin so 12.8
         # passes without masking larger regressions.
         #
-        # Fwd-state-reuse bwd path: deriving per-chunk starting accumulators
+        # Fwd-state-reuse bwd path: deriving per-batch starting accumulators
         # from `dot(pix_out_final - pix_out_at_boundary, v_render_c)` introduces
         # subtraction cancellation vs. the old K1's per-Gaussian running dot,
         # pushing the worst case to ~0.0279 on 0.3% of elements. Bumped atol
@@ -3376,6 +3388,855 @@ def test_rasterize_to_pixels_eval3d(
         torch.testing.assert_close(
             v_rays * rays_mask.float(), _v_rays * rays_mask.float(), rtol=0, atol=3.0e-2
         )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
+@pytest.mark.parametrize(
+    "renderer_config",
+    [gsplat.RendererConfig_MixedBatch(), gsplat.RendererConfig_ParallelBatch()],
+    ids=["mixed_batch", "parallel_batch"],
+)
+def test_eval3d_masked_tile_writes_safe_defaults(tile_size, renderer_config):
+    # The public binding allocates outputs internally with at::empty. If a
+    # kernel store is accidentally skipped, stale allocator contents could
+    # still match these expected defaults and let this test pass.
+    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+
+    width = height = tile_size
+    channels = 3
+
+    means = torch.tensor([[0.0, 0.0, 1.0]], device=device)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+    scales = torch.ones((1, 3), device=device)
+    colors = torch.zeros((1, 1, channels), device=device)
+    opacities = torch.ones((1, 1), device=device)
+    backgrounds = torch.tensor([[0.2, 0.4, 0.6]], device=device)
+    masks = torch.zeros((1, 1, 1), dtype=torch.bool, device=device)
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [
+            [
+                [float(width), 0.0, width / 2.0],
+                [0.0, float(height), height / 2.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ],
+        device=device,
+    )
+    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
+
+    (
+        render_colors,
+        render_alphas,
+        last_ids,
+        sample_counts,
+        render_normals,
+    ) = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+        masks=masks,
+        return_sample_counts=True,
+        return_normals=True,
+        renderer_config=renderer_config,
+    )
+
+    expected_background = backgrounds.reshape(1, 1, 1, channels).expand_as(
+        render_colors
+    )
+    torch.testing.assert_close(render_colors, expected_background)
+    torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
+    torch.testing.assert_close(render_normals, torch.zeros_like(render_normals))
+    torch.testing.assert_close(last_ids, torch.full_like(last_ids, -1))
+    torch.testing.assert_close(sample_counts, torch.zeros_like(sample_counts))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
+@pytest.mark.parametrize(
+    "renderer_config",
+    [gsplat.RendererConfig_MixedBatch(), gsplat.RendererConfig_ParallelBatch()],
+    ids=["mixed_batch", "parallel_batch"],
+)
+def test_eval3d_unsafe_masked_tile_outputs_match_safe_outputs_on_active_tiles(
+    tile_size,
+    renderer_config,
+):
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+    )
+
+    # Exercise several active/masked tile transitions in a single row.
+    mask_pattern = [True, False, False, True, False, True]
+    tile_width = len(mask_pattern)
+    tile_height = 1
+    active_tile_xs = [i for i, is_active in enumerate(mask_pattern) if is_active]
+
+    width = tile_size * tile_width
+    height = tile_size
+    channels = 3
+
+    active_tile_centers = torch.tensor(
+        [(tile_x + 0.5) * tile_size for tile_x in active_tile_xs],
+        device=device,
+    )
+    xs = (active_tile_centers - width / 2.0) / width
+    means = torch.stack(
+        [xs, torch.zeros_like(xs), torch.ones_like(xs)],
+        dim=-1,
+    )
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device).expand(
+        len(active_tile_xs), -1
+    )
+    scales = torch.full((len(active_tile_xs), 3), 0.2, device=device)
+    colors = torch.tensor(
+        [[[0.7, 0.1, 0.3], [0.1, 0.8, 0.2], [0.2, 0.3, 0.9]]],
+        device=device,
+    )
+    opacities = torch.full((1, len(active_tile_xs)), 0.8, device=device)
+    backgrounds = torch.tensor([[0.2, 0.4, 0.6]], device=device)
+    masks = torch.tensor([[mask_pattern]], dtype=torch.bool, device=device)
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [
+            [
+                [float(width), 0.0, width / 2.0],
+                [0.0, float(height), height / 2.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ],
+        device=device,
+    )
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means,
+        quats,
+        scales,
+        opacities[0],
+        viewmats,
+        Ks,
+        width,
+        height,
+    )
+    _tpg, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+    isect_offsets = isect_offsets.reshape(1, tile_height, tile_width)
+
+    def run(unsafe_masked_tile_outputs):
+        return rasterize_to_pixels_eval3d_extra(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            masks=masks,
+            return_sample_counts=True,
+            return_normals=True,
+            unsafe_masked_tile_outputs=unsafe_masked_tile_outputs,
+            renderer_config=renderer_config,
+        )
+
+    safe_outputs = run(False)
+    unsafe_outputs = run(True)
+
+    for active_tile_x in active_tile_xs:
+        # Compare only active tile pixels; masked tile outputs are undefined
+        # when unsafe_masked_tile_outputs=True.
+        active = (
+            slice(None),
+            slice(None),
+            slice(active_tile_x * tile_size, (active_tile_x + 1) * tile_size),
+        )
+        active_with_channels = active + (slice(None),)
+
+        assert torch.any(safe_outputs[1][active_with_channels] > 0.0)
+        assert torch.any(safe_outputs[2][active] >= 0)
+        assert torch.any(safe_outputs[3][active] > 0)
+
+        for safe, unsafe in zip(safe_outputs, unsafe_outputs):
+            active_slice = active_with_channels if safe.ndim == 4 else active
+            if safe.is_floating_point():
+                torch.testing.assert_close(
+                    unsafe[active_slice], safe[active_slice], rtol=0.0, atol=1e-6
+                )
+            else:
+                assert torch.equal(unsafe[active_slice], safe[active_slice])
+
+
+@pytest.fixture
+def small_scene():
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+    )
+
+    width = height = 32
+    tile_size = 16
+    C = 1
+    N = 4
+
+    means = torch.tensor(
+        [
+            [0.0, 0.0, 4.0],
+            [0.1, 0.0, 4.2],
+            [-0.1, 0.1, 4.4],
+            [0.0, -0.1, 4.6],
+        ],
+        device=device,
+        dtype=torch.float32,
+    )
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device).expand(N, 4).clone()
+    scales = torch.full((N, 3), 0.25, device=device, dtype=torch.float32)
+    opacities = torch.full((N,), 0.5, device=device, dtype=torch.float32)
+    colors = torch.tensor(
+        [[[0.2, 0.4, 0.6], [0.7, 0.3, 0.1], [0.1, 0.8, 0.2], [0.9, 0.9, 0.1]]],
+        device=device,
+        dtype=torch.float32,
+    )
+    viewmats = torch.eye(4, device=device, dtype=torch.float32).expand(C, 4, 4).clone()
+    Ks = torch.tensor(
+        [[[24.0, 0.0, 16.0], [0.0, 24.0, 16.0], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=torch.float32,
+    )
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    isect_offsets = isect_offsets.reshape(C, tile_height, tile_width)
+
+    assert flatten_ids.numel() > 0, "test setup must rasterize at least one Gaussian"
+    return {
+        "means": means,
+        "quats": quats,
+        "scales": scales,
+        "colors": colors,
+        "opacities": opacities.unsqueeze(0).clone(),
+        "viewmats": viewmats,
+        "Ks": Ks,
+        "width": width,
+        "height": height,
+        "tile_size": tile_size,
+        "isect_offsets": isect_offsets,
+        "flatten_ids": flatten_ids,
+    }
+
+
+class InputGrad(Enum):
+    REQ_GRAD = "req_grad"
+    NO_GRAD = "no_grad"
+
+
+class EnableGrad(Enum):
+    ENABLE = "enable"
+    DISABLE = "disable"
+    INFERENCE = "inference"
+
+
+class GradResult(Enum):
+    HAS_GRAD = "has_grad"
+    NO_GRAD = "no_grad"
+
+
+def _call_rasterize_eval3d_extra(
+    inputs, renderer_config, return_last_ids=False, return_sample_counts=False
+):
+    from gsplat.cuda._wrapper import rasterize_to_pixels_eval3d_extra
+
+    return rasterize_to_pixels_eval3d_extra(
+        inputs["means"],
+        inputs["quats"],
+        inputs["scales"],
+        inputs["colors"],
+        inputs["opacities"],
+        inputs["viewmats"],
+        inputs["Ks"],
+        inputs["width"],
+        inputs["height"],
+        inputs["tile_size"],
+        inputs["isect_offsets"],
+        inputs["flatten_ids"],
+        return_last_ids=return_last_ids,
+        return_sample_counts=return_sample_counts,
+        renderer_config=renderer_config,
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "renderer_config",
+    [
+        gsplat.RendererConfig_MixedBatch(),
+        gsplat.RendererConfig_ParallelBatch(),
+    ],
+    ids=["mixed_batch", "parallel_batch"],
+)
+@pytest.mark.parametrize(
+    "request_metadata",
+    [False, True],
+    ids=["render_only", "with_metadata"],
+)
+@pytest.mark.parametrize(
+    ("enable_grad", "input_grad", "grad_result"),
+    [
+        (EnableGrad.DISABLE, InputGrad.REQ_GRAD, GradResult.NO_GRAD),
+        (EnableGrad.INFERENCE, InputGrad.REQ_GRAD, GradResult.NO_GRAD),
+        (EnableGrad.ENABLE, InputGrad.NO_GRAD, GradResult.NO_GRAD),
+        (EnableGrad.ENABLE, InputGrad.REQ_GRAD, GradResult.HAS_GRAD),
+    ],
+)
+def test_rasterize_eval3d_grad_modes_save_backward_state(
+    small_scene, renderer_config, enable_grad, input_grad, grad_result, request_metadata
+):
+    saved = []
+    differentiable_names = ("means", "quats", "scales", "colors", "opacities")
+    requires_grad = input_grad is InputGrad.REQ_GRAD
+    inputs = dict(small_scene)
+    for name in differentiable_names:
+        inputs[name] = small_scene[name].detach().clone().requires_grad_(requires_grad)
+
+    def pack(tensor):
+        saved.append(True)
+        return tensor
+
+    def unpack(tensor):
+        return tensor
+
+    def call():
+        return _call_rasterize_eval3d_extra(
+            inputs,
+            renderer_config,
+            return_last_ids=request_metadata,
+            return_sample_counts=request_metadata,
+        )
+
+    with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
+        if enable_grad is EnableGrad.ENABLE:
+            outputs = call()
+        elif enable_grad is EnableGrad.DISABLE:
+            with torch.no_grad():
+                outputs = call()
+        elif enable_grad is EnableGrad.INFERENCE:
+            with torch.inference_mode():
+                outputs = call()
+        else:
+            raise AssertionError(f"unknown grad mode: {enable_grad}")
+
+        if grad_result is GradResult.HAS_GRAD:
+            (outputs[0].sum() + outputs[1].sum()).backward()
+        torch.cuda.synchronize()
+
+    if grad_result is GradResult.HAS_GRAD:
+        assert saved
+        assert outputs[0].requires_grad
+        for name in differentiable_names:
+            grad = inputs[name].grad
+            assert grad is not None, f"{name} should receive gradients"
+            assert torch.isfinite(grad).all()
+    else:
+        assert saved == []
+        assert not outputs[0].requires_grad
+        for name in differentiable_names:
+            assert inputs[name].grad is None
+
+    # Exact-metadata outputs must survive every grad mode. The no-grad / inference
+    # paths route through the state-light CUDA-key forward, which must request the
+    # full forward when last_ids / sample_counts are asked for rather than taking
+    # the fwd-only shortcut (else the shared forward rejects the combination).
+    if request_metadata:
+        assert outputs[2] is not None, "last_ids should be returned"
+        assert outputs[3] is not None, "sample_counts should be returned"
+    else:
+        assert outputs[2] is None
+        assert outputs[3] is None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "renderer_config",
+    [
+        gsplat.RendererConfig_MixedBatch(),
+        gsplat.RendererConfig_ParallelBatch(),
+    ],
+    ids=["mixed_batch", "parallel_batch"],
+)
+def test_rasterize_eval3d_autograd_tracks_any_tensor_input(
+    small_scene, renderer_config
+):
+    differentiable_names = ("means", "quats", "scales", "colors", "opacities")
+    inputs = dict(small_scene)
+    for name in differentiable_names:
+        inputs[name] = small_scene[name].detach().clone().requires_grad_(False)
+
+    # The C++ adapter's fast path mirrors torch::autograd::Function::apply():
+    # any Tensor input requiring gradients keeps the autograd path active, even
+    # for inputs whose gradients this op does not currently implement.
+    inputs["viewmats"] = small_scene["viewmats"].detach().clone().requires_grad_(True)
+
+    outputs = _call_rasterize_eval3d_extra(inputs, renderer_config)
+    assert outputs[0].requires_grad
+
+    (outputs[0].sum() + outputs[1].sum()).backward()
+    torch.cuda.synchronize()
+
+    assert inputs["viewmats"].grad is None
+    for name in differentiable_names:
+        assert inputs[name].grad is None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterize_eval3d_parallel_batch_no_t_underflow_across_batches():
+    """ParallelBatch fwd transmittance must not underflow across batches."""
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+        RollingShutterType,
+    )
+
+    tile_size = 16
+    width = height = 32
+    N = 30_000
+
+    torch.manual_seed(0)
+    means = torch.randn(N, 3, device=device) * 0.30
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.rand(N, 3, device=device).mul_(0.020).add_(0.005)
+    opacities = torch.rand(N, device=device).mul_(0.40).add_(0.55)
+    colors = torch.rand(1, N, 3, device=device)
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    viewmats[..., 2, 3] = 2.5
+    focal = 200.0
+    Ks = torch.tensor(
+        [[[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _tpg, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+
+    # This regression targets the for-backward path, where ParallelBatch must
+    # preserve enough state to match the exact serial saturation boundary.
+    means = means.detach().requires_grad_(True)
+    opacities_bc = opacities[None, :].contiguous()
+
+    rc, ra, _, _, _ = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_last_ids=False,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        camera_model="pinhole",
+        renderer_config=gsplat.RendererConfig_ParallelBatch(),
+    )
+    _rc, _ra, *_ = _rasterize_to_pixels_eval3d(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size=tile_size,
+        isect_offsets=isect_offsets,
+        flatten_ids=flatten_ids,
+        rs_type=RollingShutterType.GLOBAL,
+    )
+
+    # The serial semantic breaks before applying the Gaussian that would make
+    # `T * (1 - alpha) <= TRANSMITTANCE_THRESHOLD`, so alpha should not reach
+    # exactly one. Batch-local summaries that underflow only during compose
+    # violate that contract and show up here before broad color tolerances can
+    # hide the regression.
+    assert (
+        ra.max().item() < 1.0
+    ), f"alpha reached {ra.max().item()} because T underflowed across batches"
+    torch.testing.assert_close(ra, _ra, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(rc, _rc, rtol=3e-3, atol=1e-3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterize_eval3d_parallel_batch_backward_accepts_unused_normals():
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+    )
+
+    torch.manual_seed(7)
+    tile_size = 8
+    width = height = 16
+    N = 16
+    C = 1
+
+    means = torch.cat(
+        [
+            torch.randn(N, 2, device=device).mul_(0.10),
+            torch.full((N, 1), 3.0, device=device),
+        ],
+        dim=-1,
+    ).requires_grad_()
+    quats = torch.zeros(N, 4, device=device)
+    quats[:, 0] = 1.0
+    quats.requires_grad_()
+    scales = torch.full((N, 3), 0.08, device=device).requires_grad_()
+    opacities = torch.full((N,), 0.50, device=device).requires_grad_()
+    colors = torch.rand(C, N, 3, device=device, requires_grad=True)
+
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [[[20.0, 0.0, width / 2.0], [0.0, 20.0, height / 2.0], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+
+    (
+        render_colors,
+        render_alphas,
+        _,
+        _,
+        render_normals,
+    ) = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities.unsqueeze(0),
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_normals=True,
+        renderer_config=gsplat.RendererConfig_ParallelBatch(),
+    )
+    assert render_normals is not None
+
+    # The caller may request normals for inspection while optimizing only RGB /
+    # alpha. Backward must still use the normal-inclusive forward state layout.
+    (render_colors.sum() + render_alphas.sum()).backward()
+
+    for grad in (means.grad, quats.grad, scales.grad, colors.grad, opacities.grad):
+        assert grad is not None
+        assert torch.isfinite(grad).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "renderer_config_name",
+    ["mixed_batch", "parallel_batch"],
+)
+def test_fwd_last_ids_match_ref_under_saturation(renderer_config_name):
+    """Strict last_ids equality vs Python ref under heavy saturation."""
+    from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+        RollingShutterType,
+    )
+
+    renderer_config_factories = {
+        "mixed_batch": gsplat.RendererConfig_MixedBatch,
+        "parallel_batch": gsplat.RendererConfig_ParallelBatch,
+    }
+    renderer_config = renderer_config_factories[renderer_config_name]()
+
+    tile_size = 16
+    width = height = tile_size  # single tile
+
+    # Saturation-only fixture with little alpha-threshold ambiguity: huge
+    # scales make every Gaussian cover the tile, so alpha is close to opacity
+    # for all 256 pixels. With opacity=0.95, T evolves as
+    # 1, 0.05, 2.5e-3, 1.25e-4, 6.25e-6, ...
+    # and saturation fires unambiguously at Gaussian 3. Correct rendering
+    # stops before that threshold-crossing Gaussian, leaving last_id=2 and
+    # sample_count=3 for every pixel.
+    num_gaussians = 8
+    opacity_val = 0.95
+    scale_val = 100.0
+
+    fx = fy = float(width)
+    cx = width / 2.0
+    cy = height / 2.0
+
+    means = torch.zeros(num_gaussians, 3, device=device)
+    means[:, 2] = 1.0 + torch.arange(num_gaussians, device=device).float() * 1e-3
+    quats = (
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+        .expand(num_gaussians, 4)
+        .contiguous()
+    )
+    scales = torch.full((num_gaussians, 3), scale_val, device=device)
+    opacities = torch.full((num_gaussians,), opacity_val, device=device)
+    channels = 3
+    torch.manual_seed(0)
+    colors = torch.rand(1, num_gaussians, channels, device=device)
+    opacities_bc = opacities[None, :].contiguous()
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _tpg, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+    means = means.detach().requires_grad_(True)
+
+    rc, ra, render_last_ids, render_sample_counts, _ = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_sample_counts=True,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        camera_model="pinhole",
+        renderer_config=renderer_config,
+    )
+    _rc, _ra, _last_ids, _sample_counts = _rasterize_to_pixels_eval3d(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size=tile_size,
+        isect_offsets=isect_offsets,
+        flatten_ids=flatten_ids,
+        rs_type=RollingShutterType.GLOBAL,
+        return_last_ids=True,
+        return_sample_counts=True,
+    )
+
+    assert (
+        render_last_ids >= 0
+    ).all(), "every pixel should accumulate at least one gaussian"
+    assert ra.max().item() < 1.0, (
+        f"expected saturation truncation to keep alpha < 1; got {ra.max().item()}. "
+        "T underflowed all the way to ~0, so truncation is broken."
+    )
+
+    last_ids_diff = render_last_ids != _last_ids
+    assert not last_ids_diff.any(), (
+        f"last_ids diverge on {int(last_ids_diff.sum().item())} of "
+        f"{render_last_ids.numel()} pixels; max(|cuda - ref|) = "
+        f"{int((render_last_ids - _last_ids).abs().max().item())}. "
+        "Likely cause: saturation truncation includes the threshold-crossing "
+        "gaussian instead of stopping before it."
+    )
+
+    counts_diff = render_sample_counts != _sample_counts
+    assert not counts_diff.any(), (
+        f"sample_counts diverge on {int(counts_diff.sum().item())} pixels; "
+        f"max(|cuda - ref|) = "
+        f"{int((render_sample_counts - _sample_counts).abs().max().item())}."
+    )
+
+    torch.testing.assert_close(ra, _ra, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(rc, _rc, rtol=3e-3, atol=1e-3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_parallel_batch_fwd_only_omits_debug_metadata():
+    """Fwd-only ParallelBatch should match exact output without metadata."""
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+        RollingShutterType,
+    )
+
+    tile_size = 16
+    width = height = tile_size
+    num_gaussians = 8
+    channels = 3
+
+    means = torch.zeros(num_gaussians, 3, device=device)
+    means[:, 2] = 1.0 + torch.arange(num_gaussians, device=device).float() * 1e-3
+    quats = (
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+        .expand(num_gaussians, 4)
+        .contiguous()
+    )
+    scales = torch.full((num_gaussians, 3), 100.0, device=device)
+    opacities = torch.full((num_gaussians,), 0.95, device=device)
+    torch.manual_seed(0)
+    colors = torch.rand(1, num_gaussians, channels, device=device)
+    opacities_bc = opacities[None, :].contiguous()
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.tensor(
+        [
+            [
+                [float(width), 0.0, width / 2.0],
+                [0.0, float(height), height / 2.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ],
+        device=device,
+    )
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _tpg, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, 1, tile_width, tile_height)
+    renderer_config = gsplat.RendererConfig_ParallelBatch()
+    exact_means = means.detach().clone().requires_grad_(True)
+
+    (
+        exact_colors,
+        exact_alphas,
+        exact_last_ids,
+        exact_sample_counts,
+        _,
+    ) = rasterize_to_pixels_eval3d_extra(
+        exact_means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_sample_counts=True,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        camera_model="pinhole",
+        renderer_config=renderer_config,
+    )
+    (
+        render_colors,
+        render_alphas,
+        last_ids,
+        sample_counts,
+        _,
+    ) = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_bc,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        return_last_ids=False,
+        rolling_shutter=RollingShutterType.GLOBAL,
+        camera_model="pinhole",
+        renderer_config=renderer_config,
+    )
+
+    assert exact_last_ids is not None
+    assert exact_sample_counts is not None
+    assert last_ids is None
+    assert sample_counts is None
+    torch.testing.assert_close(render_alphas, exact_alphas, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(render_colors, exact_colors, rtol=3e-3, atol=1e-3)
 
 
 @pytest.fixture
@@ -3500,6 +4361,7 @@ def test_rasterize_eval3d_no_behind_camera_ghost_lobe(
         backgrounds=s.backgrounds,
         rolling_shutter=RollingShutterType.GLOBAL,
         use_hit_distance=False,
+        return_last_ids=False,
         return_normals=False,
         camera_model="pinhole",
         rays=rays,
@@ -3777,6 +4639,129 @@ def test_sh_zero_channels():
         spherical_harmonics(0, dirs, coeffs)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("kernel_path", ["generic", "specialized"])
+def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
+    """fp16 SH coeffs through the generic kernel (K != 16) and the K=16 specialized kernel."""
+    from gsplat.cuda._torch_impl import _spherical_harmonics
+    from gsplat.cuda._wrapper import spherical_harmonics
+
+    if kernel_path == "specialized":
+        if sh_degree == 4:
+            pytest.skip("K=16 caps at sh_degree=3")
+        K = 16
+    else:
+        K = (sh_degree + 1) ** 2
+        if K == 16:
+            pytest.skip("K=16 is covered by the specialized path")
+
+    torch.manual_seed(42)
+
+    N = 1000
+    coeffs_fp32 = torch.randn(N, K, 3, device=device)
+    dirs = torch.randn(N, 3, device=device)
+
+    # fp16 coefficients through CUDA kernel
+    coeffs_h = coeffs_fp32.half().requires_grad_(True)
+    dirs_h = dirs.clone().requires_grad_(True)
+    colors_h = spherical_harmonics(sh_degree, dirs_h, coeffs_h)
+
+    # Reference 1: roundtripped fp16->fp32 through pure-PyTorch (isolates kernel correctness)
+    coeffs_ref = coeffs_fp32.half().float().requires_grad_(True)
+    dirs_ref = dirs.clone().requires_grad_(True)
+    colors_ref = _spherical_harmonics(sh_degree, dirs_ref, coeffs_ref)
+
+    # Reference 2: true fp32 through pure-PyTorch (measures total fp16 precision loss)
+    coeffs_fp32_ref = coeffs_fp32.clone().requires_grad_(True)
+    dirs_fp32_ref = dirs.clone().requires_grad_(True)
+    colors_fp32_ref = _spherical_harmonics(sh_degree, dirs_fp32_ref, coeffs_fp32_ref)
+
+    # Forward: kernel correctness (tight, same quantized inputs)
+    torch.testing.assert_close(colors_h, colors_ref, rtol=1e-4, atol=1e-4)
+    # Forward: total fp16 precision loss vs true fp32
+    torch.testing.assert_close(colors_h, colors_fp32_ref, rtol=1e-3, atol=2e-3)
+
+    # Backward check
+    v_colors = torch.randn_like(colors_h)
+
+    v_coeffs_h, v_dirs_h = torch.autograd.grad(
+        (colors_h * v_colors).sum(),
+        (coeffs_h, dirs_h),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    v_coeffs_ref, v_dirs_ref = torch.autograd.grad(
+        (colors_ref * v_colors).sum(),
+        (coeffs_ref, dirs_ref),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    v_coeffs_fp32_ref, v_dirs_fp32_ref = torch.autograd.grad(
+        (colors_fp32_ref * v_colors).sum(),
+        (coeffs_fp32_ref, dirs_fp32_ref),
+        retain_graph=True,
+        allow_unused=True,
+    )
+
+    # v_coeffs kernel correctness (wider than forward, fp16 quantization on write-back)
+    torch.testing.assert_close(v_coeffs_h.float(), v_coeffs_ref, rtol=2e-3, atol=5e-4)
+    # v_coeffs total precision loss vs true fp32
+    torch.testing.assert_close(
+        v_coeffs_h.float(), v_coeffs_fp32_ref, rtol=1e-2, atol=1e-3
+    )
+    if sh_degree > 0:
+        torch.testing.assert_close(v_dirs_h, v_dirs_ref, rtol=1e-4, atol=1e-4)
+        # v_dirs total precision loss vs true fp32, higher-order bands amplify
+        # coefficient quantization error into direction gradients
+        torch.testing.assert_close(v_dirs_h, v_dirs_fp32_ref, rtol=5e-2, atol=1e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize(
+    "dtype, sh_degree, storage_offset",
+    [
+        # storage_offset = 1 fp16 elem (2 bytes): fails ushort4 (8-byte) and uint4 (16-byte).
+        (torch.float16, 0, 1),
+        (torch.float16, 3, 1),
+        # storage_offset = 4 fp16 elems (8 bytes): passes ushort4 but fails uint4.
+        # fp16 + degree >= 2 uses uint4, so this must still fall back to scalar.
+        (torch.float16, 3, 4),
+        # fp32: storage_offset = 1 elem (4 bytes): fails uint4 (16-byte).
+        (torch.float32, 0, 1),
+        (torch.float32, 3, 1),
+        # fp32 + storage_offset = 2 elems (8 bytes): still fails uint4 (need 16).
+        (torch.float32, 3, 2),
+    ],
+)
+def test_sh_k16_misaligned_coeffs(dtype, sh_degree, storage_offset):
+    """K=16 with a contiguous-but-misaligned coeffs view should fall back to the generic kernel.
+
+    Wide-load alignment by (dtype, degree):
+      ushort4 (8-byte): fp16 + degree <= 1
+      uint4 (16-byte):  fp16 + degree >= 2, or fp32 at any degree
+    """
+    from gsplat.cuda._wrapper import spherical_harmonics
+
+    torch.manual_seed(42)
+    N, K = 1000, 16
+
+    coeffs_aligned = torch.randn(N, K, 3, device=device, dtype=dtype)
+    dirs = torch.randn(N, 3, device=device)
+
+    storage = torch.empty(N * K * 3 + storage_offset, device=device, dtype=dtype)
+    storage[:storage_offset] = 0
+    coeffs_misaligned = storage[storage_offset:].view(N, K, 3)
+    coeffs_misaligned.copy_(coeffs_aligned)
+    assert coeffs_misaligned.is_contiguous()
+    assert coeffs_misaligned.storage_offset() == storage_offset
+
+    colors_aligned = spherical_harmonics(sh_degree, dirs, coeffs_aligned)
+    colors_misaligned = spherical_harmonics(sh_degree, dirs, coeffs_misaligned)
+
+    torch.testing.assert_close(colors_misaligned, colors_aligned)
+
+
 # ============================================================================
 # NaN/wrong-value safety tests for the 3DGUT code path
 # ============================================================================
@@ -3818,6 +4803,7 @@ def _render_alpha(data, quats, scales, means2d, radii, depths, tile_size=8):
         tile_size,
         ioff,
         fids,
+        return_last_ids=False,
     )
     return ra
 
@@ -4184,6 +5170,7 @@ def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data, tile_size):
         tile_size,
         ioff,
         fids,
+        return_last_ids=False,
     )
 
     # Python reference rasterization
