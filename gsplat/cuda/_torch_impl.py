@@ -672,9 +672,7 @@ def _build_sparse_tile_layout(
     pix_in_tile = (rows % tile_size) * tile_size + (cols % tile_size)
 
     # Per-tile activity mask over the dense [n_images, TH, TW] grid.
-    active_tile_mask = torch.zeros(
-        n_images * n_tiles, dtype=torch.bool, device=device
-    )
+    active_tile_mask = torch.zeros(n_images * n_tiles, dtype=torch.bool, device=device)
     active_tile_mask[tile_id] = True
     active_tile_mask = active_tile_mask.view(n_images, tile_height, tile_width)
 
@@ -685,9 +683,7 @@ def _build_sparse_tile_layout(
     pix_in_tile_sorted = pix_in_tile[pixel_map]
 
     # Run-length encode the sorted tile ids -> active tiles + per-tile counts.
-    active_tiles, counts = torch.unique_consecutive(
-        tile_id_sorted, return_counts=True
-    )
+    active_tiles, counts = torch.unique_consecutive(tile_id_sorted, return_counts=True)
     active_tiles = active_tiles.to(torch.int32)
     tile_pixel_cumsum = counts.cumsum(0)  # inclusive
 
