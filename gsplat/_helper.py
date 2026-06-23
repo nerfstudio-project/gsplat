@@ -332,6 +332,165 @@ def assert_grad_sparsity(
         )
 
 
+def assert_grad_reference_close(
+    actual,
+    expected,
+    *,
+    atol,
+    rtol,
+    mask=None,
+    max_element_fail_ratio=0.0,
+    max_rel_l2=None,
+    max_rel_l1=None,
+    min_cosine=None,
+    max_signed_bias=None,
+    eps=1e-30,
+    require_nonempty=True,
+    msg="",
+):
+    """Compare a gradient tensor against a reference as both values and a vector.
+
+    ``torch.testing.assert_close`` is a good scalar predicate, but large sparse
+    gradient tensors also need aggregate guards: a few local outliers should not
+    hide a directional bias, and a small absolute tolerance near zero should not
+    hide a missing-gradient bug. This helper keeps the usual scale-aware
+    element bound and optionally adds direction / magnitude / bias checks over
+    the selected tensor as a whole.
+
+    Boolean tensors are accepted for equality-style boundary checks. For bool
+    inputs, ``atol`` and ``rtol`` are ignored, ``max_element_fail_ratio`` caps
+    the ``actual != expected`` fraction, and aggregate vector metrics are
+    skipped.
+
+    Args:
+        actual, expected: Gradient tensors with identical shape and dtype.
+        atol, rtol: Elementwise bound ``abs(actual - expected) <=
+            atol + rtol * abs(expected)``.
+        mask: Optional boolean mask selecting elements to compare. Broadcasts to
+            ``actual.shape``.
+        max_element_fail_ratio: Maximum fraction of selected elements allowed to
+            exceed the elementwise bound.
+        max_rel_l2: Optional cap for ``||actual - expected||_2 / ||expected||_2``.
+        max_rel_l1: Optional cap for ``||actual - expected||_1 / ||expected||_1``.
+        min_cosine: Optional lower bound on cosine similarity.
+        max_signed_bias: Optional cap for ``abs(sum(actual - expected)) /
+            sum(abs(expected))``.
+        eps: Denominator floor for aggregate metrics.
+        require_nonempty: Whether an empty mask is an error.
+        msg: Prefix included in assertion messages.
+    """
+
+    assert actual.shape == expected.shape, f"{actual.shape=} {expected.shape=}"
+    assert actual.dtype == expected.dtype, f"{msg}: {actual.dtype=} {expected.dtype=}"
+    assert 0.0 <= max_element_fail_ratio <= 1.0, (
+        f"{msg}: max_element_fail_ratio must be in [0, 1] "
+        f"(got {max_element_fail_ratio})"
+    )
+    assert eps > 0.0, f"{msg}: eps must be > 0 (got {eps})"
+
+    if mask is None:
+        selected = torch.ones_like(actual, dtype=torch.bool)
+    else:
+        assert mask.dtype == torch.bool, f"{msg}: mask must be bool, got {mask.dtype}"
+        try:
+            selected = mask.expand_as(actual)
+        except RuntimeError as exc:
+            raise AssertionError(
+                f"{msg}: mask shape {tuple(mask.shape)} cannot broadcast to "
+                f"{tuple(actual.shape)}"
+            ) from exc
+
+    n_total = int(selected.sum().item())
+    if n_total == 0:
+        if require_nonempty:
+            raise AssertionError(f"{msg}: mask selected no elements")
+        return
+
+    a = actual[selected]
+    e = expected[selected]
+
+    if actual.dtype == torch.bool:
+        # Boolean boundary checks only have equality semantics. The vector
+        # metrics below are intentionally numeric-only.
+        fail = a != e
+        diff_for_diag = fail.to(torch.float32)
+    else:
+        assert torch.isfinite(a).all(), f"{msg}: actual contains NaN / Inf"
+        assert torch.isfinite(e).all(), f"{msg}: expected contains NaN / Inf"
+        diff = (a - e).abs()
+        bound = atol + rtol * e.abs()
+        fail = diff > bound
+        diff_for_diag = diff
+
+    n_fail = int(fail.sum().item())
+    fail_ratio = n_fail / n_total
+
+    if actual.dtype != torch.bool:
+        a64 = a.to(torch.float64)
+        e64 = e.to(torch.float64)
+        d64 = a64 - e64
+        abs_e_sum = e64.abs().sum().item()
+        l1_expected = max(abs_e_sum, eps)
+        l2_expected = max(torch.linalg.vector_norm(e64).item(), eps)
+        rel_l1 = d64.abs().sum().item() / l1_expected
+        rel_l2 = torch.linalg.vector_norm(d64).item() / l2_expected
+        signed_bias = abs(d64.sum().item()) / l1_expected
+        actual_l2 = torch.linalg.vector_norm(a64).item()
+        expected_l2_raw = torch.linalg.vector_norm(e64).item()
+        if actual_l2 <= eps and expected_l2_raw <= eps:
+            cosine = 1.0
+        elif actual_l2 <= eps or expected_l2_raw <= eps:
+            cosine = 0.0
+        else:
+            cosine = (a64 * e64).sum().item() / (actual_l2 * expected_l2_raw)
+
+        vector_metrics_msg = (
+            f"rel_l2={rel_l2:.6e}, rel_l1={rel_l1:.6e}, "
+            f"cosine={cosine:.12f}, signed_bias={signed_bias:.6e}"
+        )
+        metrics_msg = f"{msg}: {vector_metrics_msg}"
+
+    def _format_common_diagnostics():
+        flat_diff = torch.zeros_like(actual, dtype=diff_for_diag.dtype)
+        flat_diff[selected] = diff_for_diag
+        worst_flat = int(flat_diff.reshape(-1).argmax().item())
+        worst_index = tuple(int(i) for i in np.unravel_index(worst_flat, actual.shape))
+        worst_actual = actual[worst_index].item()
+        worst_expected = expected[worst_index].item()
+        max_abs = flat_diff[worst_index].item()
+        if actual.dtype == torch.bool:
+            max_rel = float("nan")
+        else:
+            denom = max(abs(float(worst_expected)), eps)
+            max_rel = abs(float(worst_actual) - float(worst_expected)) / denom
+        vector_metrics_suffix = ""
+        if actual.dtype != torch.bool:
+            vector_metrics_suffix = f"; {vector_metrics_msg}"
+        return (
+            f"{msg}: element failures {n_fail}/{n_total} "
+            f"({fail_ratio:.6%}) > {max_element_fail_ratio:.6%}; "
+            f"max_abs={max_abs:.6e}, max_rel={max_rel:.6e}, "
+            f"worst_index={worst_index}, actual={worst_actual}, "
+            f"expected={worst_expected}, atol={atol}, rtol={rtol}"
+            f"{vector_metrics_suffix}"
+        )
+
+    assert fail_ratio <= max_element_fail_ratio, _format_common_diagnostics()
+
+    if actual.dtype == torch.bool:
+        return
+    if max_rel_l2 is not None:
+        assert rel_l2 <= max_rel_l2, f"{metrics_msg}; rel_l2 exceeds {max_rel_l2:.6e}"
+    if max_rel_l1 is not None:
+        assert rel_l1 <= max_rel_l1, f"{metrics_msg}; rel_l1 exceeds {max_rel_l1:.6e}"
+    if min_cosine is not None:
+        assert cosine >= min_cosine, f"{metrics_msg}; cosine below {min_cosine:.12f}"
+    if max_signed_bias is not None:
+        assert (
+            signed_bias <= max_signed_bias
+        ), f"{metrics_msg}; signed_bias exceeds {max_signed_bias:.6e}"
+
+
 def assert_close_with_boundary_band(
     actual,
     expected,
@@ -387,7 +546,10 @@ def assert_close_with_boundary_band(
             Bool tensor of same shape; True = element is in the discontinuity
             band, False = interior.
         interior_atol, interior_rtol:
-            Forwarded to ``torch.testing.assert_close`` for the interior.
+            Elementwise tolerances for the interior comparison. The interior is
+            checked through ``assert_grad_reference_close`` with
+            ``max_element_fail_ratio=0.0``, so failures include the shared
+            worst-index diagnostics.
         boundary_max_flip_ratio:
             Maximum allowed disagreeing fraction within the band.
         boundary_symmetry_tol:
@@ -494,12 +656,15 @@ def assert_close_with_boundary_band(
 
     # --- Interior assert: regression catcher ----------------------------------
     if interior.any():
-        torch.testing.assert_close(
-            actual[interior],
-            expected[interior],
+        assert_grad_reference_close(
+            actual,
+            expected,
+            mask=interior,
             atol=interior_atol,
             rtol=interior_rtol,
-            msg=lambda default_msg: f"{msg}: interior failure: {default_msg}",
+            max_element_fail_ratio=0.0,
+            require_nonempty=False,
+            msg=f"{msg}: interior failure",
         )
 
     if not boundary_mask.any():
