@@ -141,7 +141,7 @@ within the gsplat repo (commit 6acdce4).
 
 The evaluation of `inria-X` can be 
 reproduced with our forked wersion of the official implementation at 
-`here <https://github.com/liruilong940607/gaussian-splatting/tree/benchmark>`__, 
+`benchmark branch of our gaussian-splatting fork <https://github.com/liruilong940607/gaussian-splatting/tree/benchmark>`__,
 with the command :code:`python full_eval_m360.py` (commit 36546ce).
 
 2DGS
@@ -237,6 +237,6 @@ within the gsplat repo (commit 48abf70).
 
 The evaluation of `inria-X` can be 
 reproduced with our forked wersion of the official implementation at 
-`here <https://github.com/hbb1/diff-surfel-rasterization>`__;
+`diff-surfel-rasterization repo <https://github.com/hbb1/diff-surfel-rasterization>`__;
 you need to change the :code:`--model_type 2dgs` to :code:`--model_type 2dgs-inria` in
 :code:`benchmars/basic_2dgs` and run command :code:`cd examples; bash benchmarks/basic_2dgs.sh` (commit 28c928a).

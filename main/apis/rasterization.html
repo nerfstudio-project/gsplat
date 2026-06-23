@@ -682,11 +682,10 @@ might not be as fast. Default is True.</p></li>
 <li><p><strong>tile_size</strong> – The size of the tiles for rasterization. Default is 16.
 (Note: other values are not tested)</p></li>
 <li><p><strong>backgrounds</strong> – The background colors. [C, D]. Default is None.</p></li>
-<li><p><strong>render_mode</strong> – The rendering mode. Supported modes are “RGB”, “d”, “Ed”, “D”, “ED”,
-“RGB-d”, “RGB-Ed”, “RGB+D”, and “RGB+ED”. “RGB” renders the colored image.
-Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance
-modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)
-are normalized by opacity. Default is “RGB”.</p></li>
+<li><p><strong>render_mode</strong> – The rendering mode. Supported modes are “RGB”, “Ed”, “D”, “ED”,
+“RGB+D”, and “RGB+ED”. “RGB” renders the colored image.
+Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth.
+Expected modes (Ed, ED) are normalized by opacity. Default is “RGB”.</p></li>
 <li><p><strong>sparse_grad</strong> (<em>Experimental</em>) – If true, the gradients for {means, quats, scales} will be stored in
 a COO sparse layout. This can be helpful for saving memory. Default is False.</p></li>
 <li><p><strong>absgrad</strong> – If true, the absolute gradients of the projected 2D means

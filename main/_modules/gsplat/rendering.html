@@ -371,10 +371,10 @@
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">depth_to_normal</span><span class="p">,</span> <span class="n">get_projection_matrix</span>
 
+
 <span class="c1"># Gaussian depth modes (D/ED): use projection depth (controlled by global_z_order)</span>
 <span class="c1"># Hit distance modes (d/Ed): compute along-ray distance in rasterization</span>
 <span class="n">RenderMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span>
-
 <span class="n">RasterizeMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span>
 
 
@@ -497,6 +497,71 @@
         <span class="p">)</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_nccl_process_group</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Validate that the default process group is available and uses NCCL.&quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">torch</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">is_available</span><span class="p">():</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;distributed=True requires torch.distributed to be available.&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">torch</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">():</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;distributed=True requires an initialized default torch.distributed &quot;</span>
+            <span class="s2">&quot;process group.&quot;</span>
+        <span class="p">)</span>
+
+    <span class="n">backend</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">distributed</span><span class="o">.</span><span class="n">get_backend</span><span class="p">()</span>
+    <span class="k">if</span> <span class="nb">str</span><span class="p">(</span><span class="n">backend</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">!=</span> <span class="s2">&quot;nccl&quot;</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;distributed=True currently supports only the default NCCL process &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;group; got backend &#39;</span><span class="si">{</span><span class="n">backend</span><span class="si">}</span><span class="s2">&#39;.&quot;</span>
+        <span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">normalize_features_layout</span><span class="p">(</span>
+    <span class="n">features</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">batch_dims</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">,</span>
+    <span class="n">C</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">trailing_dims</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">,</span>
+    <span class="n">batch_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">camera_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">feature_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalize per-view or per-gaussian feature tensor layout to (nnz, *trailing) or (*batch_dims, C, *trailing).&quot;&quot;&quot;</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
+    <span class="n">N</span> <span class="o">=</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">trailing_dims</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)]</span>
+
+    <span class="c1"># per-view features?</span>
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="n">features</span><span class="o">.</span><span class="n">shape</span>
+        <span class="o">==</span> <span class="n">batch_dims</span>
+        <span class="o">+</span> <span class="p">(</span>
+            <span class="n">C</span><span class="p">,</span>
+            <span class="n">N</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="o">+</span> <span class="n">trailing_dims</span>
+    <span class="p">):</span>
+        <span class="c1"># packed?</span>
+        <span class="k">if</span> <span class="n">feature_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># [..., C, N, *trailing] -&gt; [nnz, *trailing]</span>
+            <span class="k">return</span> <span class="n">features</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">*</span><span class="n">trailing_dims</span><span class="p">)[</span>
+                <span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">feature_ids</span>
+            <span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># already (..., C, N, *trailing)</span>
+            <span class="k">return</span> <span class="n">features</span>
+    <span class="c1"># per-gaussian features?</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="o">*</span><span class="n">batch_dims</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">*</span><span class="n">trailing_dims</span><span class="p">)</span>
+        <span class="c1"># packed?</span>
+        <span class="k">if</span> <span class="n">feature_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># [..., N, *trailing] -&gt; [nnz, *trailing]</span>
+            <span class="k">return</span> <span class="n">features</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">*</span><span class="n">trailing_dims</span><span class="p">)[</span><span class="n">batch_ids</span><span class="p">,</span> <span class="n">feature_ids</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># (..., N, *trailing) -&gt; (..., C, N, *trailing)</span>
+            <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span>
+                <span class="n">features</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)),</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">*</span><span class="n">trailing_dims</span><span class="p">)</span>
+            <span class="p">)</span>
+
+
 <span class="k">def</span><span class="w"> </span><span class="nf">_compute_view_dirs_packed</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">campos</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3]</span>
@@ -572,52 +637,6 @@
     <span class="k">return</span> <span class="n">dirs</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">normalize_features_layout</span><span class="p">(</span>
-    <span class="n">features</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
-    <span class="n">batch_dims</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">,</span>
-    <span class="n">C</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">trailing_dims</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">,</span>
-    <span class="n">batch_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">camera_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">feature_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalize per-view or per-gaussian feature tensor layout to (nnz, *trailing) or (*batch_dims, C, *trailing).&quot;&quot;&quot;</span>
-    <span class="n">B</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
-    <span class="n">N</span> <span class="o">=</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">trailing_dims</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)]</span>
-
-    <span class="c1"># per-view features?</span>
-    <span class="k">if</span> <span class="p">(</span>
-        <span class="n">features</span><span class="o">.</span><span class="n">shape</span>
-        <span class="o">==</span> <span class="n">batch_dims</span>
-        <span class="o">+</span> <span class="p">(</span>
-            <span class="n">C</span><span class="p">,</span>
-            <span class="n">N</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="o">+</span> <span class="n">trailing_dims</span>
-    <span class="p">):</span>
-        <span class="c1"># packed?</span>
-        <span class="k">if</span> <span class="n">feature_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="c1"># [..., C, N, *trailing] -&gt; [nnz, *trailing]</span>
-            <span class="k">return</span> <span class="n">features</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">*</span><span class="n">trailing_dims</span><span class="p">)[</span>
-                <span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">feature_ids</span>
-            <span class="p">]</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># already (..., C, N, *trailing)</span>
-            <span class="k">return</span> <span class="n">features</span>
-    <span class="c1"># per-gaussian features?</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="k">assert</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="o">*</span><span class="n">batch_dims</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">*</span><span class="n">trailing_dims</span><span class="p">)</span>
-        <span class="c1"># packed?</span>
-        <span class="k">if</span> <span class="n">feature_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="c1"># [..., N, *trailing] -&gt; [nnz, *trailing]</span>
-            <span class="k">return</span> <span class="n">features</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">*</span><span class="n">trailing_dims</span><span class="p">)[</span><span class="n">batch_ids</span><span class="p">,</span> <span class="n">feature_ids</span><span class="p">]</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># (..., N, *trailing) -&gt; (..., C, N, *trailing)</span>
-            <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span>
-                <span class="n">features</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)),</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="o">*</span><span class="n">trailing_dims</span><span class="p">)</span>
-            <span class="p">)</span>
-
-
 <span class="k">def</span><span class="w"> </span><span class="nf">viewmat_to_camera_position</span><span class="p">(</span><span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Camera position in world from world-to-camera 4x4 matrix without full inverse.</span>
 
@@ -648,13 +667,20 @@
         <span class="n">campos</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">campos</span> <span class="o">+</span> <span class="n">campos_rs</span><span class="p">)</span>
 
     <span class="c1"># Compute the direction of each gaussian wrt. its camera</span>
-    <span class="k">if</span> <span class="n">gaussian_ids</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">gaussian_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">camera_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">batch_ids</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">dirs</span> <span class="o">=</span> <span class="n">means</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span> <span class="o">-</span> <span class="n">campos</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">B</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">batch_dims</span><span class="p">)</span>
         <span class="n">C</span> <span class="o">=</span> <span class="n">campos</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
         <span class="n">dirs</span> <span class="o">=</span> <span class="n">_compute_view_dirs_packed</span><span class="p">(</span>
-            <span class="n">means</span><span class="p">,</span> <span class="n">campos</span><span class="p">,</span> <span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">,</span> <span class="n">indptr</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">campos</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">indptr</span><span class="p">,</span>
+            <span class="n">B</span><span class="p">,</span>
+            <span class="n">C</span><span class="p">,</span>
         <span class="p">)</span>  <span class="c1"># [nnz, 3]</span>
     <span class="k">return</span> <span class="n">F</span><span class="o">.</span><span class="n">normalize</span><span class="p">(</span><span class="n">dirs</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
 
@@ -1046,6 +1072,49 @@
     <span class="k">assert</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">assert_shape</span><span class="p">(</span><span class="s2">&quot;rays&quot;</span><span class="p">,</span> <span class="n">rays</span><span class="p">,</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="mi">6</span><span class="p">))</span>
+
+    <span class="k">if</span> <span class="n">distributed</span><span class="p">:</span>
+        <span class="c1"># Distributed rasterization supports only classic 3DGS pinhole; the other</span>
+        <span class="c1"># modes have no correct distributed path, so reject them here.</span>
+        <span class="n">unsupported_reasons</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">if</span> <span class="n">batch_dims</span> <span class="o">!=</span> <span class="p">():</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;batch dimensions&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">sparse_grad</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;sparse_grad=True&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">absgrad</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;absgrad=True&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">with_ut</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;with_ut=True&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">with_eval3d</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;with_eval3d=True&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">return_normals</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;return_normals=True&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">rays</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;rays&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">camera_model</span> <span class="o">!=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;camera_model=&#39;</span><span class="si">{</span><span class="n">camera_model</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">global_z_order</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;global_z_order=False&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">rolling_shutter</span> <span class="o">!=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span> <span class="ow">or</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;rolling shutter&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">or</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">or</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">or</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">or</span> <span class="n">external_distortion_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="p">):</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;camera distortion&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">lidar_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">unsupported_reasons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;lidar coefficients&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">unsupported_reasons</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;distributed=True currently supports only unbatched classic 3DGS &quot;</span>
+                <span class="s2">&quot;pinhole rasterization with the default NCCL process group. &quot;</span>
+                <span class="s2">&quot;Unsupported option(s): &quot;</span> <span class="o">+</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">unsupported_reasons</span><span class="p">)</span> <span class="o">+</span> <span class="s2">&quot;.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">_validate_nccl_process_group</span><span class="p">()</span>
+
     <span class="k">assert</span> <span class="n">global_z_order</span> <span class="ow">or</span> <span class="n">with_ut</span><span class="p">,</span> <span class="s2">&quot;global_z_order can be false only if with_ut=True&quot;</span>
     <span class="k">assert</span> <span class="p">(</span><span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;lidar&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="p">(</span>
         <span class="n">lidar_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -1073,9 +1142,10 @@
                 <span class="ow">and</span> <span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span><span class="o">*</span><span class="n">batch_dims</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
             <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39;s shape </span><span class="si">{</span><span class="n">features</span><span class="o">.</span><span class="n">shape</span><span class="si">=}</span><span class="s2"> must be either </span><span class="si">{</span><span class="p">(</span><span class="o">*</span><span class="n">batch_dims</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="n">channels</span><span class="p">)</span><span class="si">}</span><span class="s2"> or </span><span class="si">{</span><span class="p">(</span><span class="o">*</span><span class="n">batch_dims</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="p">,</span><span class="w"> </span><span class="n">N</span><span class="p">,</span><span class="w"> </span><span class="n">channels</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="k">if</span> <span class="n">distributed</span><span class="p">:</span>
-                <span class="k">assert</span> <span class="p">(</span>
-                    <span class="n">features</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">2</span>
-                <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Distributed mode only supports per-Gaussian </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="k">if</span> <span class="n">features</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">2</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;distributed=True only supports per-Gaussian </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">.&quot;</span>
+                    <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="c1"># treat features as SH coefficients in the deduplicated [N, K, D] layout,</span>
             <span class="c1"># shared across batch and camera dims. Allowing for activating partial SH bands.</span>
@@ -1091,14 +1161,12 @@
     <span class="k">if</span> <span class="n">extra_signals</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">check_features</span><span class="p">(</span><span class="n">extra_signals</span><span class="p">,</span> <span class="n">extra_signals_sh_degree</span><span class="p">,</span> <span class="s2">&quot;extra signals&quot;</span><span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">absgrad</span><span class="p">:</span>
-        <span class="k">assert</span> <span class="ow">not</span> <span class="n">distributed</span><span class="p">,</span> <span class="s2">&quot;AbsGrad is not supported in distributed mode.&quot;</span>
-
     <span class="k">if</span> <span class="p">(</span>
         <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="ow">or</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="ow">or</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="ow">or</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="ow">or</span> <span class="n">external_distortion_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="ow">or</span> <span class="n">rolling_shutter</span> <span class="o">!=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span>
     <span class="p">):</span>
         <span class="k">assert</span> <span class="p">(</span>
@@ -2505,11 +2573,10 @@
 <span class="sd">        tile_size: The size of the tiles for rasterization. Default is 16.</span>
 <span class="sd">            (Note: other values are not tested)</span>
 <span class="sd">        backgrounds: The background colors. [C, D]. Default is None.</span>
-<span class="sd">        render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;d&quot;, &quot;Ed&quot;, &quot;D&quot;, &quot;ED&quot;,</span>
-<span class="sd">            &quot;RGB-d&quot;, &quot;RGB-Ed&quot;, &quot;RGB+D&quot;, and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image.</span>
-<span class="sd">            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance</span>
-<span class="sd">            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)</span>
-<span class="sd">            are normalized by opacity. Default is &quot;RGB&quot;.</span>
+<span class="sd">        render_mode: The rendering mode. Supported modes are &quot;RGB&quot;, &quot;Ed&quot;, &quot;D&quot;, &quot;ED&quot;,</span>
+<span class="sd">            &quot;RGB+D&quot;, and &quot;RGB+ED&quot;. &quot;RGB&quot; renders the colored image.</span>
+<span class="sd">            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth.</span>
+<span class="sd">            Expected modes (Ed, ED) are normalized by opacity. Default is &quot;RGB&quot;.</span>
 <span class="sd">        sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in</span>
 <span class="sd">            a COO sparse layout. This can be helpful for saving memory. Default is False.</span>
 <span class="sd">        absgrad: If true, the absolute gradients of the projected 2D means</span>

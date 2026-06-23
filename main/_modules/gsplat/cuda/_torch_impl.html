@@ -349,6 +349,17 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">._constants</span><span class="w"> </span><span class="kn">import</span> <span class="n">MAX_ALPHA</span><span class="p">,</span> <span class="n">MIN_COMPENSATION</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_bits_for_count</span><span class="p">(</span><span class="n">count</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Bits to index ``count`` items as 0..count-1 (0 when count &lt;= 1).</span>
+
+<span class="sd">    Mirrors ``gsplat::bits_for_count`` (MathUtils.h) so the (image, tile) id is</span>
+<span class="sd">    packed/unpacked with the same field widths as the CUDA kernels. ``count -</span>
+<span class="sd">    1`` matters for power-of-two counts: ``int.bit_length()`` over-counts them</span>
+<span class="sd">    (8 -&gt; 4 bits instead of 3).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">count</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">bit_length</span><span class="p">()</span> <span class="k">if</span> <span class="n">count</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">0</span>
+
+
 <span class="k">def</span><span class="w"> </span><span class="nf">_persp_proj</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, N, 3, 3]</span>
@@ -699,8 +710,8 @@
     <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_isects</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
     <span class="n">cum_tiles_per_gauss</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">tiles_per_gauss</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">image_n_bits</span> <span class="o">=</span> <span class="n">I</span><span class="o">.</span><span class="n">bit_length</span><span class="p">()</span>
-    <span class="n">tile_n_bits</span> <span class="o">=</span> <span class="p">(</span><span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_height</span><span class="p">)</span><span class="o">.</span><span class="n">bit_length</span><span class="p">()</span>
+    <span class="n">image_n_bits</span> <span class="o">=</span> <span class="n">_bits_for_count</span><span class="p">(</span><span class="n">I</span><span class="p">)</span>
+    <span class="n">tile_n_bits</span> <span class="o">=</span> <span class="n">_bits_for_count</span><span class="p">(</span><span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_height</span><span class="p">)</span>
     <span class="k">assert</span> <span class="n">image_n_bits</span> <span class="o">+</span> <span class="n">tile_n_bits</span> <span class="o">+</span> <span class="mi">32</span> <span class="o">&lt;=</span> <span class="mi">64</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">binary</span><span class="p">(</span><span class="n">num</span><span class="p">):</span>
@@ -760,7 +771,7 @@
 <span class="sd">        This is a minimal implementation of the fully fused version, which has more</span>
 <span class="sd">        arguments. Not all arguments are supported.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">tile_n_bits</span> <span class="o">=</span> <span class="p">(</span><span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_height</span><span class="p">)</span><span class="o">.</span><span class="n">bit_length</span><span class="p">()</span>
+    <span class="n">tile_n_bits</span> <span class="o">=</span> <span class="n">_bits_for_count</span><span class="p">(</span><span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_height</span><span class="p">)</span>
     <span class="n">tile_counts</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
         <span class="p">(</span><span class="n">I</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">isect_ids</span><span class="o">.</span><span class="n">device</span>
     <span class="p">)</span>
