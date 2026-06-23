@@ -29,6 +29,7 @@ import warnings
 
 import torch
 
+from gsplat._helper import expect_grad_reference_close
 import gsplat.geometry.functional as geom
 from gsplat.geometry.kernels.pose_ops import (
     SE3PoseFromMatrixFunction,
@@ -1334,9 +1335,23 @@ class TestTrajectory2Poses(unittest.TestCase):
 
         grad_output = torch.randn_like(result["point"])
         result["point"].backward(grad_output)
-        self.assertTrue(torch.all(time0.grad == 0))
-        self.assertTrue(torch.all(time1.grad == 0))
-        self.assertTrue(torch.all(query_time.grad == 0))
+        for name, time_tensor in (
+            ("time0", time0),
+            ("time1", time1),
+            ("query_time", query_time),
+        ):
+            self.assertIsNotNone(time_tensor.grad)
+            expect_grad_reference_close(
+                time_tensor.grad,
+                torch.zeros_like(time_tensor),
+                rtol=0.0,
+                atol=0.0,
+                max_rel_l2=0.0,
+                max_rel_l1=0.0,
+                min_cosine=1.0,
+                max_signed_bias=0.0,
+                msg=f"trajectory transform {name}.grad",
+            )
 
     def test_trajectory_transform_point_backward(self):
         """Test that gradients flow correctly through trajectory transformation"""
