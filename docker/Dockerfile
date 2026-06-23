@@ -130,6 +130,7 @@ print(pkgs[0])
         "isort==5.10.1"
         "pylint==2.13.4"
         "pytest==7.1.3"
+        "pytest-check==2.8.0"
         "pytest-env==0.8.1"
         "pytest-xdist==2.5.0"
         # endonerf / dynamic-surgical test collection imports these at module top

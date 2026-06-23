@@ -24,6 +24,7 @@ import unittest
 
 import torch
 
+from gsplat._helper import assert_grad_reference_close
 import gsplat.geometry.functional as quat
 
 
@@ -38,6 +39,26 @@ TEST_SEED = 42
 # Test parameters
 NUM_QUATERNIONS = 128
 ATOL = 1e-6
+
+
+def _assert_quaternion_grad_close(
+    actual: torch.Tensor,
+    expected: torch.Tensor,
+    *,
+    name: str,
+    rtol: float,
+) -> None:
+    assert_grad_reference_close(
+        actual,
+        expected,
+        rtol=rtol,
+        atol=ATOL,
+        max_rel_l2=5e-2,
+        max_rel_l1=5e-2,
+        min_cosine=0.999,
+        max_signed_bias=5e-2,
+        msg=name,
+    )
 
 
 def random_quaternions(n: int, normalized: bool = True) -> torch.Tensor:
@@ -163,7 +184,13 @@ class TestQuaternionOperations(unittest.TestCase):
         q = torch.zeros(6, 4, device="cuda", dtype=torch.float64, requires_grad=True)
         y = QuatNormalizeSafeFunction.apply(q)
         y.backward(torch.randn_like(y))
-        self.assertTrue(torch.allclose(q.grad, torch.zeros_like(q), atol=ATOL))
+        assert_grad_reference_close(
+            q.grad,
+            torch.zeros_like(q),
+            rtol=0.0,
+            atol=ATOL,
+            msg="quat_normalize_safe degenerate backward",
+        )
 
     def test_conjugate(self):
         """Test quaternion conjugate."""
@@ -208,7 +235,17 @@ class TestQuaternionOperations(unittest.TestCase):
         y.backward(g_up)
         g_cuda = q.grad.detach()
         g_ref = _quat_conjugate_backward_reference(g_up)
-        self.assertTrue(torch.allclose(g_cuda, g_ref, atol=ATOL, rtol=1e-12))
+        assert_grad_reference_close(
+            g_cuda,
+            g_ref,
+            rtol=1e-12,
+            atol=ATOL,
+            max_rel_l2=1e-6,
+            max_rel_l1=1e-6,
+            min_cosine=1.0 - 1e-12,
+            max_signed_bias=1e-6,
+            msg="quat_conjugate q.grad",
+        )
 
     def test_inverse(self):
         """Test quaternion inverse."""
@@ -449,8 +486,8 @@ class TestQuaternionOperations(unittest.TestCase):
         axis.grad = None
         angle.grad = None
         y_ref.backward(g_up)
-        self.assertTrue(torch.allclose(ga_ext, axis.grad, atol=ATOL, rtol=1e-5))
-        self.assertTrue(torch.allclose(gan_ext, angle.grad, atol=ATOL, rtol=1e-5))
+        _assert_quaternion_grad_close(ga_ext, axis.grad, rtol=1e-5, name="axis.grad")
+        _assert_quaternion_grad_close(gan_ext, angle.grad, rtol=1e-5, name="angle.grad")
 
     def test_lerp_endpoints(self):
         """Test linear interpolation endpoints."""
@@ -525,8 +562,8 @@ class TestQuaternionOperations(unittest.TestCase):
         q1.grad = None
         q2.grad = None
         y_ref.backward(g_up)
-        self.assertTrue(torch.allclose(g1_ext, q1.grad, atol=ATOL, rtol=1e-4))
-        self.assertTrue(torch.allclose(g2_ext, q2.grad, atol=ATOL, rtol=1e-4))
+        _assert_quaternion_grad_close(g1_ext, q1.grad, rtol=1e-4, name="q1.grad")
+        _assert_quaternion_grad_close(g2_ext, q2.grad, rtol=1e-4, name="q2.grad")
 
     def _slerp_batched_torch_reference(
         self, q1: torch.Tensor, q2: torch.Tensor, t: torch.Tensor
@@ -617,9 +654,9 @@ class TestQuaternionOperations(unittest.TestCase):
         t_ref = t.detach().clone().requires_grad_(True)
         y_ref = self._slerp_batched_torch_reference(q1_ref, q2_ref, t_ref)
         y_ref.backward(g_up)
-        self.assertTrue(torch.allclose(gq1, q1_ref.grad, atol=ATOL, rtol=2e-3))
-        self.assertTrue(torch.allclose(gq2, q2_ref.grad, atol=ATOL, rtol=2e-3))
-        self.assertTrue(torch.allclose(gt, t_ref.grad, atol=ATOL, rtol=2e-3))
+        _assert_quaternion_grad_close(gq1, q1_ref.grad, rtol=2e-3, name="q1_ref.grad")
+        _assert_quaternion_grad_close(gq2, q2_ref.grad, rtol=2e-3, name="q2_ref.grad")
+        _assert_quaternion_grad_close(gt, t_ref.grad, rtol=2e-3, name="t_ref.grad")
 
     def test_slerp_endpoints(self):
         """Test spherical linear interpolation endpoints."""
@@ -920,8 +957,8 @@ class TestQuaternionOperations(unittest.TestCase):
         q1.grad = None
         q2.grad = None
         y_ref.backward(g_up)
-        self.assertTrue(torch.allclose(g1_ext, q1.grad, atol=ATOL, rtol=1e-4))
-        self.assertTrue(torch.allclose(g2_ext, q2.grad, atol=ATOL, rtol=1e-4))
+        _assert_quaternion_grad_close(g1_ext, q1.grad, rtol=1e-4, name="q1.grad")
+        _assert_quaternion_grad_close(g2_ext, q2.grad, rtol=1e-4, name="q2.grad")
 
     def test_batch_shapes(self):
         """Test that functions work with various batch shapes."""
