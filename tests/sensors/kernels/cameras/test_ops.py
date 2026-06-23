@@ -4446,7 +4446,18 @@ def test_fisheye_projection_approx_backward_factor_no_grad(
         rays, projection, no_external, allow_device_transfer=True
     )[0].sum().backward()
 
-    assert ab.grad is None or ab.grad.abs().sum() == 0
+    ab_grad = torch.zeros_like(ab) if ab.grad is None else ab.grad
+    assert_grad_reference_close(
+        ab_grad,
+        torch.zeros_like(ab),
+        rtol=0.0,
+        atol=0.0,
+        max_rel_l2=0.0,
+        max_rel_l1=0.0,
+        min_cosine=1.0,
+        max_signed_bias=0.0,
+        msg="fisheye forward approx_backward_factor.grad",
+    )
     assert fw.grad is not None and fw.grad.abs().sum() > 0
     assert focal.grad is not None and focal.grad.abs().sum() > 0
 
