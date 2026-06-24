@@ -1558,6 +1558,72 @@ def rasterize_num_contributing_gaussians(
 
 
 @torch.no_grad()
+@trace_function("render2D-count-sparse")
+def rasterize_num_contributing_gaussians_sparse(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    opacities: Tensor,  # [..., N] or [nnz]
+    active_tiles: Tensor,  # [AT]
+    tile_offsets: Tensor,  # [AT + 1]
+    flatten_ids: Tensor,  # [n_isects]
+    tile_pixel_mask: Tensor,  # [AT, words]
+    tile_pixel_cumsum: Tensor,  # [AT]
+    pixel_map: Tensor,  # [P]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+) -> Tuple[Tensor, Tensor]:
+    """Sparse counterpart of :func:`rasterize_num_contributing_gaussians`.
+
+    Counts contributing Gaussians (and accumulated alpha) for only the requested
+    pixels, packed in original-pixel order (the order of the ``pixels`` /
+    ``image_ids`` given to :func:`build_sparse_tile_layout`). Consumes the
+    layout tensors from :func:`build_sparse_tile_layout` and the intersections
+    from :func:`intersect_tile_sparse`.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.
+        conics: Inverse projected covariances. [..., N, 3] or [nnz, 3].
+        opacities: Gaussian opacities. [..., N] or [nnz].
+        active_tiles: Ascending dense ids of active tiles. [AT].
+        tile_offsets: Per-active-tile intersection offsets. [AT + 1].
+        flatten_ids: Flattened Gaussian indices. [n_isects].
+        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].
+        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].
+        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        tile_width: Number of tiles along the image width.
+        tile_height: Number of tiles along the image height.
+
+    Returns:
+        A tuple:
+
+        - **Number of contributing Gaussians**. Int32 [P].
+        - **Rendered alphas**. [P].
+    """
+    return _make_lazy_cuda_func("rasterize_num_contributing_gaussians_sparse")(
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        tile_width,
+        tile_height,
+        active_tiles.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        tile_pixel_mask.contiguous(),
+        tile_pixel_cumsum.contiguous(),
+        pixel_map.contiguous(),
+    )
+
+
+@torch.no_grad()
 @trace_function("render2D-contributors")
 def rasterize_contributing_gaussian_ids(
     means2d: Tensor,  # [..., N, 2] or [nnz, 2]
