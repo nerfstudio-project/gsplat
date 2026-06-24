@@ -280,6 +280,27 @@ void launch_rasterize_contributing_gaussian_ids_kernel(
     at::Tensor contributing_weights // [..., image_height, image_width, K]
 );
 
+// Sparse counterpart: packed [P, K] outputs, consuming the sparse layout.
+void launch_rasterize_contributing_gaussian_ids_sparse_kernel(
+    const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor opacities, // [..., N] or [nnz]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const uint32_t max_num_contributing,
+    const at::Tensor active_tiles,      // [AT]
+    const at::Tensor tile_offsets,      // [AT + 1]
+    const at::Tensor flatten_ids,       // [n_isects]
+    const at::Tensor tile_pixel_mask,   // [AT, words]
+    const at::Tensor tile_pixel_cumsum, // [AT]
+    const at::Tensor pixel_map,         // [P]
+    at::Tensor contributing_ids,        // [P, K]
+    at::Tensor contributing_weights     // [P, K]
+);
+
 void launch_rasterize_top_contributing_gaussian_ids_kernel(
     const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
     const at::Tensor conics,    // [..., N, 3] or [nnz, 3]

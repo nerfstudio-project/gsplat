@@ -1102,6 +1102,89 @@ std::tuple<at::Tensor, at::Tensor> rasterize_contributing_gaussian_ids(
     return std::make_tuple(ids, weights);
 }
 
+// Sparse counterpart: records the contributing gaussian ids (and weights) for
+// only the requested pixels, packed in original-pixel order ([P, K]) where K is
+// the max per-pixel contributor count. Forward-only.
+std::tuple<at::Tensor, at::Tensor> rasterize_contributing_gaussian_ids_sparse(
+    const at::Tensor &means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor &opacities, // [..., N] or [nnz]
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    int64_t tile_width,
+    int64_t tile_height,
+    const at::Tensor &active_tiles,      // [AT]
+    const at::Tensor &tile_offsets,      // [AT + 1]
+    const at::Tensor &flatten_ids,       // [n_isects]
+    const at::Tensor &tile_pixel_mask,   // [AT, words]
+    const at::Tensor &tile_pixel_cumsum, // [AT]
+    const at::Tensor &pixel_map,         // [P]
+    const at::Tensor &num_contributing_gaussians // [P] int32
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(active_tiles);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(tile_pixel_mask);
+    CHECK_INPUT(tile_pixel_cumsum);
+    CHECK_INPUT(pixel_map);
+    CHECK_INPUT(num_contributing_gaussians);
+    TORCH_CHECK_VALUE(
+        tile_size == 4 || tile_size == 16,
+        "Only tile_size in {4, 16} is supported, got ", tile_size
+    );
+    TORCH_CHECK_VALUE(
+        num_contributing_gaussians.scalar_type() == at::kInt,
+        "num_contributing_gaussians must have dtype int32"
+    );
+    TORCH_CHECK(pixel_map.dim() == 1, "pixel_map must be [P], got ", pixel_map.sizes());
+    TORCH_CHECK_VALUE(
+        num_contributing_gaussians.dim() == 1 &&
+            num_contributing_gaussians.size(0) == pixel_map.size(0),
+        "num_contributing_gaussians must be [P] matching pixel_map"
+    );
+
+    const int64_t P = pixel_map.size(0);
+    int64_t max_num_contributing = 0;
+    if (num_contributing_gaussians.numel() > 0) {
+        max_num_contributing =
+            num_contributing_gaussians.max().item<int32_t>();
+    }
+
+    auto opt = means2d.options();
+    at::Tensor ids =
+        at::full({P, max_num_contributing}, -1, opt.dtype(at::kInt));
+    at::Tensor weights = at::zeros({P, max_num_contributing}, opt);
+
+    if (max_num_contributing > 0) {
+        launch_rasterize_contributing_gaussian_ids_sparse_kernel(
+            means2d,
+            conics,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            tile_width,
+            tile_height,
+            static_cast<uint32_t>(max_num_contributing),
+            active_tiles,
+            tile_offsets,
+            flatten_ids,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            ids,
+            weights
+        );
+    }
+
+    return std::make_tuple(ids, weights);
+}
+
 std::tuple<at::Tensor, at::Tensor> rasterize_top_contributing_gaussian_ids(
     const at::Tensor &means2d,   // [..., N, 2] or [nnz, 2]
     const at::Tensor &conics,    // [..., N, 3] or [nnz, 3]
@@ -2894,6 +2977,7 @@ void register_rasterization_cuda_impl(torch::Library &m) {
     m.impl("rasterize_num_contributing_gaussians", &rasterize_num_contributing_gaussians);
     m.impl("rasterize_num_contributing_gaussians_sparse", &rasterize_num_contributing_gaussians_sparse);
     m.impl("rasterize_contributing_gaussian_ids", &rasterize_contributing_gaussian_ids);
+    m.impl("rasterize_contributing_gaussian_ids_sparse", &rasterize_contributing_gaussian_ids_sparse);
     m.impl("rasterize_top_contributing_gaussian_ids", &rasterize_top_contributing_gaussian_ids);
 #endif
 
