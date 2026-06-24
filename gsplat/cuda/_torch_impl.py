@@ -932,6 +932,47 @@ def _rasterize_to_pixels(
     return render_colors, render_alphas
 
 
+def _rasterize_to_pixels_sparse(
+    means2d: Tensor,  # [I, N, 2]
+    conics: Tensor,  # [I, N, 3]
+    colors: Tensor,  # [I, N, channels]
+    opacities: Tensor,  # [I, N]
+    pixels: Tensor,  # [P, 2] (row, col)
+    image_ids: Tensor,  # [P]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [I, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [I, channels]
+) -> Tuple[Tensor, Tensor]:
+    """Pytorch reference for `gsplat.cuda._wrapper.rasterize_to_pixels_sparse()`.
+
+    The sparse rasterizer is defined to produce, at each requested pixel, exactly
+    the dense rendering result. So this reference renders the full dense images
+    with :func:`_rasterize_to_pixels` and gathers the requested pixels, packed in
+    original-pixel order (``[P, ...]``). Masks are not modeled here.
+    """
+    render_colors, render_alphas = _rasterize_to_pixels(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds,
+    )
+    img = image_ids.long()
+    rows = pixels[:, 0].long()
+    cols = pixels[:, 1].long()
+    out_colors = render_colors[img, rows, cols]  # [P, channels]
+    out_alphas = render_alphas[img, rows, cols]  # [P, 1]
+    return out_colors, out_alphas
+
+
 def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):
     """
     Evaluate spherical harmonics bases at unit direction for high orders
