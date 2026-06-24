@@ -1790,6 +1790,75 @@ def rasterize_top_contributing_gaussian_ids(
     )
 
 
+@torch.no_grad()
+@trace_function("render2D-top-contributors-sparse")
+def rasterize_top_contributing_gaussian_ids_sparse(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    opacities: Tensor,  # [..., N] or [nnz]
+    active_tiles: Tensor,  # [AT]
+    tile_offsets: Tensor,  # [AT + 1]
+    flatten_ids: Tensor,  # [n_isects]
+    tile_pixel_mask: Tensor,  # [AT, words]
+    tile_pixel_cumsum: Tensor,  # [AT]
+    pixel_map: Tensor,  # [P]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+    num_depth_samples: int,
+) -> Tuple[Tensor, Tensor]:
+    """Sparse counterpart of :func:`rasterize_top_contributing_gaussian_ids`.
+
+    Keeps the top-``num_depth_samples`` contributors (by weight, in depth order)
+    for only the requested pixels, packed in original-pixel order
+    (``[P, num_depth_samples]``). Consumes the layout from
+    :func:`build_sparse_tile_layout` and the intersections from
+    :func:`intersect_tile_sparse`.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.
+        conics: Inverse projected covariances. [..., N, 3] or [nnz, 3].
+        opacities: Gaussian opacities. [..., N] or [nnz].
+        active_tiles: Ascending dense ids of active tiles. [AT].
+        tile_offsets: Per-active-tile intersection offsets. [AT + 1].
+        flatten_ids: Flattened Gaussian indices. [n_isects].
+        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].
+        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].
+        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        tile_width: Number of tiles along the image width.
+        tile_height: Number of tiles along the image height.
+        num_depth_samples: Number of top contributors to keep per pixel.
+
+    Returns:
+        A tuple:
+
+        - **Top Gaussian ids**. Int32 [P, num_depth_samples] (-1 padded).
+        - **Top weights**. [P, num_depth_samples].
+    """
+    return _make_lazy_cuda_func("rasterize_top_contributing_gaussian_ids_sparse")(
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        tile_width,
+        tile_height,
+        num_depth_samples,
+        active_tiles.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        tile_pixel_mask.contiguous(),
+        tile_pixel_cumsum.contiguous(),
+        pixel_map.contiguous(),
+    )
+
+
 class RegisterRasterizeToPixels3DGS:
     """Python autograd hooks for the gsplat::rasterize_to_pixels_3dgs op."""
 
