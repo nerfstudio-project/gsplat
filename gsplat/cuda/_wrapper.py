@@ -400,7 +400,7 @@ def spherical_harmonics(
     Returns:
         Spherical harmonics. ``[..., N, D]``.
     """
-    coeffs = coeffs.squeeze()
+    
     assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
     assert coeffs.dim() == 3 and coeffs.shape[-1] >= 1, coeffs.shape
     assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
