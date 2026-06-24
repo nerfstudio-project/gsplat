@@ -655,65 +655,71 @@ build_sparse_tile_layout(
         );
     }
 
-    // (image, tile) ids are packed into the high 32 bits of the int64 sort key,
-    // so the dense tile id must fit below 2^31 to keep the key positive.
+    // The dense tile id must fit so the tightly-packed key stays a positive
+    // int64 (end_bit below is well under 63 given this bound).
     TORCH_CHECK(
         n_images * n_tiles < (int64_t(1) << 31),
         "build_sparse_tile_layout: n_images * n_tiles (",
         n_images * n_tiles,
-        ") must be < 2^31 to pack the tile id into the sort key."
+        ") must be < 2^31."
     );
 
-    const auto pix = pixels.to(at::kLong);
-    const auto rows = pix.select(1, 0);
-    const auto cols = pix.select(1, 1);
-    const auto img = image_ids.to(at::kLong).reshape({P});
+    // Bits to index values in [0, count): ceil(log2(count)), 0 for count <= 1.
+    const auto nbits = [](int64_t count) -> int {
+        int b = 0;
+        for (int64_t m = (count > 1) ? count - 1 : 0; m > 0; m >>= 1)
+            ++b;
+        return b;
+    };
+    // Tight key packing: tile id above pos_bits, in-tile position below. end_bit
+    // bounds the radix sort to the meaningful key width (vs a full 64-bit sort).
+    const int pos_bits = nbits(tile_size * tile_size);
+    const int end_bit = pos_bits + nbits(n_images * n_tiles);
 
-    // Dense tile id and raster-order position within the tile, per pixel.
-    const auto tile_id = img.mul(n_tiles)
-                             .add(rows.floor_divide(tile_size).mul(tile_width))
-                             .add(cols.floor_divide(tile_size));
-    const auto pix_in_tile = rows.remainder(tile_size)
-                                 .mul(tile_size)
-                                 .add(cols.remainder(tile_size));
-
-    // Per-tile activity mask over the dense [n_images, TH, TW] grid.
-    auto active_tile_mask = at::zeros({n_images * n_tiles}, bln);
-    active_tile_mask.index_fill_(0, tile_id, 1);
-    active_tile_mask = active_tile_mask.view({n_images, tile_height, tile_width});
-
-    // Sort pixels by (tile_id, in-tile position). pixel_map is the argsort; keys
-    // are unique under the no-duplicate precondition, so the order is stable.
-    const auto key = tile_id.bitwise_left_shift(32).bitwise_or(pix_in_tile);
-    const auto sorted = at::sort(
-        key, /*stable=*/c10::optional<bool>(true), /*dim=*/-1, /*descending=*/false
+    // Per-pixel sort key in one fused kernel. (.to(kInt) is a no-op for the
+    // common int32 inputs.)
+    const auto pixels_i = pixels.to(at::kInt).contiguous();
+    const auto image_ids_i = image_ids.to(at::kInt).reshape({P}).contiguous();
+    auto key = at::empty({P}, i64);
+    launch_compute_tile_keys_kernel(
+        pixels_i, image_ids_i, n_tiles, tile_size, tile_width, pos_bits, key
     );
-    const auto sorted_key = std::get<0>(sorted);
-    const auto pixel_map = std::get<1>(sorted);
-    const auto tile_id_sorted = sorted_key.bitwise_right_shift(32);
-    const auto pix_in_tile_sorted =
-        pix_in_tile.index_select(0, pixel_map).contiguous();
+
+    // Bit-bounded radix sort of (key, pixel index). Keys are unique under the
+    // no-duplicate precondition, so the argsort (pixel_map) is deterministic.
+    auto pixel_index = at::arange(P, i64);
+    auto sorted_key = at::empty({P}, i64);
+    auto pixel_map = at::empty({P}, i64);
+    launch_sort_tile_keys(P, end_bit, key, pixel_index, sorted_key, pixel_map);
 
     // Run-length encode the sorted tile ids -> active tiles + per-tile counts.
+    const auto tile_id_sorted = sorted_key.bitwise_right_shift(pos_bits);
     const auto uc = at::unique_consecutive(
         tile_id_sorted, /*return_inverse=*/false, /*return_counts=*/true
     );
-    const auto active_tiles = std::get<0>(uc).to(at::kInt);
+    const auto active_tiles = std::get<0>(uc); // int64 dense tile ids
     const auto counts = std::get<2>(uc);
     const auto tile_pixel_cumsum = counts.cumsum(0); // inclusive
 
-    // Per-active-tile raster-order bitmask.
+    // Per-tile activity mask, scattered from the (few) active tile ids.
+    auto active_tile_mask = at::zeros({n_images * n_tiles}, bln);
+    active_tile_mask.index_fill_(0, active_tiles, 1);
+    active_tile_mask = active_tile_mask.view({n_images, tile_height, tile_width});
+
+    // Per-active-tile raster-order bitmask (reads the in-tile position from the
+    // low pos_bits of each sorted key).
     const int64_t AT = active_tiles.size(0);
     auto tile_pixel_mask = at::zeros({AT, words}, i64);
     launch_build_tile_bitmask_kernel(
-        pix_in_tile_sorted,
+        sorted_key,
         tile_pixel_cumsum,
         static_cast<uint32_t>(words),
+        pos_bits,
         tile_pixel_mask
     );
 
     return std::make_tuple(
-        active_tiles,
+        active_tiles.to(at::kInt),
         active_tile_mask,
         tile_pixel_mask,
         tile_pixel_cumsum,
