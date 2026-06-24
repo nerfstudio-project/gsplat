@@ -463,6 +463,190 @@ RasterizeToPixels3DGSResult rasterize_to_pixels_3dgs(
     };
 }
 
+// Forward for the sparse rasterizer. Reuses RasterizeToPixels3DGSFwdResult: the
+// outputs have the same roles (renders / alphas / last_ids / absgrad holder),
+// only packed as [P, ...] in original-pixel order instead of [..., H, W, ...].
+// image_ids is unused here (image is decoded from active_tiles) but is an op
+// input so it is saved for backward, where the background gradient needs it.
+RasterizeToPixels3DGSFwdResult rasterize_to_pixels_sparse_fwd(
+    // Gaussian parameters
+    const at::Tensor &means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor &colors,    // [..., N, channels] or [nnz, channels]
+    const at::Tensor &opacities, // [..., N]  or [nnz]
+    const at::optional<at::Tensor> &backgrounds, // [n_images, channels]
+    const at::optional<at::Tensor> &masks,       // [n_images, tile_height, tile_width]
+    const at::Tensor &image_ids,                 // [P] (saved for backward)
+    // image size
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    int64_t tile_width, int64_t tile_height,
+    // sparse layout
+    const at::Tensor &active_tiles,      // [AT]
+    const at::Tensor &tile_offsets,      // [AT + 1]
+    const at::Tensor &flatten_ids,       // [n_isects]
+    const at::Tensor &tile_pixel_mask,   // [AT, words]
+    const at::Tensor &tile_pixel_cumsum, // [AT]
+    const at::Tensor &pixel_map,         // [P]
+    bool packed,
+    bool absgrad
+) {
+    TORCH_CHECK(
+        tile_size == 4 || tile_size == 16,
+        "Only tile_size in {4, 16} is supported for sparse 3DGS rasterization, got ",
+        tile_size
+    );
+    TORCH_CHECK(
+        means2d.size(-1) == 2,
+        "means2d must have shape [..., N, 2] or [nnz, 2], got ", means2d.sizes()
+    );
+    TORCH_CHECK(pixel_map.dim() == 1, "pixel_map must be [P], got ", pixel_map.sizes());
+
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(active_tiles);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(tile_pixel_mask);
+    CHECK_INPUT(tile_pixel_cumsum);
+    CHECK_INPUT(pixel_map);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+
+    const int64_t P = pixel_map.size(0);
+    const int64_t channels = colors.size(-1);
+    at::TensorOptions opt = means2d.options();
+
+    at::Tensor renders = at::empty({P, channels}, opt);
+    at::Tensor alphas = at::empty({P, 1}, opt);
+    at::Tensor last_ids = at::empty({P}, opt.dtype(at::kInt));
+
+    launch_rasterize_to_pixels_sparse_fwd_kernel(
+        means2d, conics, colors, opacities,
+        backgrounds, masks,
+        image_width, image_height, tile_size, tile_width, tile_height,
+        active_tiles, tile_offsets, flatten_ids,
+        tile_pixel_mask, tile_pixel_cumsum, pixel_map,
+        renders, alphas, last_ids
+    );
+
+    at::Tensor absgrad_holder = absgrad ? at::zeros_like(means2d)
+                                        : at::empty({0}, means2d.options());
+
+    return RasterizeToPixels3DGSFwdResult{
+        .renders = renders,
+        .alphas = alphas,
+        .last_ids = last_ids,
+        .means2d_absgrad = absgrad_holder,
+    };
+}
+
+// Backward for the sparse rasterizer. Reuses the dense grad-bundle and result
+// types. The CUDA kernel produces the gaussian-parameter gradients; the
+// background gradient is the incoming color gradient weighted by the unoccluded
+// alpha, summed per image via image_ids (the packed analogue of the dense
+// reduction over the H, W axes).
+RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
+    // Gaussian parameters
+    const at::Tensor &means2d,   // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,    // [..., N, 3] or [nnz, 3]
+    const at::Tensor &colors,    // [..., N, channels] or [nnz, channels]
+    const at::Tensor &opacities, // [..., N] or [nnz]
+    const at::optional<at::Tensor> &backgrounds, // [n_images, channels]
+    const at::optional<at::Tensor> &masks,       // [n_images, tile_height, tile_width]
+    const at::Tensor &image_ids,                 // [P]
+    // sparse layout
+    const at::Tensor &active_tiles,      // [AT]
+    const at::Tensor &tile_offsets,      // [AT + 1]
+    const at::Tensor &flatten_ids,       // [n_isects]
+    const at::Tensor &tile_pixel_mask,   // [AT, words]
+    const at::Tensor &tile_pixel_cumsum, // [AT]
+    const at::Tensor &pixel_map,         // [P]
+    // forward outputs
+    const at::Tensor &render_alphas, // [P, 1]
+    const at::Tensor &last_ids,      // [P]
+    // scalars
+    int64_t image_width, int64_t image_height, int64_t tile_size,
+    int64_t tile_width, int64_t tile_height,
+    bool absgrad,
+    const RasterizeToPixels3DGSGrad &grad,
+    bool compute_v_backgrounds
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(active_tiles);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(tile_pixel_mask);
+    CHECK_INPUT(tile_pixel_cumsum);
+    CHECK_INPUT(pixel_map);
+    CHECK_INPUT(render_alphas);
+    CHECK_INPUT(last_ids);
+    CHECK_DENSE(grad.renders);
+    CHECK_INPUT(grad.renders);
+    CHECK_DENSE(grad.alphas);
+    CHECK_INPUT(grad.alphas);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+
+    at::Tensor v_means2d = at::zeros_like(means2d);
+    at::Tensor v_conics = at::zeros_like(conics);
+    at::Tensor v_colors = at::zeros_like(colors);
+    at::Tensor v_opacities = at::zeros_like(opacities);
+    at::Tensor v_means2d_abs;
+    if (absgrad) {
+        v_means2d_abs = at::zeros_like(means2d);
+    }
+
+    launch_rasterize_to_pixels_sparse_bwd_kernel(
+        means2d, conics, colors, opacities,
+        backgrounds, masks,
+        image_width, image_height, tile_size, tile_width, tile_height,
+        active_tiles, tile_offsets, flatten_ids,
+        tile_pixel_mask, tile_pixel_cumsum, pixel_map,
+        render_alphas, last_ids,
+        grad.renders, grad.alphas,
+        as_optional_tensor(v_means2d_abs),
+        v_means2d, v_conics, v_colors, v_opacities
+    );
+
+    // --- Background gradient (not produced by the CUDA kernel) ----------
+    at::Tensor v_backgrounds;
+    if (compute_v_backgrounds && backgrounds.has_value()) {
+        const int64_t n_images = backgrounds.value().size(0);
+        const at::Tensor one_minus_alpha =
+            at::sub(at::ones_like(render_alphas).to(at::kFloat),
+                    render_alphas.to(at::kFloat)); // [P, 1]
+        const at::Tensor weighted =
+            at::mul(grad.renders, one_minus_alpha); // [P, channels]
+        v_backgrounds =
+            at::zeros({n_images, colors.size(-1)}, grad.renders.options());
+        v_backgrounds.index_add_(0, image_ids.to(at::kLong), weighted);
+    }
+
+    return RasterizeToPixels3DGSBwdResult{
+        .v_means2d_abs = as_optional_tensor(v_means2d_abs),
+        .v_means2d = v_means2d,
+        .v_conics = v_conics,
+        .v_colors = v_colors,
+        .v_opacities = v_opacities,
+        .v_backgrounds = as_optional_tensor(v_backgrounds),
+    };
+}
+
 RasterizeToIndices3DGSResult rasterize_to_indices_3dgs(
     int64_t range_start,
     int64_t range_end,        // iteration steps
@@ -2642,6 +2826,8 @@ void register_rasterization_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_3DGS
     m.impl("rasterize_to_pixels_3dgs", to_torch_op<&rasterize_to_pixels_3dgs_fwd>);
     m.impl("rasterize_to_pixels_3dgs_bwd", to_torch_op<&rasterize_to_pixels_3dgs_bwd>);
+    m.impl("rasterize_to_pixels_sparse", to_torch_op<&rasterize_to_pixels_sparse_fwd>);
+    m.impl("rasterize_to_pixels_sparse_bwd", to_torch_op<&rasterize_to_pixels_sparse_bwd>);
     m.impl("rasterize_to_indices_3dgs", to_torch_op<&rasterize_to_indices_3dgs>);
     m.impl("rasterize_num_contributing_gaussians", &rasterize_num_contributing_gaussians);
     m.impl("rasterize_contributing_gaussian_ids", &rasterize_contributing_gaussian_ids);
