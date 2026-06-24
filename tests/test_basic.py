@@ -6150,6 +6150,28 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_backward_accepts_strided_output_grad():
+    """SH backward should accept channel-slice gradients from downstream cats."""
+    from gsplat.cuda._wrapper import spherical_harmonics
+
+    torch.manual_seed(42)
+
+    N, K, D = 128, (3 + 1) ** 2, 3
+    dirs = torch.randn(2, N, 3, device=device, requires_grad=True)
+    coeffs = torch.randn(N, K, D, device=device, requires_grad=True)
+
+    colors = spherical_harmonics(3, dirs, coeffs)
+    grad_storage = torch.randn(2, N, D * 2, device=device)
+    v_colors = grad_storage[..., :D]
+    assert not v_colors.is_contiguous()
+
+    v_coeffs, v_dirs = torch.autograd.grad(colors, (coeffs, dirs), v_colors)
+
+    assert torch.isfinite(v_coeffs).all()
+    assert torch.isfinite(v_dirs).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_sh_zero_channels():
     """Test that an error is thrown when D = 0 (i.e. empty per-Gaussian feature)"""
     from gsplat.cuda._wrapper import spherical_harmonics
