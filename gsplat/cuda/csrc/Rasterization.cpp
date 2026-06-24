@@ -501,9 +501,11 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
     CHECK_DENSE(grad.renders);
-    CHECK_INPUT(grad.renders);
     CHECK_DENSE(grad.alphas);
-    CHECK_INPUT(grad.alphas);
+    at::Tensor v_render_colors = grad.renders.contiguous();
+    at::Tensor v_render_alphas = grad.alphas.contiguous();
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
     if(backgrounds.has_value())
     {
         CHECK_INPUT(backgrounds.value());
@@ -537,8 +539,8 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
         flatten_ids,
         render_alphas,
         last_ids,
-        grad.renders,
-        grad.alphas,
+        v_render_colors,
+        v_render_alphas,
         as_optional_tensor(v_means2d_abs),
         v_means2d,
         v_conics,
@@ -554,7 +556,7 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
     {
         const at::Tensor one_minus_alpha
             = at::sub(at::ones_like(render_alphas).to(at::kFloat), render_alphas.to(at::kFloat));
-        v_backgrounds = at::mul(grad.renders, one_minus_alpha).sum({-3, -2});
+        v_backgrounds = at::mul(v_render_colors, one_minus_alpha).sum({-3, -2});
     }
 
     return RasterizeToPixels3DGSBwdResult{
@@ -2023,15 +2025,20 @@ RasterizeToPixels2DGSBwdResult rasterize_to_pixels_2dgs_bwd(
     CHECK_INPUT(last_ids);
     CHECK_INPUT(median_ids);
     CHECK_DENSE(grad.renders);
-    CHECK_INPUT(grad.renders);
     CHECK_DENSE(grad.alphas);
-    CHECK_INPUT(grad.alphas);
     CHECK_DENSE(grad.render_normals);
-    CHECK_INPUT(grad.render_normals);
     CHECK_DENSE(grad.render_distort);
-    CHECK_INPUT(grad.render_distort);
     CHECK_DENSE(grad.render_median);
-    CHECK_INPUT(grad.render_median);
+    at::Tensor v_render_colors  = grad.renders.contiguous();
+    at::Tensor v_render_alphas  = grad.alphas.contiguous();
+    at::Tensor v_render_normals = grad.render_normals.contiguous();
+    at::Tensor v_render_distort = grad.render_distort.contiguous();
+    at::Tensor v_render_median  = grad.render_median.contiguous();
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(v_render_normals);
+    CHECK_INPUT(v_render_distort);
+    CHECK_INPUT(v_render_median);
     if(backgrounds.has_value())
     {
         CHECK_INPUT(backgrounds.value());
@@ -2071,11 +2078,11 @@ RasterizeToPixels2DGSBwdResult rasterize_to_pixels_2dgs_bwd(
         render_alphas,
         last_ids,
         median_ids,
-        grad.renders,
-        grad.alphas,
-        grad.render_normals,
-        grad.render_distort,
-        grad.render_median,
+        v_render_colors,
+        v_render_alphas,
+        v_render_normals,
+        v_render_distort,
+        v_render_median,
         absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt,
         v_means2d,
         v_ray_transforms,
@@ -2093,7 +2100,7 @@ RasterizeToPixels2DGSBwdResult rasterize_to_pixels_2dgs_bwd(
     {
         const at::Tensor one_minus_alpha
             = at::sub(at::ones_like(render_alphas).to(at::kFloat), render_alphas.to(at::kFloat));
-        v_backgrounds = at::mul(grad.renders, one_minus_alpha).sum({-3, -2});
+        v_backgrounds = at::mul(v_render_colors, one_minus_alpha).sum({-3, -2});
     }
 
     return RasterizeToPixels2DGSBwdResult{
