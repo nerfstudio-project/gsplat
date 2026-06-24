@@ -15,7 +15,7 @@
 
 """Tests for fused CUDA gaussian regularization losses.
 
-Compares Tier 2 (CUDA) against Tier 1 (pure-PyTorch) implementations for
+Compares the CUDA kernel against the pure-PyTorch implementations for
 forward values and backward gradients.
 """
 
@@ -57,14 +57,14 @@ def _make_inputs(device, n=N, requires_grad=False):
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 (CPU) fallback tests — always runnable
+# CPU fallback tests — always runnable
 # ---------------------------------------------------------------------------
 
 
 class TestFusedGaussianLossesFallback:
     """Verify the FusedGaussianLosses module works in fallback (CPU) mode."""
 
-    def test_forward_matches_tier1(self):
+    def test_forward_matches_pytorch(self):
         device = torch.device("cpu")
         scales, densities, z_scales, positions, cuboid_dims = _make_inputs(device)
         threshold = 0.5
@@ -97,8 +97,8 @@ class TestFusedGaussianLossesFallback:
         assert torch.allclose(
             ld, gaussian_density_reg(densities, visibility=visibility)
         )
-        # Verify visibility does not affect z_scale and oob losses (Tier 1 helpers
-        # don't accept a visibility arg; module should pass through unchanged).
+        # Verify visibility does not affect z_scale and oob losses (the pure-PyTorch
+        # helpers don't accept a visibility arg; module should pass through unchanged).
         assert torch.allclose(lz, gaussian_z_scale_reg(z_scales, threshold))
         assert torch.allclose(lo, out_of_bound_loss(positions, cuboid_dims))
 
@@ -130,15 +130,15 @@ class TestFusedGaussianLossesFallback:
 
 
 # ---------------------------------------------------------------------------
-# Tier 2 (CUDA) tests — only run when GPU + compiled extension available
+# CUDA tests — only run when GPU + compiled extension available
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA or fused losses not available")
 class TestFusedGaussianLossesCUDA:
-    """Compare CUDA fused kernel against pure-PyTorch Tier 1."""
+    """Compare the CUDA fused kernel against the pure-PyTorch reference."""
 
-    def test_forward_matches_tier1(self):
+    def test_forward_matches_pytorch(self):
         device = torch.device("cuda")
         scales, densities, z_scales, positions, cuboid_dims = _make_inputs(device)
         threshold = 0.5
@@ -152,7 +152,7 @@ class TestFusedGaussianLossesCUDA:
         ref_lo = out_of_bound_loss(positions, cuboid_dims)
 
         # Pure element-wise fp32 ops, no transcendentals, no fast-math — expect
-        # bit-exact parity with the Tier 1 reference. If this ever fails, a
+        # bit-exact parity with the pure-PyTorch reference. If this ever fails, a
         # precision path regressed and we want to see it.
         assert torch.equal(
             ls, ref_ls
@@ -186,16 +186,16 @@ class TestFusedGaussianLossesCUDA:
 
         assert torch.equal(ls, ref_ls)
         assert torch.equal(ld, ref_ld)
-        # Verify visibility does not affect z_scale and oob losses (Tier 1 helpers
-        # don't accept a visibility arg; module should pass through unchanged).
+        # Verify visibility does not affect z_scale and oob losses (the pure-PyTorch
+        # helpers don't accept a visibility arg; module should pass through unchanged).
         assert torch.equal(lz, gaussian_z_scale_reg(z_scales, threshold))
         assert torch.equal(lo, out_of_bound_loss(positions, cuboid_dims))
 
-    def test_backward_matches_tier1(self):
+    def test_backward_matches_pytorch(self):
         device = torch.device("cuda")
         threshold = 0.5
 
-        # --- Tier 1 (Python) gradients ---
+        # --- pure-PyTorch (Python) gradients ---
         s1, d1, z1, p1, c1 = _make_inputs(device, requires_grad=True)
         ref_ls = gaussian_scale_reg(s1)
         ref_ld = gaussian_density_reg(d1)
@@ -203,15 +203,16 @@ class TestFusedGaussianLossesCUDA:
         ref_lo = out_of_bound_loss(p1, c1)
         (ref_ls.sum() + ref_ld.sum() + ref_lz.sum() + ref_lo.sum()).backward()
 
-        # --- Tier 2 (CUDA) gradients ---
+        # --- CUDA gradients ---
         s2, d2, z2, p2, c2 = _make_inputs(device, requires_grad=True)
         module = FusedGaussianLosses(z_scale_threshold=threshold)
         ls, ld, lz, lo = module(s2, d2, z2, p2, c2)
         (ls.sum() + ld.sum() + lz.sum() + lo.sum()).backward()
 
         # Backward is pure element-wise fp32 (relu/sign masks times upstream
-        # times visibility). Keep bit-exact parity vs Tier 1, but use the
-        # shared helper so failures report vector diagnostics too.
+        # times visibility). Keep bit-exact parity vs the pure-PyTorch
+        # path, but use the shared helper so failures report vector
+        # diagnostics too.
         for name, actual, expected in (
             ("scales", s2.grad, s1.grad),
             ("densities", d2.grad, d1.grad),
@@ -331,8 +332,8 @@ class TestFusedGaussianLossesCUDA:
                 )
 
     def test_visibility_shape_N1(self):
-        """Tier 1 accepts visibility as `[N]` or `[N, 1]`; the wrapper
-        reshapes before dispatch so the CUDA path matches."""
+        """The pure-PyTorch path accepts visibility as `[N]` or `[N, 1]`; the
+        wrapper reshapes before dispatch so the CUDA path matches."""
         device = torch.device("cuda")
         scales, densities, z_scales, positions, cuboid_dims = _make_inputs(device)
         visibility_flat = torch.randint(0, 2, (N,), dtype=torch.float32, device=device)

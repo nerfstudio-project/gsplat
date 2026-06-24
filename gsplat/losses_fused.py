@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fused CUDA gaussian regularization losses with Tier 1 Python fallback."""
+"""Fused CUDA gaussian regularization losses with pure-PyTorch fallback."""
 
 from typing import Optional, Tuple
 
@@ -37,17 +37,17 @@ class FusedGaussianLosses(torch.nn.Module):
     :func:`~gsplat.losses.gaussian_z_scale_reg`, and
     :func:`~gsplat.losses.out_of_bound_loss` in a single fused CUDA kernel.
 
-    Falls back to the Tier 1 pure-PyTorch implementations when CUDA is
+    Falls back to the pure-PyTorch implementations when CUDA is
     unavailable or the inputs are on CPU.
 
-    All outputs are **unreduced** (per-element), matching the Tier 1 contract.
+    All outputs are **unreduced** (per-element), matching the pure-PyTorch
+    contract.
 
     .. note::
         The CUDA kernel dispatches on ``fp32`` and ``fp64`` only. AMP training
         with ``fp16``/``bf16`` inputs will raise at kernel dispatch; cast to
         ``float`` before calling, or disable AMP for this module. Extending
-        to half-precision is tracked as a follow-up phase in the gsplat
-        losses-migration plan.
+        to half-precision is a possible future enhancement.
 
     Args:
         z_scale_threshold: Threshold above which z-scale penalty is applied.
@@ -74,7 +74,7 @@ class FusedGaussianLosses(torch.nn.Module):
             each unreduced per-element.
         """
         # Dispatch to CUDA only when every input is on the same GPU — otherwise
-        # fall through to Tier 1 instead of tripping CHECK_INPUT deep in C++.
+        # fall through to pure-PyTorch instead of tripping CHECK_INPUT deep in C++.
         all_cuda = scales.is_cuda and all(
             t.is_cuda for t in (densities, z_scales, positions, cuboid_dims)
         )
@@ -93,7 +93,7 @@ class FusedGaussianLosses(torch.nn.Module):
                 visibility,
             )
 
-        # Tier 1 fallback: pure-PyTorch
+        # Pure-PyTorch fallback
         return (
             gaussian_scale_reg(scales, visibility=visibility),
             gaussian_density_reg(densities, visibility=visibility),
