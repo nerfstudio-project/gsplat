@@ -26,8 +26,8 @@
 
 #include "Intersect.h"
 
-namespace gsplat {
-
+namespace gsplat
+{
 namespace cg = cooperative_groups;
 
 // One thread per pixel. Computes the dense tile id and raster-order in-tile
@@ -46,19 +46,21 @@ __global__ void compute_tile_keys_kernel(
     const int32_t tile_width,
     const int32_t pos_bits,
     int64_t *__restrict__ keys // [num_pixels]
-) {
+)
+{
     const uint32_t p = cg::this_grid().thread_rank();
-    if (p >= num_pixels)
+    if(p >= num_pixels)
+    {
         return;
+    }
 
-    const int32_t row = pixels[2 * p];
-    const int32_t col = pixels[2 * p + 1];
-    const int64_t tile_id = static_cast<int64_t>(image_ids[p]) * n_tiles +
-                            static_cast<int64_t>(row / tile_size) * tile_width +
-                            static_cast<int64_t>(col / tile_size);
-    const int64_t pix_in_tile =
-        static_cast<int64_t>(row % tile_size) * tile_size + (col % tile_size);
-    keys[p] = (tile_id << pos_bits) | pix_in_tile;
+    const int32_t row         = pixels[2 * p];
+    const int32_t col         = pixels[2 * p + 1];
+    const int64_t tile_id     = static_cast<int64_t>(image_ids[p]) * n_tiles
+                              + static_cast<int64_t>(row / tile_size) * tile_width
+                              + static_cast<int64_t>(col / tile_size);
+    const int64_t pix_in_tile = static_cast<int64_t>(row % tile_size) * tile_size + (col % tile_size);
+    keys[p]                   = (tile_id << pos_bits) | pix_in_tile;
 }
 
 void launch_compute_tile_keys_kernel(
@@ -71,18 +73,17 @@ void launch_compute_tile_keys_kernel(
     const int64_t pos_bits,
     // output
     at::Tensor keys // [P] int64
-) {
+)
+{
     const uint32_t P = keys.size(0);
-    if (P == 0)
+    if(P == 0)
+    {
         return;
+    }
 
     dim3 threads(256);
     dim3 grid((P + threads.x - 1) / threads.x);
-    compute_tile_keys_kernel<<<
-        grid,
-        threads,
-        0,
-        at::cuda::getCurrentCUDAStream()>>>(
+    compute_tile_keys_kernel<<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
         P,
         pixels.const_data_ptr<int32_t>(),
         image_ids.const_data_ptr<int32_t>(),
@@ -107,29 +108,22 @@ void launch_sort_tile_keys(
     at::Tensor pixel_index, // [P] int64 (input arange; also a sort buffer)
     at::Tensor keys_sorted, // [P] int64 (scratch / result)
     at::Tensor pixel_map    // [P] int64 (scratch / result)
-) {
-    if (P <= 0)
+)
+{
+    if(P <= 0)
+    {
         return;
+    }
 
-    cub::DoubleBuffer<int64_t> d_keys(
-        keys.data_ptr<int64_t>(), keys_sorted.data_ptr<int64_t>()
-    );
-    cub::DoubleBuffer<int64_t> d_values(
-        pixel_index.data_ptr<int64_t>(), pixel_map.data_ptr<int64_t>()
-    );
-    CUB_WRAPPER(
-        cub::DeviceRadixSort::SortPairs,
-        d_keys,
-        d_values,
-        P,
-        0,
-        end_bit,
-        at::cuda::getCurrentCUDAStream()
-    );
-    if (d_keys.selector == 0) {
+    cub::DoubleBuffer<int64_t> d_keys(keys.data_ptr<int64_t>(), keys_sorted.data_ptr<int64_t>());
+    cub::DoubleBuffer<int64_t> d_values(pixel_index.data_ptr<int64_t>(), pixel_map.data_ptr<int64_t>());
+    CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, d_keys, d_values, P, 0, end_bit, at::cuda::getCurrentCUDAStream());
+    if(d_keys.selector == 0)
+    {
         keys_sorted.set_(keys);
     }
-    if (d_values.selector == 0) {
+    if(d_values.selector == 0)
+    {
         pixel_map.set_(pixel_index);
     }
 }
@@ -146,21 +140,25 @@ __global__ void build_tile_bitmask_kernel(
     const int32_t pos_bits,
     const int64_t *__restrict__ sorted_keys,       // [P]
     const int64_t *__restrict__ tile_pixel_cumsum, // [num_active_tiles]
-    uint64_t *__restrict__ out_bitmask // [num_active_tiles * words_per_tile]
-) {
+    uint64_t *__restrict__ out_bitmask             // [num_active_tiles * words_per_tile]
+)
+{
     uint32_t t = cg::this_grid().thread_rank();
-    if (t >= num_active_tiles)
+    if(t >= num_active_tiles)
+    {
         return;
+    }
 
     const int64_t pos_mask = (static_cast<int64_t>(1) << pos_bits) - 1;
-    const int64_t start = (t == 0) ? 0 : tile_pixel_cumsum[t - 1];
-    const int64_t end = tile_pixel_cumsum[t];
-    uint64_t *words = out_bitmask + static_cast<int64_t>(t) * words_per_tile;
+    const int64_t start    = (t == 0) ? 0 : tile_pixel_cumsum[t - 1];
+    const int64_t end      = tile_pixel_cumsum[t];
+    uint64_t *words        = out_bitmask + static_cast<int64_t>(t) * words_per_tile;
 
-    for (int64_t k = start; k < end; ++k) {
+    for(int64_t k = start; k < end; ++k)
+    {
         // The low `pos_bits` of the key hold the raster-order in-tile position.
-        const int64_t bit = sorted_keys[k] & pos_mask;
-        words[bit >> 6] |= (static_cast<uint64_t>(1) << (bit & 63));
+        const int64_t bit  = sorted_keys[k] & pos_mask;
+        words[bit >> 6]   |= (static_cast<uint64_t>(1) << (bit & 63));
     }
 }
 
@@ -172,18 +170,17 @@ void launch_build_tile_bitmask_kernel(
     const int64_t pos_bits,
     // output
     at::Tensor out_bitmask // [num_active_tiles, words_per_tile] int64 (zeroed)
-) {
+)
+{
     const uint32_t num_active_tiles = tile_pixel_cumsum.size(0);
-    if (num_active_tiles == 0)
+    if(num_active_tiles == 0)
+    {
         return;
+    }
 
     dim3 threads(256);
     dim3 grid((num_active_tiles + threads.x - 1) / threads.x);
-    build_tile_bitmask_kernel<<<
-        grid,
-        threads,
-        0,
-        at::cuda::getCurrentCUDAStream()>>>(
+    build_tile_bitmask_kernel<<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
         num_active_tiles,
         words_per_tile,
         static_cast<int32_t>(pos_bits),
@@ -192,5 +189,4 @@ void launch_build_tile_bitmask_kernel(
         reinterpret_cast<uint64_t *>(out_bitmask.data_ptr<int64_t>())
     );
 }
-
 } // namespace gsplat

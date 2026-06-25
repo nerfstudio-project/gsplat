@@ -1,4 +1,5 @@
 variables:
     DOCKER_REGISTRY: "gitlab-master.nvidia.com:5005/nrs/nre_external/gsplat"
     IMAGE_NAME: "dev"
-    IMAGE_TAG: 9
+    IMAGE_TAG: 10
+    CLANG_FORMAT_VERSION: "22.1.5"

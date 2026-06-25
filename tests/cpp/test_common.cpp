@@ -15,18 +15,24 @@
 // CHECK_DENSE asserts a strided (dense) layout: kernels index raw dense
 // storage, so a sparse-layout tensor must be rejected attributably rather
 // than silently read as garbage. The macro names the offending variable.
-namespace {
-void require_dense(const at::Tensor &x) { CHECK_DENSE(x); }
+namespace
+{
+void require_dense(const at::Tensor &x)
+{
+    CHECK_DENSE(x);
+}
 } // namespace
 
-TEST(Common, CheckDenseAcceptsStridedTensor) {
+TEST(Common, CheckDenseAcceptsStridedTensor)
+{
     EXPECT_NO_THROW(require_dense(at::ones({2, 3}))); // strided by default
 }
 
-TEST(Common, CheckDenseThrowsNamedErrorOnSparseTensor) {
+TEST(Common, CheckDenseThrowsNamedErrorOnSparseTensor)
+{
     at::Tensor sparse = at::ones({2, 3}).to_sparse();
     EXPECT_THAT(
         [&] { require_dense(sparse); },
-        testing::ThrowsMessage<c10::Error>(
-            testing::HasSubstr("x must be a dense tensor")));
+        testing::ThrowsMessage<c10::Error>(testing::HasSubstr("x must be a dense tensor"))
+    );
 }

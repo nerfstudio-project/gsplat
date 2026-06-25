@@ -20,29 +20,32 @@
 
 #if GSPLAT_BUILD_RELOC
 
-#include <ATen/TensorUtils.h>
-#include <ATen/core/Tensor.h>
-#include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
-#include <tuple>
+#    include <ATen/TensorUtils.h>
+#    include <ATen/core/Tensor.h>
+#    include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
+#    include <tuple>
 
-#include <ATen/Functions.h>
-#include <ATen/NativeFunctions.h>
-#include <torch/library.h>
+#    include <ATen/Functions.h>
+#    include <ATen/NativeFunctions.h>
+#    include <torch/library.h>
 
-#include "Common.h"     // where all the macros are defined
-#include "Relocation.h" // where the launch function is declared
-#include "TorchUtils.h"
+#    include "Common.h"     // where all the macros are defined
+#    include "Relocation.h" // where the launch function is declared
+#    include "TorchUtils.h"
 
-namespace gsplat {
-
-struct RelocationResult {
+namespace gsplat
+{
+struct RelocationResult
+{
     at::Tensor new_opacities;
     at::Tensor new_scales;
 };
 
-template <>
-struct TorchArgDef<RelocationResult> {
-    static auto to(const RelocationResult &r) {
+template<>
+struct TorchArgDef<RelocationResult>
+{
+    static auto to(const RelocationResult &r)
+    {
         return to_torch_args(r.new_opacities, r.new_scales);
     }
 };
@@ -53,25 +56,24 @@ RelocationResult relocation(
     const at::Tensor &ratios,    // [N]
     const at::Tensor &binoms,    // [n_max, n_max]
     int64_t n_max
-) {
+)
+{
     DEVICE_GUARD(opacities);
     CHECK_INPUT(opacities);
     CHECK_INPUT(scales);
     CHECK_INPUT(ratios);
     CHECK_INPUT(binoms);
     at::Tensor new_opacities = at::empty_like(opacities);
-    at::Tensor new_scales = at::empty_like(scales);
+    at::Tensor new_scales    = at::empty_like(scales);
 
-    launch_relocation_kernel(
-        opacities, scales, ratios, binoms, n_max, new_opacities, new_scales
-    );
+    launch_relocation_kernel(opacities, scales, ratios, binoms, n_max, new_opacities, new_scales);
     return {.new_opacities = new_opacities, .new_scales = new_scales};
 }
 
-void register_relocation_cuda_impl(torch::Library &m) {
+void register_relocation_cuda_impl(torch::Library &m)
+{
     m.impl("relocation", to_torch_op<&relocation>);
 }
-
 } // namespace gsplat
 
 #endif

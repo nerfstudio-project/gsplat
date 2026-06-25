@@ -9,12 +9,9 @@
 
 #include <tuple>
 
-namespace gsplat {
-
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-launch_priming_decode_for_batch(
-    const at::Tensor &packed,
-    const at::Tensor &batch_ids
+namespace gsplat
+{
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> launch_priming_decode_for_batch(
+    const at::Tensor &packed, const at::Tensor &batch_ids
 );
-
-}  // namespace gsplat
+} // namespace gsplat

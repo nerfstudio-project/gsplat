@@ -78,6 +78,7 @@ FROM python as gsplat-deps
 # setup.py (base/dev) or examples/requirements.txt (examples).
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 COPY --link --from=gsplatrepo setup.py /opt/dep-check/setup.py
+COPY --link --from=gsplatrepo config.yaml /opt/dep-check/config.yaml
 COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
 COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirements.txt
 
@@ -124,9 +125,23 @@ assert len(pkgs) == 1, f"expected one cupy entry in dev extras, got {pkgs}"
 print(pkgs[0])
 ')
 
+    clang_format_version=$(python3 - <<'PY'
+from pathlib import Path
+
+for raw_line in Path("/opt/dep-check/config.yaml").read_text().splitlines():
+    line = raw_line.strip()
+    if line.startswith("CLANG_FORMAT_VERSION:"):
+        print(line.split(":", 1)[1].strip().strip("\"'"))
+        break
+else:
+    raise SystemExit("CLANG_FORMAT_VERSION is not set in /opt/dep-check/config.yaml")
+PY
+)
+
     # Dev/test deps
     packages=(
         "black[jupyter]==22.3.0"
+        "clang-format==${clang_format_version}"
         "isort==5.10.1"
         "pylint==2.13.4"
         "pytest==7.1.3"

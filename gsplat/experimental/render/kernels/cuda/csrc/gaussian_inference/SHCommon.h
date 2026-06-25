@@ -22,8 +22,8 @@
 #include "SHCompression.h"
 #include "Utils.h"
 
-namespace higs {
-
+namespace higs
+{
 // input mode for the unified K=16 SH evaluation kernel
 enum class SHInputMode
 {
@@ -76,9 +76,16 @@ static constexpr float SH_BIAS = 0.5f;
 
 // Convert any element type to float (works under __CUDA_NO_HALF_CONVERSIONS__).
 template<typename T>
-__device__ __forceinline__ float _sh_to_float(T v) { return static_cast<float>(v); }
+__device__ __forceinline__ float _sh_to_float(T v)
+{
+    return static_cast<float>(v);
+}
+
 template<>
-__device__ __forceinline__ float _sh_to_float<__half>(__half v) { return __half2float(v); }
+__device__ __forceinline__ float _sh_to_float<__half>(__half v)
+{
+    return __half2float(v);
+}
 
 // Encode K=16 SH coefficients into 32-byte packed representation.
 // T = float or __half.
@@ -90,7 +97,8 @@ template<typename T>
 __device__ void sh_encode_32b(const T (&coeffs)[3][16], uint32_t (&block)[8], const float (&inv_scales)[3][16])
 {
     // Linear RGB → YCoCg-R-style luma/chroma basis used by the codec.
-    auto rgb_to_ycocg = [](float R, float G, float B, float &Y, float &Co, float &Cg) {
+    auto rgb_to_ycocg = [](float R, float G, float B, float &Y, float &Co, float &Cg)
+    {
         Y  = 0.25f * R + 0.5f * G + 0.25f * B;
         Co = 0.5f * R - 0.5f * B;
         Cg = -0.25f * R + 0.5f * G - 0.25f * B;
@@ -104,7 +112,8 @@ __device__ void sh_encode_32b(const T (&coeffs)[3][16], uint32_t (&block)[8], co
     // can shift reconstructed values by ~0.1 near the edge of range (where post-square bin
     // width is large). Pre-rounding yields an integer-valued float so the hardware rni is
     // idempotent; saturation in the pack still clamps to [0, 255] as a safety net.
-    auto quantize_u1f = [](float val, float inv_scale, float max_q) -> float {
+    auto quantize_u1f = [](float val, float inv_scale, float max_q) -> float
+    {
         float norm       = val * inv_scale;
         float compressed = copysignf(sqrtf(fabsf(norm)), norm);
         float q          = fminf(fmaxf(roundf(compressed * max_q), -(max_q + 1.0f)), max_q);
@@ -135,9 +144,12 @@ __device__ void sh_encode_32b(const T (&coeffs)[3][16], uint32_t (&block)[8], co
         float B = _sh_to_float(coeffs[2][1]);
         rgb_to_ycocg(R, G, B, Y1, Co1, Cg1);
     }
-    const uint32_t k1_u8x4 =
-        __cvt_pack_sat_u8_f32(quantize_u1f(Y1, inv_scales[0][1], 31.f), quantize_u1f(Co1, inv_scales[1][1], 7.f),
-                              quantize_u1f(Cg1, inv_scales[2][1], 7.f), 0.f);
+    const uint32_t k1_u8x4 = __cvt_pack_sat_u8_f32(
+        quantize_u1f(Y1, inv_scales[0][1], 31.f),
+        quantize_u1f(Co1, inv_scales[1][1], 7.f),
+        quantize_u1f(Cg1, inv_scales[2][1], 7.f),
+        0.f
+    );
 
     // --- HO groups g=0..3 spanning k=2..15 ---
     // Each group produces one CoCg output word + one 24-bit Y chunk.
@@ -146,16 +158,16 @@ __device__ void sh_encode_32b(const T (&coeffs)[3][16], uint32_t (&block)[8], co
     uint32_t y_packed[4];
     uint32_t cocg_tail16 = 0;
 #pragma unroll
-    for (int g = 0; g < 4; g++)
+    for(int g = 0; g < 4; g++)
     {
         float Yg[4]  = {0.f, 0.f, 0.f, 0.f};
         float Cog[4] = {0.f, 0.f, 0.f, 0.f};
         float Cgg[4] = {0.f, 0.f, 0.f, 0.f};
 #pragma unroll
-        for (int j = 0; j < 4; j++)
+        for(int j = 0; j < 4; j++)
         {
             const int k = 2 + g * 4 + j;
-            if (k <= 15)
+            if(k <= 15)
             {
                 float R = _sh_to_float(coeffs[0][k]);
                 float G = _sh_to_float(coeffs[1][k]);
@@ -168,45 +180,56 @@ __device__ void sh_encode_32b(const T (&coeffs)[3][16], uint32_t (&block)[8], co
         //   Y0 | (Y1<<6) | (Y2<<12) | (Y3<<18). Top 2 bits of each byte are dropped.
         const int k_base    = 2 + g * 4;
         const uint32_t Y_u8 = __cvt_pack_sat_u8_f32(
-            quantize_u1f(Yg[0], inv_scales[0][k_base], 31.f), quantize_u1f(Yg[1], inv_scales[0][k_base + 1], 31.f),
-            quantize_u1f(Yg[2], inv_scales[0][k_base + 2], 31.f), quantize_u1f(Yg[3], inv_scales[0][k_base + 3], 31.f));
-        y_packed[g] =
-            (Y_u8 & 0x3Fu) | ((Y_u8 & 0x3F00u) >> 2) | ((Y_u8 & 0x3F0000u) >> 4) | ((Y_u8 & 0x3F000000u) >> 6);
+            quantize_u1f(Yg[0], inv_scales[0][k_base], 31.f),
+            quantize_u1f(Yg[1], inv_scales[0][k_base + 1], 31.f),
+            quantize_u1f(Yg[2], inv_scales[0][k_base + 2], 31.f),
+            quantize_u1f(Yg[3], inv_scales[0][k_base + 3], 31.f)
+        );
+        y_packed[g]
+            = (Y_u8 & 0x3Fu) | ((Y_u8 & 0x3F00u) >> 2) | ((Y_u8 & 0x3F0000u) >> 4) | ((Y_u8 & 0x3F000000u) >> 6);
 
-        if (g < 3)
+        if(g < 3)
         {
             // Bytes will be (qCo+8)<<4 | (qCg+8) as the decoder expects.
-            const uint32_t Co_u8 = __cvt_pack_sat_u8_f32(quantize_u1f(Cog[0], inv_scales[1][k_base], 7.f),
-                                                         quantize_u1f(Cog[1], inv_scales[1][k_base + 1], 7.f),
-                                                         quantize_u1f(Cog[2], inv_scales[1][k_base + 2], 7.f),
-                                                         quantize_u1f(Cog[3], inv_scales[1][k_base + 3], 7.f));
-            const uint32_t Cg_u8 = __cvt_pack_sat_u8_f32(quantize_u1f(Cgg[0], inv_scales[2][k_base], 7.f),
-                                                         quantize_u1f(Cgg[1], inv_scales[2][k_base + 1], 7.f),
-                                                         quantize_u1f(Cgg[2], inv_scales[2][k_base + 2], 7.f),
-                                                         quantize_u1f(Cgg[3], inv_scales[2][k_base + 3], 7.f));
-            block[1 + g]         = (Co_u8 << 4) | Cg_u8;
+            const uint32_t Co_u8 = __cvt_pack_sat_u8_f32(
+                quantize_u1f(Cog[0], inv_scales[1][k_base], 7.f),
+                quantize_u1f(Cog[1], inv_scales[1][k_base + 1], 7.f),
+                quantize_u1f(Cog[2], inv_scales[1][k_base + 2], 7.f),
+                quantize_u1f(Cog[3], inv_scales[1][k_base + 3], 7.f)
+            );
+            const uint32_t Cg_u8 = __cvt_pack_sat_u8_f32(
+                quantize_u1f(Cgg[0], inv_scales[2][k_base], 7.f),
+                quantize_u1f(Cgg[1], inv_scales[2][k_base + 1], 7.f),
+                quantize_u1f(Cgg[2], inv_scales[2][k_base + 2], 7.f),
+                quantize_u1f(Cgg[3], inv_scales[2][k_base + 3], 7.f)
+            );
+            block[1 + g] = (Co_u8 << 4) | Cg_u8;
         }
         else
         {
             // Tail: k=14,15 live in lanes 0,1; interleave {Cg14, Co14, Cg15, Co15} and
             // compress u8x4 (each lane ≤ 0xF) into a 16-bit field by dropping the top
             // nibble of every byte, yielding bytes [(Co14<<4)|Cg14, (Co15<<4)|Cg15].
-            const uint32_t tail_u8 = __cvt_pack_sat_u8_f32(quantize_u1f(Cgg[0], inv_scales[2][k_base], 7.f),
-                                                           quantize_u1f(Cog[0], inv_scales[1][k_base], 7.f),
-                                                           quantize_u1f(Cgg[1], inv_scales[2][k_base + 1], 7.f),
-                                                           quantize_u1f(Cog[1], inv_scales[1][k_base + 1], 7.f));
-            cocg_tail16            = (tail_u8 & 0xFu) | ((tail_u8 & 0xF00u) >> 4) | ((tail_u8 & 0xF0000u) >> 8) |
-                          ((tail_u8 & 0xF000000u) >> 12);
+            const uint32_t tail_u8 = __cvt_pack_sat_u8_f32(
+                quantize_u1f(Cgg[0], inv_scales[2][k_base], 7.f),
+                quantize_u1f(Cog[0], inv_scales[1][k_base], 7.f),
+                quantize_u1f(Cgg[1], inv_scales[2][k_base + 1], 7.f),
+                quantize_u1f(Cog[1], inv_scales[1][k_base + 1], 7.f)
+            );
+            cocg_tail16 = (tail_u8 & 0xFu)
+                        | ((tail_u8 & 0xF00u) >> 4)
+                        | ((tail_u8 & 0xF0000u) >> 8)
+                        | ((tail_u8 & 0xF000000u) >> 12);
         }
     }
 
     // --- Remaining 112-bit stream: block[4] hi16 + block[5..7] ---
     // 28-bit header packs cg15_lo14 | uY1(6) | uCo1(4) | uCg1(4).
     // k1_u8x4 byte layout: [uY1, uCo1, uCg1, 0] → shift each into place.
-    const uint32_t hdr28 = (cg15 & 0x3FFFu)                    // bits  0..13
-                           | ((k1_u8x4 & 0x3Fu) << 14)         // bits 14..19: uY (6 bits)
-                           | (((k1_u8x4 >> 8) & 0xFu) << 20)   // bits 20..23: uCo (4 bits)
-                           | (((k1_u8x4 >> 16) & 0xFu) << 24); // bits 24..27: uCg (4 bits)
+    const uint32_t hdr28 = (cg15 & 0x3FFFu)                  // bits  0..13
+                         | ((k1_u8x4 & 0x3Fu) << 14)         // bits 14..19: uY (6 bits)
+                         | (((k1_u8x4 >> 8) & 0xFu) << 20)   // bits 20..23: uCo (4 bits)
+                         | (((k1_u8x4 >> 16) & 0xFu) << 24); // bits 24..27: uCg (4 bits)
 
     // Four 24-bit Y chunks placed contiguously starting at bit 28 of the 128-bit stream.
     // Simple shifts+OR here (not funnel shifts): y_packed[] are 24-bit payloads with
@@ -235,8 +258,9 @@ __device__ void sh_encode_32b(const T (&coeffs)[3][16], uint32_t (&block)[8], co
 //   Phase 1: extract all U1-biased quantized values → __uint8x4_to_half4 → fp16 arrays
 //   Phase 2: uniform half2: FMA(val, inv_norm, offset) → x^2 → scale → YCoCg→RGB
 // Fixed inv_gamma = 2 (gamma = 1/2): x^2 with sign copy, pure half2 SIMD, no transcendentals.
-__device__ inline void sh_decode_32b(const uint32_t (&block)[8], __half2 (&out_coeffs)[3][8],
-                                     const __half2 (&scales)[3][8])
+inline __device__ void sh_decode_32b(
+    const uint32_t (&block)[8], __half2 (&out_coeffs)[3][8], const __half2 (&scales)[3][8]
+)
 {
     // ===== Phase 1: Extract all values into fp16 arrays =====
 
@@ -264,7 +288,7 @@ __device__ inline void sh_decode_32b(const uint32_t (&block)[8], __half2 (&out_c
     // Bytes are (qCo+8)<<4 | (qCg+8). Upper nibble = Co uint4, lower = Cg uint4.
     // After masking: upper nibble already in uint8 position for __uint8x4_to_half4.
 #pragma unroll
-    for (int i = 0; i < 3; i++)
+    for(int i = 0; i < 3; i++)
     {
         const uint32_t co_u8 = block[1 + i] & 0xF0F0F0F0u;        // Co nibbles in upper nibble of each byte
         const uint32_t cg_u8 = (block[1 + i] & 0x0F0F0F0Fu) << 4; // Cg nibbles shifted to upper nibble
@@ -277,7 +301,8 @@ __device__ inline void sh_decode_32b(const uint32_t (&block)[8], __half2 (&out_c
 
     // --- Y k=2..15: funnel shift extraction (14×6-bit unsigned bias) ---
     // Y data at rem bit 28 → absolute block[5] bit 12.
-    auto spread_6bit_to_uint8x4 = [](uint32_t packed_6x4) -> uint32_t {
+    auto spread_6bit_to_uint8x4 = [](uint32_t packed_6x4) -> uint32_t
+    {
         const uint32_t lo = __select(0x003FC0u, packed_6x4 << 2, packed_6x4);
         const uint32_t hi = __select(0xFF0000u, packed_6x4, packed_6x4 >> 2);
         return __prmt_idx(lo << 2, hi, 0x6510) & 0xFCFCFCFCu;
@@ -285,14 +310,15 @@ __device__ inline void sh_decode_32b(const uint32_t (&block)[8], __half2 (&out_c
 
     // k=2..13: 3 full batches of 4 at half2-aligned offsets
 #pragma unroll
-    for (int batch = 0; batch < 3; batch++)
+    for(int batch = 0; batch < 3; batch++)
     {
         const int bit_offset = 12 + batch * 24;
         const int word_idx   = 5 + bit_offset / 32;
         const int shift      = bit_offset % 32;
 
-        __uint8x4_to_half4(&Y[2 + batch * 4],
-                           spread_6bit_to_uint8x4(__funnelshift_rc(block[word_idx], block[word_idx + 1], shift)));
+        __uint8x4_to_half4(
+            &Y[2 + batch * 4], spread_6bit_to_uint8x4(__funnelshift_rc(block[word_idx], block[word_idx + 1], shift))
+        );
     }
 
     // k=14..15: pair write to avoid out-of-bounds Y[16]
@@ -311,8 +337,14 @@ __device__ inline void sh_decode_32b(const uint32_t (&block)[8], __half2 (&out_c
     // CoCg: uint8 = (q+8)<<4  → fp16 = (q+8)*16 → *(1/(16*7)) - 8/7  = q/7
 
     // x^2 with sign copy in half2: pure SIMD, no float conversion, no transcendentals.
-    auto square_signed_h2 = [](__half2 v) -> __half2 { return __h2_copy_sign(__hmul2(v, v), v); };
-    auto square_signed_h  = [](__half v) -> __half { return __h_copy_sign(__hmul(v, v), v); };
+    auto square_signed_h2 = [](__half2 v) -> __half2
+    {
+        return __h2_copy_sign(__hmul2(v, v), v);
+    };
+    auto square_signed_h = [](__half v) -> __half
+    {
+        return __h_copy_sign(__hmul(v, v), v);
+    };
 
     __half2 *Y_h2  = reinterpret_cast<__half2 *>(Y);
     __half2 *Co_h2 = reinterpret_cast<__half2 *>(Co);
@@ -338,7 +370,7 @@ __device__ inline void sh_decode_32b(const uint32_t (&block)[8], __half2 (&out_c
 
     // Normalize + inv-gamma for pairs 1..7
 #pragma unroll
-    for (int p = 1; p < 8; p++)
+    for(int p = 1; p < 8; p++)
     {
         Y_h2[p]  = square_signed_h2(__hfma2(Y_h2[p], inv_norm_y, offset_y));
         Co_h2[p] = square_signed_h2(__hfma2(Co_h2[p], inv_norm_cocg, offset_cocg));
@@ -346,7 +378,7 @@ __device__ inline void sh_decode_32b(const uint32_t (&block)[8], __half2 (&out_c
     }
 
 #pragma unroll
-    for (int p = 0; p < 8; p++)
+    for(int p = 0; p < 8; p++)
     {
         // Apply per-basis scales (pair 0 DC lane = 1.0, so DC is unmodified)
         Y_h2[p]  = __hmul2(Y_h2[p], scales[0][p]);
@@ -394,16 +426,21 @@ __device__ inline void sh_decode_32b(const uint32_t (&block)[8], __half2 (&out_c
 template<typename T>
 __device__ void sh_encode_16b(const T (&coeffs)[3][16], uint32_t (&block)[4], const float (&inv_scales)[3][16])
 {
-    auto rgb_to_ycocg = [](float R, float G, float B, float &Y, float &Co, float &Cg) {
+    auto rgb_to_ycocg = [](float R, float G, float B, float &Y, float &Co, float &Cg)
+    {
         Y  = 0.25f * R + 0.5f * G + 0.25f * B;
         Co = 0.5f * R - 0.5f * B;
         Cg = -0.25f * R + 0.5f * G - 0.25f * B;
     };
 
     // HO only needs luma — no CoCg in 16B format
-    auto rgb_to_y = [](float R, float G, float B) -> float { return 0.25f * R + 0.5f * G + 0.25f * B; };
+    auto rgb_to_y = [](float R, float G, float B) -> float
+    {
+        return 0.25f * R + 0.5f * G + 0.25f * B;
+    };
 
-    auto quantize_u1f = [](float val, float inv_scale, float max_q) -> float {
+    auto quantize_u1f = [](float val, float inv_scale, float max_q) -> float
+    {
         float norm       = val * inv_scale;
         float compressed = copysignf(sqrtf(fabsf(norm)), norm);
         float q          = fminf(fmaxf(roundf(compressed * max_q), -(max_q + 1.0f)), max_q);
@@ -433,26 +470,28 @@ __device__ void sh_encode_16b(const T (&coeffs)[3][16], uint32_t (&block)[4], co
     // the u8x4 into a 24-bit chunk by dropping the top 2 bits of each byte.
     uint32_t y_packed[4];
 #pragma unroll
-    for (int g = 0; g < 4; g++)
+    for(int g = 0; g < 4; g++)
     {
         float Yg[4] = {0.f, 0.f, 0.f, 0.f};
 #pragma unroll
-        for (int j = 0; j < 4; j++)
+        for(int j = 0; j < 4; j++)
         {
             const int k = 1 + g * 4 + j;
-            if (k <= 15)
+            if(k <= 15)
             {
-                Yg[j] = rgb_to_y(_sh_to_float(coeffs[0][k]), _sh_to_float(coeffs[1][k]),
-                                 _sh_to_float(coeffs[2][k]));
+                Yg[j] = rgb_to_y(_sh_to_float(coeffs[0][k]), _sh_to_float(coeffs[1][k]), _sh_to_float(coeffs[2][k]));
             }
         }
 
         const int k_base    = 1 + g * 4;
         const uint32_t Y_u8 = __cvt_pack_sat_u8_f32(
-            quantize_u1f(Yg[0], inv_scales[0][k_base], 31.f), quantize_u1f(Yg[1], inv_scales[0][k_base + 1], 31.f),
-            quantize_u1f(Yg[2], inv_scales[0][k_base + 2], 31.f), quantize_u1f(Yg[3], inv_scales[0][k_base + 3], 31.f));
-        y_packed[g] =
-            (Y_u8 & 0x3Fu) | ((Y_u8 & 0x3F00u) >> 2) | ((Y_u8 & 0x3F0000u) >> 4) | ((Y_u8 & 0x3F000000u) >> 6);
+            quantize_u1f(Yg[0], inv_scales[0][k_base], 31.f),
+            quantize_u1f(Yg[1], inv_scales[0][k_base + 1], 31.f),
+            quantize_u1f(Yg[2], inv_scales[0][k_base + 2], 31.f),
+            quantize_u1f(Yg[3], inv_scales[0][k_base + 3], 31.f)
+        );
+        y_packed[g]
+            = (Y_u8 & 0x3Fu) | ((Y_u8 & 0x3F00u) >> 2) | ((Y_u8 & 0x3F0000u) >> 4) | ((Y_u8 & 0x3F000000u) >> 6);
     }
 
     // Stitch: 6-bit cg11_hi header + four 24-bit Y chunks → block[1..3].
@@ -468,8 +507,9 @@ __device__ void sh_encode_16b(const T (&coeffs)[3][16], uint32_t (&block)[4], co
 // out_coeffs: output [3][8] half2 — same format as sh_decode_32b.
 //             HO CoCg is zero (not encoded in 16B format).
 // scales:     per-basis decoder scales (only y[] used for HO).
-__device__ inline void sh_decode_16b(const uint32_t (&block)[4], __half2 (&out_coeffs)[3][8],
-                                     const __half2 (&scales)[3][8])
+inline __device__ void sh_decode_16b(
+    const uint32_t (&block)[4], __half2 (&out_coeffs)[3][8], const __half2 (&scales)[3][8]
+)
 {
     // ===== Phase 1: Extract Y[0..15] and DC CoCg =====
 
@@ -493,7 +533,8 @@ __device__ inline void sh_decode_16b(const uint32_t (&block)[4], __half2 (&out_c
     Y[1] = __uint2half_rn((s0 & 0x3Fu) << 2);
 
     // k=2..13: 3 full batches of 4 at half2-aligned offsets
-    auto spread_6bit_to_uint8x4 = [](uint32_t packed_6x4) -> uint32_t {
+    auto spread_6bit_to_uint8x4 = [](uint32_t packed_6x4) -> uint32_t
+    {
         const uint32_t lo = __select(0x003FC0u, packed_6x4 << 2, packed_6x4);
         const uint32_t hi = __select(0xFF0000u, packed_6x4, packed_6x4 >> 2);
         return __prmt_idx(lo << 2, hi, 0x6510) & 0xFCFCFCFCu;
@@ -511,8 +552,14 @@ __device__ inline void sh_decode_16b(const uint32_t (&block)[4], __half2 (&out_c
     constexpr float INV_NORM_Y = 1.0f / (4.0f * 31.0f);
     constexpr float OFFSET_Y   = -32.0f / 31.0f;
 
-    auto square_signed_h2 = [](__half2 v) -> __half2 { return __h2_copy_sign(__hmul2(v, v), v); };
-    auto square_signed_h  = [](__half v) -> __half { return __h_copy_sign(__hmul(v, v), v); };
+    auto square_signed_h2 = [](__half2 v) -> __half2
+    {
+        return __h2_copy_sign(__hmul2(v, v), v);
+    };
+    auto square_signed_h = [](__half v) -> __half
+    {
+        return __h_copy_sign(__hmul(v, v), v);
+    };
 
     __half2 *Y_h2 = reinterpret_cast<__half2 *>(Y);
 
@@ -539,7 +586,7 @@ __device__ inline void sh_decode_16b(const uint32_t (&block)[4], __half2 (&out_c
     const __half2 offset_y   = __float2half2_rn(OFFSET_Y);
 
 #pragma unroll
-    for (int p = 1; p < 8; p++)
+    for(int p = 1; p < 8; p++)
     {
         const __half2 y_scaled = __hmul2(square_signed_h2(__hfma2(Y_h2[p], inv_norm_y, offset_y)), scales[0][p]);
         out_coeffs[0][p]       = y_scaled;
@@ -550,8 +597,8 @@ __device__ inline void sh_decode_16b(const uint32_t (&block)[4], __half2 (&out_c
 
 // Compute normalized view direction from camera position to gaussian center.
 // means is in [3, N] planar layout.
-__device__ __forceinline__ float3 GetViewDir(const float *__restrict__ means, uint32_t N, uint32_t idx, float cam_x,
-                                             float cam_y, float cam_z)
+__device__ __forceinline__ float3
+    GetViewDir(const float *__restrict__ means, uint32_t N, uint32_t idx, float cam_x, float cam_y, float cam_z)
 {
     const float dx    = means[idx] - cam_x;
     const float dy    = means[N + idx] - cam_y;
@@ -565,21 +612,25 @@ __device__ __forceinline__ float3 GetViewDir(const float *__restrict__ means, ui
 // Sloan, JCGT 2013 See https://jcgt.org/published/0002/02/06/ for reference
 // implementation
 
-__device__ __forceinline__ void EvaluteSHCoeffs(const uint32_t degree, // degree of SH to be evaluated
-                                                const uint32_t c,      // color channel
-                                                const float3 &dir,     // pre-normalized direction
-                                                const float *coeffs,   // [K, 3]
-                                                float bias, float min_value, float &color_out)
+__device__ __forceinline__ void EvaluteSHCoeffs(
+    const uint32_t degree, // degree of SH to be evaluated
+    const uint32_t c,      // color channel
+    const float3 &dir,     // pre-normalized direction
+    const float *coeffs,   // [K, 3]
+    float bias,
+    float min_value,
+    float &color_out
+)
 {
     float result = 0.2820947917738781f * coeffs[c];
-    if (degree >= 1)
+    if(degree >= 1)
     {
         const float x = dir.x;
         const float y = dir.y;
         const float z = dir.z;
 
         result += 0.48860251190292f * (-y * coeffs[1 * 3 + c] + z * coeffs[2 * 3 + c] - x * coeffs[3 * 3 + c]);
-        if (degree >= 2)
+        if(degree >= 2)
         {
             const float z2 = z * z;
 
@@ -592,9 +643,12 @@ __device__ __forceinline__ void EvaluteSHCoeffs(const uint32_t degree, // degree
             const float pSH8   = 0.5462742152960395f * fC1;
             const float pSH4   = 0.5462742152960395f * fS1;
 
-            result += pSH4 * coeffs[4 * 3 + c] + pSH5 * coeffs[5 * 3 + c] + pSH6 * coeffs[6 * 3 + c] +
-                      pSH7 * coeffs[7 * 3 + c] + pSH8 * coeffs[8 * 3 + c];
-            if (degree >= 3)
+            result += pSH4 * coeffs[4 * 3 + c]
+                    + pSH5 * coeffs[5 * 3 + c]
+                    + pSH6 * coeffs[6 * 3 + c]
+                    + pSH7 * coeffs[7 * 3 + c]
+                    + pSH8 * coeffs[8 * 3 + c];
+            if(degree >= 3)
             {
                 const float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
                 const float fTmp1B = 1.445305721320277f * z;
@@ -608,11 +662,15 @@ __device__ __forceinline__ void EvaluteSHCoeffs(const uint32_t degree, // degree
                 const float pSH15  = -0.5900435899266435f * fC2;
                 const float pSH9   = -0.5900435899266435f * fS2;
 
-                result += pSH9 * coeffs[9 * 3 + c] + pSH10 * coeffs[10 * 3 + c] + pSH11 * coeffs[11 * 3 + c] +
-                          pSH12 * coeffs[12 * 3 + c] + pSH13 * coeffs[13 * 3 + c] + pSH14 * coeffs[14 * 3 + c] +
-                          pSH15 * coeffs[15 * 3 + c];
+                result += pSH9 * coeffs[9 * 3 + c]
+                        + pSH10 * coeffs[10 * 3 + c]
+                        + pSH11 * coeffs[11 * 3 + c]
+                        + pSH12 * coeffs[12 * 3 + c]
+                        + pSH13 * coeffs[13 * 3 + c]
+                        + pSH14 * coeffs[14 * 3 + c]
+                        + pSH15 * coeffs[15 * 3 + c];
 
-                if (degree >= 4)
+                if(degree >= 4)
                 {
                     const float fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
                     const float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
@@ -629,9 +687,15 @@ __device__ __forceinline__ void EvaluteSHCoeffs(const uint32_t degree, // degree
                     const float pSH24  = 0.6258357354491763f * fC3;
                     const float pSH16  = 0.6258357354491763f * fS3;
 
-                    result += pSH16 * coeffs[16 * 3 + c] + pSH17 * coeffs[17 * 3 + c] + pSH18 * coeffs[18 * 3 + c] +
-                              pSH19 * coeffs[19 * 3 + c] + pSH20 * coeffs[20 * 3 + c] + pSH21 * coeffs[21 * 3 + c] +
-                              pSH22 * coeffs[22 * 3 + c] + pSH23 * coeffs[23 * 3 + c] + pSH24 * coeffs[24 * 3 + c];
+                    result += pSH16 * coeffs[16 * 3 + c]
+                            + pSH17 * coeffs[17 * 3 + c]
+                            + pSH18 * coeffs[18 * 3 + c]
+                            + pSH19 * coeffs[19 * 3 + c]
+                            + pSH20 * coeffs[20 * 3 + c]
+                            + pSH21 * coeffs[21 * 3 + c]
+                            + pSH22 * coeffs[22 * 3 + c]
+                            + pSH23 * coeffs[23 * 3 + c]
+                            + pSH24 * coeffs[24 * 3 + c];
                 }
             }
         }
@@ -646,12 +710,12 @@ __device__ __forceinline__ void LoadSHCoeffs(const T *src, float *dst)
 {
     constexpr int ELEMS_PER_VEC = sizeof(VEC) / sizeof(T);
 #pragma unroll
-    for (int i = 0; i < N_VECS; ++i)
+    for(int i = 0; i < N_VECS; ++i)
     {
         T tmp[ELEMS_PER_VEC];
         reinterpret_cast<VEC *>(tmp)[0] = reinterpret_cast<const VEC *>(src)[i];
 #pragma unroll
-        for (int j = 0; j < ELEMS_PER_VEC; ++j)
+        for(int j = 0; j < ELEMS_PER_VEC; ++j)
         {
             dst[i * ELEMS_PER_VEC + j] = _sh_to_float(tmp[j]);
         }
@@ -661,8 +725,9 @@ __device__ __forceinline__ void LoadSHCoeffs(const T *src, float *dst)
 // Evaluate SH for 3 color channels at the given degree and write packed half4 output pixel.
 // DEGREE is a template parameter so sh_coeffs_to_color_fast receives a compile-time constant.
 template<int DEGREE>
-__device__ __forceinline__ void EvalSHAndPack(const float3 &dir_n, const float *sh_coeffs, float bias, float min_value,
-                                              __half *pixel)
+__device__ __forceinline__ void EvalSHAndPack(
+    const float3 &dir_n, const float *sh_coeffs, float bias, float min_value, __half *pixel
+)
 {
     float out_color[3];
     EvaluteSHCoeffs(DEGREE, 0, dir_n, sh_coeffs, bias, min_value, out_color[0]);
@@ -678,14 +743,22 @@ __device__ __forceinline__ void EvalSHAndPack(const float3 &dir_n, const float *
 // output pixel. MODE selects the coefficient source at compile time. dir_n must be the
 // pre-computed normalized view direction for this gaussian.
 template<SHInputMode MODE>
-__device__ __forceinline__ void EvalSHForGaussian(const float3 &dir_n, int idx, int N, int degrees_to_use,
-                                                  const void *__restrict__ input_data, float bias, float min_value,
-                                                  const SHDecodeParams &decode_params, __half *__restrict__ colors)
+__device__ __forceinline__ void EvalSHForGaussian(
+    const float3 &dir_n,
+    int idx,
+    int N,
+    int degrees_to_use,
+    const void *__restrict__ input_data,
+    float bias,
+    float min_value,
+    const SHDecodeParams &decode_params,
+    __half *__restrict__ colors
+)
 {
     float sh_coeffs[16 * 3];
     __half *pixel = colors + idx * 4;
 
-    if constexpr (MODE == SHInputMode::RAW_FLOAT || MODE == SHInputMode::RAW_HALF)
+    if constexpr(MODE == SHInputMode::RAW_FLOAT || MODE == SHInputMode::RAW_HALF)
     {
         using T          = std::conditional_t<MODE == SHInputMode::RAW_FLOAT, float, __half>;
         using VEC_SMALL  = std::conditional_t<MODE == SHInputMode::RAW_FLOAT, uint4, ushort4>;
@@ -694,7 +767,7 @@ __device__ __forceinline__ void EvalSHForGaussian(const float3 &dir_n, int idx, 
 
         const T *elem_coeffs = static_cast<const T *>(input_data) + static_cast<int64_t>(idx) * (16 * 3);
 
-        switch (degrees_to_use)
+        switch(degrees_to_use)
         {
         case 0:
             LoadSHCoeffs<T, VEC_SMALL, 1>(elem_coeffs, sh_coeffs);
@@ -715,12 +788,12 @@ __device__ __forceinline__ void EvalSHForGaussian(const float3 &dir_n, int idx, 
         }
     }
 
-    if constexpr (MODE == SHInputMode::COMPRESS_32B || MODE == SHInputMode::COMPRESS_16B)
+    if constexpr(MODE == SHInputMode::COMPRESS_32B || MODE == SHInputMode::COMPRESS_16B)
     {
         const auto *packed = static_cast<const uint4 *>(input_data);
         __half2 out_coeffs[3][8];
 
-        if constexpr (MODE == SHInputMode::COMPRESS_32B)
+        if constexpr(MODE == SHInputMode::COMPRESS_32B)
         {
             // load 2 × uint4 at stride N
             uint32_t block[8];
@@ -741,10 +814,10 @@ __device__ __forceinline__ void EvalSHForGaussian(const float3 &dir_n, int idx, 
 
         // flatten to [K, 3] float layout expected by sh_coeffs_to_color_fast
 #pragma unroll
-        for (int c = 0; c < 3; c++)
+        for(int c = 0; c < 3; c++)
         {
 #pragma unroll
-            for (int p = 0; p < 8; p++)
+            for(int p = 0; p < 8; p++)
             {
                 float2 pair                    = __half22float2(out_coeffs[c][p]);
                 sh_coeffs[(p * 2 + 0) * 3 + c] = pair.x;
@@ -755,5 +828,4 @@ __device__ __forceinline__ void EvalSHForGaussian(const float3 &dir_n, int idx, 
         EvalSHAndPack<3>(dir_n, sh_coeffs, bias, min_value, pixel);
     }
 }
-
 } // namespace higs
