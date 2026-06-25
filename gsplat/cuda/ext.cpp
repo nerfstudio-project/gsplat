@@ -1194,7 +1194,10 @@ TORCH_LIBRARY(gsplat, m)
 #endif
 
 #if GSPLAT_BUILD_RELOC
-    m.def("relocation(Tensor opacities, Tensor scales, Tensor ratios, Tensor binoms, int n_max) -> (Tensor, Tensor)");
+    m.def(
+        "relocation(Tensor opacities, Tensor scales, Tensor ratios, Tensor binoms, int n_max, float min_opacity=0.0) "
+        "-> (Tensor, Tensor)"
+    );
 #endif
 
     m.def(
@@ -1225,7 +1228,7 @@ TORCH_LIBRARY(gsplat, m)
 #if GSPLAT_BUILD_3DGS
     m.def(
         "mcmc_perturb_positions(Tensor(a!) positions, Tensor quats, Tensor scales, Tensor opacities, Tensor noise, "
-        "float scaler) -> ()"
+        "float noise_scale, float t=0.005, float k=100.0) -> ()"
     );
 #endif
 

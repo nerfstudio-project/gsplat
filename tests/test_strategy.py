@@ -29,6 +29,23 @@ import gsplat
 device = torch.device("cuda:0")
 
 
+def test_mcmc_strategy_positional_constructor():
+    from gsplat.strategy import MCMCStrategy
+
+    strategy = MCMCStrategy(123, 4.5, 6, 7, 8, 9, 0.1, True, 0.2, 30.0)
+
+    assert strategy.cap_max == 123
+    assert strategy.noise_lr == 4.5
+    assert strategy.refine_start_iter == 6
+    assert strategy.refine_stop_iter == 7
+    assert strategy.noise_injection_stop_iter == 8
+    assert strategy.refine_every == 9
+    assert strategy.min_opacity == 0.1
+    assert strategy.verbose is True
+    assert strategy.noise_opacity_t == 0.2
+    assert strategy.noise_opacity_k == 30.0
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy():

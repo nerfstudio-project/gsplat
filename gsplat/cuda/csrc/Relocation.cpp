@@ -55,7 +55,8 @@ RelocationResult relocation(
     const at::Tensor &scales,    // [N, 3]
     const at::Tensor &ratios,    // [N]
     const at::Tensor &binoms,    // [n_max, n_max]
-    int64_t n_max
+    int64_t n_max,
+    double min_opacity
 )
 {
     DEVICE_GUARD(opacities);
@@ -66,7 +67,9 @@ RelocationResult relocation(
     at::Tensor new_opacities = at::empty_like(opacities);
     at::Tensor new_scales    = at::empty_like(scales);
 
-    launch_relocation_kernel(opacities, scales, ratios, binoms, n_max, new_opacities, new_scales);
+    launch_relocation_kernel(
+        opacities, scales, ratios, binoms, n_max, static_cast<float>(min_opacity), new_opacities, new_scales
+    );
     return {.new_opacities = new_opacities, .new_scales = new_scales};
 }
 
