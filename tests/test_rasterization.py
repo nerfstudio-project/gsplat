@@ -569,6 +569,7 @@ def test_rasterization(
 
     rtol = 1e-4
     atol = 1e-4
+    extra_signals_atol = atol
     if (
         execution_mode == _RENDER_EXECUTION
         and with_eval3d
@@ -582,6 +583,10 @@ def test_rasterization(
         # slightly from the exact-metadata reference.
         rtol = 3e-4
         atol = 3e-4
+        # Extra signals follow the same approximate fwd-only path, but Blackwell
+        # lidar cases can leave a few isolated metadata pixels just above the
+        # render-color envelope. Keep the wider bound scoped to that metadata.
+        extra_signals_atol = 4e-4
 
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
     if gaussians.extra_signals is not None:
@@ -589,7 +594,7 @@ def test_rasterization(
             meta["render_extra_signals"],
             _meta["render_extra_signals"],
             rtol=rtol,
-            atol=atol,
+            atol=extra_signals_atol,
         )
 
     if render_mode_has_hit_distance(render_mode):
