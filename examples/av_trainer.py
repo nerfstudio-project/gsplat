@@ -683,6 +683,7 @@ def train(
     duration: float | None = None,
     max_lidar: int = 150_000,
     downscale: int = 1,
+    rigid_dynamic_track_class_ids: list[str] | None = None,
     # LiDAR rendering (addition over simple_trainer)
     lidar_render: bool = False,
     lidar_render_subsample: int = 112,
@@ -715,7 +716,16 @@ def train(
             camera_ids=cameras or None,
             duration_sec=duration,
             max_lidar_points=max_lidar,
+            rigid_dynamic_track_class_ids=rigid_dynamic_track_class_ids,
         )
+        if rigid_dynamic_track_class_ids is not None:
+            n_dyn_pts = sum(len(t.points_local) for t in parser.rigid_dynamic_tracks)
+            print(
+                f"  Rigid dynamic: {len(parser.rigid_dynamic_tracks)} tracks "
+                f"({n_dyn_pts} local points) for class IDs "
+                f"{sorted(rigid_dynamic_track_class_ids)}. Moving-object returns "
+                f"are kept in the static background."
+            )
         # Pre-stacking below requires every selected camera to share (W, H).
         # Mixed-resolution surround-view rigs (e.g. wide 120fov + tele 30fov)
         # would raise at torch.stack time; fail early with a clear message.
@@ -1178,6 +1188,15 @@ def main():
     p.add_argument(
         "--duration", type=float, default=None, help="clip duration in seconds (NCore)"
     )
+    p.add_argument(
+        "--rigid-dynamic-track-class-ids",
+        type=str,
+        default=None,
+        help=(
+            "comma-separated NCore cuboid class IDs to load as rigid dynamic "
+            "tracks; moving returns stay in static init"
+        ),
+    )
     p.add_argument("--max-lidar", type=int, default=150_000)
     p.add_argument("--downscale", type=int, default=1)
     p.add_argument("--max-steps", type=int, default=15000)
@@ -1217,6 +1236,15 @@ def main():
         raise RuntimeError("CUDA required for gsplat rasterization.")
 
     cameras_list = args.cameras.split(",") if args.cameras else None
+    rigid_dynamic_track_class_ids = (
+        [
+            class_id.strip()
+            for class_id in args.rigid_dynamic_track_class_ids.split(",")
+            if class_id.strip()
+        ]
+        if args.rigid_dynamic_track_class_ids
+        else None
+    )
     train(
         scene_path=args.scene or default_scene_path,
         max_steps=args.max_steps,
@@ -1233,6 +1261,7 @@ def main():
         duration=args.duration,
         max_lidar=args.max_lidar,
         downscale=args.downscale,
+        rigid_dynamic_track_class_ids=rigid_dynamic_track_class_ids,
         lidar_render=args.lidar_render,
         lidar_render_subsample=args.lidar_render_subsample,
         lidar_render_weight=args.lidar_render_weight,
