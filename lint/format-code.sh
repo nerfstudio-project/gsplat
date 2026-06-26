@@ -180,7 +180,19 @@ if (( ${#python_files[@]} > 0 )); then
         --color
     )
 
-    python -m black "${black_args[@]}" "${python_files[@]}"
+    black_status=0
+    for python_file in "${python_files[@]}"; do
+        # Black's multi-file path uses a process pool even with --workers 1.
+        if ! python -m black "${black_args[@]}" "${python_file}"; then
+            status="${PIPESTATUS[0]}"
+            if (( black_status == 0 )); then
+                black_status="${status}"
+            fi
+        fi
+    done
+    if (( black_status != 0 )); then
+        exit "${black_status}"
+    fi
 else
     echo "Python formatting was not performed because there are no selected Python files."
 fi
