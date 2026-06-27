@@ -40,36 +40,40 @@ namespace gsplat
 {
 namespace cg = cooperative_groups;
 
+// Cap registers to 64 (>= 4 blocks/SM) only for paths where measurement shows it
+// wins. The default min-blocks policy is 1, which keeps camera codegen close to
+// baseline without needing a separate kernel wrapper.
 template<typename SensorModel, typename scalar_t>
-__global__ void projection_ut_3dgs_fused_kernel(
-    const uint32_t B,
-    const uint32_t C,
-    const uint32_t N,
-    const scalar_t *__restrict__ means,     // [B, N, 3]
-    const scalar_t *__restrict__ quats,     // [B, N, 4]
-    const scalar_t *__restrict__ scales,    // [B, N, 3]
-    const scalar_t *__restrict__ opacities, // [B, N] optional
-    const scalar_t *__restrict__ viewmats0, // [B, C, 4, 4]
-    const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
-    // Image width and height are redundant, they are in the sensor model parameters
-    const uint32_t image_width,
-    const uint32_t image_height,
-    const float eps2d,
-    const float near_plane,
-    const float far_plane,
-    const float radius_clip,
-    const bool global_z_order,
-    // uncented transform
-    const UnscentedTransformParameters ut_params,
-    // sensor model parameters
-    const __grid_constant__ typename SensorModel::KernelParameters sensor_model_params,
-    // outputs
-    int32_t *__restrict__ radii,         // [B, C, N, 2]
-    scalar_t *__restrict__ means2d,      // [B, C, N, 2]
-    scalar_t *__restrict__ depths,       // [B, C, N]
-    scalar_t *__restrict__ conics,       // [B, C, N, 3]
-    scalar_t *__restrict__ compensations // [B, C, N] optional
-)
+__global__ void
+    __launch_bounds__(256, ProjectionUTCodegenTraits<SensorModel>::kMinBlocks) projection_ut_3dgs_fused_kernel(
+        const uint32_t B,
+        const uint32_t C,
+        const uint32_t N,
+        const scalar_t *__restrict__ means,     // [B, N, 3]
+        const scalar_t *__restrict__ quats,     // [B, N, 4]
+        const scalar_t *__restrict__ scales,    // [B, N, 3]
+        const scalar_t *__restrict__ opacities, // [B, N] optional
+        const scalar_t *__restrict__ viewmats0, // [B, C, 4, 4]
+        const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
+        // Image width and height are redundant, they are in the sensor model parameters
+        const uint32_t image_width,
+        const uint32_t image_height,
+        const float eps2d,
+        const float near_plane,
+        const float far_plane,
+        const float radius_clip,
+        const bool global_z_order,
+        // uncented transform
+        const UnscentedTransformParameters ut_params,
+        // sensor model parameters
+        const __grid_constant__ typename SensorModel::KernelParameters sensor_model_params,
+        // outputs
+        int32_t *__restrict__ radii,         // [B, C, N, 2]
+        scalar_t *__restrict__ means2d,      // [B, C, N, 2]
+        scalar_t *__restrict__ depths,       // [B, C, N]
+        scalar_t *__restrict__ conics,       // [B, C, N, 3]
+        scalar_t *__restrict__ compensations // [B, C, N] optional
+    )
 {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -212,7 +216,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
         return;
     }
 
-    if constexpr(is_lidar<SensorModel>::value)
+    if constexpr(!ProjectionUTCodegenTraits<SensorModel>::kNeedsCulling)
     {
         // LIDAR culling is performed inside world_gaussian_to_image_gaussian_unscented_transform_shutter_pose,
         // so no additional 2D image-region masking is needed here.

@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -27,6 +28,8 @@
 #include <variant>
 
 #include <ATen/core/ivalue.h>
+
+#include "Common.h"
 
 // ---------------------------------------------------------------------------------------------
 
@@ -46,6 +49,8 @@ enum class ShutterType
 // Gaussian-specific types
 struct UnscentedTransformParameters : public torch::CustomClassHolder
 {
+    static constexpr size_t D = 3;
+
     // See Gustafsson and Hendeby 2012 for sigma point parameterization - this
     // default parameter choice is based on
     //
@@ -58,7 +63,7 @@ struct UnscentedTransformParameters : public torch::CustomClassHolder
         float in_image_margin_factor        = 0.1f,
         bool require_all_sigma_points_valid = false
     )
-        : alpha(alpha)
+        : alpha2(alpha * alpha)
         , beta(beta)
         , kappa(kappa)
         , in_image_margin_factor(in_image_margin_factor)
@@ -67,19 +72,18 @@ struct UnscentedTransformParameters : public torch::CustomClassHolder
         // The UT requires D + lambda = alpha^2 * (D + kappa) > 0 to produce
         // meaningful sigma point spread.  A non-positive value would make
         // sqrt(D + lambda) produce NaN and the weight denominators diverge.
-        constexpr float D = 3.0f;
         TORCH_CHECK(
-            alpha * alpha * (D + kappa) > 0.0f,
+            alpha2 * (D + kappa) > 0.0f,
             "UT parameters invalid: alpha^2 * (D + kappa) must be > 0 "
-            "(got alpha=",
-            alpha,
+            "(got alpha^2=",
+            alpha2,
             ", kappa=",
             kappa,
             ")"
         );
     }
 
-    float alpha;
+    float alpha2;
     float beta;
     float kappa;
 

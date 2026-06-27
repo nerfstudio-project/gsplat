@@ -23,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 #include <cuda_runtime.h>
 
 // Silence warnings / errors of the form
@@ -39,6 +40,7 @@
 
 #include "Cameras.h"
 #include "ExternalDistortion.cuh"
+#include "Utils.cuh"
 
 template<typename T, std::size_t N>
 __device__ std::array<T, N> make_array(const T *ptr)
@@ -51,6 +53,24 @@ __device__ std::array<T, N> make_array(const T *ptr)
     }
     return arr;
 }
+
+// Per-sensor codegen knobs for the UT projection kernel. The default keeps
+// camera models close to the baseline path; specializations opt into measured
+// faster codegen/solver policies.
+template<typename SensorModel>
+struct ProjectionUTCodegenTraits
+{
+    static constexpr int kMinBlocks                = 1;
+    static constexpr unsigned kUTUnroll            = 2u * 3u + 1u;
+    static constexpr bool kNeedsCulling            = true;
+    static constexpr bool kUseGaussianScopeSlerper = false;
+
+    template<size_t N_ROLLING_SHUTTER_ITERATIONS>
+    static constexpr auto rolling_shutter_unroll() -> unsigned
+    {
+        return N_ROLLING_SHUTTER_ITERATIONS == 0u ? 1u : N_ROLLING_SHUTTER_ITERATIONS;
+    }
+};
 
 struct RollingShutterParameters
 {
@@ -330,6 +350,69 @@ inline __device__ auto precise_normalize(const glm::fquat &q) -> glm::fquat
 #endif
 }
 
+// Precomputes the loop-invariant part of a quaternion slerp between two fixed
+// endpoints so the rolling-shutter solver can re-interpolate at successive
+// relative frame times without recomputing the inter-quaternion angle on every
+// iteration. operator()(a) reproduces glm::slerp(q_start, q_end, a) bit-for-bit:
+// the only quantities cached are those that are identical across calls (the
+// sign-corrected endpoint, the angle and its sine), so dividing by the cached
+// sin(angle) is equivalent to glm recomputing it each call.
+template<bool kEnabled = true>
+struct QuaternionSlerper
+{
+    glm::fquat x    = glm::fquat{0.f, 0.f, 0.f, 0.f}; // start endpoint
+    glm::fquat z    = glm::fquat{0.f, 0.f, 0.f, 0.f}; // end endpoint, sign-flipped onto the short arc
+    float angle     = 0.f;                            // angle between x and z
+    float sin_angle = 0.f;
+    bool linear     = false; // near-parallel endpoints -> component-wise mix
+
+    QuaternionSlerper() = default;
+
+    inline __device__ QuaternionSlerper(const glm::fquat &q_start, const glm::fquat &q_end)
+        : x(q_start)
+        , z(q_end)
+    {
+        float cos_theta = glm::dot(q_start, q_end);
+        if(cos_theta < 0.f)
+        {
+            z         = -q_end;
+            cos_theta = -cos_theta;
+        }
+        if(cos_theta > 1.f - glm::epsilon<float>())
+        {
+            linear = true;
+        }
+        else
+        {
+            angle     = glm::acos(cos_theta);
+            sin_angle = glm::sin(angle);
+        }
+    }
+
+    inline __device__ auto operator()(float a) const -> glm::fquat
+    {
+        if(linear)
+        {
+            // Component-wise lerp, matching glm::slerp's near-parallel branch.
+            // Open-coded rather than glm::lerp(x, z, a) because glm::lerp
+            // asserts 0 <= a <= 1, which fails in debug builds when the
+            // rolling-shutter frame time lands slightly outside [0, 1].
+            return glm::fquat(
+                glm::mix(x.w, z.w, a), glm::mix(x.x, z.x, a), glm::mix(x.y, z.y, a), glm::mix(x.z, z.z, a)
+            );
+        }
+        return (glm::sin((1.f - a) * angle) * x + glm::sin(a * angle) * z) / sin_angle;
+    }
+};
+
+template<>
+struct QuaternionSlerper<false>
+{
+    QuaternionSlerper() = default;
+
+    inline __device__ QuaternionSlerper(const glm::fquat &, const glm::fquat &) { }
+};
+
 inline __device__ auto interpolate_shutter_pose(
     float relative_frame_time, const RollingShutterParameters &rolling_shutter_parameters
 ) -> ShutterPose
@@ -462,9 +545,12 @@ struct BaseCameraModel
             .camera_ray_to_world_ray(camera_ray.ray_dir);
     }
 
-    template<size_t N_ROLLING_SHUTTER_ITERATIONS = 10>
+    template<size_t N_ROLLING_SHUTTER_ITERATIONS = 10, bool UsePrecomputedSlerper = false>
     inline __device__ auto world_point_to_image_point_shutter_pose(
-        const glm::fvec3 &world_point, const RollingShutterParameters &rolling_shutter_parameters, float margin_factor
+        const glm::fvec3 &world_point,
+        const RollingShutterParameters &rolling_shutter_parameters,
+        float margin_factor,
+        QuaternionSlerper<UsePrecomputedSlerper> precomputed_slerper = {}
     ) const -> ImagePointReturn
     {
         // Perform rolling-shutter-based world point to image point projection /
@@ -519,19 +605,38 @@ struct BaseCameraModel
 
         // Compute the new timestamp and project again
         auto image_points_rs_prev = init_image_point;
-        auto relative_frame_time  = float{};
         auto t_rs                 = glm::fvec3{};
         auto q_rs                 = glm::fquat{};
         bool valid                = true;
-#pragma unroll
+
+        constexpr unsigned kRollingShutterUnroll = ProjectionUTCodegenTraits<DerivedCameraModel>::
+            template rolling_shutter_unroll<N_ROLLING_SHUTTER_ITERATIONS>();
+        auto prev_relative_frame_time = -std::numeric_limits<float>::max();
+#pragma unroll kRollingShutterUnroll
         for(auto j = 0; j < N_ROLLING_SHUTTER_ITERATIONS; ++j)
         {
-            relative_frame_time = derived->shutter_relative_frame_time(image_points_rs_prev);
+            const auto relative_frame_time = derived->shutter_relative_frame_time(image_points_rs_prev);
+
+            if(relative_frame_time == prev_relative_frame_time)
+            {
+                // Same frame time means the same pose and reprojection for
+                // all remaining iterations, so this is bit-identical to
+                // continuing.
+                break;
+            }
+            prev_relative_frame_time = relative_frame_time;
 
             t_rs = (1.f - relative_frame_time) * t_start + relative_frame_time * t_end;
-            // The rolling-shutter optimization loop is sensitive to small pose
-            // updates, so use the precise normalization here.
-            q_rs = precise_normalize(glm::slerp(q_start, q_end, relative_frame_time));
+            // LiDAR reuses a Gaussian-level slerper across sigma points. Other
+            // sensors pass an empty slerper and construct the local one here.
+            decltype(auto) slerper
+                = gsplat::select_provided_or_construct<UsePrecomputedSlerper, QuaternionSlerper<true>>(
+                    precomputed_slerper, q_start, q_end
+                );
+
+            // The rolling-shutter optimization loop is sensitive to small
+            // pose updates, so use the precise normalization here.
+            q_rs = precise_normalize(slerper(relative_frame_time));
 
             const auto [image_point_rs, valid_rs]
                 = derived->camera_ray_to_image_point(glm::rotate(q_rs, world_point) + t_rs, margin_factor);
@@ -1509,23 +1614,39 @@ public:
 
 struct SigmaPoints
 {
-    std::array<glm::fvec3, 2 * 3 + 1> points;
-    std::array<float, 2 * 3 + 1> weights_mean;
-    std::array<float, 2 * 3 + 1> weights_covariance;
+    std::array<glm::fvec3, 2 * UnscentedTransformParameters::D + 1> points;
 };
+
+inline __device__ auto ut_lambda(const UnscentedTransformParameters &unscented_transform_parameters) -> float
+{
+    const auto &alpha2 = unscented_transform_parameters.alpha2;
+    const auto &kappa  = unscented_transform_parameters.kappa;
+    return alpha2 * (UnscentedTransformParameters::D + kappa) - UnscentedTransformParameters::D;
+}
+
+inline __device__ auto ut_weights(const UnscentedTransformParameters &unscented_transform_parameters, float lambda)
+    -> std::tuple<float, float, float>
+{
+    const auto &alpha2       = unscented_transform_parameters.alpha2;
+    const auto &beta         = unscented_transform_parameters.beta;
+    const auto lambda_plus_D = UnscentedTransformParameters::D + lambda;
+
+    const auto mean0       = lambda / lambda_plus_D;
+    const auto covariance0 = mean0 + (1 - alpha2 + beta);
+    const auto rest        = 1 / (2 * lambda_plus_D);
+
+    return {mean0, covariance0, rest};
+}
 
 inline __device__ auto world_gaussian_sigma_points(
     const UnscentedTransformParameters &unscented_transform_parameters,
     const glm::fvec3 &gaussian_world_mean,
     const glm::fvec3 &gaussian_world_scale,
     const glm::fquat &gaussian_world_rot
-) -> SigmaPoints
+) -> std::tuple<float, SigmaPoints>
 {
-    static constexpr size_t D = 3;
-    const auto &alpha         = unscented_transform_parameters.alpha;
-    const auto &beta          = unscented_transform_parameters.beta;
-    const auto &kappa         = unscented_transform_parameters.kappa;
-    const auto lambda         = alpha * alpha * (D + kappa) - D;
+    static constexpr auto D = UnscentedTransformParameters::D;
+    const auto lambda       = ut_lambda(unscented_transform_parameters);
 
     // Compute rotation matrix R from quaternion (scaling matrix S is diag(s_i))
     glm::fmat3 R = glm::mat3_cast(gaussian_world_rot);
@@ -1534,11 +1655,7 @@ inline __device__ auto world_gaussian_sigma_points(
     // R) provides a closed form of it's SVD C = U * Σ * U^T with U = R^T and Σ
     // = S^T*S = diag((s_i)^2).
 
-    // Use this closed form SVD to compute sigma points and weights from a (D +
-    // lambda)-scaled covariance C (cf. "On Unscented Kalman Filtering for State
-    // Estimation of Continuous-Time Nonlinear Systems" - Särkkä 2007). In
-    // particular, this means that the singular values are given by σ_i = s_i
-    // and the singular vectors u_i are the columns of R
+    // Use this closed form SVD to compute sigma points.
     auto ret = SigmaPoints{};
 
     ret.points[0] = gaussian_world_mean;
@@ -1553,18 +1670,7 @@ inline __device__ auto world_gaussian_sigma_points(
         ret.points[i + 1 + D] = gaussian_world_mean - delta;
     }
 
-    // Compute weights
-    ret.weights_mean[0]       = lambda / (D + lambda);
-    ret.weights_covariance[0] = lambda / (D + lambda) + (1 - alpha * alpha + beta);
-
-#pragma unroll
-    for(auto i = 0u; i < 2 * D; ++i)
-    {
-        ret.weights_mean[i + 1]       = 1 / (2 * (D + lambda));
-        ret.weights_covariance[i + 1] = 1 / (2 * (D + lambda));
-    }
-
-    return ret;
+    return {lambda, ret};
 }
 
 struct ImageGaussianReturn
@@ -1585,27 +1691,52 @@ inline __device__ auto world_gaussian_to_image_gaussian_unscented_transform_shut
 ) -> ImageGaussianReturn
 {
     // Compute sigma points for input distribution
-    const auto sigma_points = world_gaussian_sigma_points(
+    const auto [lambda, sigma_points] = world_gaussian_sigma_points(
         unscented_transform_parameters, gaussian_world_mean, gaussian_world_scale, gaussian_world_rot
     );
 
     // Transform sigma points / compute approximation of output distribution via
     // sample mean / covariance
     bool valid            = unscented_transform_parameters.require_all_sigma_points_valid;
-    auto image_points     = std::array<glm::fvec2, 2 * 3 + 1>{};
+    auto image_points     = std::array<glm::fvec2, 2 * UnscentedTransformParameters::D + 1>{};
     auto image_mean       = glm::fvec2{0};
     auto image_covariance = glm::fmat2{0};
-#pragma unroll
+
+    auto [mean, covariance, rest] = ut_weights(unscented_transform_parameters, lambda);
+
+    // De-unroll the two 7-point loops only for measured wins. The fixed 7-trip
+    // camera loops are cheap enough that the LiDAR register/codegen policy is
+    // not a universal improvement.
+    constexpr unsigned kUTUnroll = ProjectionUTCodegenTraits<CameraModel>::kUTUnroll;
+
+    // The rolling-shutter slerp endpoints are identical for every sigma point of
+    // this Gaussian, so compute the inter-quaternion angle once here and share it
+    // across all 7 sigma-point projections when rolling shutter is active.
+    using GaussianSlerper = std::conditional_t<
+        ProjectionUTCodegenTraits<CameraModel>::kUseGaussianScopeSlerper,
+        QuaternionSlerper<true>,
+        QuaternionSlerper<false>
+    >;
+    GaussianSlerper rs_slerper{};
+    if constexpr(ProjectionUTCodegenTraits<CameraModel>::kUseGaussianScopeSlerper)
+    {
+        if(camera_model.parameters.shutter_type != ShutterType::GLOBAL)
+        {
+            rs_slerper = QuaternionSlerper<>(rolling_shutter_parameters.q_start, rolling_shutter_parameters.q_end);
+        }
+    }
+#pragma unroll kUTUnroll
     for(auto i = 0u; i < std::size(image_points); ++i)
     {
-        const auto [image_point, point_valid] =
-            // annotate with 'template' to avoid warnings: #174-D: expression
-            // has no effect
-            camera_model.template world_point_to_image_point_shutter_pose<>(
-                sigma_points.points[i],
-                rolling_shutter_parameters,
-                unscented_transform_parameters.in_image_margin_factor
-            );
+        typename CameraModel::ImagePointReturn image_point_return{};
+        image_point_return = camera_model.template world_point_to_image_point_shutter_pose<>(
+            sigma_points.points[i],
+            rolling_shutter_parameters,
+            unscented_transform_parameters.in_image_margin_factor,
+            rs_slerper
+        );
+
+        const auto [image_point, point_valid] = image_point_return;
 
         if(unscented_transform_parameters.require_all_sigma_points_valid)
         {
@@ -1620,9 +1751,9 @@ inline __device__ auto world_gaussian_to_image_gaussian_unscented_transform_shut
         {
             valid |= point_valid; // any valid is sufficient
         }
-        image_points[i] = {image_point.x, image_point.y};
-
-        image_mean += sigma_points.weights_mean[i] * image_points[i];
+        image_points[i]  = {image_point.x, image_point.y};
+        image_mean      += mean * image_points[i];
+        mean             = rest;
     }
 
     if(!valid)
@@ -1631,11 +1762,12 @@ inline __device__ auto world_gaussian_to_image_gaussian_unscented_transform_shut
         return {image_mean, image_covariance, false};
     }
 
-#pragma unroll
+#pragma unroll kUTUnroll
     for(auto i = 0u; i < std::size(image_points); ++i)
     {
-        const auto image_mean_vec = image_points[i] - image_mean;
-        image_covariance += sigma_points.weights_covariance[i] * glm::outerProduct(image_mean_vec, image_mean_vec);
+        const auto image_mean_vec  = image_points[i] - image_mean;
+        image_covariance          += covariance * glm::outerProduct(image_mean_vec, image_mean_vec);
+        covariance                 = rest;
     }
 
     return {image_mean, image_covariance, valid};
