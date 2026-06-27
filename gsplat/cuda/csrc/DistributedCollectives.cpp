@@ -16,14 +16,15 @@
  */
 
 #include "DistributedCollectives.h"
-#include "TorchUtils.h"
 
 #include <ATen/Functions.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/core/dispatch/Dispatcher.h>
+#include <ATen/core/ivalue.h>
 #include <c10/core/SymInt.h>
 #include <c10/util/ArrayRef.h>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
+#include <torch/version.h>
 
 #include <numeric>
 
@@ -31,6 +32,22 @@ namespace gsplat
 {
 namespace
 {
+#if TORCH_VERSION_MAJOR > 2 || (TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR >= 12)
+    using C10dGroupNameArg = c10::IValue;
+
+    C10dGroupNameArg c10d_group_name_arg(const std::string &pg)
+    {
+        return c10::IValue(pg);
+    }
+#else
+    using C10dGroupNameArg = std::string;
+
+    C10dGroupNameArg c10d_group_name_arg(const std::string &pg)
+    {
+        return pg;
+    }
+#endif
+
     // --- The only irreducible job: reach the dispatcher-registered functional ---
     // collective and synchronize the async result. We always call the `_autograd`
     // variant: torch records a backward (the reverse collective) only when grad is
@@ -39,10 +56,13 @@ namespace
     // autograd-vs-plain choice to make.
     at::Tensor all_gather_into_tensor(const at::Tensor &input, int64_t world_size, const std::string &pg)
     {
-        using Sig = at::Tensor(const at::Tensor &, int64_t, const std::string &);
+        using Sig = at::Tensor(const at::Tensor &, int64_t, const C10dGroupNameArg &);
 
-        at::Tensor gathered
-            = call_torch_op<Sig>("_c10d_functional_autograd::all_gather_into_tensor", input, world_size, pg);
+        C10dGroupNameArg group_name = c10d_group_name_arg(pg);
+        auto op                     = c10::Dispatcher::singleton()
+                                          .findSchemaOrThrow("_c10d_functional_autograd::all_gather_into_tensor", "")
+                                          .typed<Sig>();
+        at::Tensor gathered         = op.call(input, world_size, group_name);
 
         return c10d::wait_tensor(gathered);
     }
@@ -54,11 +74,13 @@ namespace
         const std::string &pg
     )
     {
-        using Sig = at::Tensor(const at::Tensor &, at::SymIntArrayRef, at::SymIntArrayRef, const std::string &);
+        using Sig = at::Tensor(const at::Tensor &, at::SymIntArrayRef, at::SymIntArrayRef, const C10dGroupNameArg &);
 
-        at::Tensor scattered = call_torch_op<Sig>(
-            "_c10d_functional_autograd::all_to_all_single", input, output_splits, input_splits, pg
-        );
+        C10dGroupNameArg group_name = c10d_group_name_arg(pg);
+        auto op                     = c10::Dispatcher::singleton()
+                                          .findSchemaOrThrow("_c10d_functional_autograd::all_to_all_single", "")
+                                          .typed<Sig>();
+        at::Tensor scattered        = op.call(input, output_splits, input_splits, group_name);
 
         return c10d::wait_tensor(scattered);
     }
