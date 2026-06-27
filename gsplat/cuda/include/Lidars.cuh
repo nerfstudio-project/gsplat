@@ -312,15 +312,19 @@ public:
     }
 };
 
-// Type trait to detect LIDAR model
-template<typename T>
-struct is_lidar : std::false_type
-{
-};
-
 template<>
-struct is_lidar<RowOffsetStructuredSpinningLidarModel> : std::true_type
+struct ProjectionUTCodegenTraits<RowOffsetStructuredSpinningLidarModel>
 {
+    static constexpr int kMinBlocks                = 4;
+    static constexpr unsigned kUTUnroll            = 1u;
+    static constexpr bool kNeedsCulling            = false;
+    static constexpr bool kUseGaussianScopeSlerper = true;
+
+    template<size_t N_ROLLING_SHUTTER_ITERATIONS>
+    static constexpr auto rolling_shutter_unroll() -> unsigned
+    {
+        return 1u;
+    }
 };
 
 // Type list of all lidar model types

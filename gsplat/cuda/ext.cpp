@@ -18,6 +18,8 @@
 
 #include <torch/extension.h>
 
+#include <cmath>
+
 #include "Cameras.h"
 #include "ExternalDistortion.h"
 #include "csrc/Config.h"
@@ -160,9 +162,9 @@ TORCH_LIBRARY(gsplat, m)
         .def_property(
             "alpha",
             [](const c10::intrusive_ptr<UnscentedTransformParameters> &self)
-            { return static_cast<double>(self->alpha); },
+            { return static_cast<double>(std::sqrt(self->alpha2)); },
             [](const c10::intrusive_ptr<UnscentedTransformParameters> &self, double alpha)
-            { self->alpha = static_cast<float>(alpha); }
+            { self->alpha2 = static_cast<float>(alpha * alpha); }
         )
         .def_property(
             "beta",
@@ -193,7 +195,7 @@ TORCH_LIBRARY(gsplat, m)
                 return c10::IValue(
                     c10::ivalue::Tuple::create(
                         {c10::IValue(static_cast<int64_t>(1)),
-                         c10::IValue(static_cast<double>(self->alpha)),
+                         c10::IValue(static_cast<double>(std::sqrt(self->alpha2))),
                          c10::IValue(static_cast<double>(self->beta)),
                          c10::IValue(static_cast<double>(self->kappa)),
                          c10::IValue(static_cast<double>(self->in_image_margin_factor)),
