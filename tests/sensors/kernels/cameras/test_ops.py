@@ -2239,46 +2239,6 @@ def test_camera_rays_to_image_points_ftheta_nan_input_marks_invalid(
     ), f"NaN-bearing ray must be flagged invalid; got valid_flags={valid_flags.tolist()}"
 
 
-def test_camera_rays_to_image_points_ftheta_no_external_scratch_gating(
-    ftheta_projection_forward_ref, no_external, sensor_device: torch.device
-):
-    """When no input requires_grad, scratch tensor must be empty; gradient mode
-    must allocate a scratch tensor sized for the per-row save layout."""
-    rays = _ftheta_synthetic_rays(sensor_device).detach()
-    op = torch.ops.gsplat_sensors.camera_rays_to_image_points_ftheta_no_external
-
-    _, _, scratch = op(ftheta_projection_forward_ref, no_external, rays)
-    assert scratch.numel() == 0
-
-    _, _, ray_grad_scratch = op(
-        ftheta_projection_forward_ref,
-        no_external,
-        rays.detach().clone().requires_grad_(True),
-    )
-    assert ray_grad_scratch.shape[0] == rays.shape[0]
-    assert ray_grad_scratch.numel() > 0
-
-
-def test_image_points_to_camera_rays_ftheta_scratch_gating(
-    ftheta_projection_forward_ref, no_external, sensor_device: torch.device
-):
-    """Inverse direction also gates scratch by requires_grad."""
-    pp = ftheta_projection_forward_ref.principal_point
-    image_points = pp.reshape(1, 2) + torch.tensor([[2.0, 1.0]], device=sensor_device)
-    op = torch.ops.gsplat_sensors.image_points_to_camera_rays_ftheta_no_external
-
-    _, scratch = op(ftheta_projection_forward_ref, no_external, image_points)
-    assert scratch.numel() == 0
-
-    _, grad_scratch = op(
-        ftheta_projection_forward_ref,
-        no_external,
-        image_points.detach().clone().requires_grad_(True),
-    )
-    assert grad_scratch.shape[0] == image_points.shape[0]
-    assert grad_scratch.numel() > 0
-
-
 def _ftheta_dynamic_pose_tensors(pose: DynamicPose, device: torch.device):
     return unpack_dynamic_pose_components(
         pose,
@@ -2288,104 +2248,112 @@ def _ftheta_dynamic_pose_tensors(pose: DynamicPose, device: torch.device):
     )
 
 
-def test_project_world_points_mean_pose_ftheta_scratch_shapes(
-    ftheta_projection_forward_ref, no_external, windshield_distortion, dynamic_pose
+@pytest.mark.parametrize(
+    "distortion_fixture, op_suffix, expected_strides",
+    [
+        ("no_external", "no_external", (8, 8, 10, 11, 8, 9)),
+        (
+            "windshield_distortion",
+            "bivariate_windshield",
+            (8, 12, 10, 11, 12, 12),
+        ),
+    ],
+)
+def test_ftheta_forward_scratch_abi_all_op_families(
+    request,
+    distortion_fixture,
+    op_suffix,
+    expected_strides,
+    ftheta_projection_forward_ref,
+    dynamic_pose,
+    static_pose,
 ):
-    """Verify FTheta mean-pose scratch is (N, 10) for both no-external and bivariate paths."""
+    """Every FTheta forward policy variant must preserve grad gating and stride."""
+    distortion = request.getfixturevalue(distortion_fixture)
     device = ftheta_projection_forward_ref.principal_point.device
-    world_points = torch.tensor(
-        [[0.0, 0.0, 1.5], [0.1, -0.1, 2.0]], device=device
-    ).requires_grad_(True)
+    rays = _ftheta_synthetic_rays(device).detach()
+    image_points = (
+        ftheta_projection_forward_ref.principal_point.reshape(1, 2)
+        + torch.tensor([[2.0, 1.0], [-1.5, 0.7]], device=device)
+    ).detach()
+    world_points = torch.tensor([[0.1, 0.05, 1.6], [-0.1, 0.08, 2.1]], device=device)
     start_t, start_r, end_t, end_r = _ftheta_dynamic_pose_tensors(dynamic_pose, device)
-
-    (
-        *_,
-        scratch_no_external,
-    ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_ftheta_no_external(
-        ftheta_projection_forward_ref,
-        no_external,
-        world_points,
-        start_t,
-        start_r,
-        end_t,
-        end_r,
-        0,
-        10,
+    translations, rotations, _ = _unpack_static_pose(
+        static_pose,
+        device,
+        torch.float32,
+        allow_device_transfer=True,
     )
-    assert scratch_no_external.shape == (world_points.shape[0], 10)
 
-    (
-        *_,
-        scratch_bivariate,
-    ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_ftheta_bivariate_windshield(
-        ftheta_projection_forward_ref,
-        windshield_distortion,
-        world_points,
-        start_t,
-        start_r,
-        end_t,
-        end_r,
-        0,
-        10,
-    )
-    assert scratch_bivariate.shape == (world_points.shape[0], 10)
+    cases = [
+        ("camera_rays_to_image_points", rays, ()),
+        ("image_points_to_camera_rays", image_points, ()),
+        (
+            "project_world_points_mean_pose",
+            world_points,
+            (start_t, start_r, end_t, end_r, 0, 10),
+        ),
+        (
+            "project_world_points_shutter_pose",
+            world_points,
+            (
+                start_t,
+                start_r,
+                end_t,
+                end_r,
+                100,
+                80,
+                int(ShutterType.ROLLING_TOP_TO_BOTTOM),
+                0,
+                10,
+                1,
+                0.01,
+                0.01,
+                0.5,
+            ),
+        ),
+        (
+            "image_points_to_world_rays_static_pose",
+            image_points,
+            (translations, rotations, 7),
+        ),
+        (
+            "image_points_to_world_rays_shutter_pose",
+            image_points,
+            (
+                start_t,
+                start_r,
+                end_t,
+                end_r,
+                100,
+                80,
+                int(ShutterType.ROLLING_TOP_TO_BOTTOM),
+                0,
+                10,
+            ),
+        ),
+    ]
 
+    for (family, primary_input, extra_args), expected_stride in zip(
+        cases, expected_strides, strict=True
+    ):
+        op = getattr(torch.ops.gsplat_sensors, f"{family}_ftheta_{op_suffix}")
+        *_, scratch = op(
+            ftheta_projection_forward_ref,
+            distortion,
+            primary_input,
+            *extra_args,
+        )
+        assert scratch.numel() == 0, family
 
-def test_project_world_points_shutter_pose_ftheta_scratch_shapes(
-    ftheta_projection_forward_ref, no_external, windshield_distortion, dynamic_pose
-):
-    """Verify FTheta shutter-pose scratch is (N, 11), with alpha stored in slot 10."""
-    device = ftheta_projection_forward_ref.principal_point.device
-    world_points = torch.tensor(
-        [[0.1, 0.05, 1.6], [-0.1, 0.08, 2.1]], device=device
-    ).requires_grad_(True)
-    start_t, start_r, end_t, end_r = _ftheta_dynamic_pose_tensors(dynamic_pose, device)
-
-    (
-        *_,
-        scratch_no_external,
-    ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_ftheta_no_external(
-        ftheta_projection_forward_ref,
-        no_external,
-        world_points,
-        start_t,
-        start_r,
-        end_t,
-        end_r,
-        100,
-        80,
-        int(ShutterType.ROLLING_TOP_TO_BOTTOM),
-        0,
-        10,
-        1,
-        0.01,
-        0.01,
-        0.5,
-    )
-    assert scratch_no_external.shape == (world_points.shape[0], 11)
-
-    (
-        *_,
-        scratch_bivariate,
-    ) = torch.ops.gsplat_sensors.project_world_points_shutter_pose_ftheta_bivariate_windshield(
-        ftheta_projection_forward_ref,
-        windshield_distortion,
-        world_points,
-        start_t,
-        start_r,
-        end_t,
-        end_r,
-        100,
-        80,
-        int(ShutterType.ROLLING_TOP_TO_BOTTOM),
-        0,
-        10,
-        1,
-        0.01,
-        0.01,
-        0.5,
-    )
-    assert scratch_bivariate.shape == (world_points.shape[0], 11)
+        grad_input = primary_input.detach().clone().requires_grad_(True)
+        *_, grad_scratch = op(
+            ftheta_projection_forward_ref,
+            distortion,
+            grad_input,
+            *extra_args,
+        )
+        assert grad_scratch.shape == (primary_input.shape[0], expected_stride), family
 
 
 @pytest.mark.gradcheck
@@ -2412,6 +2380,45 @@ def test_camera_rays_to_image_points_ftheta_no_external_gradcheck(
         )[0]
 
     assert torch.autograd.gradcheck(fn, (rays,), **GRADCHECK_KWARGS_FTHETA_PROJECT)
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize(
+    "projection_fixture",
+    ["ftheta_projection_forward_ref", "ftheta_projection_backward_ref"],
+)
+def test_ftheta_bivariate_camera_rays_to_image_points_nonidentity_gradcheck(
+    request, projection_fixture, windshield_distortion
+):
+    """Exercise FTheta bivariate forward scratch replay through public autograd."""
+    projection = request.getfixturevalue(projection_fixture)
+    rays = torch.tensor(
+        [[0.04, 0.03, 1.0], [-0.05, 0.02, 1.1]],
+        device=projection.principal_point.device,
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    distortion_coeffs = _make_distortion_coeffs_f64(windshield_distortion)
+    with torch.no_grad():
+        distortion_coeffs[0] += 0.01
+        distortion_coeffs[7] += 0.002
+
+    def fn(camera_rays, coeffs):
+        distortion = _build_distortion(
+            windshield_distortion, ReferencePolynomial.FORWARD, coeffs
+        )
+        return camera_rays_to_image_points(
+            camera_rays,
+            projection,
+            distortion,
+            allow_device_transfer=True,
+        )[0]
+
+    assert torch.autograd.gradcheck(
+        fn,
+        (rays, distortion_coeffs),
+        **GRADCHECK_KWARGS_FTHETA_PROJECT,
+    )
 
 
 @pytest.mark.gradcheck

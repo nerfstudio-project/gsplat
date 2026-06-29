@@ -117,8 +117,11 @@ gsplat/sensors/kernels/
       math.cuh                      # float3 helpers + normalize3 bwd
 ```
 
-There is no `include/projective_sensor.h` trait header — the kernel layer does
-not use a C++ traits contract.
+There is no `include/projective_sensor.h` projection-trait header. The forward
+fisheye and FTheta CUDA paths do use a sensor-local compile-time distortion
+contract: CUDA-only `DistortionPolicy` structs select the implementation, and
+host-safe `DistortionScratchTraits` specializations define each tuple's scratch
+layout. Backward kernels and pinhole remain hand-written per distortion.
 
 ## Native split: bridge / CUDA-only / Torch-only
 
@@ -130,16 +133,19 @@ pulling Torch templates through the compiler.
 
 | File extension | Compiler | Allowed includes | Role |
 | --- | --- | --- | --- |
-| `*_params.h` | both | `<cstdint>`, sibling `*_params.h`, the forward-declared `cudaStream_t` | Bridge: POD structs + `_launch` prototypes. No CUDA, no Torch. |
+| `*_params.h` | both | `<cstdint>`, sibling `*_params.h`, the forward-declared `cudaStream_t` | Bridge: POD structs, `_launch` prototypes, and host-safe enum, tag, and trait contracts. No CUDA device code, no Torch. |
 | `*_kernel.cuh` | nvcc | `*_params.h`, other `*_kernel.cuh`, `<cuda_runtime.h>`, `gsplat/geometry` headers (`quaternion.cuh`, `pose.cuh`, `coordinate_conversions.cuh`) | CUDA-only device math, per-thread structs, `__device__` helpers. |
 | `*_kernel.cu` / `*_kernel_backward.cu` | nvcc | matching `.cuh`, `<c10/cuda/CUDAException.h>` | `__global__` definitions, per-pair `_launch` definitions. |
 | `*_torch.h` / `.cpp` | host C++ | `*_params.h`, ATen / `torch::CustomClassHolder` | Host structs, validators, Torch entry functions. |
 | `ext.cpp` | host C++ | all `*_torch.h` | `TORCH_LIBRARY` + `PYBIND11_MODULE`. |
 
-The bridge seam is exactly two declarations: an opaque `CUstream_st`
-forward-declaration aliased as `cudaStream_t` in `camera_params.h`, plus the
-POD `KernelParameters` structs. Every other type leaks only on one side or
-the other.
+The bridge seam is deliberately host-safe rather than limited to two
+declarations. It includes the opaque `CUstream_st` forward-declaration aliased
+as `cudaStream_t`, POD `KernelParameters` structs and launch prototypes, plus
+plain enum, tag, and `constexpr` trait contracts such as `DistortionSensor`,
+`DistortionOpFamily`, `DistortionDirection`, the distortion policy tags, and
+`DistortionScratchTraits`. CUDA device types and Torch types remain on their
+respective sides of the seam.
 
 ## Three-tier C++ representation
 
@@ -154,15 +160,15 @@ table below states what each one is actually called.
 | OpenCV pinhole | `gsplat_sensors::OpenCVPinholeProjection` | `OpenCVPinholeProjection_KernelParameters` | `OpenCVPinholeParams` |
 | FTheta | `gsplat_sensors::FThetaProjection` | `FThetaProjection_KernelParameters` | `FThetaParams` |
 | OpenCV fisheye | `gsplat_sensors::OpenCVFisheyeProjection` | `OpenCVFisheyeProjection_KernelParameters` | `OpenCVFisheyeParams` |
-| No external distortion | `gsplat_sensors::NoExternalDistortion` | `NoExternalDistortion_KernelParameters` (empty) | `NoExternalDistortion_Parameters` (empty no-op tag) |
-| Bivariate windshield | `gsplat_sensors::BivariateWindshieldDistortion` | `BivariateWindshieldDistortion_KernelParameters` | `BivariateWindshieldParams` |
+| No external distortion | `gsplat_sensors::NoExternalDistortion` | `NoExternalDistortion_KernelParameters` (empty) | `NoExternalDistortionPolicy::Params` (empty identity policy state) |
+| Bivariate windshield | `gsplat_sensors::BivariateWindshieldDistortion` | `BivariateWindshieldDistortion_KernelParameters` | `BivariateWindshieldPolicy::Params` (`BivariateWindshieldParams`) |
 | Row-offset spinning LiDAR | `gsplat_sensors::RowOffsetStructuredSpinningLidarProjection` | `RowOffsetStructuredSpinningLidarProjection_KernelParameters` | raw table/POD access in `lidar_kernel.cuh` |
 
 The naming asymmetry is intentional and worth flagging: projection per-thread
 structs drop the `Projection` suffix (`OpenCVPinholeParams`, `FThetaParams`,
-`OpenCVFisheyeParams`), and the bivariate per-thread struct is
-`BivariateWindshieldParams`. Only the two empty / no-op slots follow the
-`_Parameters` suffix convention.
+`OpenCVFisheyeParams`). Forward fisheye and FTheta access distortion state
+through `NoExternalDistortionPolicy` or `BivariateWindshieldPolicy`; the latter's
+`Params` alias names the concrete `BivariateWindshieldParams` register struct.
 
 The Torch host structs store per-component `at::Tensor` members (no packed
 wire format) plus frozen scalars / arrays such as the
@@ -173,9 +179,11 @@ into the bridge POD. No tensor allocation or device transfer happens there.
 
 ## Polymorphism and Dispatch
 
-There is no C++ trait class, no `std::variant`, no runtime enum tag at the
-C++/CUDA boundary. Polymorphism is realised in three layers, all visible
-from Python:
+There is no runtime `std::variant` or distortion enum at the C++/CUDA boundary.
+Python still selects a concrete registered op, while the forward fisheye and
+FTheta launchers explicitly instantiate one CUDA `DistortionPolicy` per op.
+`DistortionScratchTraits` is a compile-time layout contract, not runtime
+polymorphism. The public dispatch remains visible in three layers:
 
 **Type definition (C++ via `torch::class_<>`).** `ext.cpp` registers the camera
 classes (`OpenCVPinholeProjection`, `FThetaProjection`,
@@ -317,11 +325,11 @@ trajectory backward path where query time is differentiable.
 | `kernels/cuda/build.py` | `get_build_parameters()` + `build_and_load_sensors_cuda()` JIT entry; `DEBUG` / `NVCC_FLAGS` / `VERBOSE` env handling; stale ninja lock cleanup. |
 | `kernels/cuda/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
 | `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter and Newton-iteration bounds. Forward-declared `cudaStream_t`. |
-| `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters` (empty) + `BivariateWindshieldDistortion_KernelParameters`. |
-| `csrc/camera_kernel.cuh` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/cuda/csrc/quaternion.cuh`. |
+| `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters`, `BivariateWindshieldDistortion_KernelParameters`, `DistortionSensor`, `DistortionOpFamily`, `DistortionDirection`, the policy tags, and host-safe `DistortionScratchTraits` specializations. |
+| `csrc/camera_kernel.cuh` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/cuda/csrc/pose.cuh`. |
 | `csrc/ftheta_kernel.cuh` / `.cu` / `_backward.cu` | FTheta device math, forward kernels, and backward kernels. |
 | `csrc/fisheye_kernel.cuh` / `.cu` / `_backward.cu` | OpenCV fisheye device math, forward kernels, and backward kernels. |
-| `csrc/external_distortion_kernel.cuh` | `BivariateWindshieldParams` + `NoExternalDistortion_Parameters` no-op tag + header-only bivariate distortion math (no companion `.cu`). |
+| `csrc/external_distortion_kernel.cuh` | `NoExternalDistortionPolicy`, `BivariateWindshieldPolicy`, `BivariateWindshieldParams`, and header-only bivariate distortion math (no companion `.cu`). `apply_bivariate_distortion` normalizes its input internally. |
 | `csrc/math.cuh` | `safe_nonzero`, `add3 / sub3 / scale3 / dot3`, `normalize3` forward and backward. |
 | `gsplat/geometry/.../coordinate_conversions.cuh` | Geometry-owned header-only `sincos_t` and `spherical_to_cartesian` / `cartesian_to_spherical` ray<->angle conversions shared by the sensor kernels. |
 | `csrc/shutter_type.h` | `gsplat_sensors::ShutterType` enum class (source of truth; verified at Python import). |
@@ -434,8 +442,10 @@ the wheel path is the deployment workflow.
 - `NoExternalDistortion` is explicit at the public API; `None` is rejected
   with a `TypeError`.
 - Cross-family polymorphism is realised through Python `dict` dispatch
-  tables in `projective_sensor_ops.py`. No `std::variant`, no runtime enum
-  tag, no C++ trait class at the kernel boundary.
+  tables in `projective_sensor_ops.py`. There is no `std::variant` or runtime
+  distortion enum at the kernel boundary. Forward fisheye and FTheta kernels
+  use compile-time `DistortionPolicy` and `DistortionScratchTraits`; backward
+  kernels and pinhole still use separate hand-written bodies.
 - Each `(op, projection, distortion[, _backward])` triple has its own
   `m.def` binding, its own `torch.autograd.Function`, and its own dispatch
   entry. Adding a registered class without populating every table fails the
