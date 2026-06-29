@@ -25,8 +25,9 @@
 #    include <c10/cuda/CUDAStream.h>
 
 #    include "Common.h"
-#    include "Rasterization.h"
 #    include "Dispatch.h"
+#    include "Rasterization.h"
+#    include "Utils.cuh"
 
 namespace gsplat
 {
@@ -49,6 +50,10 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     const bool *__restrict__ masks,        // [I, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
+    const uint32_t I,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const uint32_t block_offset,
     const int32_t *__restrict__ isect_offsets, // [I, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,   // [n_isects]
     float *__restrict__ render_colors,         // [I, image_height, image_width, CDIM]
@@ -68,13 +73,16 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     );
     static_assert(PIXELS_PER_THREAD > 0, "PIXELS_PER_THREAD == 0 - CTA_SIZE must not exceed TILE_SIZE * TILE_SIZE");
 
-    const int32_t image_id     = blockIdx.x;
-    const uint32_t grid_width  = gridDim.z;
-    const uint32_t grid_height = gridDim.y;
+    const uint32_t linear_block_index = blockIdx.x + block_offset;
+    const uint32_t tiles_per_image    = tile_width * tile_height;
+    const int32_t image_id            = linear_block_index / tiles_per_image;
+    const uint32_t tile_linear        = linear_block_index % tiles_per_image;
+    const uint32_t grid_width         = tile_width;
+    const uint32_t grid_height        = tile_height;
 
-    const uint32_t tile_x = blockIdx.z;
-    const uint32_t tile_y = blockIdx.y;
-    const int32_t tile_id = blockIdx.y * grid_width + blockIdx.z;
+    const uint32_t tile_x = tile_linear % grid_width;
+    const uint32_t tile_y = tile_linear / grid_width;
+    const int32_t tile_id = tile_y * grid_width + tile_x;
 
     const uint32_t tid      = threadIdx.x;
     const uint32_t thread_x = tid & TILE_MASK;   // X & 0xF(15) == X % 16
@@ -152,11 +160,10 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    const int32_t range_start = isect_offsets[tile_id];
-    const int32_t range_end
-        = (image_id == (int32_t)gridDim.x - 1) && (tile_id == (int32_t)(grid_width * grid_height) - 1)
-            ? n_isects
-            : isect_offsets[tile_id + 1];
+    const int32_t range_start  = isect_offsets[tile_id];
+    const int32_t range_end    = (image_id == (int32_t)I - 1) && (tile_id == (int32_t)(grid_width * grid_height) - 1)
+                                   ? n_isects
+                                   : isect_offsets[tile_id + 1];
     const uint32_t num_batches = (range_end - range_start + BATCH_SIZE - 1) / BATCH_SIZE;
 
     extern __shared__ int s[];
@@ -316,8 +323,8 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const uint32_t grid_h   = isect_offsets.size(-2);
     const uint32_t grid_w   = isect_offsets.size(-1);
     const uint32_t n_isects = flatten_ids.size(0);
-
-    const dim3 grid = {I, grid_h, grid_w};
+    const uint32_t n_tiles  = I * grid_h * grid_w;
+    const dim3 grid         = {n_tiles, 1, 1};
 
     const int32_t channels = colors.size(-1);
     TORCH_CHECK_VALUE(
@@ -367,6 +374,10 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
                     masks_ptr,
                     image_width,
                     image_height,
+                    I,
+                    grid_w,
+                    grid_h,
+                    0,
                     isect_offsets.const_data_ptr<int32_t>(),
                     flatten_ids.const_data_ptr<int32_t>(),
                     renders.data_ptr<float>(),
@@ -396,6 +407,131 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     };
     const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernel));
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
+}
+
+void launch_rasterize_to_pixels_3dgs_fwd_kernels(
+    // Gaussian parameters
+    const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
+    const at::Tensor conics,                    // [..., N, 3] or [nnz, 3]
+    const at::Tensor colors,                    // [..., N, channels] or [nnz, channels]
+    const at::Tensor opacities,                 // [..., N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [..., channels]
+    const at::optional<at::Tensor> masks,       // [..., grid_h, grid_w]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor isect_offsets, // [..., grid_h, grid_w]
+    const at::Tensor flatten_ids,   // [n_isects]
+    // outputs
+    at::Tensor renders, // [..., image_height, image_width, channels]
+    at::Tensor alphas,  // [..., image_height, image_width]
+    at::Tensor last_ids // [..., image_height, image_width]
+)
+{
+    const bool packed = means2d.dim() == 2;
+
+    const uint32_t N        = packed ? 0 : means2d.size(-2);
+    const uint32_t I        = alphas.numel() / (image_height * image_width);
+    const uint32_t grid_h   = isect_offsets.size(-2);
+    const uint32_t grid_w   = isect_offsets.size(-1);
+    const uint32_t n_isects = flatten_ids.size(0);
+    const uint32_t n_tiles  = I * grid_h * grid_w;
+
+    const int32_t channels = colors.size(-1);
+    TORCH_CHECK_VALUE(
+        SupportedChannels::contains(channels),
+        "Unsupported number of color channels: ",
+        channels,
+        ". To add support, rebuild gsplat with this channel count included "
+        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+    );
+
+    auto launch_kernels = [&]<typename ChannelsT>()
+    {
+        constexpr uint32_t CDIM = ChannelsT::value;
+
+        auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
+        {
+            const dim3 threads       = dim3{CTA_SIZE, 1, 1};
+            const int64_t shmem_size = CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
+
+            const float *bg_ptr   = backgrounds.has_value() ? backgrounds.value().const_data_ptr<float>() : nullptr;
+            const bool *masks_ptr = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
+
+            for(const auto device_id: c10::irange(c10::cuda::device_count()))
+            {
+                C10_CUDA_CHECK(cudaSetDevice(device_id));
+                if(cudaFuncSetAttribute(
+                       rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
+                       cudaFuncAttributeMaxDynamicSharedMemorySize,
+                       shmem_size
+                   )
+                   != cudaSuccess)
+                {
+                    AT_ERROR(
+                        "Failed to set maximum shared memory size (requested ",
+                        shmem_size,
+                        " bytes), try lowering tile_size."
+                    );
+                }
+                auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+                int64_t block_offset, block_count;
+                std::tie(block_offset, block_count) = chunk(n_tiles, device_id);
+                if(block_count > 0)
+                {
+                    const dim3 grid = {static_cast<uint32_t>(block_count), 1, 1};
+                    rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
+                        <<<grid, threads, shmem_size, stream>>>(
+                            N,
+                            n_isects,
+                            packed,
+                            reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
+                            reinterpret_cast<const vec3 *>(conics.const_data_ptr<float>()),
+                            colors.const_data_ptr<float>(),
+                            opacities.const_data_ptr<float>(),
+                            bg_ptr,
+                            masks_ptr,
+                            image_width,
+                            image_height,
+                            I,
+                            grid_w,
+                            grid_h,
+                            block_offset,
+                            isect_offsets.const_data_ptr<int32_t>(),
+                            flatten_ids.const_data_ptr<int32_t>(),
+                            renders.data_ptr<float>(),
+                            alphas.data_ptr<float>(),
+                            last_ids.data_ptr<int32_t>()
+                        );
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                }
+            }
+        };
+
+        if(tile_size == 16)
+        {
+            launch_variant.template operator()<16, 64>();
+        }
+        else if(tile_size == 4)
+        {
+            launch_variant.template operator()<4, 16>();
+        }
+        else
+        {
+            AT_ERROR("Unsupported tile_size ", tile_size, "; supported values are {4, 16}.");
+        }
+    };
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch_kernels));
+    TORCH_CHECK(
+        dispatched,
+        "dispatch failed: no matching compile-time instantiation for runtime "
+        "parameters"
+    );
+
+    merge_streams();
 }
 } // namespace gsplat
 

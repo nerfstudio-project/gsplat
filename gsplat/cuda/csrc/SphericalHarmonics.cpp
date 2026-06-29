@@ -151,6 +151,24 @@ SphericalHarmonicsFwdResult spherical_harmonics_fwd(
     };
 }
 
+at::Tensor spherical_harmonics_fwd_privateuseone(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &coeffs,             // [N, K, D]
+    const at::optional<at::Tensor> &masks // [..., N]
+)
+{
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
+
+    auto out_shape    = dirs.sizes().vec();
+    out_shape.back()  = coeffs.size(-1);
+    at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
+
+    launch_spherical_harmonics_fwd_kernels(degrees_to_use, dirs, coeffs, masks, colors);
+    return colors; // [..., N, D]
+}
+
 // Full backward for spherical_harmonics.
 // `compute_v_dirs` selects whether to compute the direction gradient. It is an
 // explicit argument rather than something inferred from a tensor's
@@ -241,7 +259,7 @@ void assemble_proj_features_unpacked_fwd(
     CHECK_INPUT(means);
     CHECK_INPUT(campos);
     CHECK_INPUT(coeffs);
-    CHECK_CUDA(out);
+    CHECK_DEVICE(out);
     TORCH_CHECK(out.is_contiguous(), "out must be contiguous");
     TORCH_CHECK(means.scalar_type() == at::kFloat, "means must be float32");
     TORCH_CHECK(campos.scalar_type() == at::kFloat, "campos must be float32");
@@ -282,7 +300,7 @@ void assemble_proj_features_unpacked_fwd(
     }
     if(relu_mask.has_value())
     {
-        CHECK_CUDA(relu_mask.value());
+        CHECK_DEVICE(relu_mask.value());
         TORCH_CHECK(relu_mask.value().is_contiguous(), "relu_mask must be contiguous");
         TORCH_CHECK(relu_mask.value().scalar_type() == at::kBool, "relu_mask must be bool");
         TORCH_CHECK(relu_mask.value().numel() == lead * Dc, "relu_mask numel mismatch");
@@ -567,10 +585,59 @@ at::Tensor assemble_proj_features(
     );
 }
 
+std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_bwd_privateuseone(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,                // [..., N, 3]
+    const at::Tensor &coeffs,              // [N, K, D]
+    const at::optional<at::Tensor> &masks, // [..., N]
+    const at::Tensor &v_colors,            // [..., N, D]
+    bool compute_v_dirs
+)
+{
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
+    CHECK_INPUT(v_colors);
+    TORCH_CHECK(
+        v_colors.size(-1) == coeffs.size(-1),
+        "v_colors last dim (",
+        v_colors.size(-1),
+        ") must match coeffs last dim (",
+        coeffs.size(-1),
+        ")"
+    );
+
+    at::Tensor v_coeffs_accum = at::zeros(coeffs.sizes(), coeffs.options().dtype(at::kFloat));
+    at::Tensor v_dirs;
+    if(compute_v_dirs)
+    {
+        v_dirs = at::zeros_like(dirs);
+    }
+
+    launch_spherical_harmonics_bwd_kernels(
+        degrees_to_use,
+        dirs,
+        coeffs,
+        masks,
+        v_colors,
+        v_coeffs_accum,
+        v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
+    );
+
+    at::Tensor v_coeffs
+        = (coeffs.scalar_type() == at::kFloat) ? v_coeffs_accum : v_coeffs_accum.to(coeffs.scalar_type());
+    return std::make_tuple(v_coeffs, as_optional_tensor(v_dirs));
+}
+
 void register_spherical_harmonics_cuda_impl(torch::Library &m)
 {
     m.impl("spherical_harmonics", to_torch_op<&spherical_harmonics_fwd>);
     m.impl("spherical_harmonics_bwd", to_torch_op<&spherical_harmonics_bwd>);
     m.impl("assemble_proj_features_unpacked_fwd", &assemble_proj_features_unpacked_fwd);
+}
+
+void register_spherical_harmonics_privateuseone_impl(torch::Library &m)
+{
+    m.impl("spherical_harmonics", to_torch_op<&spherical_harmonics_fwd_privateuseone>);
+    m.impl("spherical_harmonics_bwd", to_torch_op<&spherical_harmonics_bwd_privateuseone>);
 }
 } // namespace gsplat

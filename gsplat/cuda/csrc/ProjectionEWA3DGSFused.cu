@@ -36,6 +36,8 @@ namespace cg = cooperative_groups;
 
 template<typename scalar_t>
 __global__ void projection_ewa_3dgs_fused_fwd_kernel(
+    const int64_t gaussian_offset,
+    const int64_t gaussian_count,
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
@@ -61,15 +63,17 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     scalar_t *__restrict__ compensations // [B, C, N] optional
 )
 {
-    // parallelize over B * C * N.
-    uint32_t idx = cg::this_grid().thread_rank();
-    if(idx >= B * C * N)
+    // parallelize over B * C * gaussian_count.
+    int64_t idx         = cg::this_grid().thread_rank();
+    const int64_t count = static_cast<int64_t>(B) * C * gaussian_count;
+    if(idx >= count)
     {
         return;
     }
-    const uint32_t bid = idx / (C * N); // batch id
-    const uint32_t cid = (idx / N) % C; // camera id
-    const uint32_t gid = idx % N;       // gaussian id
+    const uint32_t bid       = idx / (C * gaussian_count);             // batch id
+    const uint32_t cid       = (idx / gaussian_count) % C;             // camera id
+    const uint32_t gid       = idx % gaussian_count + gaussian_offset; // gaussian id
+    const int64_t global_idx = (static_cast<int64_t>(bid) * C + cid) * N + gid;
 
     // shift pointers to the current camera and gaussian
     means    += bid * N * 3 + gid * 3;
@@ -95,8 +99,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     posW2C(R, t, glm::make_vec3(means), mean_c);
     if(mean_c.z < near_plane || mean_c.z > far_plane)
     {
-        radii[idx * 2]     = 0;
-        radii[idx * 2 + 1] = 0;
+        radii[global_idx * 2]     = 0;
+        radii[global_idx * 2 + 1] = 0;
         return;
     }
 
@@ -148,8 +152,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     float det = add_blur(eps2d, covar2d, compensation);
     if(det <= 0.f)
     {
-        radii[idx * 2]     = 0;
-        radii[idx * 2 + 1] = 0;
+        radii[global_idx * 2]     = 0;
+        radii[global_idx * 2 + 1] = 0;
         return;
     }
 
@@ -167,8 +171,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
         }
         if(opacity < ALPHA_THRESHOLD)
         {
-            radii[idx * 2]     = 0;
-            radii[idx * 2 + 1] = 0;
+            radii[global_idx * 2]     = 0;
+            radii[global_idx * 2 + 1] = 0;
             return;
         }
         // Compute opacity-aware bounding box.
@@ -183,8 +187,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
 
     if(radius_x <= radius_clip && radius_y <= radius_clip)
     {
-        radii[idx * 2]     = 0;
-        radii[idx * 2 + 1] = 0;
+        radii[global_idx * 2]     = 0;
+        radii[global_idx * 2 + 1] = 0;
         return;
     }
 
@@ -194,23 +198,23 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
        || mean2d.y + radius_y <= 0
        || mean2d.y - radius_y >= image_height)
     {
-        radii[idx * 2]     = 0;
-        radii[idx * 2 + 1] = 0;
+        radii[global_idx * 2]     = 0;
+        radii[global_idx * 2 + 1] = 0;
         return;
     }
 
     // write to outputs
-    radii[idx * 2]       = (int32_t)radius_x;
-    radii[idx * 2 + 1]   = (int32_t)radius_y;
-    means2d[idx * 2]     = mean2d.x;
-    means2d[idx * 2 + 1] = mean2d.y;
-    depths[idx]          = mean_c.z;
-    conics[idx * 3]      = covar2d_inv[0][0];
-    conics[idx * 3 + 1]  = covar2d_inv[0][1];
-    conics[idx * 3 + 2]  = covar2d_inv[1][1];
+    radii[global_idx * 2]       = (int32_t)radius_x;
+    radii[global_idx * 2 + 1]   = (int32_t)radius_y;
+    means2d[global_idx * 2]     = mean2d.x;
+    means2d[global_idx * 2 + 1] = mean2d.y;
+    depths[global_idx]          = mean_c.z;
+    conics[global_idx * 3]      = covar2d_inv[0][0];
+    conics[global_idx * 3 + 1]  = covar2d_inv[0][1];
+    conics[global_idx * 3 + 2]  = covar2d_inv[1][1];
     if(compensations != nullptr)
     {
-        compensations[idx] = compensation;
+        compensations[global_idx] = compensation;
     }
 }
 
@@ -242,10 +246,9 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     uint32_t C = viewmats.size(-3);       // number of cameras
     uint32_t B = means.numel() / (N * 3); // number of batches
 
-    int64_t n_elements = B * C * N;
-    dim3 threads(256);
-    dim3 grid((n_elements + threads.x - 1) / threads.x);
-    int64_t shmem_size = 0; // No shared memory used in this kernel
+    int64_t n_elements             = B * C * N;
+    constexpr unsigned int threads = 256;
+    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
 
     if(n_elements == 0)
     {
@@ -253,42 +256,127 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
         return;
     }
 
+    auto stream = at::cuda::getCurrentCUDAStream();
     AT_DISPATCH_FLOATING_TYPES(
         means.scalar_type(),
         "projection_ewa_3dgs_fused_fwd_kernel",
         [&]()
         {
-            projection_ewa_3dgs_fused_fwd_kernel<scalar_t>
-                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                    B,
-                    C,
-                    N,
-                    means.const_data_ptr<scalar_t>(),
-                    covars.has_value() ? covars.value().const_data_ptr<scalar_t>() : nullptr,
-                    quats.has_value() ? quats.value().const_data_ptr<scalar_t>() : nullptr,
-                    scales.has_value() ? scales.value().const_data_ptr<scalar_t>() : nullptr,
-                    opacities.has_value() ? opacities.value().const_data_ptr<scalar_t>() : nullptr,
-                    viewmats.const_data_ptr<scalar_t>(),
-                    Ks.const_data_ptr<scalar_t>(),
-                    image_width,
-                    image_height,
-                    eps2d,
-                    near_plane,
-                    far_plane,
-                    radius_clip,
-                    camera_model,
-                    radii.data_ptr<int32_t>(),
-                    means2d.data_ptr<scalar_t>(),
-                    depths.data_ptr<scalar_t>(),
-                    conics.data_ptr<scalar_t>(),
-                    compensations.has_value() ? compensations.value().data_ptr<scalar_t>() : nullptr
-                );
+            projection_ewa_3dgs_fused_fwd_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+                0,
+                N,
+                B,
+                C,
+                N,
+                means.const_data_ptr<scalar_t>(),
+                covars.has_value() ? covars.value().const_data_ptr<scalar_t>() : nullptr,
+                quats.has_value() ? quats.value().const_data_ptr<scalar_t>() : nullptr,
+                scales.has_value() ? scales.value().const_data_ptr<scalar_t>() : nullptr,
+                opacities.has_value() ? opacities.value().const_data_ptr<scalar_t>() : nullptr,
+                viewmats.const_data_ptr<scalar_t>(),
+                Ks.const_data_ptr<scalar_t>(),
+                image_width,
+                image_height,
+                eps2d,
+                near_plane,
+                far_plane,
+                radius_clip,
+                camera_model,
+                radii.data_ptr<int32_t>(),
+                means2d.data_ptr<scalar_t>(),
+                depths.data_ptr<scalar_t>(),
+                conics.data_ptr<scalar_t>(),
+                compensations.has_value() ? compensations.value().data_ptr<scalar_t>() : nullptr
+            );
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     );
 }
 
+void launch_projection_ewa_3dgs_fused_fwd_kernels(
+    // inputs
+    const at::Tensor means,                   // [..., N, 3]
+    const at::optional<at::Tensor> covars,    // [..., N, 6] optional
+    const at::optional<at::Tensor> quats,     // [..., N, 4] optional
+    const at::optional<at::Tensor> scales,    // [..., N, 3] optional
+    const at::optional<at::Tensor> opacities, // [..., N] optional
+    const at::Tensor viewmats,                // [..., C, 4, 4]
+    const at::Tensor Ks,                      // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const CameraModelType camera_model,
+    // outputs
+    at::Tensor radii,                      // [..., C, N, 2]
+    at::Tensor means2d,                    // [..., C, N, 2]
+    at::Tensor depths,                     // [..., C, N]
+    at::Tensor conics,                     // [..., C, N, 3]
+    at::optional<at::Tensor> compensations // [..., C, N] optional
+)
+{
+    uint32_t N = means.size(-2);
+    uint32_t C = viewmats.size(-3);
+    uint32_t B = means.numel() / (N * 3);
+
+    constexpr unsigned int threads = 256;
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+        int64_t gaussian_offset, gaussian_count;
+        std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
+        int64_t n_elements                        = static_cast<int64_t>(B) * C * gaussian_count;
+        unsigned int blocks                       = ::cuda::ceil_div(n_elements, threads);
+        if(blocks > 0)
+        {
+            AT_DISPATCH_FLOATING_TYPES(
+                means.scalar_type(),
+                "projection_ewa_3dgs_fused_fwd_kernel",
+                [&]()
+                {
+                    projection_ewa_3dgs_fused_fwd_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+                        gaussian_offset,
+                        gaussian_count,
+                        B,
+                        C,
+                        N,
+                        means.const_data_ptr<scalar_t>(),
+                        covars.has_value() ? covars.value().const_data_ptr<scalar_t>() : nullptr,
+                        quats.has_value() ? quats.value().const_data_ptr<scalar_t>() : nullptr,
+                        scales.has_value() ? scales.value().const_data_ptr<scalar_t>() : nullptr,
+                        opacities.has_value() ? opacities.value().const_data_ptr<scalar_t>() : nullptr,
+                        viewmats.const_data_ptr<scalar_t>(),
+                        Ks.const_data_ptr<scalar_t>(),
+                        image_width,
+                        image_height,
+                        eps2d,
+                        near_plane,
+                        far_plane,
+                        radius_clip,
+                        camera_model,
+                        radii.data_ptr<int32_t>(),
+                        means2d.data_ptr<scalar_t>(),
+                        depths.data_ptr<scalar_t>(),
+                        conics.data_ptr<scalar_t>(),
+                        compensations.has_value() ? compensations.value().data_ptr<scalar_t>() : nullptr
+                    );
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                }
+            );
+        }
+    }
+    merge_streams();
+}
+
 template<typename scalar_t>
 __global__ void projection_ewa_3dgs_fused_bwd_kernel(
+    const int64_t gaussian_offset,
+    const int64_t gaussian_count,
     // fwd inputs
     const uint32_t B,
     const uint32_t C,
@@ -320,26 +408,32 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     scalar_t *__restrict__ v_viewmats // [B, C, 4, 4] optional
 )
 {
-    // parallelize over B * C * N.
-    uint32_t idx = cg::this_grid().thread_rank();
-    if(idx >= B * C * N || radii[idx * 2] <= 0 || radii[idx * 2 + 1] <= 0)
+    // parallelize over B * C * gaussian_count.
+    int64_t idx         = cg::this_grid().thread_rank();
+    const int64_t count = static_cast<int64_t>(B) * C * gaussian_count;
+    if(idx >= count)
     {
         return;
     }
-    const uint32_t bid = idx / (C * N); // batch id
-    const uint32_t cid = (idx / N) % C; // camera id
-    const uint32_t gid = idx % N;       // gaussian id
+    const uint32_t bid       = idx / (C * gaussian_count);             // batch id
+    const uint32_t cid       = (idx / gaussian_count) % C;             // camera id
+    const uint32_t gid       = idx % gaussian_count + gaussian_offset; // gaussian id
+    const int64_t global_idx = (static_cast<int64_t>(bid) * C + cid) * N + gid;
+    if(radii[global_idx * 2] <= 0 || radii[global_idx * 2 + 1] <= 0)
+    {
+        return;
+    }
 
     // shift pointers to the current camera and gaussian
     means    += bid * N * 3 + gid * 3;
     viewmats += bid * C * 16 + cid * 16;
     Ks       += bid * C * 9 + cid * 9;
 
-    conics += idx * 3;
+    conics += global_idx * 3;
 
-    v_means2d += idx * 2;
-    v_depths  += idx;
-    v_conics  += idx * 3;
+    v_means2d += global_idx * 2;
+    v_depths  += global_idx;
+    v_conics  += global_idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
     mat2 covar2d_inv   = mat2(conics[0], conics[1], conics[1], conics[2]);
@@ -350,8 +444,8 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     if(v_compensations != nullptr)
     {
         // vjp: compensation term
-        const float compensation   = compensations[idx];
-        const float v_compensation = v_compensations[idx];
+        const float compensation   = compensations[global_idx];
+        const float v_compensation = v_compensations[global_idx];
         add_blur_vjp(eps2d, covar2d_inv, compensation, v_compensation, v_covar2d);
     }
 
@@ -535,9 +629,9 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
 #    pragma unroll
                 for(uint32_t j = 0; j < 3; j++)
                 { // cols
-                    gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
+                    atomicAdd_system(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
-                gpuAtomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
+                atomicAdd_system(v_viewmats + i * 4 + 3, v_t[i]);
             }
         }
     }
@@ -578,10 +672,9 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     uint32_t C = viewmats.size(-3);       // number of cameras
     uint32_t B = means.numel() / (N * 3); // number of batches
 
-    int64_t n_elements = B * C * N;
-    dim3 threads(256);
-    dim3 grid((n_elements + threads.x - 1) / threads.x);
-    int64_t shmem_size = 0; // No shared memory used in this kernel
+    int64_t n_elements             = B * C * N;
+    constexpr unsigned int threads = 256;
+    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
 
     if(n_elements == 0)
     {
@@ -589,41 +682,139 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
         return;
     }
 
+    auto stream = at::cuda::getCurrentCUDAStream();
     AT_DISPATCH_FLOATING_TYPES(
         means.scalar_type(),
         "projection_ewa_3dgs_fused_bwd_kernel",
         [&]()
         {
-            projection_ewa_3dgs_fused_bwd_kernel<scalar_t>
-                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                    B,
-                    C,
-                    N,
-                    means.const_data_ptr<scalar_t>(),
-                    covars.has_value() ? covars.value().const_data_ptr<scalar_t>() : nullptr,
-                    covars.has_value() ? nullptr : quats.value().const_data_ptr<scalar_t>(),
-                    covars.has_value() ? nullptr : scales.value().const_data_ptr<scalar_t>(),
-                    viewmats.const_data_ptr<scalar_t>(),
-                    Ks.const_data_ptr<scalar_t>(),
-                    image_width,
-                    image_height,
-                    eps2d,
-                    camera_model,
-                    radii.const_data_ptr<int32_t>(),
-                    conics.const_data_ptr<scalar_t>(),
-                    compensations.has_value() ? compensations.value().const_data_ptr<scalar_t>() : nullptr,
-                    v_means2d.const_data_ptr<scalar_t>(),
-                    v_depths.const_data_ptr<scalar_t>(),
-                    v_conics.const_data_ptr<scalar_t>(),
-                    v_compensations.has_value() ? v_compensations.value().const_data_ptr<scalar_t>() : nullptr,
-                    v_means.data_ptr<scalar_t>(),
-                    covars.has_value() ? v_covars.data_ptr<scalar_t>() : nullptr,
-                    covars.has_value() ? nullptr : v_quats.data_ptr<scalar_t>(),
-                    covars.has_value() ? nullptr : v_scales.data_ptr<scalar_t>(),
-                    viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>() : nullptr
-                );
+            projection_ewa_3dgs_fused_bwd_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+                0,
+                N,
+                B,
+                C,
+                N,
+                means.const_data_ptr<scalar_t>(),
+                covars.has_value() ? covars.value().const_data_ptr<scalar_t>() : nullptr,
+                covars.has_value() ? nullptr : quats.value().const_data_ptr<scalar_t>(),
+                covars.has_value() ? nullptr : scales.value().const_data_ptr<scalar_t>(),
+                viewmats.const_data_ptr<scalar_t>(),
+                Ks.const_data_ptr<scalar_t>(),
+                image_width,
+                image_height,
+                eps2d,
+                camera_model,
+                radii.const_data_ptr<int32_t>(),
+                conics.const_data_ptr<scalar_t>(),
+                compensations.has_value() ? compensations.value().const_data_ptr<scalar_t>() : nullptr,
+                v_means2d.const_data_ptr<scalar_t>(),
+                v_depths.const_data_ptr<scalar_t>(),
+                v_conics.const_data_ptr<scalar_t>(),
+                v_compensations.has_value() ? v_compensations.value().const_data_ptr<scalar_t>() : nullptr,
+                v_means.data_ptr<scalar_t>(),
+                covars.has_value() ? v_covars.data_ptr<scalar_t>() : nullptr,
+                covars.has_value() ? nullptr : v_quats.data_ptr<scalar_t>(),
+                covars.has_value() ? nullptr : v_scales.data_ptr<scalar_t>(),
+                viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>() : nullptr
+            );
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     );
+}
+
+void launch_projection_ewa_3dgs_fused_bwd_kernels(
+    // inputs
+    // fwd inputs
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> scales, // [..., N, 3] optional
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const CameraModelType camera_model,
+    // fwd outputs
+    const at::Tensor radii,                       // [..., C, N, 2]
+    const at::Tensor conics,                      // [..., C, N, 3]
+    const at::optional<at::Tensor> compensations, // [..., C, N] optional
+    // grad outputs
+    const at::Tensor v_means2d,                     // [..., C, N, 2]
+    const at::Tensor v_depths,                      // [..., C, N]
+    const at::Tensor v_conics,                      // [..., C, N, 3]
+    const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
+    const bool viewmats_requires_grad,
+    // outputs
+    at::Tensor v_means,   // [..., N, 3]
+    at::Tensor v_covars,  // [..., N, 3, 3]
+    at::Tensor v_quats,   // [..., N, 4]
+    at::Tensor v_scales,  // [..., N, 3]
+    at::Tensor v_viewmats // [..., C, 4, 4]
+)
+{
+    uint32_t N = means.size(-2);
+    uint32_t C = viewmats.size(-3);
+    uint32_t B = means.numel() / (N * 3);
+
+    constexpr unsigned int threads = 256;
+
+    if(B == 0 || C == 0 || N == 0)
+    {
+        return;
+    }
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+
+        int64_t gaussian_offset, gaussian_count;
+        std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
+        int64_t n_elements                        = static_cast<int64_t>(B) * C * gaussian_count;
+        unsigned int blocks                       = ::cuda::ceil_div(n_elements, threads);
+        if(blocks > 0)
+        {
+            AT_DISPATCH_FLOATING_TYPES(
+                means.scalar_type(),
+                "projection_ewa_3dgs_fused_bwd_kernel",
+                [&]()
+                {
+                    projection_ewa_3dgs_fused_bwd_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+                        gaussian_offset,
+                        gaussian_count,
+                        B,
+                        C,
+                        N,
+                        means.const_data_ptr<scalar_t>(),
+                        covars.has_value() ? covars.value().const_data_ptr<scalar_t>() : nullptr,
+                        covars.has_value() ? nullptr : quats.value().const_data_ptr<scalar_t>(),
+                        covars.has_value() ? nullptr : scales.value().const_data_ptr<scalar_t>(),
+                        viewmats.const_data_ptr<scalar_t>(),
+                        Ks.const_data_ptr<scalar_t>(),
+                        image_width,
+                        image_height,
+                        eps2d,
+                        camera_model,
+                        radii.const_data_ptr<int32_t>(),
+                        conics.const_data_ptr<scalar_t>(),
+                        compensations.has_value() ? compensations.value().const_data_ptr<scalar_t>() : nullptr,
+                        v_means2d.const_data_ptr<scalar_t>(),
+                        v_depths.const_data_ptr<scalar_t>(),
+                        v_conics.const_data_ptr<scalar_t>(),
+                        v_compensations.has_value() ? v_compensations.value().const_data_ptr<scalar_t>() : nullptr,
+                        v_means.data_ptr<scalar_t>(),
+                        covars.has_value() ? v_covars.data_ptr<scalar_t>() : nullptr,
+                        covars.has_value() ? nullptr : v_quats.data_ptr<scalar_t>(),
+                        covars.has_value() ? nullptr : v_scales.data_ptr<scalar_t>(),
+                        viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>() : nullptr
+                    );
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                }
+            );
+        }
+    }
+    merge_streams();
 }
 } // namespace gsplat
 

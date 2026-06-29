@@ -161,6 +161,52 @@ QuatScaleToCovarPreciFwdResult quat_scale_to_covar_preci_fwd(
     };
 }
 
+std::tuple<at::optional<at::Tensor>, at::optional<at::Tensor>> quat_scale_to_covar_preci_fwd_privateuseone(
+    const at::Tensor &quats,  // [..., 4]
+    const at::Tensor &scales, // [..., 3]
+    bool compute_covar,
+    bool compute_preci,
+    bool triu
+)
+{
+    DEVICE_GUARD(quats);
+    check_quat_scale_to_covar_preci_inputs(quats, scales);
+
+    auto opt = quats.options();
+    at::DimVector out_shape(quats.sizes().slice(0, quats.dim() - 1));
+    if(triu)
+    {
+        out_shape.append({6});
+    }
+    else
+    {
+        out_shape.append({3, 3});
+    }
+
+    at::Tensor covars, precis;
+    if(compute_covar)
+    {
+        covars = at::empty(out_shape, opt);
+    }
+    if(compute_preci)
+    {
+        precis = at::empty(out_shape, opt);
+    }
+
+    launch_quat_scale_to_covar_preci_fwd_kernels(
+        quats,
+        scales,
+        triu,
+        compute_covar ? at::optional<at::Tensor>(covars) : at::nullopt,
+        compute_preci ? at::optional<at::Tensor>(precis) : at::nullopt
+    );
+
+    return std::make_tuple(
+        compute_covar ? at::optional<at::Tensor>(covars) : at::nullopt,
+        compute_preci ? at::optional<at::Tensor>(precis) : at::nullopt
+    );
+}
+
 QuatScaleToCovarPreciBwdResult quat_scale_to_covar_preci_bwd(
     const at::Tensor &quats,  // [..., 4]
     const at::Tensor &scales, // [..., 3]
@@ -204,10 +250,52 @@ QuatScaleToCovarPreciBwdResult quat_scale_to_covar_preci_bwd(
     };
 }
 
+std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd_privateuseone(
+    const at::Tensor &quats,  // [..., 4]
+    const at::Tensor &scales, // [..., 3]
+    bool triu,
+    const at::optional<at::Tensor> &v_covars, // [..., 3, 3] or [..., 6]
+    const at::optional<at::Tensor> &v_precis  // [..., 3, 3] or [..., 6]
+)
+{
+    DEVICE_GUARD(quats);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(scales);
+    if(v_covars.has_value())
+    {
+        CHECK_INPUT(v_covars.value());
+    }
+    if(v_precis.has_value())
+    {
+        CHECK_INPUT(v_precis.value());
+    }
+
+    at::Tensor v_scales = at::empty_like(scales);
+    at::Tensor v_quats  = at::empty_like(quats);
+
+    if(v_covars.has_value() || v_precis.has_value())
+    {
+        launch_quat_scale_to_covar_preci_bwd_kernels(quats, scales, triu, v_covars, v_precis, v_quats, v_scales);
+    }
+    else
+    {
+        v_scales.zero_();
+        v_quats.zero_();
+    }
+
+    return std::make_tuple(v_quats, v_scales);
+}
+
 void register_quat_scale_to_covar_cuda_impl(torch::Library &m)
 {
     m.impl("quat_scale_to_covar_preci", to_torch_op<&quat_scale_to_covar_preci_fwd>);
     m.impl("quat_scale_to_covar_preci_bwd", to_torch_op<&quat_scale_to_covar_preci_bwd>);
+}
+
+void register_quat_scale_to_covar_privateuseone_impl(torch::Library &m)
+{
+    m.impl("quat_scale_to_covar_preci", to_torch_op<&quat_scale_to_covar_preci_fwd_privateuseone>);
+    m.impl("quat_scale_to_covar_preci_bwd", to_torch_op<&quat_scale_to_covar_preci_bwd_privateuseone>);
 }
 } // namespace gsplat
 

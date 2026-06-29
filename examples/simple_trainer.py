@@ -106,6 +106,9 @@ class Config:
     camera_model: CameraModel = "pinhole"
     # Load EXIF exposure metadata from images (if available)
     load_exposure: bool = True
+    # Backend to train on: "cuda" for standard multi-process training,
+    # or "dgx" for torch-dgx single-process multi-GPU training.
+    backend: str = "cuda"
 
     # --- NCore-specific options (only used when data_type="ncore") ---
     # Camera sensor IDs to load (auto-detected from sequence if empty)
@@ -387,7 +390,7 @@ class Runner:
         self.world_rank = world_rank
         self.local_rank = local_rank
         self.world_size = world_size
-        self.device = f"cuda:{local_rank}"
+        self.device = f"{cfg.backend}:{local_rank}"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -1586,6 +1589,8 @@ if __name__ == "__main__":
         ),
     }
     cfg = tyro.extras.overridable_config_cli(configs)
+    if cfg.backend == "dgx":
+        import torch_dgx  # noqa: F401
     cfg.adjust_steps(cfg.steps_scaler)
 
     # try import extra dependencies
