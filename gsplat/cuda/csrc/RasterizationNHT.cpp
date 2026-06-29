@@ -1,6 +1,18 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include "Config.h"
@@ -149,21 +161,21 @@ rasterize_to_pixels_from_world_nht_3dgs_fwd(
         renders, alphas, render_depth_opt, render_normals_opt, last_ids)
 
     switch (channels) {
-        case 4:   __NHT_FWD_LAUNCH__(4, at::Half); break;
-        case 8:   __NHT_FWD_LAUNCH__(8, at::Half); break;
-        case 12:  __NHT_FWD_LAUNCH__(12, at::Half); break;
-        case 16:  __NHT_FWD_LAUNCH__(16, at::Half); break;
-        case 20:  __NHT_FWD_LAUNCH__(20, at::Half); break;
-        case 24:  __NHT_FWD_LAUNCH__(24, at::Half); break;
-        case 28:  __NHT_FWD_LAUNCH__(28, at::Half); break;
-        case 32:  __NHT_FWD_LAUNCH__(32, at::Half); break;
-        case 36:  __NHT_FWD_LAUNCH__(36, at::Half); break;
-        case 40:  __NHT_FWD_LAUNCH__(40, at::Half); break;
-        case 44:  __NHT_FWD_LAUNCH__(44, at::Half); break;
-        case 48:  __NHT_FWD_LAUNCH__(48, at::Half); break;
-        case 64:  __NHT_FWD_LAUNCH__(64, at::Half); break;
-        case 80:  __NHT_FWD_LAUNCH__(80, at::Half); break;
-        case 96:  __NHT_FWD_LAUNCH__(96, at::Half); break;
+        case 4:   __NHT_FWD_LAUNCH__(4,   at::Half); break;
+        case 8:   __NHT_FWD_LAUNCH__(8,   at::Half); break;
+        case 12:  __NHT_FWD_LAUNCH__(12,  at::Half); break;
+        case 16:  __NHT_FWD_LAUNCH__(16,  at::Half); break;
+        case 20:  __NHT_FWD_LAUNCH__(20,  at::Half); break;
+        case 24:  __NHT_FWD_LAUNCH__(24,  at::Half); break;
+        case 28:  __NHT_FWD_LAUNCH__(28,  at::Half); break;
+        case 32:  __NHT_FWD_LAUNCH__(32,  at::Half); break;
+        case 36:  __NHT_FWD_LAUNCH__(36,  at::Half); break;
+        case 40:  __NHT_FWD_LAUNCH__(40,  at::Half); break;
+        case 44:  __NHT_FWD_LAUNCH__(44,  at::Half); break;
+        case 48:  __NHT_FWD_LAUNCH__(48,  at::Half); break;
+        case 64:  __NHT_FWD_LAUNCH__(64,  at::Half); break;
+        case 80:  __NHT_FWD_LAUNCH__(80,  at::Half); break;
+        case 96:  __NHT_FWD_LAUNCH__(96,  at::Half); break;
         case 128: __NHT_FWD_LAUNCH__(128, at::Half); break;
         case 256: __NHT_FWD_LAUNCH__(256, at::Half); break;
         default: AT_ERROR("NHT fwd: unsupported channels: ", channels);
@@ -279,21 +291,21 @@ rasterize_to_pixels_from_world_nht_3dgs_bwd(
         v_depths_per_gauss_opt)
 
     switch (channels) {
-        case 4:   __NHT_BWD_LAUNCH__(4); break;
-        case 8:   __NHT_BWD_LAUNCH__(8); break;
-        case 12:  __NHT_BWD_LAUNCH__(12); break;
-        case 16:  __NHT_BWD_LAUNCH__(16); break;
-        case 20:  __NHT_BWD_LAUNCH__(20); break;
-        case 24:  __NHT_BWD_LAUNCH__(24); break;
-        case 28:  __NHT_BWD_LAUNCH__(28); break;
-        case 32:  __NHT_BWD_LAUNCH__(32); break;
-        case 36:  __NHT_BWD_LAUNCH__(36); break;
-        case 40:  __NHT_BWD_LAUNCH__(40); break;
-        case 44:  __NHT_BWD_LAUNCH__(44); break;
-        case 48:  __NHT_BWD_LAUNCH__(48); break;
-        case 64:  __NHT_BWD_LAUNCH__(64); break;
-        case 80:  __NHT_BWD_LAUNCH__(80); break;
-        case 96:  __NHT_BWD_LAUNCH__(96); break;
+        case 4:   __NHT_BWD_LAUNCH__(4);   break;
+        case 8:   __NHT_BWD_LAUNCH__(8);   break;
+        case 12:  __NHT_BWD_LAUNCH__(12);  break;
+        case 16:  __NHT_BWD_LAUNCH__(16);  break;
+        case 20:  __NHT_BWD_LAUNCH__(20);  break;
+        case 24:  __NHT_BWD_LAUNCH__(24);  break;
+        case 28:  __NHT_BWD_LAUNCH__(28);  break;
+        case 32:  __NHT_BWD_LAUNCH__(32);  break;
+        case 36:  __NHT_BWD_LAUNCH__(36);  break;
+        case 40:  __NHT_BWD_LAUNCH__(40);  break;
+        case 44:  __NHT_BWD_LAUNCH__(44);  break;
+        case 48:  __NHT_BWD_LAUNCH__(48);  break;
+        case 64:  __NHT_BWD_LAUNCH__(64);  break;
+        case 80:  __NHT_BWD_LAUNCH__(80);  break;
+        case 96:  __NHT_BWD_LAUNCH__(96);  break;
         case 128: __NHT_BWD_LAUNCH__(128); break;
         case 256: __NHT_BWD_LAUNCH__(256); break;
         default: AT_ERROR("NHT bwd: unsupported channels: ", channels);

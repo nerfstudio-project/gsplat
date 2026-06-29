@@ -606,6 +606,71 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel<Ext
     }
 };
 
+template <typename ExternalDistortionModel>
+struct PerfectOrthographicCameraModel : BaseCameraModel<PerfectOrthographicCameraModel<ExternalDistortionModel>, ExternalDistortionModel> {
+    // Orthographic (parallel) projection camera model.
+    //
+    // Unlike the central-projection models above, an orthographic camera maps a
+    // 3D camera-space point (x, y, z) to (fx*x + cx, fy*y + cy) independently of
+    // depth z. This matches gsplat's EWA `ortho_proj` (Utils.cuh). It is exposed
+    // here so the unscented-transform projection (ProjectionUT3DGSFused.cu) can
+    // handle CameraModelType::ORTHO; the UT forward path only ever calls
+    // camera_ray_to_image_point on camera-space points, never the inverse
+    // unprojection, so the parallel-ray geometry is fully expressible.
+
+    using Base = BaseCameraModel<PerfectOrthographicCameraModel, ExternalDistortionModel>;
+
+    struct KernelParameters : Base::KernelParameters {
+        const float *__restrict__ Ks;
+    };
+
+    struct Parameters : Base::Parameters {
+        std::array<float, 2> principal_point;
+        std::array<float, 2> focal_length;
+
+        inline __device__ Parameters(const KernelParameters& kernel_parameters, int camera_index)
+            : Base::Parameters(kernel_parameters, camera_index)
+            , principal_point({kernel_parameters.Ks[camera_index * 9 + 2], kernel_parameters.Ks[camera_index * 9 + 5]})
+            , focal_length({kernel_parameters.Ks[camera_index * 9 + 0], kernel_parameters.Ks[camera_index * 9 + 4]}) {}
+    };
+
+    inline __device__ PerfectOrthographicCameraModel(const KernelParameters& kernel_parameters, int camera_index)
+        : parameters(kernel_parameters, camera_index)
+    {
+    }
+
+    Parameters parameters;
+
+    inline __device__ auto camera_ray_to_image_point_impl(
+        glm::fvec3 const &cam_ray, float margin_factor
+    ) const -> typename Base::ImagePointReturn {
+        // Orthographic projection is depth-independent: x and y map directly to
+        // image coordinates, z is ignored. Points behind the camera are not
+        // rejected here (matching EWA ortho_proj); near/far culling is performed
+        // by the caller on the Gaussian center depth.
+        auto const image_point = glm::fvec2(
+            parameters.focal_length[0] * cam_ray.x + parameters.principal_point[0],
+            parameters.focal_length[1] * cam_ray.y + parameters.principal_point[1]
+        );
+
+        auto const valid = image_point_in_image_bounds_margin(
+            image_point, parameters.resolution, margin_factor
+        );
+
+        return {image_point, valid};
+    }
+
+    inline __device__ CameraRay image_point_to_camera_ray_impl(glm::fvec2 /*image_point*/
+    ) const {
+        // All orthographic rays are parallel to the optical axis. The per-pixel
+        // ray *origin* offset (x0, y0, 0) cannot be carried by the central
+        // CameraRay (direction-only) contract, so this returns the shared
+        // viewing direction. The UT projection path never invokes unprojection,
+        // so this is provided only to satisfy the camera-model interface.
+        return {glm::fvec3{0.f, 0.f, 1.f}, true};
+    }
+};
+
 template <typename ExternalDistortionModel, size_t N_MAX_UNDISTORTION_ITERATIONS = 5>
 struct OpenCVPinholeCameraModel
     : BaseCameraModel<OpenCVPinholeCameraModel<ExternalDistortionModel, N_MAX_UNDISTORTION_ITERATIONS>, ExternalDistortionModel> {
@@ -1548,6 +1613,7 @@ struct CameraModelWrapper {
 
 using CameraModelWrappers = TypeList<
     CameraModelWrapper<PerfectPinholeCameraModel>,
+    CameraModelWrapper<PerfectOrthographicCameraModel>,
     CameraModelWrapper<OpenCVPinholeCameraModel>,
     CameraModelWrapper<OpenCVFisheyeCameraModel>,
     CameraModelWrapper<FThetaCameraModel>

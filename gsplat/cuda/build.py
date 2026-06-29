@@ -130,13 +130,21 @@ def get_build_parameters():
     extra_ldflags = []
 
     if sys.platform == "win32":
-        extra_cflags += ["/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN"]
+        # /bigobj: some translation units (e.g. the ParallelBatch rasterizers,
+        # which instantiate ~200+ kernel template variants each) push the COFF
+        # object's section count high enough that MSVC's linker can silently
+        # fail to resolve their symbols without this flag.
+        extra_cflags += [
+            "/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN", "/bigobj"
+        ]
         extra_cuda_cflags += [
             "-std=c++20",
             "-allow-unsupported-compiler",
             "-Xcompiler",
             "/Zc:preprocessor",
             "-DWIN32_LEAN_AND_MEAN",
+            "-Xcompiler",
+            "/bigobj",
         ]
     else:
         extra_cflags = ["-std=c++20"]
@@ -225,6 +233,17 @@ def get_build_parameters():
         sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
 
     extra_ldflags += [] if WITH_SYMBOLS or sys.platform == "win32" else ["-s"]
+
+    if sys.platform == "win32":
+        # setuptools' bundled _msvccompiler.py hardcodes /LTCG (link-time
+        # code generation / whole-program optimization) for every Windows
+        # Release link. With ~47 translation units — a couple instantiating
+        # ~200+ kernel template variants each — this has been observed to
+        # silently drop exported symbols from the largest objects (LNK2001
+        # at link time despite the symbol being present and External in the
+        # object file when compiled/linked standalone without LTCG).
+        # Appended after setuptools' own ldflags, so this overrides it.
+        extra_ldflags += ["/LTCG:OFF"]
 
     if WITH_SYMBOLS:
         extra_cuda_cflags += ["-lineinfo"]

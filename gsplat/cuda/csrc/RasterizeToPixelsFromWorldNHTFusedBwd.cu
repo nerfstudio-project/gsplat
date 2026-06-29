@@ -2,6 +2,18 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
  * Fused NHT training backward.
  *
  * One kernel that backpropagates from dL/dRGB all the way to the splat
@@ -151,56 +163,88 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
     auto rs_params = RollingShutterParameters(
         viewmats0 + iid * 16,
         viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16);
-    const vec2 focal_length    = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
-    const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
 
     WorldRay ray;
     if (inside) {
         if (camera_model_type == CameraModelType::PINHOLE &&
             radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-            PerfectPinholeCameraModel::Parameters cm = {};
-            cm.resolution    = {image_width, image_height};
-            cm.shutter_type  = rs_type;
-            cm.principal_point = {principal_point.x, principal_point.y};
-            cm.focal_length    = {focal_length.x, focal_length.y};
-            cm.external_distortion_params = external_distortion_params.has_value()
-                ? &external_distortion_params.value() : nullptr;
-            ray = PerfectPinholeCameraModel(cm).element_to_world_ray_shutter_pose(j, i, rs_params);
+            if (external_distortion_params.has_value()) {
+                using CameraModel = PerfectPinholeCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_params },
+                    Ks,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
         } else if (camera_model_type == CameraModelType::PINHOLE) {
-            OpenCVPinholeCameraModel<>::Parameters cm = {};
-            cm.resolution    = {image_width, image_height};
-            cm.shutter_type  = rs_type;
-            cm.principal_point = {principal_point.x, principal_point.y};
-            cm.focal_length    = {focal_length.x, focal_length.y};
-            if (radial_coeffs)     cm.radial_coeffs     = make_array<float, 6>(radial_coeffs     + iid * 6);
-            if (tangential_coeffs) cm.tangential_coeffs  = make_array<float, 2>(tangential_coeffs + iid * 2);
-            if (thin_prism_coeffs) cm.thin_prism_coeffs  = make_array<float, 4>(thin_prism_coeffs + iid * 4);
-            cm.external_distortion_params = external_distortion_params.has_value()
-                ? &external_distortion_params.value() : nullptr;
-            ray = OpenCVPinholeCameraModel<>(cm).element_to_world_ray_shutter_pose(j, i, rs_params);
+            if (external_distortion_params.has_value()) {
+                using CameraModel = OpenCVPinholeCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_params },
+                    Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = OpenCVPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
         } else if (camera_model_type == CameraModelType::FISHEYE) {
-            OpenCVFisheyeCameraModel<>::Parameters cm = {};
-            cm.resolution    = {image_width, image_height};
-            cm.shutter_type  = rs_type;
-            cm.principal_point = {principal_point.x, principal_point.y};
-            cm.focal_length    = {focal_length.x, focal_length.y};
-            if (radial_coeffs) cm.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
-            cm.external_distortion_params = external_distortion_params.has_value()
-                ? &external_distortion_params.value() : nullptr;
-            ray = OpenCVFisheyeCameraModel<>(cm).element_to_world_ray_shutter_pose(j, i, rs_params);
+            if (external_distortion_params.has_value()) {
+                using CameraModel = OpenCVFisheyeCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_params },
+                    Ks, radial_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = OpenCVFisheyeCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks, radial_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
         } else if (camera_model_type == CameraModelType::FTHETA) {
-            FThetaCameraModel<>::Parameters cm = {};
-            cm.resolution    = {image_width, image_height};
-            cm.shutter_type  = rs_type;
-            cm.principal_point = {principal_point.x, principal_point.y};
-            cm.dist          = ftheta_coeffs;
-            cm.external_distortion_params = external_distortion_params.has_value()
-                ? &external_distortion_params.value() : nullptr;
-            ray = FThetaCameraModel<>(cm).element_to_world_ray_shutter_pose(j, i, rs_params);
+            if (external_distortion_params.has_value()) {
+                using CameraModel = FThetaCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_params },
+                    Ks, ftheta_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks, ftheta_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
         } else if (camera_model_type == CameraModelType::LIDAR) {
             assert(lidar_coeffs);
-            ray = RowOffsetStructuredSpinningLidarModel(*lidar_coeffs)
-                .element_to_world_ray_shutter_pose(j, i, rs_params);
+            using CameraModel = RowOffsetStructuredSpinningLidarModel;
+            CameraModel::KernelParameters kernel_params = *lidar_coeffs;
+            CameraModel camera_model(kernel_params, iid);
+            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
         } else {
             // Unsupported camera model — degrade gracefully (no early return:
             // every thread must reach the warp-cooperative MLP backward).
@@ -211,9 +255,16 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
         ray.valid_flag = false;
     }
 
-    const vec3 ray_d = ray.ray_dir;
-    const vec3 ray_o = ray.ray_org;
+    // For inactive/invalid pixels (partial edge tiles or rays the camera model
+    // rejected) ``ray`` is default-constructed and ``ray_dir``/``ray_org`` are
+    // uninitialized garbage. These threads still participate in the
+    // warp-cooperative MLP backward below (with zero upstream gradient), so the
+    // garbage ray must not reach the SH encoding: a non-finite encoded input
+    // yields non-finite hidden activations, and ``0 * inf = NaN`` in the shared
+    // dW outer-product would poison the whole tile's MLP weight gradient.
     const bool active = inside && ray.valid_flag;
+    const vec3 ray_d = active ? ray.ray_dir : vec3(0.f, 0.f, 0.f);
+    const vec3 ray_o = active ? ray.ray_org : vec3(0.f, 0.f, 0.f);
 
     const int32_t range_start = tile_offsets[tile_id];
     const int32_t range_end   = ((int32_t)iid == (int32_t)(B * C) - 1 &&
@@ -366,7 +417,7 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
                 const float power = -0.5f * grayDist;
                 vis = __expf(power);
                 alpha = min(MAX_ALPHA, opac * vis);
-                if (alpha < ALPHA_THRESHOLD || vis <= MAX_KERNEL_DENSITY_CUTOFF) valid = false;
+                if (alpha < ALPHA_THRESHOLD) valid = false;
             }
 
             if (!warp.any(valid)) continue;
@@ -654,11 +705,16 @@ static void nht_fbwd_wrapper_##C##_##H##_##L( \
             v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_params); \
 }
 
-// Keep the instantiation set small: the training configs that matter today.
-__NHT_DEF_BWD_WRAPPER__(16, 64,  2) __NHT_DEF_BWD_WRAPPER__(32, 64,  2) __NHT_DEF_BWD_WRAPPER__(48, 64,  2)
-__NHT_DEF_BWD_WRAPPER__(16, 64,  3) __NHT_DEF_BWD_WRAPPER__(32, 64,  3) __NHT_DEF_BWD_WRAPPER__(48, 64,  3)
-__NHT_DEF_BWD_WRAPPER__(16, 128, 2) __NHT_DEF_BWD_WRAPPER__(32, 128, 2) __NHT_DEF_BWD_WRAPPER__(48, 128, 2)
-__NHT_DEF_BWD_WRAPPER__(16, 128, 3) __NHT_DEF_BWD_WRAPPER__(32, 128, 3) __NHT_DEF_BWD_WRAPPER__(48, 128, 3)
+// Channel set {4,8,12,16,24,32,48,64,96} × each (hidden, layers) config.
+#define __NHT_DEF_BWD_WRAPPER_ALL_C__(H, L) \
+    __NHT_DEF_BWD_WRAPPER__(4,  H, L) __NHT_DEF_BWD_WRAPPER__(8,  H, L) __NHT_DEF_BWD_WRAPPER__(12, H, L) \
+    __NHT_DEF_BWD_WRAPPER__(16, H, L) __NHT_DEF_BWD_WRAPPER__(24, H, L) __NHT_DEF_BWD_WRAPPER__(32, H, L) \
+    __NHT_DEF_BWD_WRAPPER__(48, H, L) __NHT_DEF_BWD_WRAPPER__(64, H, L) __NHT_DEF_BWD_WRAPPER__(96, H, L)
+__NHT_DEF_BWD_WRAPPER_ALL_C__(64,  2)
+__NHT_DEF_BWD_WRAPPER_ALL_C__(64,  3)
+__NHT_DEF_BWD_WRAPPER_ALL_C__(128, 2)
+__NHT_DEF_BWD_WRAPPER_ALL_C__(128, 3)
+#undef __NHT_DEF_BWD_WRAPPER_ALL_C__
 #undef __NHT_DEF_BWD_WRAPPER__
 
 // ── Public dispatch entry point ──────────────────────────────────────────────
@@ -699,11 +755,17 @@ void dispatch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
 
 #define __NHT_FB_SWITCH__(H_VAL, L_VAL) \
     switch (channels) { \
+        case 4:  __NHT_FB__(4,  H_VAL, L_VAL); break; \
+        case 8:  __NHT_FB__(8,  H_VAL, L_VAL); break; \
+        case 12: __NHT_FB__(12, H_VAL, L_VAL); break; \
         case 16: __NHT_FB__(16, H_VAL, L_VAL); break; \
+        case 24: __NHT_FB__(24, H_VAL, L_VAL); break; \
         case 32: __NHT_FB__(32, H_VAL, L_VAL); break; \
         case 48: __NHT_FB__(48, H_VAL, L_VAL); break; \
+        case 64: __NHT_FB__(64, H_VAL, L_VAL); break; \
+        case 96: __NHT_FB__(96, H_VAL, L_VAL); break; \
         default: AT_ERROR("NHT fused bwd: unsupported channels=", channels, \
-                          " (supported: 16, 32, 48)"); \
+                          " (supported: 4, 8, 12, 16, 24, 32, 48, 64, 96)"); \
     }
 
     if      (mlp_hidden_dim ==  64 && mlp_num_layers == 2) { __NHT_FB_SWITCH__( 64, 2) }

@@ -26,6 +26,7 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/cub.h>
 #include <c10/cuda/CUDAStream.h>
+#include <bit>
 #include <cooperative_groups.h>
 #include <cstdint>
 #include <cuda/std/optional>
@@ -186,7 +187,7 @@ uint32_t ceil_log2_u64(uint64_t x) {
     if (x <= 1) {
         return 0;
     }
-    return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
+    return 64u - static_cast<uint32_t>(std::countl_zero(x - 1));
 }
 
 } // namespace

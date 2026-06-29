@@ -2,6 +2,18 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
  * NHT backward rasterizer
  * 
  * Supports FP16 color fetches (vectorized half loads into FP32 shmem).
@@ -189,28 +201,41 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_bwd_kernel(
     WorldRay ray;
     if (inside && camera_model_type == CameraModelType::PINHOLE) {
         if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-            PerfectPinholeCameraModel::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.focal_length = { focal_length.x, focal_length.y };
-            cm_params.external_distortion_params = external_distortion_device_params.has_value()
-                ? &external_distortion_device_params.value()
-                : nullptr;
-            ray = PerfectPinholeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+            if (external_distortion_device_params.has_value()) {
+                using CameraModel = PerfectPinholeCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                    Ks,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
         } else {
-            OpenCVPinholeCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.focal_length = { focal_length.x, focal_length.y };
-            if (radial_coeffs)     cm_params.radial_coeffs     = make_array<float, 6>(radial_coeffs + iid * 6);
-            if (tangential_coeffs) cm_params.tangential_coeffs  = make_array<float, 2>(tangential_coeffs + iid * 2);
-            if (thin_prism_coeffs) cm_params.thin_prism_coeffs  = make_array<float, 4>(thin_prism_coeffs + iid * 4);
-            cm_params.external_distortion_params = external_distortion_device_params.has_value()
-                ? &external_distortion_device_params.value()
-                : nullptr;
-            ray = OpenCVPinholeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+            if (external_distortion_device_params.has_value()) {
+                using CameraModel = OpenCVPinholeCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                    Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = OpenCVPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
         }
     } else if (inside && camera_model_type == CameraModelType::ORTHO) {
         ray = nht_ortho_world_ray(
@@ -224,30 +249,47 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_bwd_kernel(
             rs_params
         );
     } else if (inside && camera_model_type == CameraModelType::FISHEYE) {
-        OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
-        cm_params.resolution = {image_width, image_height};
-        cm_params.shutter_type = rs_type;
-        cm_params.principal_point = { principal_point.x, principal_point.y };
-        cm_params.focal_length = { focal_length.x, focal_length.y };
-        if (radial_coeffs) cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
-        cm_params.external_distortion_params = external_distortion_device_params.has_value()
-            ? &external_distortion_device_params.value()
-            : nullptr;
-        ray = OpenCVFisheyeCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+        if (external_distortion_device_params.has_value()) {
+            using CameraModel = OpenCVFisheyeCameraModel<extdist::BivariateWindshieldModel>;
+            CameraModel::KernelParameters kernel_params = {
+                { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                Ks, radial_coeffs,
+            };
+            CameraModel camera_model(kernel_params, iid);
+            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+        } else {
+            using CameraModel = OpenCVFisheyeCameraModel<extdist::EmptyExternalDistortionModel>;
+            CameraModel::KernelParameters kernel_params = {
+                { {image_width, image_height}, rs_type, {} },
+                Ks, radial_coeffs,
+            };
+            CameraModel camera_model(kernel_params, iid);
+            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
     } else if (inside && camera_model_type == CameraModelType::FTHETA) {
-        FThetaCameraModel<>::Parameters cm_params = {};
-        cm_params.resolution = {image_width, image_height};
-        cm_params.shutter_type = rs_type;
-        cm_params.principal_point = { principal_point.x, principal_point.y };
-        cm_params.dist = ftheta_coeffs;
-        cm_params.external_distortion_params = external_distortion_device_params.has_value()
-            ? &external_distortion_device_params.value()
-            : nullptr;
-        ray = FThetaCameraModel(cm_params).element_to_world_ray_shutter_pose(j, i, rs_params);
+        if (external_distortion_device_params.has_value()) {
+            using CameraModel = FThetaCameraModel<extdist::BivariateWindshieldModel>;
+            CameraModel::KernelParameters kernel_params = {
+                { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                Ks, ftheta_coeffs,
+            };
+            CameraModel camera_model(kernel_params, iid);
+            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+        } else {
+            using CameraModel = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
+            CameraModel::KernelParameters kernel_params = {
+                { {image_width, image_height}, rs_type, {} },
+                Ks, ftheta_coeffs,
+            };
+            CameraModel camera_model(kernel_params, iid);
+            ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+        }
     } else if (inside && camera_model_type == CameraModelType::LIDAR) {
         assert(lidar_device_coeffs);
-        ray = RowOffsetStructuredSpinningLidarModel(*lidar_device_coeffs)
-            .element_to_world_ray_shutter_pose(j, i, rs_params);
+        using CameraModel = RowOffsetStructuredSpinningLidarModel;
+        CameraModel::KernelParameters kernel_params = *lidar_device_coeffs;
+        CameraModel camera_model(kernel_params, iid);
+        ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
     } else {
         ray.valid_flag = false;
         if (inside) {
@@ -387,7 +429,7 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_bwd_kernel(
                 const float power = -0.5f * grayDist;
                 vis = __expf(power);
                 alpha = min(MAX_ALPHA, opac * vis);
-                if (alpha < ALPHA_THRESHOLD || vis <= MAX_KERNEL_DENSITY_CUTOFF) valid = false;
+                if (alpha < ALPHA_THRESHOLD) valid = false;
             }
 
             if (!warp.any(valid)) continue;

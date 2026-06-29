@@ -61,7 +61,8 @@ from gsplat.nht import (
 from gsplat.nht._inference_renderer import NHTInferenceConfig, NHTInferenceRenderer
 from gsplat.strategy import MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
-from gsplat.rendering import rasterization
+from gsplat.scene import GaussianNHTScene
+from gsplat.experimental.render.functional.render_scene import render_scene
 from gsplat_viewer import (
     apply_ortho_scale_to_K,
     GsplatViewer,
@@ -562,6 +563,8 @@ class Runner:
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
+        self.nht_scene = GaussianNHTScene.from_splats(self.splats, id="nht_scene")
+
         self.cfg.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.cfg.strategy.initialize_state()
 
@@ -1005,9 +1008,6 @@ class Runner:
             )
 
         means = self.splats["means"]  # [N, 3]
-        quats = self.splats["quats"]  # [N, 4]
-        scales = torch.exp(self.splats["scales"])
-        opacities = torch.sigmoid(self.splats["opacities"])
 
         kwargs.pop("image_ids", None)
         kwargs.pop("sh_degree", None)
@@ -1019,9 +1019,6 @@ class Runner:
         # Backgrounds are RGB-space; they cannot be blended during feature
         # rasterization.  Callers must apply them after deferred shading.
         kwargs.pop("backgrounds", None)
-
-        colors = self.splats["features"]
-        sh_degree = None
 
         if rasterize_mode is None:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -1035,13 +1032,12 @@ class Runner:
 
         use_eval3d = self.cfg.with_eval3d
         use_ut = self.cfg.with_ut
-        render_colors, render_alphas, info = rasterization(
-            means=means,
-            quats=quats,
-            scales=scales,
-            opacities=opacities,
-            colors=colors,
-            sh_degree=sh_degree,
+        self.nht_scene.nht_params = NHTParams(
+            center_ray_mode=self.cfg.deferred_opt_center_ray_encoding,
+            ray_dir_scale=self._deferred_mod().ray_dir_scale,
+        )
+        ret = render_scene(
+            self.nht_scene,
             viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
             Ks=Ks,  # [C, 3, 3]
             width=width,
@@ -1056,13 +1052,13 @@ class Runner:
             camera_model=camera_model,
             with_ut=use_ut,
             with_eval3d=use_eval3d,
-            nht_params=NHTParams(
-                center_ray_mode=self.cfg.deferred_opt_center_ray_encoding,
-                ray_dir_scale=self._deferred_mod().ray_dir_scale,
-            ),
             **sensor_kwargs,
             **kwargs,
         )
+        render_colors = ret.frame
+        render_alphas = ret.metadata.pop("alphas")
+        ret.metadata.pop("render_path", None)
+        info = ret.metadata
 
         render_mode_has_depth = render_mode in {"RGB+D", "RGB+ED", "RGB-d", "RGB-Ed"}
         render_colors, extras = self.deferred_module(render_colors)
