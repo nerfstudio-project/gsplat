@@ -59,6 +59,65 @@ __global__ void se3pose_transform_direction_fwd_kernel(
     se3pose_transform_direction_fwd_device(i, n, rotation, direction, out);
 }
 
+// Grid-stride: row-wise SE(3) pose composition parent * child.
+template<typename scalar_t>
+__global__ void se3pose_compose_fwd_kernel(
+    int64_t n,
+    const scalar_t *__restrict__ parent_translation,
+    const scalar_t *__restrict__ parent_rotation,
+    const scalar_t *__restrict__ child_translation,
+    const scalar_t *__restrict__ child_rotation,
+    scalar_t *__restrict__ out_translation,
+    scalar_t *__restrict__ out_rotation
+)
+{
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= n)
+    {
+        return;
+    }
+    se3pose_compose_fwd_device(
+        i, n, parent_translation, parent_rotation, child_translation, child_rotation, out_translation, out_rotation
+    );
+}
+
+// Grid-stride: VJP for row-wise SE(3) pose composition.
+template<typename scalar_t>
+__global__ void se3pose_compose_bwd_kernel(
+    int64_t n,
+    const scalar_t *__restrict__ parent_translation,
+    const scalar_t *__restrict__ parent_rotation,
+    const scalar_t *__restrict__ child_translation,
+    const scalar_t *__restrict__ child_rotation,
+    const scalar_t *__restrict__ grad_out_translation,
+    const scalar_t *__restrict__ grad_out_rotation,
+    scalar_t *__restrict__ grad_parent_translation,
+    scalar_t *__restrict__ grad_parent_rotation,
+    scalar_t *__restrict__ grad_child_translation,
+    scalar_t *__restrict__ grad_child_rotation
+)
+{
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(i >= n)
+    {
+        return;
+    }
+    se3pose_compose_bwd_device(
+        i,
+        n,
+        parent_translation,
+        parent_rotation,
+        child_translation,
+        child_rotation,
+        grad_out_translation,
+        grad_out_rotation,
+        grad_parent_translation,
+        grad_parent_rotation,
+        grad_child_translation,
+        grad_child_rotation
+    );
+}
+
 // Grid-stride: inverse point R^T(p−t); q stored xyzw (device uses conjugate for inverse rotation).
 template<typename scalar_t>
 __global__ void se3pose_inverse_transform_point_fwd_kernel(
@@ -137,6 +196,76 @@ void launch_se3pose_transform_direction_fwd(const at::Tensor &rotation, const at
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
+// Launch row-wise SE(3) pose composition on the current CUDA stream.
+template<typename scalar_t>
+void launch_se3pose_compose_fwd(
+    const at::Tensor &parent_translation,
+    const at::Tensor &parent_rotation,
+    const at::Tensor &child_translation,
+    const at::Tensor &child_rotation,
+    at::Tensor &out_translation,
+    at::Tensor &out_rotation
+)
+{
+    const int64_t n = parent_translation.size(0);
+    if(n == 0)
+    {
+        return;
+    }
+    const int threads         = kThreadsPerBlock;
+    const int blocks          = static_cast<int>((n + threads - 1) / threads);
+    const cudaStream_t stream = at::cuda::getCurrentCUDAStream(parent_translation.device().index());
+    se3pose_compose_fwd_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+        n,
+        parent_translation.data_ptr<scalar_t>(),
+        parent_rotation.data_ptr<scalar_t>(),
+        child_translation.data_ptr<scalar_t>(),
+        child_rotation.data_ptr<scalar_t>(),
+        out_translation.data_ptr<scalar_t>(),
+        out_rotation.data_ptr<scalar_t>()
+    );
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+// Launch VJP for row-wise SE(3) pose composition on the current CUDA stream.
+template<typename scalar_t>
+void launch_se3pose_compose_bwd(
+    const at::Tensor &parent_translation,
+    const at::Tensor &parent_rotation,
+    const at::Tensor &child_translation,
+    const at::Tensor &child_rotation,
+    const at::Tensor &grad_out_translation,
+    const at::Tensor &grad_out_rotation,
+    at::Tensor &grad_parent_translation,
+    at::Tensor &grad_parent_rotation,
+    at::Tensor &grad_child_translation,
+    at::Tensor &grad_child_rotation
+)
+{
+    const int64_t n = parent_translation.size(0);
+    if(n == 0)
+    {
+        return;
+    }
+    const int threads         = kThreadsPerBlock;
+    const int blocks          = static_cast<int>((n + threads - 1) / threads);
+    const cudaStream_t stream = at::cuda::getCurrentCUDAStream(parent_translation.device().index());
+    se3pose_compose_bwd_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
+        n,
+        parent_translation.data_ptr<scalar_t>(),
+        parent_rotation.data_ptr<scalar_t>(),
+        child_translation.data_ptr<scalar_t>(),
+        child_rotation.data_ptr<scalar_t>(),
+        grad_out_translation.data_ptr<scalar_t>(),
+        grad_out_rotation.data_ptr<scalar_t>(),
+        grad_parent_translation.data_ptr<scalar_t>(),
+        grad_parent_rotation.data_ptr<scalar_t>(),
+        grad_child_translation.data_ptr<scalar_t>(),
+        grad_child_rotation.data_ptr<scalar_t>()
+    );
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
 // Launch the inverse SE(3) point transform kernel on the current CUDA stream.
 // Inputs: translation (N,3), rotation (N,4) in xyzw order, point (N,3).
 // Output: out (N,3) with row i = R(q_i)^T * (point_i - translation_i).
@@ -209,6 +338,64 @@ void se3pose_transform_direction_cuda(const at::Tensor &rotation, const at::Tens
         direction.scalar_type(),
         "se3pose_transform_direction_cuda",
         [&] { launch_se3pose_transform_direction_fwd<scalar_t>(rotation, direction, out); }
+    );
+}
+
+// Public CUDA entrypoint for row-wise SE(3) pose composition.
+// Output pose is parent * child with xyzw rotations.
+void se3pose_compose_cuda(
+    const at::Tensor &parent_translation,
+    const at::Tensor &parent_rotation,
+    const at::Tensor &child_translation,
+    const at::Tensor &child_rotation,
+    at::Tensor &out_translation,
+    at::Tensor &out_rotation
+)
+{
+    AT_DISPATCH_FLOATING_TYPES(
+        parent_translation.scalar_type(),
+        "se3pose_compose_cuda",
+        [&]
+        {
+            launch_se3pose_compose_fwd<scalar_t>(
+                parent_translation, parent_rotation, child_translation, child_rotation, out_translation, out_rotation
+            );
+        }
+    );
+}
+
+// Public CUDA entrypoint for row-wise SE(3) pose composition VJP.
+void se3pose_compose_bwd_cuda(
+    const at::Tensor &parent_translation,
+    const at::Tensor &parent_rotation,
+    const at::Tensor &child_translation,
+    const at::Tensor &child_rotation,
+    const at::Tensor &grad_out_translation,
+    const at::Tensor &grad_out_rotation,
+    at::Tensor &grad_parent_translation,
+    at::Tensor &grad_parent_rotation,
+    at::Tensor &grad_child_translation,
+    at::Tensor &grad_child_rotation
+)
+{
+    AT_DISPATCH_FLOATING_TYPES(
+        parent_translation.scalar_type(),
+        "se3pose_compose_bwd_cuda",
+        [&]
+        {
+            launch_se3pose_compose_bwd<scalar_t>(
+                parent_translation,
+                parent_rotation,
+                child_translation,
+                child_rotation,
+                grad_out_translation,
+                grad_out_rotation,
+                grad_parent_translation,
+                grad_parent_rotation,
+                grad_child_translation,
+                grad_child_rotation
+            );
+        }
     );
 }
 
@@ -1013,6 +1200,451 @@ void launch_trajectory_get_rotation_2poses_bwd(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 } // namespace trajectory_cuda
+
+namespace packed_track_cuda
+{
+template<typename scalar_t, typename time_t>
+__global__ void se3_interpolate_tracks_fwd_kernel(
+    int64_t n_tracks,
+    int64_t n_poses,
+    const scalar_t *__restrict__ pose_translations,
+    const scalar_t *__restrict__ pose_rotations,
+    const time_t *__restrict__ pose_times,
+    const int64_t *__restrict__ pose_offsets,
+    const int64_t *__restrict__ pose_counts,
+    const time_t *__restrict__ query_times,
+    scalar_t *__restrict__ out_translations,
+    scalar_t *__restrict__ out_rotations
+)
+{
+    const int64_t track = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(track >= n_tracks)
+    {
+        return;
+    }
+
+    const int64_t start = pose_offsets[track];
+    const int64_t count = pose_counts[track];
+    const int64_t out3  = track * 3;
+    const int64_t out4  = track * 4;
+    if(!valid_track_range(start, count, n_poses))
+    {
+        out_translations[out3 + 0] = scalar_t(0);
+        out_translations[out3 + 1] = scalar_t(0);
+        out_translations[out3 + 2] = scalar_t(0);
+        out_rotations[out4 + 0]    = scalar_t(0);
+        out_rotations[out4 + 1]    = scalar_t(0);
+        out_rotations[out4 + 2]    = scalar_t(0);
+        out_rotations[out4 + 3]    = scalar_t(1);
+        return;
+    }
+    int64_t left = 0, right = 0;
+    bool same = false, valid = false;
+    time_t clamped_query, left_time, right_time;
+    track_interval(
+        pose_times,
+        start,
+        count,
+        query_times[track],
+        &left,
+        &right,
+        &same,
+        &valid,
+        &clamped_query,
+        &left_time,
+        &right_time
+    );
+    const scalar_t alpha = interpolation_alpha<scalar_t>(left_time, right_time, clamped_query, valid);
+
+    const int64_t l3 = left * 3;
+    const int64_t r3 = right * 3;
+    out_translations[out3 + 0]
+        = pose_translations[l3 + 0] + alpha * (pose_translations[r3 + 0] - pose_translations[l3 + 0]);
+    out_translations[out3 + 1]
+        = pose_translations[l3 + 1] + alpha * (pose_translations[r3 + 1] - pose_translations[l3 + 1]);
+    out_translations[out3 + 2]
+        = pose_translations[l3 + 2] + alpha * (pose_translations[r3 + 2] - pose_translations[l3 + 2]);
+
+    const int64_t l4 = left * 4;
+    if(same)
+    {
+        out_rotations[out4 + 0] = pose_rotations[l4 + 0];
+        out_rotations[out4 + 1] = pose_rotations[l4 + 1];
+        out_rotations[out4 + 2] = pose_rotations[l4 + 2];
+        out_rotations[out4 + 3] = pose_rotations[l4 + 3];
+        return;
+    }
+
+    const int64_t r4 = right * 4;
+    quat_slerp_pair_fwd(
+        pose_rotations[l4 + 0],
+        pose_rotations[l4 + 1],
+        pose_rotations[l4 + 2],
+        pose_rotations[l4 + 3],
+        pose_rotations[r4 + 0],
+        pose_rotations[r4 + 1],
+        pose_rotations[r4 + 2],
+        pose_rotations[r4 + 3],
+        alpha,
+        out_rotations + out4 + 0,
+        out_rotations + out4 + 1,
+        out_rotations + out4 + 2,
+        out_rotations + out4 + 3
+    );
+}
+
+template<typename scalar_t, typename time_t>
+__global__ void se3_interpolate_tracks_bwd_kernel(
+    int64_t n_tracks,
+    int64_t n_poses,
+    const scalar_t *__restrict__ pose_translations,
+    const scalar_t *__restrict__ pose_rotations,
+    const time_t *__restrict__ pose_times,
+    const int64_t *__restrict__ pose_offsets,
+    const int64_t *__restrict__ pose_counts,
+    const time_t *__restrict__ query_times,
+    const scalar_t *__restrict__ out_rotations,
+    const scalar_t *__restrict__ grad_out_translations,
+    const scalar_t *__restrict__ grad_out_rotations,
+    scalar_t *__restrict__ grad_pose_translations,
+    scalar_t *__restrict__ grad_pose_rotations,
+    time_t *__restrict__ grad_pose_times,
+    time_t *__restrict__ grad_query_times
+)
+{
+    const int64_t track = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(track >= n_tracks)
+    {
+        return;
+    }
+
+    const int64_t start = pose_offsets[track];
+    const int64_t count = pose_counts[track];
+    if(!valid_track_range(start, count, n_poses))
+    {
+        return;
+    }
+    int64_t left = 0, right = 0;
+    bool same = false, valid = false;
+    time_t clamped_query, left_time, right_time;
+    track_interval(
+        pose_times,
+        start,
+        count,
+        query_times[track],
+        &left,
+        &right,
+        &same,
+        &valid,
+        &clamped_query,
+        &left_time,
+        &right_time
+    );
+    const scalar_t alpha           = interpolation_alpha<scalar_t>(left_time, right_time, clamped_query, valid);
+    const scalar_t one_minus_alpha = scalar_t(1) - alpha;
+
+    const int64_t out3 = track * 3;
+    const int64_t l3   = left * 3;
+    const int64_t r3   = right * 3;
+    const scalar_t gtx = grad_out_translations[out3 + 0];
+    const scalar_t gty = grad_out_translations[out3 + 1];
+    const scalar_t gtz = grad_out_translations[out3 + 2];
+    atomic_add(grad_pose_translations + l3 + 0, one_minus_alpha * gtx);
+    atomic_add(grad_pose_translations + l3 + 1, one_minus_alpha * gty);
+    atomic_add(grad_pose_translations + l3 + 2, one_minus_alpha * gtz);
+    if(!same)
+    {
+        atomic_add(grad_pose_translations + r3 + 0, alpha * gtx);
+        atomic_add(grad_pose_translations + r3 + 1, alpha * gty);
+        atomic_add(grad_pose_translations + r3 + 2, alpha * gtz);
+    }
+
+    scalar_t grad_alpha = gtx * (pose_translations[r3 + 0] - pose_translations[l3 + 0])
+                        + gty * (pose_translations[r3 + 1] - pose_translations[l3 + 1])
+                        + gtz * (pose_translations[r3 + 2] - pose_translations[l3 + 2]);
+
+    const int64_t out4 = track * 4;
+    const int64_t l4   = left * 4;
+    if(same)
+    {
+        atomic_add(grad_pose_rotations + l4 + 0, grad_out_rotations[out4 + 0]);
+        atomic_add(grad_pose_rotations + l4 + 1, grad_out_rotations[out4 + 1]);
+        atomic_add(grad_pose_rotations + l4 + 2, grad_out_rotations[out4 + 2]);
+        atomic_add(grad_pose_rotations + l4 + 3, grad_out_rotations[out4 + 3]);
+        return;
+    }
+
+    const int64_t r4 = right * 4;
+    scalar_t glqx, glqy, glqz, glqw, grqx, grqy, grqz, grqw, grad_alpha_q;
+    quat_slerp_pair_bwd(
+        pose_rotations[l4 + 0],
+        pose_rotations[l4 + 1],
+        pose_rotations[l4 + 2],
+        pose_rotations[l4 + 3],
+        pose_rotations[r4 + 0],
+        pose_rotations[r4 + 1],
+        pose_rotations[r4 + 2],
+        pose_rotations[r4 + 3],
+        alpha,
+        out_rotations[out4 + 0],
+        out_rotations[out4 + 1],
+        out_rotations[out4 + 2],
+        out_rotations[out4 + 3],
+        grad_out_rotations[out4 + 0],
+        grad_out_rotations[out4 + 1],
+        grad_out_rotations[out4 + 2],
+        grad_out_rotations[out4 + 3],
+        &glqx,
+        &glqy,
+        &glqz,
+        &glqw,
+        &grqx,
+        &grqy,
+        &grqz,
+        &grqw,
+        &grad_alpha_q
+    );
+    atomic_add(grad_pose_rotations + l4 + 0, glqx);
+    atomic_add(grad_pose_rotations + l4 + 1, glqy);
+    atomic_add(grad_pose_rotations + l4 + 2, glqz);
+    atomic_add(grad_pose_rotations + l4 + 3, glqw);
+    atomic_add(grad_pose_rotations + r4 + 0, grqx);
+    atomic_add(grad_pose_rotations + r4 + 1, grqy);
+    atomic_add(grad_pose_rotations + r4 + 2, grqz);
+    atomic_add(grad_pose_rotations + r4 + 3, grqw);
+    grad_alpha += grad_alpha_q;
+
+    accumulate_interpolation_time_grads<scalar_t>(
+        left_time, right_time, clamped_query, valid, left, right, track, grad_alpha, grad_pose_times, grad_query_times
+    );
+}
+
+template<typename scalar_t, typename time_t>
+void launch_se3_interpolate_tracks_fwd(
+    const at::Tensor &pose_translations,
+    const at::Tensor &pose_rotations,
+    const at::Tensor &pose_times,
+    const at::Tensor &pose_offsets,
+    const at::Tensor &pose_counts,
+    const at::Tensor &query_times,
+    at::Tensor &out_translations,
+    at::Tensor &out_rotations
+)
+{
+    const int64_t n_tracks = pose_offsets.size(0);
+    if(n_tracks == 0)
+    {
+        return;
+    }
+    const int threads         = kThreadsPerBlock;
+    const int blocks          = static_cast<int>((n_tracks + threads - 1) / threads);
+    const cudaStream_t stream = at::cuda::getCurrentCUDAStream(pose_translations.device().index());
+    se3_interpolate_tracks_fwd_kernel<scalar_t, time_t><<<blocks, threads, 0, stream>>>(
+        n_tracks,
+        pose_times.size(0),
+        pose_translations.data_ptr<scalar_t>(),
+        pose_rotations.data_ptr<scalar_t>(),
+        pose_times.data_ptr<time_t>(),
+        pose_offsets.data_ptr<int64_t>(),
+        pose_counts.data_ptr<int64_t>(),
+        query_times.data_ptr<time_t>(),
+        out_translations.data_ptr<scalar_t>(),
+        out_rotations.data_ptr<scalar_t>()
+    );
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+template<typename scalar_t, typename time_t>
+void launch_se3_interpolate_tracks_bwd(
+    const at::Tensor &pose_translations,
+    const at::Tensor &pose_rotations,
+    const at::Tensor &pose_times,
+    const at::Tensor &pose_offsets,
+    const at::Tensor &pose_counts,
+    const at::Tensor &query_times,
+    const at::Tensor &out_rotations,
+    const at::Tensor &grad_out_translations,
+    const at::Tensor &grad_out_rotations,
+    at::Tensor &grad_pose_translations,
+    at::Tensor &grad_pose_rotations,
+    at::Tensor &grad_pose_times,
+    at::Tensor &grad_query_times
+)
+{
+    const int64_t n_tracks = pose_offsets.size(0);
+    if(n_tracks == 0)
+    {
+        return;
+    }
+    const int threads         = kThreadsPerBlock;
+    const int blocks          = static_cast<int>((n_tracks + threads - 1) / threads);
+    const cudaStream_t stream = at::cuda::getCurrentCUDAStream(pose_translations.device().index());
+    se3_interpolate_tracks_bwd_kernel<scalar_t, time_t><<<blocks, threads, 0, stream>>>(
+        n_tracks,
+        pose_times.size(0),
+        pose_translations.data_ptr<scalar_t>(),
+        pose_rotations.data_ptr<scalar_t>(),
+        pose_times.data_ptr<time_t>(),
+        pose_offsets.data_ptr<int64_t>(),
+        pose_counts.data_ptr<int64_t>(),
+        query_times.data_ptr<time_t>(),
+        out_rotations.data_ptr<scalar_t>(),
+        grad_out_translations.data_ptr<scalar_t>(),
+        grad_out_rotations.data_ptr<scalar_t>(),
+        grad_pose_translations.data_ptr<scalar_t>(),
+        grad_pose_rotations.data_ptr<scalar_t>(),
+        grad_pose_times.data_ptr<time_t>(),
+        grad_query_times.data_ptr<time_t>()
+    );
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+} // namespace packed_track_cuda
+
+void se3_interpolate_tracks_cuda(
+    const at::Tensor &pose_translations,
+    const at::Tensor &pose_rotations,
+    const at::Tensor &pose_times,
+    const at::Tensor &pose_offsets,
+    const at::Tensor &pose_counts,
+    const at::Tensor &query_times,
+    at::Tensor &out_translations,
+    at::Tensor &out_rotations
+)
+{
+    AT_DISPATCH_FLOATING_TYPES(
+        pose_translations.scalar_type(),
+        "se3_interpolate_tracks_cuda",
+        [&]
+        {
+            if(pose_times.scalar_type() == at::kLong)
+            {
+                packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, int64_t>(
+                    pose_translations,
+                    pose_rotations,
+                    pose_times,
+                    pose_offsets,
+                    pose_counts,
+                    query_times,
+                    out_translations,
+                    out_rotations
+                );
+            }
+            else if(pose_times.scalar_type() == at::kFloat)
+            {
+                packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, float>(
+                    pose_translations,
+                    pose_rotations,
+                    pose_times,
+                    pose_offsets,
+                    pose_counts,
+                    query_times,
+                    out_translations,
+                    out_rotations
+                );
+            }
+            else if(pose_times.scalar_type() == at::kDouble)
+            {
+                packed_track_cuda::launch_se3_interpolate_tracks_fwd<scalar_t, double>(
+                    pose_translations,
+                    pose_rotations,
+                    pose_times,
+                    pose_offsets,
+                    pose_counts,
+                    query_times,
+                    out_translations,
+                    out_rotations
+                );
+            }
+            else
+            {
+                TORCH_CHECK(false, "se3_interpolate_tracks_cuda: unsupported pose_times dtype");
+            }
+        }
+    );
+}
+
+void se3_interpolate_tracks_bwd_cuda(
+    const at::Tensor &pose_translations,
+    const at::Tensor &pose_rotations,
+    const at::Tensor &pose_times,
+    const at::Tensor &pose_offsets,
+    const at::Tensor &pose_counts,
+    const at::Tensor &query_times,
+    const at::Tensor &out_rotations,
+    const at::Tensor &grad_out_translations,
+    const at::Tensor &grad_out_rotations,
+    at::Tensor &grad_pose_translations,
+    at::Tensor &grad_pose_rotations,
+    at::Tensor &grad_pose_times,
+    at::Tensor &grad_query_times
+)
+{
+    AT_DISPATCH_FLOATING_TYPES(
+        pose_translations.scalar_type(),
+        "se3_interpolate_tracks_bwd_cuda",
+        [&]
+        {
+            if(pose_times.scalar_type() == at::kLong)
+            {
+                packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, int64_t>(
+                    pose_translations,
+                    pose_rotations,
+                    pose_times,
+                    pose_offsets,
+                    pose_counts,
+                    query_times,
+                    out_rotations,
+                    grad_out_translations,
+                    grad_out_rotations,
+                    grad_pose_translations,
+                    grad_pose_rotations,
+                    grad_pose_times,
+                    grad_query_times
+                );
+            }
+            else if(pose_times.scalar_type() == at::kFloat)
+            {
+                packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, float>(
+                    pose_translations,
+                    pose_rotations,
+                    pose_times,
+                    pose_offsets,
+                    pose_counts,
+                    query_times,
+                    out_rotations,
+                    grad_out_translations,
+                    grad_out_rotations,
+                    grad_pose_translations,
+                    grad_pose_rotations,
+                    grad_pose_times,
+                    grad_query_times
+                );
+            }
+            else if(pose_times.scalar_type() == at::kDouble)
+            {
+                packed_track_cuda::launch_se3_interpolate_tracks_bwd<scalar_t, double>(
+                    pose_translations,
+                    pose_rotations,
+                    pose_times,
+                    pose_offsets,
+                    pose_counts,
+                    query_times,
+                    out_rotations,
+                    grad_out_translations,
+                    grad_out_rotations,
+                    grad_pose_translations,
+                    grad_pose_rotations,
+                    grad_pose_times,
+                    grad_query_times
+                );
+            }
+            else
+            {
+                TORCH_CHECK(false, "se3_interpolate_tracks_bwd_cuda: unsupported pose_times dtype");
+            }
+        }
+    );
+}
 
 // Public CUDA entrypoint for 2-keyframe trajectory point interpolation.
 // Inputs: keyframe translations/rotations/times, point (N,3), and query_time.
