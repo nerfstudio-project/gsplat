@@ -415,7 +415,8 @@ __device__ __forceinline__ void ftheta_load_meanpose_10(
 //
 // Backward: project world points -> image points with mean shutter pose
 // (slerp alpha = 0.5, no external distortion). Chains d_image_point through
-// ftheta_project_ray_bwd and pose VJPs; interpolation time is fixed by the sensor.
+// ftheta_project_ray_bwd, quat_inverse_rotate_bwd (mean rotation), and
+// quat_slerp_pair_bwd to world-point + start/end pose grads.
 // =============================================================================
 
 __global__ void project_world_points_mean_pose_ftheta_no_external_backward_kernel(
@@ -589,7 +590,7 @@ __global__ void project_world_points_mean_pose_ftheta_no_external_backward_kerne
 // D4 (bivariate) backward -- project_world_points_mean_pose_ftheta_bivariate
 //
 // Same as D4 above, with bivariate windshield distortion inserted between
-// camera_ray and the FTheta projection. Adds bivariate coeff gradient
+// cam_pt and the FTheta projection. Adds bivariate coeff gradient
 // accumulation.
 // =============================================================================
 
@@ -636,16 +637,14 @@ __global__ void project_world_points_mean_pose_ftheta_bivariate_windshield_backw
         if(!state.behind_camera)
         {
             float2 d_img                = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
-            float3 camera_ray           = normalize3(cam_pt);
-            float3 distorted_ray        = apply_bivariate_distortion(camera_ray, biv_params);
+            float3 distorted_ray        = apply_bivariate_distortion(cam_pt, biv_params);
             FThetaProjectState replayed = state;
             replayed.ray_norm           = normalize3(distorted_ray);
 
             float3 d_distorted_ray = make_float3(0.0f, 0.0f, 0.0f);
             ftheta_project_ray_bwd(distorted_ray, params, replayed, d_img, d_distorted_ray, d_params);
-            float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
-            apply_bivariate_distortion_bwd(camera_ray, biv_params, d_distorted_ray, d_camera_ray, d_biv);
-            float3 d_cam_pt = normalize3_bwd(cam_pt, d_camera_ray);
+            float3 d_cam_pt = make_float3(0.0f, 0.0f, 0.0f);
+            apply_bivariate_distortion_bwd(cam_pt, biv_params, d_distorted_ray, d_cam_pt, d_biv);
 
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
@@ -1137,7 +1136,7 @@ __global__ void project_world_points_shutter_pose_ftheta_no_external_backward_ke
 // D6 (bivariate) backward
 //
 // Same as D6 with bivariate windshield distortion inserted between
-// camera_ray and the FTheta projection.
+// cam_pt and the FTheta projection.
 // =============================================================================
 
 __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_backward_kernel(
@@ -1193,16 +1192,14 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_ba
 
             float2 d_img = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
 
-            float3 camera_ray           = normalize3(cam_pt);
-            float3 distorted_ray        = apply_bivariate_distortion(camera_ray, biv_params);
+            float3 distorted_ray        = apply_bivariate_distortion(cam_pt, biv_params);
             FThetaProjectState replayed = state;
             replayed.ray_norm           = normalize3(distorted_ray);
             float3 d_distorted_ray      = make_float3(0.0f, 0.0f, 0.0f);
             ftheta_project_ray_bwd(distorted_ray, params, replayed, d_img, d_distorted_ray, d_params);
 
-            float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
-            apply_bivariate_distortion_bwd(camera_ray, biv_params, d_distorted_ray, d_camera_ray, d_biv);
-            float3 d_cam_pt = normalize3_bwd(cam_pt, d_camera_ray);
+            float3 d_cam_pt = make_float3(0.0f, 0.0f, 0.0f);
+            apply_bivariate_distortion_bwd(cam_pt, biv_params, d_distorted_ray, d_cam_pt, d_biv);
 
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
@@ -1327,8 +1324,10 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_ba
 // D7 backward -- image_points_to_world_rays_shutter_pose_ftheta_no_external
 //
 // Backward: FTheta backproject image points -> world rays with rolling-shutter
-// pose (no external distortion). Pose interpolation is not time-differentiable
-// here; gradients flow only to world point, endpoint poses, and intrinsics.
+// pose (no external distortion). d_origin splits (1-alpha)/(alpha) to
+// start/end translation; d_direction chains through quat_rotate_bwd and
+// quat_slerp_pair_bwd into start/end rotation, then through
+// ftheta_backproject_image_point_bwd to d_image_point + intrinsic grads.
 // =============================================================================
 
 __global__ void image_points_to_world_rays_shutter_pose_ftheta_no_external_backward_kernel(

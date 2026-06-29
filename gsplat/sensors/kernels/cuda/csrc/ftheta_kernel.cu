@@ -348,7 +348,8 @@ __global__ void project_world_points_mean_pose_ftheta_no_external_forward_kernel
 // =============================================================================
 // D4 (bivariate) -- project_world_points_mean_pose_ftheta_bivariate_windshield
 // Mean-pose variant with bivariate windshield distortion applied to the
-// normalized camera ray before FTheta projection.
+// camera-space point before FTheta projection (apply_bivariate_distortion
+// normalizes its input internally).
 // =============================================================================
 
 __global__ void project_world_points_mean_pose_ftheta_bivariate_windshield_forward_kernel(
@@ -407,8 +408,7 @@ __global__ void project_world_points_mean_pose_ftheta_bivariate_windshield_forwa
     float2 img = make_float2(0.0f, 0.0f);
     if(cam_pt.z > 0.0f)
     {
-        const float3 camera_ray    = normalize3(cam_pt);
-        const float3 distorted_ray = apply_bivariate_distortion(camera_ray, bivariate_params);
+        const float3 distorted_ray = apply_bivariate_distortion(cam_pt, bivariate_params);
         img                        = ftheta_project_ray(distorted_ray, params, state, valid);
     }
     else
@@ -699,8 +699,9 @@ __global__ void project_world_points_shutter_pose_ftheta_no_external_forward_ker
 
 // =============================================================================
 // D6 (bivariate) -- project_world_points_shutter_pose_ftheta_bivariate_windshield
-// Shutter-pose variant with bivariate windshield distortion applied each
-// iteration after normalizing cam_pt and before the FTheta projection.
+// Shutter-pose variant with bivariate windshield distortion applied to cam_pt
+// each iteration before the FTheta projection (apply_bivariate_distortion
+// normalizes its input internally).
 // =============================================================================
 
 __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_forward_kernel(
@@ -775,8 +776,7 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_fo
             state.behind_camera = true;
             break;
         }
-        const float3 camera_ray    = normalize3(cam_pt);
-        const float3 distorted_ray = apply_bivariate_distortion(camera_ray, bivariate_params);
+        const float3 distorted_ray = apply_bivariate_distortion(cam_pt, bivariate_params);
         bool fwd_valid             = false;
         FThetaProjectState iter_state;
         const float2 img = ftheta_project_ray(distorted_ray, params, iter_state, fwd_valid);
