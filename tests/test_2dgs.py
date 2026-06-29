@@ -74,6 +74,117 @@ def test_data():
     }
 
 
+@pytest.fixture
+def deterministic_2dgs_data():
+    torch.manual_seed(7)
+
+    C = 2
+    N = 6
+    W, H = 32, 24
+    signal_channels = 20
+    means = torch.tensor(
+        [
+            [-0.30, -0.20, 2.00],
+            [-0.10, 0.15, 2.20],
+            [0.12, -0.05, 2.40],
+            [0.28, 0.18, 2.60],
+            [-0.22, 0.24, 2.80],
+            [0.05, -0.28, 3.00],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]] * N, dtype=torch.float32, device=device)
+    scales = torch.tensor([[0.18, 0.14, 1.0]] * N, dtype=torch.float32, device=device)
+    opacities = torch.linspace(0.20, 0.70, N, device=device)
+    colors = torch.linspace(0.05, 0.95, C * N * 3, device=device).reshape(C, N, 3)
+    viewmats = torch.eye(4, device=device).expand(C, 4, 4).clone()
+    viewmats[1, 0, 3] = 0.05
+
+    Ks = (
+        torch.tensor(
+            [
+                [float(W), 0.0, W / 2.0],
+                [0.0, float(W), H / 2.0],
+                [0.0, 0.0, 1.0],
+            ],
+            device=device,
+        )
+        .expand(C, 3, 3)
+        .clone()
+    )
+
+    extra_signals = torch.linspace(
+        0.10, 0.90, C * N * signal_channels, device=device
+    ).reshape(C, N, signal_channels)
+
+    return {
+        "means": means,
+        "quats": quats,
+        "scales": scales,
+        "opacities": opacities,
+        "colors": colors,
+        "viewmats": viewmats,
+        "Ks": Ks,
+        "extra_signals": extra_signals,
+        "width": W,
+        "height": H,
+        "n_cameras": C,
+        "n_gaussians": N,
+        "signal_channels": signal_channels,
+    }
+
+
+def _assert_2dgs_outputs_close(actual, expected):
+    (
+        actual_render_colors,
+        actual_render_alphas,
+        actual_normals,
+        actual_surf_normals,
+    ) = actual[:4]
+    actual_render_distort, actual_render_median, actual_meta = actual[4:]
+
+    expected_render_colors, expected_render_alphas, expected_normals = expected[:3]
+    expected_surf_normals, expected_render_distort, expected_render_median = expected[
+        3:6
+    ]
+    expected_meta = expected[6]
+
+    torch.testing.assert_close(actual_render_colors, expected_render_colors)
+    torch.testing.assert_close(actual_render_alphas, expected_render_alphas)
+    torch.testing.assert_close(actual_normals, expected_normals)
+    torch.testing.assert_close(actual_render_distort, expected_render_distort)
+    torch.testing.assert_close(actual_render_median, expected_render_median)
+
+    if actual_surf_normals is None:
+        assert expected_surf_normals is None
+    else:
+        torch.testing.assert_close(actual_surf_normals, expected_surf_normals)
+
+    for key in (
+        "radii",
+        "means2d",
+        "depths",
+        "ray_transforms",
+        "opacities",
+        "normals",
+        "isect_offsets",
+        "width",
+        "height",
+        "tile_size",
+        "n_cameras",
+        "render_distort",
+        "gradient_2dgs",
+    ):
+        assert key in actual_meta
+        assert key in expected_meta
+
+        if isinstance(actual_meta[key], torch.Tensor):
+            assert actual_meta[key].shape == expected_meta[key].shape
+        else:
+            assert actual_meta[key] == expected_meta[key]
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
@@ -487,6 +598,56 @@ def test_rasterize_to_pixels_2dgs(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+def test_rasterization_2dgs_extra_signals_sh(
+    deterministic_2dgs_data,
+    packed: bool,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    sh_degree = 3
+    signal_channels = 20
+    K = (sh_degree + 1) ** 2
+    extra_signals = torch.linspace(
+        0.10,
+        0.90,
+        deterministic_2dgs_data["n_gaussians"] * K * signal_channels,
+        device=device,
+    ).reshape(deterministic_2dgs_data["n_gaussians"], K, signal_channels)
+
+    render_colors, _, _, _, _, _, meta = rasterization_2dgs(
+        means=deterministic_2dgs_data["means"],
+        quats=deterministic_2dgs_data["quats"],
+        scales=deterministic_2dgs_data["scales"],
+        opacities=deterministic_2dgs_data["opacities"],
+        colors=deterministic_2dgs_data["colors"],
+        viewmats=deterministic_2dgs_data["viewmats"],
+        Ks=deterministic_2dgs_data["Ks"],
+        width=deterministic_2dgs_data["width"],
+        height=deterministic_2dgs_data["height"],
+        render_mode="RGB",
+        packed=packed,
+        extra_signals=extra_signals,
+        extra_signals_sh_degree=sh_degree,
+    )
+
+    assert render_colors.shape[-1] == 3
+    assert meta["render_extra_signals"].shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        signal_channels,
+    )
+    assert meta["extra_signal_layout"] == "sh"
+    assert meta["extra_signal_channels"] == signal_channels
+    assert meta["extra_signals_sh_degree"] == sh_degree
+    assert meta["extra_signal_source"] == "sh_evaluated"
+    assert meta["extra_signal_compositing"] == "alpha"
+    assert torch.isfinite(meta["render_extra_signals"]).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("batch_dims", [(2,), (1, 2)])
 def test_rasterization_packed_2dgs(test_data, batch_dims: Tuple[int, ...]):
     from gsplat.rendering import rasterization_2dgs
@@ -519,6 +680,394 @@ def test_rasterization_packed_2dgs(test_data, batch_dims: Tuple[int, ...]):
         3,
     )
     assert torch.isfinite(render_colors).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("render_mode", ["RGB", "RGB+D"])
+def test_rasterization_2dgs_extra_signals_none_matches_existing_path(
+    deterministic_2dgs_data,
+    render_mode: str,
+    packed: bool = False,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    inputs = {
+        "means": deterministic_2dgs_data["means"],
+        "quats": deterministic_2dgs_data["quats"],
+        "scales": deterministic_2dgs_data["scales"],
+        "opacities": deterministic_2dgs_data["opacities"],
+        "colors": deterministic_2dgs_data["colors"],
+        "viewmats": deterministic_2dgs_data["viewmats"],
+        "Ks": deterministic_2dgs_data["Ks"],
+        "width": deterministic_2dgs_data["width"],
+        "height": deterministic_2dgs_data["height"],
+        "render_mode": render_mode,
+        "packed": packed,
+    }
+
+    expected = rasterization_2dgs(**inputs)
+
+    actual = rasterization_2dgs(
+        **inputs,
+        extra_signals=None,
+        extra_signals_sh_degree=None,
+    )
+
+    _assert_2dgs_outputs_close(actual, expected)
+
+    actual_meta = actual[-1]
+    assert "render_extra_signals" not in actual_meta
+    assert "extra_signal_layout" not in actual_meta
+    assert "extra_signal_channels" not in actual_meta
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize(
+    "render_mode,expected_render_channels", [("RGB", 3), ("RGB+D", 4)]
+)
+def test_rasterization_2dgs_extra_signals_post_activation_metadata_and_shape(
+    deterministic_2dgs_data,
+    render_mode: str,
+    expected_render_channels: int,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    render_colors, render_alphas, _, _, _, _, meta = rasterization_2dgs(
+        means=deterministic_2dgs_data["means"],
+        quats=deterministic_2dgs_data["quats"],
+        scales=deterministic_2dgs_data["scales"],
+        opacities=deterministic_2dgs_data["opacities"],
+        colors=deterministic_2dgs_data["colors"],
+        viewmats=deterministic_2dgs_data["viewmats"],
+        Ks=deterministic_2dgs_data["Ks"],
+        width=deterministic_2dgs_data["width"],
+        height=deterministic_2dgs_data["height"],
+        render_mode=render_mode,
+        extra_signals=deterministic_2dgs_data["extra_signals"],
+        extra_signals_sh_degree=None,
+    )
+
+    assert render_colors.shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        expected_render_channels,
+    )
+    assert render_alphas.shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        1,
+    )
+
+    assert "render_extra_signals" in meta
+    assert meta["render_extra_signals"].shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        deterministic_2dgs_data["signal_channels"],
+    )
+
+    assert meta["extra_signal_layout"] == "per_camera"
+    assert meta["extra_signal_channels"] == deterministic_2dgs_data["signal_channels"]
+    assert meta["extra_signals_sh_degree"] is None
+    assert meta["extra_signal_source"] == "post_activation"
+    assert meta["extra_signal_compositing"] == "alpha"
+
+    assert torch.isfinite(render_colors).all()
+    assert torch.isfinite(meta["render_extra_signals"]).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize(
+    "extra_signals,expected_layout",
+    [
+        ("per_gaussian", "per_gaussian"),
+        ("per_camera", "per_camera"),
+    ],
+)
+def test_rasterization_2dgs_extra_signals_layout_metadata(
+    deterministic_2dgs_data,
+    extra_signals: str,
+    expected_layout: str,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    signal_input = (
+        deterministic_2dgs_data["extra_signals"][0]
+        if extra_signals == "per_gaussian"
+        else deterministic_2dgs_data["extra_signals"]
+    )
+
+    _, _, _, _, _, _, meta = rasterization_2dgs(
+        means=deterministic_2dgs_data["means"],
+        quats=deterministic_2dgs_data["quats"],
+        scales=deterministic_2dgs_data["scales"],
+        opacities=deterministic_2dgs_data["opacities"],
+        colors=deterministic_2dgs_data["colors"],
+        viewmats=deterministic_2dgs_data["viewmats"],
+        Ks=deterministic_2dgs_data["Ks"],
+        width=deterministic_2dgs_data["width"],
+        height=deterministic_2dgs_data["height"],
+        render_mode="RGB",
+        extra_signals=signal_input,
+    )
+
+    assert meta["extra_signal_layout"] == expected_layout
+    assert meta["extra_signal_channels"] == deterministic_2dgs_data["signal_channels"]
+    assert meta["render_extra_signals"].shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        deterministic_2dgs_data["signal_channels"],
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("extra_signals", ["per_gaussian", "per_camera"])
+def test_rasterization_2dgs_extra_signals_packed_post_activation(
+    deterministic_2dgs_data,
+    extra_signals: str,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    signal_input = (
+        deterministic_2dgs_data["extra_signals"][0]
+        if extra_signals == "per_gaussian"
+        else deterministic_2dgs_data["extra_signals"]
+    )
+
+    render_colors, _, _, _, _, _, meta = rasterization_2dgs(
+        means=deterministic_2dgs_data["means"],
+        quats=deterministic_2dgs_data["quats"],
+        scales=deterministic_2dgs_data["scales"],
+        opacities=deterministic_2dgs_data["opacities"],
+        colors=deterministic_2dgs_data["colors"],
+        viewmats=deterministic_2dgs_data["viewmats"],
+        Ks=deterministic_2dgs_data["Ks"],
+        width=deterministic_2dgs_data["width"],
+        height=deterministic_2dgs_data["height"],
+        render_mode="RGB",
+        packed=True,
+        extra_signals=signal_input,
+    )
+
+    assert render_colors.shape[-1] == 3
+    assert (
+        meta["render_extra_signals"].shape[-1]
+        == deterministic_2dgs_data["signal_channels"]
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("render_mode", ["D", "ED"])
+@pytest.mark.parametrize("packed", [False, True])
+def test_rasterization_2dgs_extra_signals_depth_only(
+    deterministic_2dgs_data,
+    render_mode: str,
+    packed: bool,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    render_colors, render_alphas, _, _, _, _, meta = rasterization_2dgs(
+        means=deterministic_2dgs_data["means"],
+        quats=deterministic_2dgs_data["quats"],
+        scales=deterministic_2dgs_data["scales"],
+        opacities=deterministic_2dgs_data["opacities"],
+        colors=None,
+        viewmats=deterministic_2dgs_data["viewmats"],
+        Ks=deterministic_2dgs_data["Ks"],
+        width=deterministic_2dgs_data["width"],
+        height=deterministic_2dgs_data["height"],
+        render_mode=render_mode,
+        packed=packed,
+        extra_signals=deterministic_2dgs_data["extra_signals"],
+    )
+
+    assert render_colors.shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        1,
+    )
+    assert render_alphas.shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        1,
+    )
+    assert meta["render_extra_signals"].shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        deterministic_2dgs_data["signal_channels"],
+    )
+    assert meta["extra_signal_channels"] == deterministic_2dgs_data["signal_channels"]
+    assert torch.isfinite(render_colors).all()
+    assert torch.isfinite(meta["render_extra_signals"]).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+def test_rasterization_2dgs_extra_signals_channel_chunk(
+    deterministic_2dgs_data,
+    packed: bool,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    signal_channels = 4
+    extra_signals = deterministic_2dgs_data["extra_signals"][..., :signal_channels]
+
+    render_colors, _, _, _, _, _, meta = rasterization_2dgs(
+        means=deterministic_2dgs_data["means"],
+        quats=deterministic_2dgs_data["quats"],
+        scales=deterministic_2dgs_data["scales"],
+        opacities=deterministic_2dgs_data["opacities"],
+        colors=deterministic_2dgs_data["colors"],
+        viewmats=deterministic_2dgs_data["viewmats"],
+        Ks=deterministic_2dgs_data["Ks"],
+        width=deterministic_2dgs_data["width"],
+        height=deterministic_2dgs_data["height"],
+        render_mode="RGB",
+        packed=packed,
+        extra_signals=extra_signals,
+        channel_chunk=4,
+    )
+
+    assert render_colors.shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        3,
+    )
+    assert meta["render_extra_signals"].shape == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        signal_channels,
+    )
+    assert meta["extra_signal_channels"] == signal_channels
+    assert torch.isfinite(render_colors).all()
+    assert torch.isfinite(meta["render_extra_signals"]).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+def test_rasterization_2dgs_extra_signals_gradients(
+    deterministic_2dgs_data,
+    packed: bool,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    means = deterministic_2dgs_data["means"].detach().clone().requires_grad_(True)
+    quats = deterministic_2dgs_data["quats"].detach().clone().requires_grad_(True)
+    scales = deterministic_2dgs_data["scales"].detach().clone().requires_grad_(True)
+    opacities = (
+        deterministic_2dgs_data["opacities"].detach().clone().requires_grad_(True)
+    )
+    colors = deterministic_2dgs_data["colors"].detach().clone().requires_grad_(True)
+    extra_signals = (
+        deterministic_2dgs_data["extra_signals"].detach().clone().requires_grad_(True)
+    )
+
+    render_colors, render_alphas, _, _, _, _, meta = rasterization_2dgs(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=deterministic_2dgs_data["viewmats"],
+        Ks=deterministic_2dgs_data["Ks"],
+        width=deterministic_2dgs_data["width"],
+        height=deterministic_2dgs_data["height"],
+        render_mode="RGB+D",
+        packed=packed,
+        extra_signals=extra_signals,
+    )
+
+    loss = (
+        render_colors.sum() + render_alphas.sum() + meta["render_extra_signals"].sum()
+    )
+    loss.backward()
+
+    for name, tensor in [
+        ("means", means),
+        ("quats", quats),
+        ("scales", scales),
+        ("opacities", opacities),
+        ("colors", colors),
+        ("extra_signals", extra_signals),
+    ]:
+        assert tensor.grad is not None, f"{name} should receive gradients"
+        assert torch.isfinite(tensor.grad).all(), f"{name} grad should be finite"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterization_2dgs_extra_signals_deterministic_stats(
+    deterministic_2dgs_data,
+):
+    from gsplat.rendering import rasterization_2dgs
+
+    signal_channels = 4
+    extra_signals = deterministic_2dgs_data["extra_signals"][..., :signal_channels]
+
+    render_colors, render_alphas, _, _, _, _, meta = rasterization_2dgs(
+        means=deterministic_2dgs_data["means"],
+        quats=deterministic_2dgs_data["quats"],
+        scales=deterministic_2dgs_data["scales"],
+        opacities=deterministic_2dgs_data["opacities"],
+        colors=deterministic_2dgs_data["colors"],
+        viewmats=deterministic_2dgs_data["viewmats"],
+        Ks=deterministic_2dgs_data["Ks"],
+        width=deterministic_2dgs_data["width"],
+        height=deterministic_2dgs_data["height"],
+        render_mode="RGB+D",
+        extra_signals=extra_signals,
+        channel_chunk=4,
+    )
+
+    stats = {
+        "n_gaussians": deterministic_2dgs_data["n_gaussians"],
+        "signal_channels": signal_channels,
+        "render_shape": tuple(render_colors.shape),
+        "extra_shape": tuple(meta["render_extra_signals"].shape),
+        "alpha_sum": render_alphas.sum(),
+        "render_sum": render_colors.sum(),
+        "extra_sum": meta["render_extra_signals"].sum(),
+    }
+
+    assert stats["n_gaussians"] == 6
+    assert stats["signal_channels"] == 4
+    assert stats["render_shape"] == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        4,
+    )
+    assert stats["extra_shape"] == (
+        deterministic_2dgs_data["n_cameras"],
+        deterministic_2dgs_data["height"],
+        deterministic_2dgs_data["width"],
+        signal_channels,
+    )
+
+    torch.testing.assert_close(
+        stats["alpha_sum"], torch.tensor(114.67495727539062, device=device)
+    )
+    torch.testing.assert_close(
+        stats["render_sum"], torch.tensor(462.40618896484375, device=device)
+    )
+    torch.testing.assert_close(
+        stats["extra_sum"], torch.tensor(219.33282470703125, device=device)
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

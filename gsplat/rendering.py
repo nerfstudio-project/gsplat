@@ -2193,7 +2193,9 @@ def rasterization_2dgs(
     quats: Tensor,  # [..., N, 4]
     scales: Tensor,  # [..., N, 3]
     opacities: Tensor,  # [..., N]
-    colors: Tensor,  # [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients
+    colors: Optional[
+        Tensor
+    ],  # [..., (C,) N, D] for post-activation colors, or [N, K, D] for SH coefficients
     viewmats: Tensor,  # [..., C, 4, 4]
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
@@ -2211,6 +2213,9 @@ def rasterization_2dgs(
     absgrad: bool = False,
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
+    extra_signals: Optional[Tensor] = None,
+    extra_signals_sh_degree: Optional[int] = None,
+    channel_chunk: int = 32,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
 
@@ -2260,7 +2265,9 @@ def rasterization_2dgs(
             will be done looply in chunks.
         distloss: If true, use distortion regularization to get better geometry detail.
         depth_mode: render depth mode. Choose from expected depth and median depth.
-
+        extra_signals: Auxiliary per-Gaussian signals, shaped [..., N, E] or [..., C, N, E].
+        extra_signals_sh_degree: If set, extra_signals is interpreted as SH coefficients [N, K, E].
+        channel_chunk: Number of feature channels to rasterize per CUDA call.
     Returns:
         A tuple:
 
@@ -2322,7 +2329,8 @@ def rasterization_2dgs(
     C = viewmats.shape[-3]
     I = B * C
     device = means.device
-    channels = colors.shape[-1]
+    has_color = render_mode_has_color(render_mode)
+    channels = colors.shape[-1] if has_color else 0
 
     assert means.shape == batch_dims + (N, 3), means.shape
     assert quats.shape == batch_dims + (N, 4), quats.shape
@@ -2335,7 +2343,13 @@ def rasterization_2dgs(
             render_mode
         ), f"distloss requires depth rendering, but render mode is {render_mode}"
 
-    if sh_degree is None:
+    if colors is None and has_color:
+        raise ValueError(
+            f"colors must be provided when render_mode='{render_mode}' includes RGB."
+        )
+    if colors is None and sh_degree is not None:
+        raise ValueError("sh_degree must be None when colors is None.")
+    if has_color and sh_degree is None:
         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
         assert (
             colors.dim() == num_batch_dims + 2
@@ -2344,11 +2358,31 @@ def rasterization_2dgs(
             colors.dim() == num_batch_dims + 3
             and colors.shape[:-1] == batch_dims + (C, N)
         ), colors.shape
-    else:
+    elif has_color:
         # treat colors as SH coefficients, must be in shape [N, K, D].
         # Allowing for activating partial SH bands.
         assert colors.dim() == 3 and colors.shape[0] == N, colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
+
+    if extra_signals is not None:
+        extra_signal_channels = extra_signals.shape[-1]
+        if extra_signals_sh_degree is None:
+            assert (
+                extra_signals.dim() == num_batch_dims + 2
+                and extra_signals.shape[:-1] == batch_dims + (N,)
+            ) or (
+                extra_signals.dim() == num_batch_dims + 3
+                and extra_signals.shape[:-1] == batch_dims + (C, N)
+            ), extra_signals.shape
+        else:
+            assert (
+                extra_signals.dim() == 3 and extra_signals.shape[0] == N
+            ), extra_signals.shape
+            assert (extra_signals_sh_degree + 1) ** 2 <= extra_signals.shape[
+                -2
+            ], extra_signals.shape
+    else:
+        extra_signal_channels = 0
 
     # Compute Ray-Splat intersection transformation.
     proj_results = fully_fused_projection_2dgs(
@@ -2410,67 +2444,220 @@ def rasterization_2dgs(
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
-    if sh_degree is not None:  # SH coefficients
-        if packed:
-            dirs = compute_directions(
+    valid_gaussians = (radii > 0).all(dim=-1)
+
+    feature_list = []
+
+    if has_color:
+        if sh_degree is not None:  # SH coefficients
+            if packed:
+                dirs = compute_directions(
+                    batch_dims,
+                    means,
+                    viewmats,
+                    batch_ids,
+                    camera_ids,
+                    gaussian_ids,
+                    indptr,
+                )  # [nnz, 3]
+                shs = colors[gaussian_ids]
+            else:
+                camtoworlds = torch.inverse(viewmats)
+                dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]
+                shs = colors
+
+            colors = spherical_harmonics(sh_degree, dirs, shs, masks=valid_gaussians)
+            colors = torch.clamp_min(colors + 0.5, 0.0)
+        else:
+            colors = normalize_features_layout(
+                colors,
                 batch_dims,
-                means,
-                viewmats,
+                C,
+                colors.shape[-1:],
                 batch_ids,
                 camera_ids,
                 gaussian_ids,
-                indptr,
-            )  # [nnz, 3]
-            # Gather per-Gaussian coeffs to match the [nnz, K, 3] dirs.
-            shs = colors[gaussian_ids]
+            )
+
+        feature_list.append(colors)
+
+    render_extra_signal_layout = None
+    extra_signal_source = None
+    if extra_signals is not None:
+        if extra_signals_sh_degree is not None:
+            render_extra_signal_layout = "sh"
+            extra_signal_source = "sh_evaluated"
+            if packed:
+                dirs = compute_directions(
+                    batch_dims,
+                    means,
+                    viewmats,
+                    batch_ids,
+                    camera_ids,
+                    gaussian_ids,
+                    indptr,
+                )  # [nnz, 3]
+                shs = extra_signals[gaussian_ids]
+            else:
+                camtoworlds = torch.inverse(viewmats)
+                dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]
+                shs = extra_signals
+
+            extra_signals = spherical_harmonics(
+                extra_signals_sh_degree,
+                dirs,
+                shs,
+                masks=valid_gaussians,
+            )
+            extra_signals = extra_signals + 0.5
         else:
-            camtoworlds = torch.inverse(viewmats)
-            dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]
-            shs = colors
-        colors = spherical_harmonics(
-            sh_degree, dirs, shs, masks=(radii > 0).all(dim=-1)
-        )  # [nnz, 3] or [..., C, N, 3]
-        # make it apple-to-apple with Inria's CUDA Backend.
-        colors = torch.clamp_min(colors + 0.5, 0.0)
+            render_extra_signal_layout = (
+                "per_gaussian"
+                if extra_signals.dim() == num_batch_dims + 2
+                else "per_camera"
+            )
+            extra_signal_source = "post_activation"
+            extra_signals = normalize_features_layout(
+                extra_signals,
+                batch_dims,
+                C,
+                extra_signals.shape[-1:],
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+            )
+
+        feature_list.append(extra_signals)
+
+    proj_features = (
+        torch.cat(feature_list, dim=-1)
+        if len(feature_list) > 1
+        else feature_list[0]
+        if feature_list
+        else None
+    )
+
+    if backgrounds is not None and extra_signals is not None:
+        backgrounds = torch.cat(
+            [
+                backgrounds,
+                torch.zeros(
+                    batch_dims + (C, extra_signal_channels),
+                    device=backgrounds.device,
+                    dtype=backgrounds.dtype,
+                ),
+            ],
+            dim=-1,
+        )
 
     # Rasterize to pixels
     if render_mode_has_depth_channel(render_mode) and render_mode_has_color(
         render_mode
     ):
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
+        proj_features = torch.cat((proj_features, depths[..., None]), dim=-1)
 
         if backgrounds is not None:
             backgrounds = torch.cat(
                 (backgrounds, torch.zeros_like(backgrounds[..., :1])), dim=-1
             )
     elif render_mode_has_only_depth_channel(render_mode):
-        colors = depths[..., None]
+        depth_channel = depths[..., None]
+        if proj_features is not None:
+            proj_features = torch.cat((proj_features, depth_channel), dim=-1)
+        else:
+            proj_features = depth_channel
     else:  # RGB
         pass
 
-    (
-        render_colors,
-        render_alphas,
-        render_normals,
-        render_distort,
-        render_median,
-    ) = rasterize_to_pixels_2dgs(
-        means2d,
-        ray_transforms,
-        colors,
-        opacities,
-        normals,
-        densify,
-        width,
-        height,
-        tile_size,
-        isect_offsets,
-        flatten_ids,
-        backgrounds=backgrounds,
-        packed=packed,
-        absgrad=absgrad,
-        distloss=distloss,
-    )
+    if proj_features.shape[-1] > channel_chunk:
+        n_chunks = (proj_features.shape[-1] + channel_chunk - 1) // channel_chunk
+        render_colors = []
+        render_alphas = []
+        render_normals = []
+        render_distorts = []
+        render_medians = []
+        for i in range(n_chunks):
+            features_chunk = proj_features[
+                ..., i * channel_chunk : (i + 1) * channel_chunk
+            ]
+            backgrounds_chunk = (
+                backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
+                if backgrounds is not None
+                else None
+            )
+            (
+                render_colors_,
+                render_alphas_,
+                render_normals_,
+                render_distort_,
+                render_median_,
+            ) = rasterize_to_pixels_2dgs(
+                means2d,
+                ray_transforms,
+                features_chunk,
+                opacities,
+                normals,
+                densify,
+                width,
+                height,
+                tile_size,
+                isect_offsets,
+                flatten_ids,
+                backgrounds=backgrounds_chunk,
+                packed=packed,
+                absgrad=absgrad,
+                distloss=distloss,
+            )
+            render_colors.append(render_colors_)
+            render_alphas.append(render_alphas_)
+            render_normals.append(render_normals_)
+            render_distorts.append(render_distort_)
+            render_medians.append(render_median_)
+
+        render_colors = torch.cat(render_colors, dim=-1)
+        render_alphas = render_alphas[0]
+        render_normals = render_normals[0]
+        render_distort = render_distorts[0]
+        render_median = render_medians[0]
+    else:
+        (
+            render_colors,
+            render_alphas,
+            render_normals,
+            render_distort,
+            render_median,
+        ) = rasterize_to_pixels_2dgs(
+            means2d,
+            ray_transforms,
+            proj_features,
+            opacities,
+            normals,
+            densify,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            packed=packed,
+            absgrad=absgrad,
+            distloss=distloss,
+        )
+
+    render_extra_signals = None
+    if extra_signals is not None:
+        render_extra_signals = render_colors[
+            ..., channels : channels + extra_signal_channels
+        ]
+
+        if render_mode_has_depth_channel(render_mode):
+            render_depth = render_colors[..., -1:]
+            render_colors = torch.cat(
+                [render_colors[..., :channels], render_depth], dim=-1
+            )
+        else:
+            render_colors = render_colors[..., :channels]
+
     render_normals_from_depth = None
     if render_mode_has_expected_depth(render_mode):
         # normalize the accumulated depth to get the expected depth
@@ -2514,6 +2701,14 @@ def rasterization_2dgs(
         "render_distort": render_distort,
         "gradient_2dgs": densify,  # This holds the gradient used for densification for 2dgs
     }
+
+    if render_extra_signals is not None:
+        meta["render_extra_signals"] = render_extra_signals
+        meta["extra_signal_layout"] = render_extra_signal_layout
+        meta["extra_signal_channels"] = extra_signal_channels
+        meta["extra_signals_sh_degree"] = extra_signals_sh_degree
+        meta["extra_signal_source"] = extra_signal_source
+        meta["extra_signal_compositing"] = "alpha"
 
     render_normals = torch.einsum(
         "...ij,...hwj->...hwi",
