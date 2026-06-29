@@ -135,7 +135,10 @@ def get_build_parameters():
         # object's section count high enough that MSVC's linker can silently
         # fail to resolve their symbols without this flag.
         extra_cflags += [
-            "/std:c++20", "/Zc:preprocessor", "-DWIN32_LEAN_AND_MEAN", "/bigobj"
+            "/std:c++20",
+            "/Zc:preprocessor",
+            "-DWIN32_LEAN_AND_MEAN",
+            "/bigobj",
         ]
         extra_cuda_cflags += [
             "-std=c++20",

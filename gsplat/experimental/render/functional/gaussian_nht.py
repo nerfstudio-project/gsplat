@@ -64,8 +64,11 @@ def rasterize_gaussian_nht_scene(
             "rasterize_gaussian_nht_scene does not support the out= buffer "
             "contract (training renders a fresh buffer every call)"
         )
-    if "means" in request or "quats" in request or "scales" in request or (
-        "opacities" in request or "colors" in request or "sh_degree" in request
+    if (
+        "means" in request
+        or "quats" in request
+        or "scales" in request
+        or ("opacities" in request or "colors" in request or "sh_degree" in request)
     ):
         raise TypeError(
             "means/quats/scales/opacities/colors/sh_degree are read from "
