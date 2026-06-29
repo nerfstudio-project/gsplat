@@ -148,6 +148,42 @@ __forceinline__ __device__ void quat_multiply_impl(
     *ow               = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2;
 }
 
+// VJP for Hamilton product q_out = q1 ⊗ q2, all quaternions in xyzw order.
+template<typename scalar_t>
+__forceinline__ __device__ void quat_multiply_bwd_impl(
+    scalar_t x1,
+    scalar_t y1,
+    scalar_t z1,
+    scalar_t w1,
+    scalar_t x2,
+    scalar_t y2,
+    scalar_t z2,
+    scalar_t w2,
+    scalar_t gx,
+    scalar_t gy,
+    scalar_t gz,
+    scalar_t gw,
+    scalar_t *gq1x,
+    scalar_t *gq1y,
+    scalar_t *gq1z,
+    scalar_t *gq1w,
+    scalar_t *gq2x,
+    scalar_t *gq2y,
+    scalar_t *gq2z,
+    scalar_t *gq2w
+)
+{
+    *gq1x = w2 * gx - z2 * gy + y2 * gz - x2 * gw;
+    *gq1y = z2 * gx + w2 * gy - x2 * gz - y2 * gw;
+    *gq1z = -y2 * gx + x2 * gy + w2 * gz - z2 * gw;
+    *gq1w = x2 * gx + y2 * gy + z2 * gz + w2 * gw;
+
+    *gq2x = w1 * gx + z1 * gy - y1 * gz - x1 * gw;
+    *gq2y = -z1 * gx + w1 * gy + x1 * gz - y1 * gw;
+    *gq2z = y1 * gx - x1 * gy + w1 * gz - z1 * gw;
+    *gq2w = x1 * gx + y1 * gy + z1 * gz + w1 * gw;
+}
+
 // -----------------------------------------------------------------------------
 // quat_to_matrix using the native CUDA normalize-and-convert path.
 // -----------------------------------------------------------------------------
@@ -302,6 +338,161 @@ template<typename scalar_t>
 __forceinline__ __device__ scalar_t quat_slerp_small_angle_dot_threshold()
 {
     return scalar_t(0.9995);
+}
+
+// Scalar SLERP(q1, q2, t) in xyzw order. Used by batched quaternion, trajectory,
+// and packed pose-track kernels so the hemisphere, clamp, and small-angle paths
+// stay identical.
+template<typename scalar_t>
+__forceinline__ __device__ void quat_slerp_pair_fwd(
+    scalar_t x1,
+    scalar_t y1,
+    scalar_t z1,
+    scalar_t w1,
+    scalar_t x2,
+    scalar_t y2,
+    scalar_t z2,
+    scalar_t w2,
+    scalar_t ti,
+    scalar_t *ox,
+    scalar_t *oy,
+    scalar_t *oz,
+    scalar_t *ow
+)
+{
+    const scalar_t dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
+    const scalar_t s   = dot < scalar_t(0) ? scalar_t(-1) : scalar_t(1);
+    const scalar_t sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
+    const scalar_t c_raw = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
+    const scalar_t c     = quat_slerp_clamp_dot(c_raw);
+
+    if(c > quat_slerp_small_angle_dot_threshold<scalar_t>())
+    {
+        const scalar_t om      = scalar_t(1) - ti;
+        const scalar_t rx      = om * x1 + ti * sx;
+        const scalar_t ry      = om * y1 + ti * sy;
+        const scalar_t rz      = om * z1 + ti * sz;
+        const scalar_t rw      = om * w1 + ti * sw;
+        const scalar_t norm_sq = rx * rx + ry * ry + rz * rz + rw * rw;
+        const scalar_t inv_n   = scalar_t(1) / sqrt(norm_sq);
+        *ox                    = rx * inv_n;
+        *oy                    = ry * inv_n;
+        *oz                    = rz * inv_n;
+        *ow                    = rw * inv_n;
+        return;
+    }
+
+    const scalar_t theta     = acos(c);
+    const scalar_t sin_theta = sin(theta);
+    const scalar_t w1s       = sin((scalar_t(1) - ti) * theta) / sin_theta;
+    const scalar_t w2s       = sin(ti * theta) / sin_theta;
+    *ox                      = w1s * x1 + w2s * sx;
+    *oy                      = w1s * y1 + w2s * sy;
+    *oz                      = w1s * z1 + w2s * sz;
+    *ow                      = w1s * w1 + w2s * sw;
+}
+
+// VJP for quat_slerp_pair_fwd. `rx..rw` are the forward outputs and
+// `gx..gw` is upstream dL/dout.
+template<typename scalar_t>
+__forceinline__ __device__ void quat_slerp_pair_bwd(
+    scalar_t x1,
+    scalar_t y1,
+    scalar_t z1,
+    scalar_t w1,
+    scalar_t x2,
+    scalar_t y2,
+    scalar_t z2,
+    scalar_t w2,
+    scalar_t ti,
+    scalar_t rx,
+    scalar_t ry,
+    scalar_t rz,
+    scalar_t rw,
+    scalar_t gx,
+    scalar_t gy,
+    scalar_t gz,
+    scalar_t gw,
+    scalar_t *gq1x,
+    scalar_t *gq1y,
+    scalar_t *gq1z,
+    scalar_t *gq1w,
+    scalar_t *gq2x,
+    scalar_t *gq2y,
+    scalar_t *gq2z,
+    scalar_t *gq2w,
+    scalar_t *grad_t
+)
+{
+    const scalar_t dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
+    const scalar_t s   = dot < scalar_t(0) ? scalar_t(-1) : scalar_t(1);
+    const scalar_t sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
+    const scalar_t c_raw  = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
+    const scalar_t c      = quat_slerp_clamp_dot(c_raw);
+    const bool interior_c = (c_raw > scalar_t(-1)) && (c_raw < scalar_t(1));
+    const scalar_t c_mask = interior_c ? scalar_t(1) : scalar_t(0);
+
+    if(c > quat_slerp_small_angle_dot_threshold<scalar_t>())
+    {
+        const scalar_t om      = scalar_t(1) - ti;
+        const scalar_t rrx     = om * x1 + ti * sx;
+        const scalar_t rry     = om * y1 + ti * sy;
+        const scalar_t rrz     = om * z1 + ti * sz;
+        const scalar_t rrw     = om * w1 + ti * sw;
+        const scalar_t norm_sq = rrx * rrx + rry * rry + rrz * rrz + rrw * rrw;
+        const scalar_t r_norm  = sqrt(norm_sq);
+        const scalar_t ydotg   = rx * gx + ry * gy + rz * gz + rw * gw;
+        const scalar_t scale   = scalar_t(1) / r_norm;
+        const scalar_t grx     = (gx - rx * ydotg) * scale;
+        const scalar_t gry     = (gy - ry * ydotg) * scale;
+        const scalar_t grz     = (gz - rz * ydotg) * scale;
+        const scalar_t grw     = (gw - rw * ydotg) * scale;
+
+        *gq1x = om * grx;
+        *gq1y = om * gry;
+        *gq1z = om * grz;
+        *gq1w = om * grw;
+        *gq2x = s * ti * grx;
+        *gq2y = s * ti * gry;
+        *gq2z = s * ti * grz;
+        *gq2w = s * ti * grw;
+
+        *grad_t = grx * (sx - x1) + gry * (sy - y1) + grz * (sz - z1) + grw * (sw - w1);
+        return;
+    }
+
+    const scalar_t theta     = acos(c);
+    const scalar_t sin_theta = sin(theta);
+    const scalar_t w1s       = sin((scalar_t(1) - ti) * theta) / sin_theta;
+    const scalar_t w2s       = sin(ti * theta) / sin_theta;
+    const scalar_t G1        = gx * x1 + gy * y1 + gz * z1 + gw * w1;
+    const scalar_t G2        = gx * sx + gy * sy + gz * sz + gw * sw;
+    const scalar_t den       = sin_theta * sin_theta;
+    const scalar_t dw1_dtheta
+        = ((scalar_t(1) - ti) * cos((scalar_t(1) - ti) * theta) * sin_theta - sin((scalar_t(1) - ti) * theta) * c)
+        / den;
+    const scalar_t dw2_dtheta = (ti * cos(ti * theta) * sin_theta - sin(ti * theta) * c) / den;
+    const scalar_t dw1_dc     = sin_theta > scalar_t(1e-20) ? (-dw1_dtheta / sin_theta) * c_mask : scalar_t(0);
+    const scalar_t dw2_dc     = sin_theta > scalar_t(1e-20) ? (-dw2_dtheta / sin_theta) * c_mask : scalar_t(0);
+    const scalar_t K          = G1 * dw1_dc + G2 * dw2_dc;
+
+    *gq1x = w1s * gx + K * sx;
+    *gq1y = w1s * gy + K * sy;
+    *gq1z = w1s * gz + K * sz;
+    *gq1w = w1s * gw + K * sw;
+
+    const scalar_t gq2ex = w2s * gx + K * x1;
+    const scalar_t gq2ey = w2s * gy + K * y1;
+    const scalar_t gq2ez = w2s * gz + K * z1;
+    const scalar_t gq2ew = w2s * gw + K * w1;
+    *gq2x                = s * gq2ex;
+    *gq2y                = s * gq2ey;
+    *gq2z                = s * gq2ez;
+    *gq2w                = s * gq2ew;
+
+    const scalar_t dw1_dt = -theta * cos((scalar_t(1) - ti) * theta) / sin_theta;
+    const scalar_t dw2_dt = theta * cos(ti * theta) / sin_theta;
+    *grad_t               = G1 * dw1_dt + G2 * dw2_dt;
 }
 
 // -----------------------------------------------------------------------------
@@ -650,17 +841,28 @@ __device__ void quat_multiply_bwd_device(
     const scalar_t x2 = q2[o + 0], y2 = q2[o + 1], z2 = q2[o + 2], w2 = q2[o + 3];
     const scalar_t gx = grad_out[o + 0], gy = grad_out[o + 1], gz = grad_out[o + 2], gw = grad_out[o + 3];
 
-    // grad_q1 = J1^T * grad_out (q2 fixed)
-    grad_q1[o + 0] = w2 * gx - z2 * gy + y2 * gz - x2 * gw;
-    grad_q1[o + 1] = z2 * gx + w2 * gy - x2 * gz - y2 * gw;
-    grad_q1[o + 2] = -y2 * gx + x2 * gy + w2 * gz - z2 * gw;
-    grad_q1[o + 3] = x2 * gx + y2 * gy + z2 * gz + w2 * gw;
-
-    // grad_q2 = J2^T * grad_out (q2 variable, q1 fixed); J2 is left-multiply by q1
-    grad_q2[o + 0] = w1 * gx + z1 * gy - y1 * gz - x1 * gw;
-    grad_q2[o + 1] = -z1 * gx + w1 * gy + x1 * gz - y1 * gw;
-    grad_q2[o + 2] = y1 * gx - x1 * gy + w1 * gz - z1 * gw;
-    grad_q2[o + 3] = x1 * gx + y1 * gy + z1 * gz + w1 * gw;
+    quat_multiply_bwd_impl(
+        x1,
+        y1,
+        z1,
+        w1,
+        x2,
+        y2,
+        z2,
+        w2,
+        gx,
+        gy,
+        gz,
+        gw,
+        grad_q1 + o + 0,
+        grad_q1 + o + 1,
+        grad_q1 + o + 2,
+        grad_q1 + o + 3,
+        grad_q2 + o + 0,
+        grad_q2 + o + 1,
+        grad_q2 + o + 2,
+        grad_q2 + o + 3
+    );
 }
 
 // Batch row i: out_i = R(q_i) v_i. quat: (N,4) xyzw flat; vec/out: (N,3) row-major (o = i*3 / i*4).
@@ -1008,36 +1210,7 @@ __device__ void quat_slerp_batched_fwd_device(
     const scalar_t ti = t[i];
     const scalar_t x1 = q1[o + 0], y1 = q1[o + 1], z1 = q1[o + 2], w1 = q1[o + 3];
     const scalar_t x2 = q2[o + 0], y2 = q2[o + 1], z2 = q2[o + 2], w2 = q2[o + 3];
-    const scalar_t dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
-    scalar_t s         = dot < scalar_t(0) ? scalar_t(-1) : scalar_t(1);
-    const scalar_t sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
-    const scalar_t c_raw = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
-    const scalar_t c     = quat_slerp_clamp_dot(c_raw);
-
-    if(c > quat_slerp_small_angle_dot_threshold<scalar_t>())
-    {
-        const scalar_t om      = scalar_t(1) - ti;
-        const scalar_t rx      = om * x1 + ti * sx;
-        const scalar_t ry      = om * y1 + ti * sy;
-        const scalar_t rz      = om * z1 + ti * sz;
-        const scalar_t rw      = om * w1 + ti * sw;
-        const scalar_t norm_sq = rx * rx + ry * ry + rz * rz + rw * rw;
-        const scalar_t inv_n   = scalar_t(1) / sqrt(norm_sq);
-        out[o + 0]             = rx * inv_n;
-        out[o + 1]             = ry * inv_n;
-        out[o + 2]             = rz * inv_n;
-        out[o + 3]             = rw * inv_n;
-        return;
-    }
-
-    const scalar_t theta     = acos(c);
-    const scalar_t sin_theta = sin(theta);
-    const scalar_t w1s       = sin((scalar_t(1) - ti) * theta) / sin_theta;
-    const scalar_t w2s       = sin(ti * theta) / sin_theta;
-    out[o + 0]               = w1s * x1 + w2s * sx;
-    out[o + 1]               = w1s * y1 + w2s * sy;
-    out[o + 2]               = w1s * z1 + w2s * sz;
-    out[o + 3]               = w1s * w1 + w2s * sw;
+    quat_slerp_pair_fwd(x1, y1, z1, w1, x2, y2, z2, w2, ti, out + o + 0, out + o + 1, out + o + 2, out + o + 3);
 }
 
 // VJP for quat_slerp_batched_fwd_device: grad_out (xyzw), forward `result`; outputs grad_q1, grad_q2, grad_t[i].
@@ -1060,84 +1233,34 @@ __device__ void quat_slerp_batched_bwd_device(
     const scalar_t x1 = q1[o + 0], y1 = q1[o + 1], z1 = q1[o + 2], w1 = q1[o + 3];
     const scalar_t x2 = q2[o + 0], y2 = q2[o + 1], z2 = q2[o + 2], w2 = q2[o + 3];
     const scalar_t gx = grad_out[o + 0], gy = grad_out[o + 1], gz = grad_out[o + 2], gw = grad_out[o + 3];
-
-    const scalar_t dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
-    const scalar_t s   = dot < scalar_t(0) ? scalar_t(-1) : scalar_t(1);
-    const scalar_t sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
-    const scalar_t c_raw  = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
-    const scalar_t c      = quat_slerp_clamp_dot(c_raw);
-    const bool interior_c = (c_raw > scalar_t(-1)) && (c_raw < scalar_t(1));
-    const scalar_t c_mask = interior_c ? scalar_t(1) : scalar_t(0);
-
-    if(c > quat_slerp_small_angle_dot_threshold<scalar_t>())
-    {
-        const scalar_t om      = scalar_t(1) - ti;
-        const scalar_t rx      = om * x1 + ti * sx;
-        const scalar_t ry      = om * y1 + ti * sy;
-        const scalar_t rz      = om * z1 + ti * sz;
-        const scalar_t rw      = om * w1 + ti * sw;
-        const scalar_t norm_sq = rx * rx + ry * ry + rz * rz + rw * rw;
-        const scalar_t r_norm  = sqrt(norm_sq);
-
-        const scalar_t yx = result[o + 0], yy = result[o + 1], yz = result[o + 2], yw = result[o + 3];
-        const scalar_t ydotg = yx * gx + yy * gy + yz * gz + yw * gw;
-        const scalar_t scale = scalar_t(1) / r_norm;
-        const scalar_t grx   = (gx - yx * ydotg) * scale;
-        const scalar_t gry   = (gy - yy * ydotg) * scale;
-        const scalar_t grz   = (gz - yz * ydotg) * scale;
-        const scalar_t grw   = (gw - yw * ydotg) * scale;
-
-        grad_q1[o + 0] = om * grx;
-        grad_q1[o + 1] = om * gry;
-        grad_q1[o + 2] = om * grz;
-        grad_q1[o + 3] = om * grw;
-
-        grad_q2[o + 0] = s * ti * grx;
-        grad_q2[o + 1] = s * ti * gry;
-        grad_q2[o + 2] = s * ti * grz;
-        grad_q2[o + 3] = s * ti * grw;
-
-        const scalar_t dq2m_dq1x = sx - x1, dq2m_dq1y = sy - y1, dq2m_dq1z = sz - z1, dq2m_dq1w = sw - w1;
-        grad_t[i] = grx * dq2m_dq1x + gry * dq2m_dq1y + grz * dq2m_dq1z + grw * dq2m_dq1w;
-        return;
-    }
-
-    const scalar_t theta     = acos(c);
-    const scalar_t sin_theta = sin(theta);
-    const scalar_t w1s       = sin((scalar_t(1) - ti) * theta) / sin_theta;
-    const scalar_t w2s       = sin(ti * theta) / sin_theta;
-
-    const scalar_t G1 = gx * x1 + gy * y1 + gz * z1 + gw * w1;
-    const scalar_t G2 = gx * sx + gy * sy + gz * sz + gw * sw;
-
-    const scalar_t den = sin_theta * sin_theta;
-    const scalar_t dw1_dtheta
-        = ((scalar_t(1) - ti) * cos((scalar_t(1) - ti) * theta) * sin_theta - sin((scalar_t(1) - ti) * theta) * c)
-        / den;
-    const scalar_t dw2_dtheta = (ti * cos(ti * theta) * sin_theta - sin(ti * theta) * c) / den;
-    const scalar_t dw1_dc     = sin_theta > scalar_t(1e-20) ? (-dw1_dtheta / sin_theta) * c_mask : scalar_t(0);
-    const scalar_t dw2_dc     = sin_theta > scalar_t(1e-20) ? (-dw2_dtheta / sin_theta) * c_mask : scalar_t(0);
-
-    const scalar_t K = G1 * dw1_dc + G2 * dw2_dc;
-
-    grad_q1[o + 0] = w1s * gx + K * sx;
-    grad_q1[o + 1] = w1s * gy + K * sy;
-    grad_q1[o + 2] = w1s * gz + K * sz;
-    grad_q1[o + 3] = w1s * gw + K * sw;
-
-    const scalar_t gq2ex = w2s * gx + K * x1;
-    const scalar_t gq2ey = w2s * gy + K * y1;
-    const scalar_t gq2ez = w2s * gz + K * z1;
-    const scalar_t gq2ew = w2s * gw + K * w1;
-
-    grad_q2[o + 0] = s * gq2ex;
-    grad_q2[o + 1] = s * gq2ey;
-    grad_q2[o + 2] = s * gq2ez;
-    grad_q2[o + 3] = s * gq2ew;
-
-    const scalar_t dw1_dt = -theta * cos((scalar_t(1) - ti) * theta) / sin_theta;
-    const scalar_t dw2_dt = theta * cos(ti * theta) / sin_theta;
-    grad_t[i]             = G1 * dw1_dt + G2 * dw2_dt;
+    quat_slerp_pair_bwd(
+        x1,
+        y1,
+        z1,
+        w1,
+        x2,
+        y2,
+        z2,
+        w2,
+        ti,
+        result[o + 0],
+        result[o + 1],
+        result[o + 2],
+        result[o + 3],
+        gx,
+        gy,
+        gz,
+        gw,
+        grad_q1 + o + 0,
+        grad_q1 + o + 1,
+        grad_q1 + o + 2,
+        grad_q1 + o + 3,
+        grad_q2 + o + 0,
+        grad_q2 + o + 1,
+        grad_q2 + o + 2,
+        grad_q2 + o + 3,
+        grad_t + i
+    );
 }
 
 // Batch row i: angular distance 2·acos(|⟨q̂1,q̂2⟩|) radians after normalizing both quaternions (xyzw); dist_out[i] scalar.
