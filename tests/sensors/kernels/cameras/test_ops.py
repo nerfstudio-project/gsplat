@@ -4494,3 +4494,531 @@ def test_fisheye_projection_bindings_readonly(fisheye_projection):
             )
     with pytest.raises((AttributeError, RuntimeError, TypeError)):
         fisheye_projection.resolution = (1, 1)
+
+
+# ===========================================================================
+# Backward DistortionPolicy regression gates.
+# ===========================================================================
+
+
+_DISTORTION_POLICY_OPERATIONS = (
+    "camera_rays_to_image_points",
+    "image_points_to_camera_rays",
+    "project_world_points_mean_pose",
+    "project_world_points_shutter_pose",
+    "image_points_to_world_rays_static_pose",
+    "image_points_to_world_rays_shutter_pose",
+)
+_PROJECT_LIKE_OPERATIONS = frozenset(
+    {
+        "camera_rays_to_image_points",
+        "project_world_points_mean_pose",
+        "project_world_points_shutter_pose",
+    }
+)
+_DYNAMIC_POSE_OPERATIONS = frozenset(
+    {
+        "project_world_points_mean_pose",
+        "project_world_points_shutter_pose",
+        "image_points_to_world_rays_shutter_pose",
+    }
+)
+
+
+def _nonidentity_distortion_coeffs(
+    windshield_distortion,
+    *,
+    dtype: torch.dtype,
+    requires_grad: bool,
+) -> Tensor:
+    coeffs = windshield_distortion.distortion_coeffs.detach().clone().to(dtype=dtype)
+    with torch.no_grad():
+        coeffs[1] += 2e-3
+        coeffs[8] -= 1.5e-3
+        coeffs[22] -= 1e-3
+        coeffs[29] += 2e-3
+    return coeffs.requires_grad_(requires_grad)
+
+
+def _ftheta_projection_with_reference(base_projection, reference_polynomial):
+    return FThetaProjection(
+        principal_point=base_projection.principal_point,
+        fw_poly=base_projection.fw_poly,
+        bw_poly=base_projection.bw_poly,
+        A=base_projection.A,
+        resolution=base_projection.resolution,
+        reference_polynomial=int(reference_polynomial),
+        fw_poly_degree=int(base_projection.fw_poly_degree),
+        bw_poly_degree=int(base_projection.bw_poly_degree),
+        newton_iterations=int(base_projection.newton_iterations),
+        max_angle=float(base_projection.max_angle),
+        min_2d_norm=float(base_projection.min_2d_norm),
+    )
+
+
+def _operation_primary_input(
+    operation: str,
+    projection,
+    *,
+    count: int,
+    dtype: torch.dtype,
+) -> Tensor:
+    device = projection.principal_point.device
+    if operation == "camera_rays_to_image_points":
+        value = torch.tensor([[0.037, -0.021, 1.07]], device=device, dtype=dtype)
+    elif operation in _PROJECT_LIKE_OPERATIONS:
+        value = torch.tensor([[0.171, 0.097, 1.83]], device=device, dtype=dtype)
+    else:
+        value = projection.principal_point.detach().reshape(1, 2).to(
+            dtype=dtype
+        ) + torch.tensor([[1.7, -1.1]], device=device, dtype=dtype)
+    return value.expand(count, -1).clone().requires_grad_(True)
+
+
+def _operation_pose_inputs(
+    operation: str,
+    device: torch.device,
+    *,
+    dtype: torch.dtype,
+) -> tuple[Tensor, ...]:
+    start_translation = torch.tensor(
+        [0.01, -0.02, 0.03], device=device, dtype=dtype, requires_grad=True
+    )
+    start_rotation = torch.tensor(
+        [0.999825, 0.01, -0.015, 0.005],
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    if operation == "image_points_to_world_rays_static_pose":
+        return start_translation, start_rotation
+    if operation in _DYNAMIC_POSE_OPERATIONS:
+        end_translation = torch.tensor(
+            [0.08, 0.01, -0.02], device=device, dtype=dtype, requires_grad=True
+        )
+        end_rotation = torch.tensor(
+            [0.99975, -0.008, 0.02, -0.006],
+            device=device,
+            dtype=dtype,
+            requires_grad=True,
+        )
+        return start_translation, start_rotation, end_translation, end_rotation
+    return ()
+
+
+def _operation_output(
+    operation: str,
+    primary_input: Tensor,
+    projection,
+    distortion,
+    pose_inputs: tuple[Tensor, ...],
+) -> Tensor:
+    if operation == "camera_rays_to_image_points":
+        return camera_rays_to_image_points(
+            primary_input,
+            projection,
+            distortion,
+            allow_device_transfer=True,
+        )[0]
+    if operation == "image_points_to_camera_rays":
+        return image_points_to_camera_rays(
+            primary_input,
+            projection,
+            distortion,
+            allow_device_transfer=True,
+        )
+    if operation == "image_points_to_world_rays_static_pose":
+        translation, rotation = pose_inputs
+        return image_points_to_world_rays_static_pose(
+            primary_input,
+            projection,
+            distortion,
+            Pose(translation=translation, rotation=rotation),
+            allow_device_transfer=True,
+        )[0]
+
+    start_t, start_r, end_t, end_r = pose_inputs
+    pose = DynamicPose(
+        Pose(translation=start_t, rotation=start_r),
+        Pose(translation=end_t, rotation=end_r),
+    )
+    if operation == "project_world_points_mean_pose":
+        return project_world_points_mean_pose(
+            primary_input,
+            projection,
+            distortion,
+            pose,
+            (100, 80),
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            allow_device_transfer=True,
+        )[0]
+    if operation == "project_world_points_shutter_pose":
+        return project_world_points_shutter_pose(
+            primary_input,
+            projection,
+            distortion,
+            (100, 80),
+            ShutterType.GLOBAL,
+            pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            max_iterations=1,
+            initial_relative_time=0.5,
+            allow_device_transfer=True,
+        )[0]
+    if operation == "image_points_to_world_rays_shutter_pose":
+        return image_points_to_world_rays_shutter_pose(
+            primary_input,
+            projection,
+            distortion,
+            (100, 80),
+            ShutterType.ROLLING_TOP_TO_BOTTOM,
+            pose,
+            start_timestamp_us=0,
+            end_timestamp_us=10,
+            allow_device_transfer=True,
+        )[0]
+    raise AssertionError(f"unsupported operation: {operation}")
+
+
+def _joint_bivariate_gradcheck(
+    operation: str,
+    projection,
+    windshield_distortion,
+    external_reference: ReferencePolynomial,
+) -> bool:
+    primary_input = _operation_primary_input(
+        operation, projection, count=1, dtype=torch.float64
+    )
+    pose_inputs = _operation_pose_inputs(
+        operation, projection.principal_point.device, dtype=torch.float64
+    )
+    distortion_coeffs = _nonidentity_distortion_coeffs(
+        windshield_distortion, dtype=torch.float64, requires_grad=True
+    )
+
+    def fn(*inputs):
+        primary = inputs[0]
+        poses = tuple(
+            torch.nn.functional.normalize(value, dim=0)
+            if value.shape == (4,)
+            else value
+            for value in inputs[1:-1]
+        )
+        coeffs = inputs[-1]
+        distortion = _build_distortion(
+            windshield_distortion, external_reference, coeffs
+        )
+        return _operation_output(operation, primary, projection, distortion, poses)
+
+    if operation == "camera_rays_to_image_points":
+        kwargs = GRADCHECK_KWARGS_FTHETA_PROJECT
+    elif operation in _DYNAMIC_POSE_OPERATIONS:
+        kwargs = GRADCHECK_KWARGS_FTHETA_DYNAMIC
+    else:
+        kwargs = GRADCHECK_KWARGS
+    return torch.autograd.gradcheck(
+        fn,
+        (primary_input, *pose_inputs, distortion_coeffs),
+        **kwargs,
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize(
+    "external_reference",
+    [ReferencePolynomial.FORWARD, ReferencePolynomial.BACKWARD],
+)
+def test_fisheye_bivariate_joint_gradcheck_all_public_operations(
+    operation,
+    external_reference,
+    fisheye_projection,
+    windshield_distortion,
+):
+    """Jointly check each fisheye primary, pose, and coefficient VJP."""
+    assert _joint_bivariate_gradcheck(
+        operation,
+        fisheye_projection,
+        windshield_distortion,
+        external_reference,
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize(
+    "projection_reference",
+    [ReferencePolynomial.FORWARD, ReferencePolynomial.BACKWARD],
+)
+@pytest.mark.parametrize(
+    "external_reference",
+    [ReferencePolynomial.FORWARD, ReferencePolynomial.BACKWARD],
+)
+def test_ftheta_bivariate_joint_gradcheck_reference_cross_product(
+    operation,
+    projection_reference,
+    external_reference,
+    ftheta_projection_forward_ref,
+    windshield_distortion,
+):
+    """Check every FTheta intrinsic/external reference selector combination."""
+    projection = _ftheta_projection_with_reference(
+        ftheta_projection_forward_ref, projection_reference
+    )
+    assert _joint_bivariate_gradcheck(
+        operation,
+        projection,
+        windshield_distortion,
+        external_reference,
+    )
+
+
+def _active_distortion_slice(
+    operation: str, reference_polynomial: ReferencePolynomial
+) -> slice:
+    forward_half_is_active = (operation in _PROJECT_LIKE_OPERATIONS) == (
+        reference_polynomial == ReferencePolynomial.FORWARD
+    )
+    return slice(0, 21) if forward_half_is_active else slice(21, 42)
+
+
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize(
+    "external_reference",
+    [ReferencePolynomial.FORWARD, ReferencePolynomial.BACKWARD],
+)
+def test_ftheta_active_coefficient_half_all_public_operations(
+    operation,
+    external_reference,
+    ftheta_projection_forward_ref,
+    windshield_distortion,
+):
+    """Every FTheta operation must reduce only its selected coefficient half."""
+    coeffs = _nonidentity_distortion_coeffs(
+        windshield_distortion, dtype=torch.float32, requires_grad=True
+    )
+    distortion = _build_distortion(windshield_distortion, external_reference, coeffs)
+    primary_input = _operation_primary_input(
+        operation, ftheta_projection_forward_ref, count=2, dtype=torch.float32
+    )
+    pose_inputs = _operation_pose_inputs(
+        operation,
+        ftheta_projection_forward_ref.principal_point.device,
+        dtype=torch.float32,
+    )
+    output = _operation_output(
+        operation,
+        primary_input,
+        ftheta_projection_forward_ref,
+        distortion,
+        pose_inputs,
+    )
+    weights = torch.linspace(
+        0.3, 1.1, output.shape[-1], device=output.device, dtype=output.dtype
+    )
+    (output * weights).sum().backward()
+    torch.cuda.synchronize(output.device)
+
+    assert coeffs.grad is not None
+    active = _active_distortion_slice(operation, external_reference)
+    inactive = slice(21, 42) if active.start == 0 else slice(0, 21)
+    assert coeffs.grad[active].abs().sum() > 0
+    assert torch.count_nonzero(coeffs.grad[inactive]).item() == 0
+
+
+def _partial_block_projection(sensor: str, base_projection):
+    if sensor == "ftheta":
+        principal_point, fw_poly, bw_poly, A = (
+            tensor.detach().clone().requires_grad_(True)
+            for tensor in (
+                base_projection.principal_point,
+                base_projection.fw_poly,
+                base_projection.bw_poly,
+                base_projection.A,
+            )
+        )
+        projection = _ftheta_projection_from_grad_tensors(
+            base_projection, principal_point, fw_poly, bw_poly, A
+        )
+        return projection, (principal_point, fw_poly, bw_poly, A)
+
+    principal_point, focal_length, forward_poly = (
+        tensor.detach().clone().requires_grad_(True)
+        for tensor in (
+            base_projection.principal_point,
+            base_projection.focal_length,
+            base_projection.forward_poly,
+        )
+    )
+    projection = _fisheye_projection_from_grad_tensors(
+        base_projection,
+        principal_point,
+        focal_length,
+        forward_poly,
+        base_projection.approx_backward_factor.detach().clone(),
+    )
+    return projection, (principal_point, focal_length, forward_poly)
+
+
+def _partial_block_state(
+    *,
+    sensor: str,
+    distortion_policy: str,
+    operation: str,
+    count: int,
+    base_projection,
+    no_external,
+    windshield_distortion,
+):
+    projection, intrinsic_inputs = _partial_block_projection(sensor, base_projection)
+    primary_input = _operation_primary_input(
+        operation, projection, count=count, dtype=torch.float32
+    )
+    pose_inputs = _operation_pose_inputs(
+        operation, projection.principal_point.device, dtype=torch.float32
+    )
+    if distortion_policy == "bivariate":
+        distortion_coeffs = _nonidentity_distortion_coeffs(
+            windshield_distortion, dtype=torch.float32, requires_grad=True
+        )
+        distortion = _build_distortion(
+            windshield_distortion,
+            ReferencePolynomial.FORWARD,
+            distortion_coeffs,
+        )
+    else:
+        distortion_coeffs = None
+        distortion = no_external
+    return (
+        primary_input,
+        projection,
+        distortion,
+        pose_inputs,
+        intrinsic_inputs,
+        distortion_coeffs,
+    )
+
+
+def _backward_output_lane(
+    operation: str,
+    primary_input: Tensor,
+    projection,
+    distortion,
+    pose_inputs: tuple[Tensor, ...],
+    output_index: int,
+) -> None:
+    output = _operation_output(
+        operation, primary_input, projection, distortion, pose_inputs
+    )
+    weights = torch.linspace(
+        0.3, 1.1, output.shape[-1], device=output.device, dtype=output.dtype
+    )
+    (output[output_index] * weights).sum().backward()
+    torch.cuda.synchronize(output.device)
+
+
+def _assert_partial_block_grad_matches(
+    actual: Tensor,
+    expected: Tensor,
+    *,
+    label: str,
+) -> None:
+    assert actual.grad is not None, label
+    assert expected.grad is not None, label
+    assert torch.isfinite(actual.grad).all(), label
+    assert torch.isfinite(expected.grad).all(), label
+    assert torch.allclose(actual.grad, expected.grad, atol=3e-4, rtol=2e-3), label
+
+
+@pytest.mark.parametrize("sensor", ["fisheye", "ftheta"])
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize("count", [255, 257])
+def test_backward_partial_blocks_cover_every_specialization(
+    sensor,
+    distortion_policy,
+    operation,
+    count,
+    fisheye_projection,
+    ftheta_projection_forward_ref,
+    no_external,
+    windshield_distortion,
+):
+    """The last lane/block must contribute every applicable backward output."""
+    base_projection = (
+        fisheye_projection if sensor == "fisheye" else ftheta_projection_forward_ref
+    )
+    batched = _partial_block_state(
+        sensor=sensor,
+        distortion_policy=distortion_policy,
+        operation=operation,
+        count=count,
+        base_projection=base_projection,
+        no_external=no_external,
+        windshield_distortion=windshield_distortion,
+    )
+    reference = _partial_block_state(
+        sensor=sensor,
+        distortion_policy=distortion_policy,
+        operation=operation,
+        count=256,
+        base_projection=base_projection,
+        no_external=no_external,
+        windshield_distortion=windshield_distortion,
+    )
+    reference_lane = (count - 1) % 256
+
+    _backward_output_lane(operation, *batched[:4], -1)
+    _backward_output_lane(operation, *reference[:4], reference_lane)
+
+    batched_primary, _, _, batched_poses, batched_intrinsics, batched_coeffs = batched
+    (
+        reference_primary,
+        _,
+        _,
+        reference_poses,
+        reference_intrinsics,
+        reference_coeffs,
+    ) = reference
+    assert batched_primary.grad is not None
+    assert reference_primary.grad is not None
+    assert torch.count_nonzero(batched_primary.grad[:-1]).item() == 0
+    assert torch.count_nonzero(reference_primary.grad[:reference_lane]).item() == 0
+    assert torch.count_nonzero(reference_primary.grad[reference_lane + 1 :]).item() == 0
+    assert batched_primary.grad[-1].abs().sum() > 0
+    assert reference_primary.grad[reference_lane].abs().sum() > 0
+    assert torch.allclose(
+        batched_primary.grad[-1],
+        reference_primary.grad[reference_lane],
+        atol=3e-4,
+        rtol=2e-3,
+    )
+
+    for index, (actual, expected) in enumerate(
+        zip(batched_intrinsics, reference_intrinsics, strict=True)
+    ):
+        _assert_partial_block_grad_matches(
+            actual, expected, label=f"intrinsic[{index}]"
+        )
+        if sensor == "fisheye" or index != 2:
+            assert expected.grad.abs().sum() > 0, f"intrinsic[{index}]"
+
+    for index, (actual, expected) in enumerate(
+        zip(batched_poses, reference_poses, strict=True)
+    ):
+        _assert_partial_block_grad_matches(actual, expected, label=f"pose[{index}]")
+        assert expected.grad.abs().sum() > 0, f"pose[{index}]"
+
+    if distortion_policy == "bivariate":
+        assert batched_coeffs is not None
+        assert reference_coeffs is not None
+        _assert_partial_block_grad_matches(
+            batched_coeffs, reference_coeffs, label="distortion"
+        )
+        active = _active_distortion_slice(operation, ReferencePolynomial.FORWARD)
+        inactive = slice(21, 42) if active.start == 0 else slice(0, 21)
+        assert batched_coeffs.grad[active].abs().sum() > 0
+        assert reference_coeffs.grad[active].abs().sum() > 0
+        assert torch.count_nonzero(batched_coeffs.grad[inactive]).item() == 0

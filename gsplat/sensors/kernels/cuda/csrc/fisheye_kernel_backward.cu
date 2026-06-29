@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-// OpenCV-fisheye backward CUDA kernels for the no_external D1/D2/D3/D5 ops.
-// VJPs chain through the fisheye adjoint helpers in fisheye_kernel.cuh and the
-// shared pose/quaternion adapters in camera_kernel.cuh. Each kernel reduces the
-// intrinsic grads (principal_point, focal_length, forward_poly — NO ab slot)
-// via block_sum + one atomicAdd per slot per block. D3/D5 reorder the
-// single pose rotation gradient xyzw -> wxyz at the store boundary.
+// OpenCV-fisheye backward CUDA kernels. VJPs chain through the fisheye
+// adjoint helpers in fisheye_kernel.cuh and the shared pose/quaternion adapters
+// in camera_kernel.cuh. Each kernel reduces the intrinsic grads
+// (principal_point, focal_length, forward_poly — NO ab slot) via block_sum +
+// one atomicAdd per slot per block. Pose rotation gradients are accumulated in
+// xyzw order and emitted in wxyz order at the store boundary.
 
 #include "camera_kernel.cuh"
 #include "external_distortion_kernel.cuh"
@@ -36,6 +36,14 @@ dim3 grid_for_count(int64_t count)
 {
     return dim3(static_cast<unsigned int>((count + kThreads - 1) / kThreads));
 }
+
+template<DistortionOpFamily Op, typename DistortionPolicy>
+using FisheyeBackwardScratch = DistortionScratchTraits<
+    DistortionSensor::OpenCVFisheye,
+    Op,
+    DistortionDirection::Backward,
+    typename DistortionPolicy::Tag
+>;
 
 // Value-cast flag unpack: scratch holds the flag VALUE, not a
 // bit-reinterpreted float.
@@ -178,69 +186,105 @@ __device__ __forceinline__ void fisheye_load_bp_state_8(
 }
 
 // =============================================================================
-// D1 backward -- camera_rays_to_image_points_opencv_fisheye_no_external
+// camera_rays_to_image_points backward
 // =============================================================================
 
-__global__ void camera_rays_to_image_points_opencv_fisheye_no_external_backward_kernel(
+template<typename DistortionPolicy>
+__global__ void camera_rays_to_image_points_opencv_fisheye_backward_kernel(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
+    typename DistortionPolicy::KernelParameters distortion,
     const float *__restrict__ camera_rays,
     const float *__restrict__ grad_image_points,
     float *__restrict__ grad_camera_rays,
     float *__restrict__ grad_principal_point,
     float *__restrict__ grad_focal_length,
     float *__restrict__ grad_forward_poly,
+    float *__restrict__ grad_distortion_coeffs,
     const float *__restrict__ scratch
 )
 {
+    using Scratch              = FisheyeBackwardScratch<DistortionOpFamily::CameraRaysToImagePoints, DistortionPolicy>;
     int64_t idx                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
+    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
     OpenCVFisheyeParamGrads d_params{};
+    BivariateParamGrads d_biv{};
 
     if(idx < count)
     {
         FisheyeProjectState state;
-        fisheye_load_proj_state_8(scratch, idx * 8, state);
-        float3 ray   = read_vec3(camera_rays, idx);
-        float2 d_img = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
+        fisheye_load_proj_state_8(scratch, idx * Scratch::kScratchStride, state);
+        float3 ray         = read_vec3(camera_rays, idx);
+        float3 projected   = DistortionPolicy::apply_fwd(ray, distortion_params);
+        float2 d_img       = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
+        float3 d_projected = make_float3(0.0f, 0.0f, 0.0f);
+        fisheye_project_ray_bwd(projected, params, state, d_img, d_projected, d_params);
         float3 d_ray = make_float3(0.0f, 0.0f, 0.0f);
-        fisheye_project_ray_bwd(ray, params, state, d_img, d_ray, d_params);
+        DistortionPolicy::apply_bwd(ray, distortion_params, d_projected, d_ray, d_biv);
         if(grad_camera_rays != nullptr)
         {
             write_vec3(grad_camera_rays, idx, d_ray);
         }
     }
     reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
+    if constexpr(DistortionPolicy::kHasDistortion)
+    {
+        reduce_fisheye_bivariate_grads(d_biv, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
+    }
 }
 
 // =============================================================================
-// D2 backward -- image_points_to_camera_rays_opencv_fisheye_no_external
+// image_points_to_camera_rays backward
 // =============================================================================
 
-__global__ void image_points_to_camera_rays_opencv_fisheye_no_external_backward_kernel(
+template<typename DistortionPolicy>
+__global__ void image_points_to_camera_rays_opencv_fisheye_backward_kernel(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
+    typename DistortionPolicy::KernelParameters distortion,
     const float *__restrict__ image_points,
     const float *__restrict__ grad_camera_rays,
     float *__restrict__ grad_image_points,
     float *__restrict__ grad_principal_point,
     float *__restrict__ grad_focal_length,
     float *__restrict__ grad_forward_poly,
+    float *__restrict__ grad_distortion_coeffs,
     const float *__restrict__ scratch
 )
 {
+    using Scratch              = FisheyeBackwardScratch<DistortionOpFamily::ImagePointsToCameraRays, DistortionPolicy>;
     int64_t idx                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
+    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
     OpenCVFisheyeParamGrads d_params{};
+    BivariateParamGrads d_biv{};
 
     if(idx < count)
     {
+        int64_t off = idx * Scratch::kScratchStride;
         FisheyeBackprojectState state;
-        fisheye_load_bp_state_8(scratch, idx * 8, state);
+        fisheye_load_bp_state_8(scratch, off, state);
         float2 img   = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
         float3 d_ray = read_vec3(grad_camera_rays, idx);
+
+        float3 distorted_ray = normalize3(state.ray_raw);
+        float3 inverse_primal
+            = DistortionPolicy::inverse_bwd_input(distorted_ray, scratch, off + Scratch::kInverseStashOffset);
+        float3 d_inverse = d_ray;
+        if constexpr(DistortionPolicy::kHasDistortion)
+        {
+            d_inverse = normalize3_bwd(inverse_primal, d_ray);
+        }
+        float3 d_distorted = make_float3(0.0f, 0.0f, 0.0f);
+        DistortionPolicy::apply_bwd(distorted_ray, distortion_params, d_inverse, d_distorted, d_biv);
+        float3 d_backproject = d_distorted;
+        if constexpr(DistortionPolicy::kHasDistortion)
+        {
+            d_backproject = normalize3_bwd(state.ray_raw, d_distorted);
+        }
         float2 d_img = make_float2(0.0f, 0.0f);
-        fisheye_backproject_image_point_bwd(img, params, state, d_ray, d_img, d_params);
+        fisheye_backproject_image_point_bwd(img, params, state, d_backproject, d_img, d_params);
         if(grad_image_points != nullptr)
         {
             grad_image_points[idx * 2 + 0] = d_img.x;
@@ -248,6 +292,10 @@ __global__ void image_points_to_camera_rays_opencv_fisheye_no_external_backward_
         }
     }
     reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
+    if constexpr(DistortionPolicy::kHasDistortion)
+    {
+        reduce_fisheye_bivariate_grads(d_biv, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
+    }
 }
 
 // Unpacks the D3 14-slot mean-pose scratch into FisheyeProjectState plus p_rel
@@ -265,18 +313,18 @@ __device__ __forceinline__ void fisheye_load_meanpose_14(
 }
 
 // =============================================================================
-// D3 backward -- project_world_points_mean_pose_opencv_fisheye_no_external
+// project_world_points_mean_pose backward
 //
-// Feeds the UNNORMALIZED cam_pt straight into fisheye_project_ray_bwd (atan2
-// path, NO normalize3_bwd), then through
-// quat_inverse_rotate_bwd_xyzw_geom (mean rotation) and quat_slerp_pair_bwd_no_time_grad to
-// world-point + start/end pose grads. The single mean rotation gradient is
-// stored in wxyz output order.
+// The distortion policy receives the unnormalized cam_pt. The resulting
+// adjoint flows through quat_inverse_rotate_bwd_xyzw_geom (mean rotation) and
+// quat_slerp_pair_bwd to world-point and start/end pose gradients.
 // =============================================================================
 
-__global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backward_kernel(
+template<typename DistortionPolicy>
+__global__ void project_world_points_mean_pose_opencv_fisheye_backward_kernel(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
+    typename DistortionPolicy::KernelParameters distortion,
     const float *__restrict__ world_points,
     const float *__restrict__ start_rotation,
     const float *__restrict__ end_rotation,
@@ -289,12 +337,16 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backwa
     float *__restrict__ grad_principal_point,
     float *__restrict__ grad_focal_length,
     float *__restrict__ grad_forward_poly,
+    float *__restrict__ grad_distortion_coeffs,
     const float *__restrict__ scratch
 )
 {
-    int64_t idx                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FisheyeBackwardScratch<DistortionOpFamily::ProjectWorldPointsMeanPose, DistortionPolicy>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
+    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
     OpenCVFisheyeParamGrads d_params{};
+    BivariateParamGrads d_biv{};
     float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
@@ -302,7 +354,7 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backwa
 
     if(idx < count)
     {
-        int64_t off = idx * 14;
+        int64_t off = idx * Scratch::kScratchStride;
         float3 p_rel;
         float3 cam_pt;
         FisheyeProjectState state;
@@ -312,10 +364,11 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backwa
         {
             float2 d_img = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
 
-            // Unnormalized cam_pt feeds project_ray_bwd directly (NO
-            // normalize3_bwd in the pose chain).
+            float3 projected   = DistortionPolicy::apply_fwd(cam_pt, distortion_params);
+            float3 d_projected = make_float3(0.0f, 0.0f, 0.0f);
+            fisheye_project_ray_bwd(projected, params, state, d_img, d_projected, d_params);
             float3 d_cam_pt = make_float3(0.0f, 0.0f, 0.0f);
-            fisheye_project_ray_bwd(cam_pt, params, state, d_img, d_cam_pt, d_params);
+            DistortionPolicy::apply_bwd(cam_pt, distortion_params, d_projected, d_cam_pt, d_biv);
 
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
@@ -432,10 +485,14 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backwa
         }
     }
     reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
+    if constexpr(DistortionPolicy::kHasDistortion)
+    {
+        reduce_fisheye_bivariate_grads(d_biv, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
+    }
 }
 
 // =============================================================================
-// D5 backward -- image_points_to_world_rays_static_pose_opencv_fisheye_no_external
+// image_points_to_world_rays_static_pose backward
 //
 // d_origin passes directly to d_translation; d_direction chains through
 // quat_rotate_bwd to d_rotation and d_camera_ray, then through
@@ -443,9 +500,11 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_backwa
 // single static rotation gradient is stored in wxyz output order.
 // =============================================================================
 
-__global__ void image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward_kernel(
+template<typename DistortionPolicy>
+__global__ void image_points_to_world_rays_static_pose_opencv_fisheye_backward_kernel(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
+    typename DistortionPolicy::KernelParameters distortion,
     const float *__restrict__ image_points,
     const float *__restrict__ translation,
     const float *__restrict__ rotation,
@@ -456,19 +515,24 @@ __global__ void image_points_to_world_rays_static_pose_opencv_fisheye_no_externa
     float *__restrict__ grad_principal_point,
     float *__restrict__ grad_focal_length,
     float *__restrict__ grad_forward_poly,
+    float *__restrict__ grad_distortion_coeffs,
     const float *__restrict__ scratch
 )
 {
-    int64_t idx                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FisheyeBackwardScratch<DistortionOpFamily::ImagePointsToWorldRaysStaticPose, DistortionPolicy>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
+    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
     OpenCVFisheyeParamGrads d_params{};
+    BivariateParamGrads d_biv{};
     float4 d_rot_xyzw = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float3 d_trans    = make_float3(0.0f, 0.0f, 0.0f);
 
     if(idx < count)
     {
+        int64_t off = idx * Scratch::kScratchStride;
         FisheyeBackprojectState state;
-        fisheye_load_bp_state_8(scratch, idx * 8, state);
+        fisheye_load_bp_state_8(scratch, off, state);
         float2 img = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
         float3 d_origin
             = make_float3(grad_world_rays[idx * 6 + 0], grad_world_rays[idx * 6 + 1], grad_world_rays[idx * 6 + 2]);
@@ -477,19 +541,36 @@ __global__ void image_points_to_world_rays_static_pose_opencv_fisheye_no_externa
 
         d_trans = d_origin;
 
-        float4 pose_r_xyzw = read_quat_xyzw_from_wxyz(rotation, 0);
-        // Reconstruct the normalized camera_ray; on the min2d short-circuit the
-        // forward returned (0,0,1) and the backproject bwd contributes no grad.
-        float3 camera_ray  = normalize3(state.ray_raw);
+        float4 pose_r_xyzw   = read_quat_xyzw_from_wxyz(rotation, 0);
+        float3 distorted_ray = normalize3(state.ray_raw);
         if(state.min2d_clamped)
         {
-            camera_ray = make_float3(0.0f, 0.0f, 1.0f);
+            distorted_ray = make_float3(0.0f, 0.0f, 1.0f);
+        }
+        float3 inverse_primal
+            = DistortionPolicy::inverse_bwd_input(distorted_ray, scratch, off + Scratch::kInverseStashOffset);
+        float3 camera_ray = inverse_primal;
+        if constexpr(DistortionPolicy::kHasDistortion)
+        {
+            camera_ray = normalize3(inverse_primal);
         }
         float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
         quat_rotate_bwd_xyzw_geom(pose_r_xyzw, camera_ray, d_direction, d_rot_xyzw, d_camera_ray);
 
+        float3 d_inverse = d_camera_ray;
+        if constexpr(DistortionPolicy::kHasDistortion)
+        {
+            d_inverse = normalize3_bwd(inverse_primal, d_camera_ray);
+        }
+        float3 d_distorted = make_float3(0.0f, 0.0f, 0.0f);
+        DistortionPolicy::apply_bwd(distorted_ray, distortion_params, d_inverse, d_distorted, d_biv);
+        float3 d_backproject = d_distorted;
+        if constexpr(DistortionPolicy::kHasDistortion)
+        {
+            d_backproject = normalize3_bwd(state.ray_raw, d_distorted);
+        }
         float2 d_img = make_float2(0.0f, 0.0f);
-        fisheye_backproject_image_point_bwd(img, params, state, d_camera_ray, d_img, d_params);
+        fisheye_backproject_image_point_bwd(img, params, state, d_backproject, d_img, d_params);
         if(grad_image_points != nullptr)
         {
             grad_image_points[idx * 2 + 0] = d_img.x;
@@ -523,401 +604,13 @@ __global__ void image_points_to_world_rays_static_pose_opencv_fisheye_no_externa
         }
     }
     reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
+    if constexpr(DistortionPolicy::kHasDistortion)
+    {
+        reduce_fisheye_bivariate_grads(d_biv, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
+    }
 }
 
 // =============================================================================
-// D1 bivariate backward -- camera_rays_to_image_points_opencv_fisheye_bivariate_windshield
-//
-// Reconstructs distorted_ray from the saved camera ray (scratch stride 8, no
-// unnorm_out), runs fisheye_project_ray_bwd at the distorted ray, then chains
-// d_distorted back through apply_bivariate_distortion_bwd to d_camera_ray +
-// fisheye intrinsic + bivariate-coeff grads.
-// =============================================================================
-
-__global__ void camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward_kernel(
-    int64_t count,
-    OpenCVFisheyeProjection_KernelParameters projection,
-    BivariateWindshieldDistortion_KernelParameters distortion,
-    const float *__restrict__ camera_rays,
-    const float *__restrict__ grad_image_points,
-    float *__restrict__ grad_camera_rays,
-    float *__restrict__ grad_principal_point,
-    float *__restrict__ grad_focal_length,
-    float *__restrict__ grad_forward_poly,
-    float *__restrict__ grad_distortion_coeffs,
-    const float *__restrict__ scratch
-)
-{
-    int64_t idx                                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    OpenCVFisheyeParams params                 = load_opencv_fisheye_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, false);
-    OpenCVFisheyeParamGrads d_params{};
-    BivariateParamGrads d_biv{};
-
-    if(idx < count)
-    {
-        FisheyeProjectState state;
-        fisheye_load_proj_state_8(scratch, idx * 8, state);
-        float3 ray           = read_vec3(camera_rays, idx);
-        float3 distorted_ray = apply_bivariate_distortion(ray, bivariate_params);
-        float2 d_img         = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
-        float3 d_distorted   = make_float3(0.0f, 0.0f, 0.0f);
-        fisheye_project_ray_bwd(distorted_ray, params, state, d_img, d_distorted, d_params);
-        float3 d_ray = make_float3(0.0f, 0.0f, 0.0f);
-        apply_bivariate_distortion_bwd(ray, bivariate_params, d_distorted, d_ray, d_biv);
-        if(grad_camera_rays != nullptr)
-        {
-            write_vec3(grad_camera_rays, idx, d_ray);
-        }
-    }
-    reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
-    reduce_fisheye_bivariate_grads(d_biv, distortion, false, grad_distortion_coeffs);
-}
-
-// =============================================================================
-// D2 bivariate backward -- image_points_to_camera_rays_opencv_fisheye_bivariate_windshield
-//
-// Chain (scratch stride 12, unnorm_out at [8..10]):
-//   d_ray -> normalize3_bwd(unnorm_out) -> d_unnorm
-//   d_unnorm -> apply_bivariate_distortion_bwd(distorted_ray=normalize3(ray_raw))
-//            -> d_distorted + bivariate-coeff grads
-//   d_distorted -> normalize3_bwd(ray_raw) -> d_ray_raw
-//   d_ray_raw -> fisheye_backproject_image_point_bwd -> d_image_point + intrinsic
-// =============================================================================
-
-__global__ void image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward_kernel(
-    int64_t count,
-    OpenCVFisheyeProjection_KernelParameters projection,
-    BivariateWindshieldDistortion_KernelParameters distortion,
-    const float *__restrict__ image_points,
-    const float *__restrict__ grad_camera_rays,
-    float *__restrict__ grad_image_points,
-    float *__restrict__ grad_principal_point,
-    float *__restrict__ grad_focal_length,
-    float *__restrict__ grad_forward_poly,
-    float *__restrict__ grad_distortion_coeffs,
-    const float *__restrict__ scratch
-)
-{
-    int64_t idx                                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    OpenCVFisheyeParams params                 = load_opencv_fisheye_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, true);
-    OpenCVFisheyeParamGrads d_params{};
-    BivariateParamGrads d_biv{};
-
-    if(idx < count)
-    {
-        int64_t off = idx * 12;
-        FisheyeBackprojectState state;
-        fisheye_load_bp_state_8(scratch, off, state);
-        float3 unnorm_out = make_float3(scratch[off + 8], scratch[off + 9], scratch[off + 10]);
-        float2 img        = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-        float3 d_ray      = read_vec3(grad_camera_rays, idx);
-
-        // camera_ray = normalize3(unnorm_out).
-        float3 d_unnorm      = normalize3_bwd(unnorm_out, d_ray);
-        // unnorm_out = apply_bivariate_distortion(distorted_ray); distorted_ray
-        // is the backproject output normalize3(ray_raw).
-        float3 distorted_ray = normalize3(state.ray_raw);
-        float3 d_distorted   = make_float3(0.0f, 0.0f, 0.0f);
-        apply_bivariate_distortion_bwd(distorted_ray, bivariate_params, d_unnorm, d_distorted, d_biv);
-        // distorted_ray = normalize3(ray_raw).
-        float3 d_ray_raw = normalize3_bwd(state.ray_raw, d_distorted);
-        float2 d_img     = make_float2(0.0f, 0.0f);
-        fisheye_backproject_image_point_bwd(img, params, state, d_ray_raw, d_img, d_params);
-        if(grad_image_points != nullptr)
-        {
-            grad_image_points[idx * 2 + 0] = d_img.x;
-            grad_image_points[idx * 2 + 1] = d_img.y;
-        }
-    }
-    reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
-    reduce_fisheye_bivariate_grads(d_biv, distortion, true, grad_distortion_coeffs);
-}
-
-// =============================================================================
-// D3 bivariate backward -- project_world_points_mean_pose_opencv_fisheye_bivariate_windshield
-//
-// Identical pose/slerp chain to D3 no_external, with the bivariate distortion
-// inserted between cam_pt and the fisheye projection: recompute distorted from
-// cam_pt (scratch stride 14, no unnorm_out), run fisheye_project_ray_bwd at the
-// distorted ray, then apply_bivariate_distortion_bwd back to d_cam_pt + coeff
-// grads. The mean rotation gradient is stored in wxyz output order.
-// =============================================================================
-
-__global__ void project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward_kernel(
-    int64_t count,
-    OpenCVFisheyeProjection_KernelParameters projection,
-    BivariateWindshieldDistortion_KernelParameters distortion,
-    const float *__restrict__ world_points,
-    const float *__restrict__ start_rotation,
-    const float *__restrict__ end_rotation,
-    const float *__restrict__ grad_image_points,
-    float *__restrict__ grad_world_points,
-    float *__restrict__ grad_start_translation,
-    float *__restrict__ grad_end_translation,
-    float *__restrict__ grad_start_rotation,
-    float *__restrict__ grad_end_rotation,
-    float *__restrict__ grad_principal_point,
-    float *__restrict__ grad_focal_length,
-    float *__restrict__ grad_forward_poly,
-    float *__restrict__ grad_distortion_coeffs,
-    const float *__restrict__ scratch
-)
-{
-    int64_t idx                                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    OpenCVFisheyeParams params                 = load_opencv_fisheye_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, false);
-    OpenCVFisheyeParamGrads d_params{};
-    BivariateParamGrads d_biv{};
-    float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
-    float3 d_trans1 = make_float3(0.0f, 0.0f, 0.0f);
-
-    if(idx < count)
-    {
-        int64_t off = idx * 14;
-        float3 p_rel;
-        float3 cam_pt;
-        FisheyeProjectState state;
-        fisheye_load_meanpose_14(scratch, off, p_rel, cam_pt, state);
-
-        if(!state.behind_camera && !state.oob)
-        {
-            float2 d_img = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
-
-            // Recompute distorted ray for the fisheye_project_ray_bwd primal,
-            // then chain back through the bivariate distortion (NO normalize3_bwd
-            // in the pose chain).
-            float3 distorted   = apply_bivariate_distortion(cam_pt, bivariate_params);
-            float3 d_distorted = make_float3(0.0f, 0.0f, 0.0f);
-            fisheye_project_ray_bwd(distorted, params, state, d_img, d_distorted, d_params);
-            float3 d_cam_pt = make_float3(0.0f, 0.0f, 0.0f);
-            apply_bivariate_distortion_bwd(cam_pt, bivariate_params, d_distorted, d_cam_pt, d_biv);
-
-            float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
-            float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
-            float rx, ry, rz, rw;
-            gsplat_geometry::quat_slerp_pair_fwd<float>(
-                rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &rx, &ry, &rz, &rw
-            );
-            float4 rot_mid_xyzw   = make_float4(rx, ry, rz, rw);
-            float4 d_rot_mid_xyzw = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-            float3 d_p_rel        = make_float3(0.0f, 0.0f, 0.0f);
-            quat_inverse_rotate_bwd_xyzw_geom(rot_mid_xyzw, p_rel, d_cam_pt, d_rot_mid_xyzw, d_p_rel);
-
-            if(grad_world_points != nullptr)
-            {
-                write_vec3(grad_world_points, idx, d_p_rel);
-            }
-            float3 d_mean_t  = scale3(d_p_rel, -1.0f);
-            d_trans0.x      += 0.5f * d_mean_t.x;
-            d_trans0.y      += 0.5f * d_mean_t.y;
-            d_trans0.z      += 0.5f * d_mean_t.z;
-            d_trans1.x      += 0.5f * d_mean_t.x;
-            d_trans1.y      += 0.5f * d_mean_t.y;
-            d_trans1.z      += 0.5f * d_mean_t.z;
-
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
-            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
-                rot0.x,
-                rot0.y,
-                rot0.z,
-                rot0.w,
-                rot1.x,
-                rot1.y,
-                rot1.z,
-                rot1.w,
-                0.5f,
-                rx,
-                ry,
-                rz,
-                rw,
-                d_rot_mid_xyzw.x,
-                d_rot_mid_xyzw.y,
-                d_rot_mid_xyzw.z,
-                d_rot_mid_xyzw.w,
-                &gq0x,
-                &gq0y,
-                &gq0z,
-                &gq0w,
-                &gq1x,
-                &gq1y,
-                &gq1z,
-                &gq1w
-            );
-            d_rot0.x += gq0x;
-            d_rot0.y += gq0y;
-            d_rot0.z += gq0z;
-            d_rot0.w += gq0w;
-            d_rot1.x += gq1x;
-            d_rot1.y += gq1y;
-            d_rot1.z += gq1z;
-            d_rot1.w += gq1w;
-        }
-        else
-        {
-            if(grad_world_points != nullptr)
-            {
-                write_vec3(grad_world_points, idx, make_float3(0.0f, 0.0f, 0.0f));
-            }
-        }
-    }
-
-    float t0x = block_sum<kThreads>(d_trans0.x);
-    float t0y = block_sum<kThreads>(d_trans0.y);
-    float t0z = block_sum<kThreads>(d_trans0.z);
-    float t1x = block_sum<kThreads>(d_trans1.x);
-    float t1y = block_sum<kThreads>(d_trans1.y);
-    float t1z = block_sum<kThreads>(d_trans1.z);
-    float r0x = block_sum<kThreads>(d_rot0.x);
-    float r0y = block_sum<kThreads>(d_rot0.y);
-    float r0z = block_sum<kThreads>(d_rot0.z);
-    float r0w = block_sum<kThreads>(d_rot0.w);
-    float r1x = block_sum<kThreads>(d_rot1.x);
-    float r1y = block_sum<kThreads>(d_rot1.y);
-    float r1z = block_sum<kThreads>(d_rot1.z);
-    float r1w = block_sum<kThreads>(d_rot1.w);
-
-    if(threadIdx.x == 0)
-    {
-        if(grad_start_translation != nullptr)
-        {
-            atomicAdd(&grad_start_translation[0], t0x);
-            atomicAdd(&grad_start_translation[1], t0y);
-            atomicAdd(&grad_start_translation[2], t0z);
-        }
-        if(grad_end_translation != nullptr)
-        {
-            atomicAdd(&grad_end_translation[0], t1x);
-            atomicAdd(&grad_end_translation[1], t1y);
-            atomicAdd(&grad_end_translation[2], t1z);
-        }
-        // Emit rotation grads in wxyz output order.
-        if(grad_start_rotation != nullptr)
-        {
-            atomicAdd(&grad_start_rotation[0], r0w);
-            atomicAdd(&grad_start_rotation[1], r0x);
-            atomicAdd(&grad_start_rotation[2], r0y);
-            atomicAdd(&grad_start_rotation[3], r0z);
-        }
-        if(grad_end_rotation != nullptr)
-        {
-            atomicAdd(&grad_end_rotation[0], r1w);
-            atomicAdd(&grad_end_rotation[1], r1x);
-            atomicAdd(&grad_end_rotation[2], r1y);
-            atomicAdd(&grad_end_rotation[3], r1z);
-        }
-    }
-    reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
-    reduce_fisheye_bivariate_grads(d_biv, distortion, false, grad_distortion_coeffs);
-}
-
-// =============================================================================
-// D5 bivariate backward -- image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield
-//
-// d_origin -> d_translation; d_direction -> quat_rotate_bwd -> d_rotation +
-// d_camera_ray. Then chain (scratch stride 12, unnorm_out at [8..10]):
-//   d_camera_ray -> normalize3_bwd(unnorm_out) -> d_unnorm
-//   d_unnorm -> apply_bivariate_distortion_bwd(normalize3(ray_raw)) -> d_distorted
-//   d_distorted -> normalize3_bwd(ray_raw) -> d_ray_raw
-//   d_ray_raw -> fisheye_backproject_image_point_bwd -> d_image_point + intrinsic
-// The static rotation gradient is stored in wxyz output order.
-// =============================================================================
-
-__global__ void image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward_kernel(
-    int64_t count,
-    OpenCVFisheyeProjection_KernelParameters projection,
-    BivariateWindshieldDistortion_KernelParameters distortion,
-    const float *__restrict__ image_points,
-    const float *__restrict__ translation,
-    const float *__restrict__ rotation,
-    const float *__restrict__ grad_world_rays,
-    float *__restrict__ grad_image_points,
-    float *__restrict__ grad_translation,
-    float *__restrict__ grad_rotation,
-    float *__restrict__ grad_principal_point,
-    float *__restrict__ grad_focal_length,
-    float *__restrict__ grad_forward_poly,
-    float *__restrict__ grad_distortion_coeffs,
-    const float *__restrict__ scratch
-)
-{
-    int64_t idx                                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    OpenCVFisheyeParams params                 = load_opencv_fisheye_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, true);
-    OpenCVFisheyeParamGrads d_params{};
-    BivariateParamGrads d_biv{};
-    float4 d_rot_xyzw = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float3 d_trans    = make_float3(0.0f, 0.0f, 0.0f);
-
-    if(idx < count)
-    {
-        int64_t off = idx * 12;
-        FisheyeBackprojectState state;
-        fisheye_load_bp_state_8(scratch, off, state);
-        float3 unnorm_out = make_float3(scratch[off + 8], scratch[off + 9], scratch[off + 10]);
-        float2 img        = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-        float3 d_origin
-            = make_float3(grad_world_rays[idx * 6 + 0], grad_world_rays[idx * 6 + 1], grad_world_rays[idx * 6 + 2]);
-        float3 d_direction
-            = make_float3(grad_world_rays[idx * 6 + 3], grad_world_rays[idx * 6 + 4], grad_world_rays[idx * 6 + 5]);
-
-        d_trans = d_origin;
-
-        float4 pose_r_xyzw  = read_quat_xyzw_from_wxyz(rotation, 0);
-        float3 camera_ray   = normalize3(unnorm_out);
-        float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
-        quat_rotate_bwd_xyzw_geom(pose_r_xyzw, camera_ray, d_direction, d_rot_xyzw, d_camera_ray);
-
-        // camera_ray = normalize3(unnorm_out).
-        float3 d_unnorm      = normalize3_bwd(unnorm_out, d_camera_ray);
-        // unnorm_out = apply_bivariate_distortion(distorted_ray).
-        float3 distorted_ray = normalize3(state.ray_raw);
-        float3 d_distorted   = make_float3(0.0f, 0.0f, 0.0f);
-        apply_bivariate_distortion_bwd(distorted_ray, bivariate_params, d_unnorm, d_distorted, d_biv);
-        // distorted_ray = normalize3(ray_raw).
-        float3 d_ray_raw = normalize3_bwd(state.ray_raw, d_distorted);
-
-        float2 d_img = make_float2(0.0f, 0.0f);
-        fisheye_backproject_image_point_bwd(img, params, state, d_ray_raw, d_img, d_params);
-        if(grad_image_points != nullptr)
-        {
-            grad_image_points[idx * 2 + 0] = d_img.x;
-            grad_image_points[idx * 2 + 1] = d_img.y;
-        }
-    }
-
-    float tx = block_sum<kThreads>(d_trans.x);
-    float ty = block_sum<kThreads>(d_trans.y);
-    float tz = block_sum<kThreads>(d_trans.z);
-    float rx = block_sum<kThreads>(d_rot_xyzw.x);
-    float ry = block_sum<kThreads>(d_rot_xyzw.y);
-    float rz = block_sum<kThreads>(d_rot_xyzw.z);
-    float rw = block_sum<kThreads>(d_rot_xyzw.w);
-
-    if(threadIdx.x == 0)
-    {
-        if(grad_translation != nullptr)
-        {
-            atomicAdd(&grad_translation[0], tx);
-            atomicAdd(&grad_translation[1], ty);
-            atomicAdd(&grad_translation[2], tz);
-        }
-        // Emit rotation grad in wxyz output order.
-        if(grad_rotation != nullptr)
-        {
-            atomicAdd(&grad_rotation[0], rw);
-            atomicAdd(&grad_rotation[1], rx);
-            atomicAdd(&grad_rotation[2], ry);
-            atomicAdd(&grad_rotation[3], rz);
-        }
-    }
-    reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
-    reduce_fisheye_bivariate_grads(d_biv, distortion, true, grad_distortion_coeffs);
-}
-
 // Reduces start/end translation + rotation pose grads via block_sum and
 // atomicAdds them from thread 0 in wxyz output order. Mirrors
 // reduce_pose2_grads_components; both rotation grads are fed as xyzw and stored
@@ -979,20 +672,21 @@ __device__ __forceinline__ void reduce_fisheye_pose2_grads(
 }
 
 // =============================================================================
-// D4 backward -- project_world_points_shutter_pose_opencv_fisheye_no_external
+// project_world_points_shutter_pose backward
 //
 // Replays ONE differentiable step at the converged alpha read from scratch
 // (off+14). Gradient flow is gated on fwd_valid = !isnan(alpha) &&
-// !behind_camera && !oob (the D4-only NaN-alpha gate). Feeds the
-// UNNORMALIZED cam_pt straight into fisheye_project_ray_bwd (NO normalize3_bwd
-// in the pose chain), then through quat_inverse_rotate_bwd to the
-// world-point + start/end pose grads. Translation splits (1-alpha)/alpha; both
-// rotation grads are stored in wxyz output order.
+// !behind_camera && !oob. The distortion policy receives the unnormalized
+// cam_pt, and the resulting adjoint flows through quat_inverse_rotate_bwd to
+// the world-point and start/end pose gradients. Translation splits
+// (1-alpha)/alpha; both rotation gradients are stored in wxyz output order.
 // =============================================================================
 
-__global__ void project_world_points_shutter_pose_opencv_fisheye_no_external_backward_kernel(
+template<typename DistortionPolicy>
+__global__ void project_world_points_shutter_pose_opencv_fisheye_backward_kernel(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
+    typename DistortionPolicy::KernelParameters distortion,
     const float *__restrict__ start_rotation,
     const float *__restrict__ end_rotation,
     const float *__restrict__ grad_image_points,
@@ -1004,12 +698,16 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_no_external_bac
     float *__restrict__ grad_principal_point,
     float *__restrict__ grad_focal_length,
     float *__restrict__ grad_forward_poly,
+    float *__restrict__ grad_distortion_coeffs,
     const float *__restrict__ scratch
 )
 {
-    int64_t idx                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FisheyeBackwardScratch<DistortionOpFamily::ProjectWorldPointsShutterPose, DistortionPolicy>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
+    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
     OpenCVFisheyeParamGrads d_params{};
+    BivariateParamGrads d_biv{};
     float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
@@ -1017,7 +715,7 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_no_external_bac
 
     if(idx < count)
     {
-        int64_t off = idx * 16;
+        int64_t off = idx * Scratch::kScratchStride;
         float3 p_rel;
         float3 cam_pt;
         FisheyeProjectState state;
@@ -1029,8 +727,11 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_no_external_bac
         {
             float2 d_img = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
 
+            float3 projected   = DistortionPolicy::apply_fwd(cam_pt, distortion_params);
+            float3 d_projected = make_float3(0.0f, 0.0f, 0.0f);
+            fisheye_project_ray_bwd(projected, params, state, d_img, d_projected, d_params);
             float3 d_cam_pt = make_float3(0.0f, 0.0f, 0.0f);
-            fisheye_project_ray_bwd(cam_pt, params, state, d_img, d_cam_pt, d_params);
+            DistortionPolicy::apply_bwd(cam_pt, distortion_params, d_projected, d_cam_pt, d_biv);
 
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
@@ -1112,21 +813,27 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_no_external_bac
         grad_end_rotation
     );
     reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
+    if constexpr(DistortionPolicy::kHasDistortion)
+    {
+        reduce_fisheye_bivariate_grads(d_biv, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
+    }
 }
 
 // =============================================================================
-// D6 backward -- image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external
+// image_points_to_world_rays_shutter_pose backward
 //
 // d_origin passes directly to start/end translation (split (1-alpha)/alpha);
 // d_direction chains through quat_rotate_bwd at the slerp pose -> d_rotation +
 // d_camera_ray, then through fisheye_backproject_image_point_bwd to
-// d_image_point + intrinsic grads. NO isnan(alpha) gate; alpha read from
-// scratch (off+8). Both rotation grads stored in wxyz output order.
+// d_image_point + intrinsic grads. There is no isnan(alpha) gate; alpha is read
+// from scratch slot 8. Both rotation gradients are stored in wxyz output order.
 // =============================================================================
 
-__global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward_kernel(
+template<typename DistortionPolicy>
+__global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_backward_kernel(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
+    typename DistortionPolicy::KernelParameters distortion,
     const float *__restrict__ image_points,
     const float *__restrict__ start_rotation,
     const float *__restrict__ end_rotation,
@@ -1139,12 +846,16 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_extern
     float *__restrict__ grad_principal_point,
     float *__restrict__ grad_focal_length,
     float *__restrict__ grad_forward_poly,
+    float *__restrict__ grad_distortion_coeffs,
     const float *__restrict__ scratch
 )
 {
-    int64_t idx                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    using Scratch = FisheyeBackwardScratch<DistortionOpFamily::ImagePointsToWorldRaysShutterPose, DistortionPolicy>;
+    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
+    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
     OpenCVFisheyeParamGrads d_params{};
+    BivariateParamGrads d_biv{};
     float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
@@ -1152,7 +863,7 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_extern
 
     if(idx < count)
     {
-        int64_t off = idx * 12;
+        int64_t off = idx * Scratch::kScratchStride;
         FisheyeBackprojectState state;
         fisheye_load_bp_state_8(scratch, off, state);
         float alpha = scratch[off + 8];
@@ -1178,19 +889,36 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_extern
         );
         float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
 
-        // Reconstruct the normalized camera_ray; on the min2d short-circuit the
-        // forward returned (0,0,1) and the backproject bwd contributes no grad.
-        float3 camera_ray = normalize3(state.ray_raw);
+        float3 distorted_ray = normalize3(state.ray_raw);
         if(state.min2d_clamped)
         {
-            camera_ray = make_float3(0.0f, 0.0f, 1.0f);
+            distorted_ray = make_float3(0.0f, 0.0f, 1.0f);
+        }
+        float3 inverse_primal
+            = DistortionPolicy::inverse_bwd_input(distorted_ray, scratch, off + Scratch::kInverseStashOffset);
+        float3 camera_ray = inverse_primal;
+        if constexpr(DistortionPolicy::kHasDistortion)
+        {
+            camera_ray = normalize3(inverse_primal);
         }
         float4 d_rot_alpha  = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
         float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
         quat_rotate_bwd_xyzw_geom(rot_alpha_xyzw, camera_ray, d_direction, d_rot_alpha, d_camera_ray);
 
+        float3 d_inverse = d_camera_ray;
+        if constexpr(DistortionPolicy::kHasDistortion)
+        {
+            d_inverse = normalize3_bwd(inverse_primal, d_camera_ray);
+        }
+        float3 d_distorted = make_float3(0.0f, 0.0f, 0.0f);
+        DistortionPolicy::apply_bwd(distorted_ray, distortion_params, d_inverse, d_distorted, d_biv);
+        float3 d_backproject = d_distorted;
+        if constexpr(DistortionPolicy::kHasDistortion)
+        {
+            d_backproject = normalize3_bwd(state.ray_raw, d_distorted);
+        }
         float2 d_img = make_float2(0.0f, 0.0f);
-        fisheye_backproject_image_point_bwd(img, params, state, d_camera_ray, d_img, d_params);
+        fisheye_backproject_image_point_bwd(img, params, state, d_backproject, d_img, d_params);
         if(grad_image_points != nullptr)
         {
             grad_image_points[idx * 2 + 0] = d_img.x;
@@ -1246,294 +974,10 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_extern
         grad_end_rotation
     );
     reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
-}
-
-// =============================================================================
-// D4 bivariate backward -- project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield
-//
-// Identical pose/slerp chain to D4 no_external, with the bivariate distortion
-// inserted between cam_pt and the fisheye projection: recompute distorted from
-// cam_pt (scratch stride 16, no unnorm_out), run fisheye_project_ray_bwd at the
-// distorted ray, then apply_bivariate_distortion_bwd back to d_cam_pt + coeff
-// grads. NaN-alpha gate as D4; both rotation grads stored in wxyz order.
-// =============================================================================
-
-__global__ void project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward_kernel(
-    int64_t count,
-    OpenCVFisheyeProjection_KernelParameters projection,
-    BivariateWindshieldDistortion_KernelParameters distortion,
-    const float *__restrict__ start_rotation,
-    const float *__restrict__ end_rotation,
-    const float *__restrict__ grad_image_points,
-    float *__restrict__ grad_world_points,
-    float *__restrict__ grad_start_translation,
-    float *__restrict__ grad_end_translation,
-    float *__restrict__ grad_start_rotation,
-    float *__restrict__ grad_end_rotation,
-    float *__restrict__ grad_principal_point,
-    float *__restrict__ grad_focal_length,
-    float *__restrict__ grad_forward_poly,
-    float *__restrict__ grad_distortion_coeffs,
-    const float *__restrict__ scratch
-)
-{
-    int64_t idx                                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    OpenCVFisheyeParams params                 = load_opencv_fisheye_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, false);
-    OpenCVFisheyeParamGrads d_params{};
-    BivariateParamGrads d_biv{};
-    float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
-    float3 d_trans1 = make_float3(0.0f, 0.0f, 0.0f);
-
-    if(idx < count)
+    if constexpr(DistortionPolicy::kHasDistortion)
     {
-        int64_t off = idx * 16;
-        float3 p_rel;
-        float3 cam_pt;
-        FisheyeProjectState state;
-        fisheye_load_meanpose_14(scratch, off, p_rel, cam_pt, state);
-        float alpha          = scratch[off + 14];
-        const bool fwd_valid = !isnan(alpha) && !state.behind_camera && !state.oob;
-
-        if(fwd_valid)
-        {
-            float2 d_img = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
-
-            float3 distorted   = apply_bivariate_distortion(cam_pt, bivariate_params);
-            float3 d_distorted = make_float3(0.0f, 0.0f, 0.0f);
-            fisheye_project_ray_bwd(distorted, params, state, d_img, d_distorted, d_params);
-            float3 d_cam_pt = make_float3(0.0f, 0.0f, 0.0f);
-            apply_bivariate_distortion_bwd(cam_pt, bivariate_params, d_distorted, d_cam_pt, d_biv);
-
-            float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
-            float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
-            float rx, ry, rz, rw;
-            gsplat_geometry::quat_slerp_pair_fwd<float>(
-                rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
-            );
-            float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
-            float4 d_rot_alpha    = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-            float3 d_p_rel        = make_float3(0.0f, 0.0f, 0.0f);
-            quat_inverse_rotate_bwd_xyzw_geom(rot_alpha_xyzw, p_rel, d_cam_pt, d_rot_alpha, d_p_rel);
-
-            if(grad_world_points != nullptr)
-            {
-                write_vec3(grad_world_points, idx, d_p_rel);
-            }
-            float3 d_pose_t  = scale3(d_p_rel, -1.0f);
-            d_trans0.x      += (1.0f - alpha) * d_pose_t.x;
-            d_trans0.y      += (1.0f - alpha) * d_pose_t.y;
-            d_trans0.z      += (1.0f - alpha) * d_pose_t.z;
-            d_trans1.x      += alpha * d_pose_t.x;
-            d_trans1.y      += alpha * d_pose_t.y;
-            d_trans1.z      += alpha * d_pose_t.z;
-
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
-            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
-                rot0.x,
-                rot0.y,
-                rot0.z,
-                rot0.w,
-                rot1.x,
-                rot1.y,
-                rot1.z,
-                rot1.w,
-                alpha,
-                rx,
-                ry,
-                rz,
-                rw,
-                d_rot_alpha.x,
-                d_rot_alpha.y,
-                d_rot_alpha.z,
-                d_rot_alpha.w,
-                &gq0x,
-                &gq0y,
-                &gq0z,
-                &gq0w,
-                &gq1x,
-                &gq1y,
-                &gq1z,
-                &gq1w
-            );
-            d_rot0.x += gq0x;
-            d_rot0.y += gq0y;
-            d_rot0.z += gq0z;
-            d_rot0.w += gq0w;
-            d_rot1.x += gq1x;
-            d_rot1.y += gq1y;
-            d_rot1.z += gq1z;
-            d_rot1.w += gq1w;
-        }
-        else
-        {
-            if(grad_world_points != nullptr)
-            {
-                write_vec3(grad_world_points, idx, make_float3(0.0f, 0.0f, 0.0f));
-            }
-        }
+        reduce_fisheye_bivariate_grads(d_biv, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
     }
-
-    reduce_fisheye_pose2_grads(
-        d_trans0,
-        d_trans1,
-        d_rot0,
-        d_rot1,
-        grad_start_translation,
-        grad_end_translation,
-        grad_start_rotation,
-        grad_end_rotation
-    );
-    reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
-    reduce_fisheye_bivariate_grads(d_biv, distortion, false, grad_distortion_coeffs);
-}
-
-// =============================================================================
-// D6 bivariate backward -- image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield
-//
-// d_origin -> start/end translation (split (1-alpha)/alpha); d_direction ->
-// quat_rotate_bwd at the slerp pose -> d_rotation + d_camera_ray. Then chain
-// (scratch stride 16, unnorm_out at [12..14]):
-//   d_camera_ray -> normalize3_bwd(unnorm_out) -> d_unnorm
-//   d_unnorm -> apply_bivariate_distortion_bwd(normalize3(ray_raw)) -> d_distorted
-//   d_distorted -> normalize3_bwd(ray_raw) -> d_ray_raw
-//   d_ray_raw -> fisheye_backproject_image_point_bwd -> d_image_point + intrinsic
-// NO isnan(alpha) gate; both rotation grads stored in wxyz output order.
-// =============================================================================
-
-__global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward_kernel(
-    int64_t count,
-    OpenCVFisheyeProjection_KernelParameters projection,
-    BivariateWindshieldDistortion_KernelParameters distortion,
-    const float *__restrict__ image_points,
-    const float *__restrict__ start_rotation,
-    const float *__restrict__ end_rotation,
-    const float *__restrict__ grad_world_rays,
-    float *__restrict__ grad_image_points,
-    float *__restrict__ grad_start_translation,
-    float *__restrict__ grad_end_translation,
-    float *__restrict__ grad_start_rotation,
-    float *__restrict__ grad_end_rotation,
-    float *__restrict__ grad_principal_point,
-    float *__restrict__ grad_focal_length,
-    float *__restrict__ grad_forward_poly,
-    float *__restrict__ grad_distortion_coeffs,
-    const float *__restrict__ scratch
-)
-{
-    int64_t idx                                = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    OpenCVFisheyeParams params                 = load_opencv_fisheye_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, true);
-    OpenCVFisheyeParamGrads d_params{};
-    BivariateParamGrads d_biv{};
-    float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
-    float3 d_trans1 = make_float3(0.0f, 0.0f, 0.0f);
-
-    if(idx < count)
-    {
-        int64_t off = idx * 16;
-        FisheyeBackprojectState state;
-        fisheye_load_bp_state_8(scratch, off, state);
-        float alpha       = scratch[off + 8];
-        float3 unnorm_out = make_float3(scratch[off + 12], scratch[off + 13], scratch[off + 14]);
-        float2 img        = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-        float3 d_origin
-            = make_float3(grad_world_rays[idx * 6 + 0], grad_world_rays[idx * 6 + 1], grad_world_rays[idx * 6 + 2]);
-        float3 d_direction
-            = make_float3(grad_world_rays[idx * 6 + 3], grad_world_rays[idx * 6 + 4], grad_world_rays[idx * 6 + 5]);
-
-        float3 d_pose_t  = d_origin;
-        d_trans0.x      += (1.0f - alpha) * d_pose_t.x;
-        d_trans0.y      += (1.0f - alpha) * d_pose_t.y;
-        d_trans0.z      += (1.0f - alpha) * d_pose_t.z;
-        d_trans1.x      += alpha * d_pose_t.x;
-        d_trans1.y      += alpha * d_pose_t.y;
-        d_trans1.z      += alpha * d_pose_t.z;
-
-        float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
-        float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
-        float rx, ry, rz, rw;
-        gsplat_geometry::quat_slerp_pair_fwd<float>(
-            rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
-        );
-        float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
-
-        float3 camera_ray   = normalize3(unnorm_out);
-        float4 d_rot_alpha  = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
-        quat_rotate_bwd_xyzw_geom(rot_alpha_xyzw, camera_ray, d_direction, d_rot_alpha, d_camera_ray);
-
-        // camera_ray = normalize3(unnorm_out).
-        float3 d_unnorm      = normalize3_bwd(unnorm_out, d_camera_ray);
-        // unnorm_out = apply_bivariate_distortion(distorted_ray).
-        float3 distorted_ray = normalize3(state.ray_raw);
-        float3 d_distorted   = make_float3(0.0f, 0.0f, 0.0f);
-        apply_bivariate_distortion_bwd(distorted_ray, bivariate_params, d_unnorm, d_distorted, d_biv);
-        // distorted_ray = normalize3(ray_raw).
-        float3 d_ray_raw = normalize3_bwd(state.ray_raw, d_distorted);
-
-        float2 d_img = make_float2(0.0f, 0.0f);
-        fisheye_backproject_image_point_bwd(img, params, state, d_ray_raw, d_img, d_params);
-        if(grad_image_points != nullptr)
-        {
-            grad_image_points[idx * 2 + 0] = d_img.x;
-            grad_image_points[idx * 2 + 1] = d_img.y;
-        }
-
-        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
-        gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
-            rot0.x,
-            rot0.y,
-            rot0.z,
-            rot0.w,
-            rot1.x,
-            rot1.y,
-            rot1.z,
-            rot1.w,
-            alpha,
-            rx,
-            ry,
-            rz,
-            rw,
-            d_rot_alpha.x,
-            d_rot_alpha.y,
-            d_rot_alpha.z,
-            d_rot_alpha.w,
-            &gq0x,
-            &gq0y,
-            &gq0z,
-            &gq0w,
-            &gq1x,
-            &gq1y,
-            &gq1z,
-            &gq1w
-        );
-        d_rot0.x += gq0x;
-        d_rot0.y += gq0y;
-        d_rot0.z += gq0z;
-        d_rot0.w += gq0w;
-        d_rot1.x += gq1x;
-        d_rot1.y += gq1y;
-        d_rot1.z += gq1z;
-        d_rot1.w += gq1w;
-    }
-
-    reduce_fisheye_pose2_grads(
-        d_trans0,
-        d_trans1,
-        d_rot0,
-        d_rot1,
-        grad_start_translation,
-        grad_end_translation,
-        grad_start_rotation,
-        grad_end_rotation
-    );
-    reduce_fisheye_intrinsic_grads(d_params, grad_principal_point, grad_focal_length, grad_forward_poly);
-    reduce_fisheye_bivariate_grads(d_biv, distortion, true, grad_distortion_coeffs);
 }
 } // namespace
 
@@ -1558,20 +1002,20 @@ void camera_rays_to_image_points_opencv_fisheye_no_external_backward_launch(
     {
         return;
     }
-    camera_rays_to_image_points_opencv_fisheye_no_external_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        camera_rays,
-        grad_image_points,
-        grad_camera_rays,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        scratch);
+    camera_rays_to_image_points_opencv_fisheye_backward_kernel<NoExternalDistortionPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            NoExternalDistortion_KernelParameters{},
+            camera_rays,
+            grad_image_points,
+            grad_camera_rays,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            nullptr,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1592,20 +1036,20 @@ void image_points_to_camera_rays_opencv_fisheye_no_external_backward_launch(
     {
         return;
     }
-    image_points_to_camera_rays_opencv_fisheye_no_external_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        image_points,
-        grad_camera_rays,
-        grad_image_points,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        scratch);
+    image_points_to_camera_rays_opencv_fisheye_backward_kernel<NoExternalDistortionPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            NoExternalDistortion_KernelParameters{},
+            image_points,
+            grad_camera_rays,
+            grad_image_points,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            nullptr,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1632,26 +1076,26 @@ void project_world_points_mean_pose_opencv_fisheye_no_external_backward_launch(
     {
         return;
     }
-    project_world_points_mean_pose_opencv_fisheye_no_external_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        world_points,
-        start_rotation,
-        end_rotation,
-        grad_image_points,
-        grad_world_points,
-        grad_start_translation,
-        grad_end_translation,
-        grad_start_rotation,
-        grad_end_rotation,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        scratch);
+    project_world_points_mean_pose_opencv_fisheye_backward_kernel<NoExternalDistortionPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            NoExternalDistortion_KernelParameters{},
+            world_points,
+            start_rotation,
+            end_rotation,
+            grad_image_points,
+            grad_world_points,
+            grad_start_translation,
+            grad_end_translation,
+            grad_start_rotation,
+            grad_end_rotation,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            nullptr,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1676,29 +1120,29 @@ void image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward_
     {
         return;
     }
-    image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        image_points,
-        translation,
-        rotation,
-        grad_world_rays,
-        grad_image_points,
-        grad_translation,
-        grad_rotation,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        scratch);
+    image_points_to_world_rays_static_pose_opencv_fisheye_backward_kernel<NoExternalDistortionPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            NoExternalDistortion_KernelParameters{},
+            image_points,
+            translation,
+            rotation,
+            grad_world_rays,
+            grad_image_points,
+            grad_translation,
+            grad_rotation,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            nullptr,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 // =============================================================================
-// Bivariate-windshield backward launchers (D1/D2/D3/D5).
+// Bivariate-windshield backward launchers.
 // =============================================================================
 
 void camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward_launch(
@@ -1720,22 +1164,20 @@ void camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward_la
     {
         return;
     }
-    camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        distortion,
-        camera_rays,
-        grad_image_points,
-        grad_camera_rays,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        grad_distortion_coeffs,
-        scratch);
+    camera_rays_to_image_points_opencv_fisheye_backward_kernel<BivariateWindshieldPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            distortion,
+            camera_rays,
+            grad_image_points,
+            grad_camera_rays,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            grad_distortion_coeffs,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1758,22 +1200,20 @@ void image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward_la
     {
         return;
     }
-    image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        distortion,
-        image_points,
-        grad_camera_rays,
-        grad_image_points,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        grad_distortion_coeffs,
-        scratch);
+    image_points_to_camera_rays_opencv_fisheye_backward_kernel<BivariateWindshieldPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            distortion,
+            image_points,
+            grad_camera_rays,
+            grad_image_points,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            grad_distortion_coeffs,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1802,28 +1242,26 @@ void project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward
     {
         return;
     }
-    project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        distortion,
-        world_points,
-        start_rotation,
-        end_rotation,
-        grad_image_points,
-        grad_world_points,
-        grad_start_translation,
-        grad_end_translation,
-        grad_start_rotation,
-        grad_end_rotation,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        grad_distortion_coeffs,
-        scratch);
+    project_world_points_mean_pose_opencv_fisheye_backward_kernel<BivariateWindshieldPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            distortion,
+            world_points,
+            start_rotation,
+            end_rotation,
+            grad_image_points,
+            grad_world_points,
+            grad_start_translation,
+            grad_end_translation,
+            grad_start_rotation,
+            grad_end_rotation,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            grad_distortion_coeffs,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1850,31 +1288,29 @@ void image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_
     {
         return;
     }
-    image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        distortion,
-        image_points,
-        translation,
-        rotation,
-        grad_world_rays,
-        grad_image_points,
-        grad_translation,
-        grad_rotation,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        grad_distortion_coeffs,
-        scratch);
+    image_points_to_world_rays_static_pose_opencv_fisheye_backward_kernel<BivariateWindshieldPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            distortion,
+            image_points,
+            translation,
+            rotation,
+            grad_world_rays,
+            grad_image_points,
+            grad_translation,
+            grad_rotation,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            grad_distortion_coeffs,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 // =============================================================================
-// Shutter-pose backward launchers (D4/D6, both distortions).
+// Shutter-pose backward launchers.
 // =============================================================================
 
 void project_world_points_shutter_pose_opencv_fisheye_no_external_backward_launch(
@@ -1899,25 +1335,25 @@ void project_world_points_shutter_pose_opencv_fisheye_no_external_backward_launc
     {
         return;
     }
-    project_world_points_shutter_pose_opencv_fisheye_no_external_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        start_rotation,
-        end_rotation,
-        grad_image_points,
-        grad_world_points,
-        grad_start_translation,
-        grad_end_translation,
-        grad_start_rotation,
-        grad_end_rotation,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        scratch);
+    project_world_points_shutter_pose_opencv_fisheye_backward_kernel<NoExternalDistortionPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            NoExternalDistortion_KernelParameters{},
+            start_rotation,
+            end_rotation,
+            grad_image_points,
+            grad_world_points,
+            grad_start_translation,
+            grad_end_translation,
+            grad_start_rotation,
+            grad_end_rotation,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            nullptr,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1945,27 +1381,25 @@ void project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backw
     {
         return;
     }
-    project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        distortion,
-        start_rotation,
-        end_rotation,
-        grad_image_points,
-        grad_world_points,
-        grad_start_translation,
-        grad_end_translation,
-        grad_start_rotation,
-        grad_end_rotation,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        grad_distortion_coeffs,
-        scratch);
+    project_world_points_shutter_pose_opencv_fisheye_backward_kernel<BivariateWindshieldPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            distortion,
+            start_rotation,
+            end_rotation,
+            grad_image_points,
+            grad_world_points,
+            grad_start_translation,
+            grad_end_translation,
+            grad_start_rotation,
+            grad_end_rotation,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            grad_distortion_coeffs,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1992,26 +1426,26 @@ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward
     {
         return;
     }
-    image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        image_points,
-        start_rotation,
-        end_rotation,
-        grad_world_rays,
-        grad_image_points,
-        grad_start_translation,
-        grad_end_translation,
-        grad_start_rotation,
-        grad_end_rotation,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        scratch);
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_backward_kernel<NoExternalDistortionPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            NoExternalDistortion_KernelParameters{},
+            image_points,
+            start_rotation,
+            end_rotation,
+            grad_world_rays,
+            grad_image_points,
+            grad_start_translation,
+            grad_end_translation,
+            grad_start_rotation,
+            grad_end_rotation,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            nullptr,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -2040,27 +1474,25 @@ void image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield
     {
         return;
     }
-    image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward_kernel<<<
-        grid_for_count(count),
-        kThreads,
-        0,
-        stream
-    >>>(count,
-        projection,
-        distortion,
-        image_points,
-        start_rotation,
-        end_rotation,
-        grad_world_rays,
-        grad_image_points,
-        grad_start_translation,
-        grad_end_translation,
-        grad_start_rotation,
-        grad_end_rotation,
-        grad_principal_point,
-        grad_focal_length,
-        grad_forward_poly,
-        grad_distortion_coeffs,
-        scratch);
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_backward_kernel<BivariateWindshieldPolicy>
+        <<<grid_for_count(count), kThreads, 0, stream>>>(
+            count,
+            projection,
+            distortion,
+            image_points,
+            start_rotation,
+            end_rotation,
+            grad_world_rays,
+            grad_image_points,
+            grad_start_translation,
+            grad_end_translation,
+            grad_start_rotation,
+            grad_end_rotation,
+            grad_principal_point,
+            grad_focal_length,
+            grad_forward_poly,
+            grad_distortion_coeffs,
+            scratch
+        );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }

@@ -48,8 +48,10 @@ projection at this revision:
   helper `generate_image_points` (pixel-centre coordinates).
 - A rolling-shutter Newton solver inside `project_world_points_shutter_pose`,
   capped by `kMaxRollingShutterIterations = 12` in `camera_params.h`.
-- Hand-written backward CUDA kernels per `(op, projection, distortion)` pair,
-  exposed through one `torch.autograd.Function` per pair.
+- Concrete backward CUDA launchers per `(op, projection, distortion)` pair,
+  exposed through one `torch.autograd.Function` per pair. Fisheye and FTheta
+  share policy-templated device bodies across distortion variants; pinhole
+  backward bodies remain hand-written.
 - One LiDAR projection model: `RowOffsetStructuredSpinningLidarProjection`.
   It carries row elevations, column azimuths, optional row azimuth offsets,
   vertical and horizontal FOV scalars, `SpinningDirection`, and a
@@ -117,11 +119,14 @@ gsplat/sensors/kernels/
       math.cuh                      # float3 helpers + normalize3 bwd
 ```
 
-There is no `include/projective_sensor.h` projection-trait header. The forward
-fisheye and FTheta CUDA paths do use a sensor-local compile-time distortion
-contract: CUDA-only `DistortionPolicy` structs select the implementation, and
-host-safe `DistortionScratchTraits` specializations define each tuple's scratch
-layout. Backward kernels and pinhole remain hand-written per distortion.
+There is no `include/projective_sensor.h` projection-trait header. All FTheta
+forward and backward paths, all fisheye backward paths, and five fisheye
+forward families use a sensor-local compile-time distortion contract:
+CUDA-only `DistortionPolicy` structs select the implementation, and host-safe
+`DistortionScratchTraits` specializations define each tuple's scratch layout.
+Fisheye shutter-project forward retains separate bodies because its distortion
+variants have asymmetric launch bounds. Pinhole remains hand-written per
+distortion.
 
 ## Native split: bridge / CUDA-only / Torch-only
 
@@ -166,9 +171,11 @@ table below states what each one is actually called.
 
 The naming asymmetry is intentional and worth flagging: projection per-thread
 structs drop the `Projection` suffix (`OpenCVPinholeParams`, `FThetaParams`,
-`OpenCVFisheyeParams`). Forward fisheye and FTheta access distortion state
-through `NoExternalDistortionPolicy` or `BivariateWindshieldPolicy`; the latter's
-`Params` alias names the concrete `BivariateWindshieldParams` register struct.
+`OpenCVFisheyeParams`). The policy-templated FTheta and fisheye kernels access
+distortion state through `NoExternalDistortionPolicy` or
+`BivariateWindshieldPolicy`; the latter's `Params` alias names the concrete
+`BivariateWindshieldParams` register struct. Fisheye shutter-project forward is
+the sole non-templated fisheye/FTheta exception.
 
 The Torch host structs store per-component `at::Tensor` members (no packed
 wire format) plus frozen scalars / arrays such as the
@@ -180,8 +187,10 @@ into the bridge POD. No tensor allocation or device transfer happens there.
 ## Polymorphism and Dispatch
 
 There is no runtime `std::variant` or distortion enum at the C++/CUDA boundary.
-Python still selects a concrete registered op, while the forward fisheye and
-FTheta launchers explicitly instantiate one CUDA `DistortionPolicy` per op.
+Python still selects a concrete registered op. FTheta forward and backward,
+fisheye backward, and five fisheye forward families explicitly instantiate one
+CUDA `DistortionPolicy` per op; fisheye shutter-project forward retains its two
+separate launch paths.
 `DistortionScratchTraits` is a compile-time layout contract, not runtime
 polymorphism. The public dispatch remains visible in three layers:
 
@@ -443,9 +452,10 @@ the wheel path is the deployment workflow.
   with a `TypeError`.
 - Cross-family polymorphism is realised through Python `dict` dispatch
   tables in `projective_sensor_ops.py`. There is no `std::variant` or runtime
-  distortion enum at the kernel boundary. Forward fisheye and FTheta kernels
-  use compile-time `DistortionPolicy` and `DistortionScratchTraits`; backward
-  kernels and pinhole still use separate hand-written bodies.
+  distortion enum at the kernel boundary. FTheta forward and backward,
+  fisheye backward, and five fisheye forward families use compile-time
+  `DistortionPolicy` and `DistortionScratchTraits`. Fisheye shutter-project
+  forward and pinhole retain separate hand-written bodies.
 - Each `(op, projection, distortion[, _backward])` triple has its own
   `m.def` binding, its own `torch.autograd.Function`, and its own dispatch
   entry. Adding a registered class without populating every table fails the
