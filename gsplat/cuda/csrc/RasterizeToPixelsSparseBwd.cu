@@ -29,6 +29,7 @@
 #    include "Common.h"
 #    include "Dispatch.h"
 #    include "Rasterization.h"
+#    include "RasterizeSparseAddressing.cuh"
 #    include "RasterizeToPixels3DGSDevice.cuh"
 #    include "Utils.cuh"
 
@@ -86,21 +87,19 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
     float *__restrict__ v_opacities   // [I, N] or [nnz]
 )
 {
-    auto block                   = cg::this_thread_block();
-    const uint32_t ord           = block.group_index().x;
-    const uint32_t n_tiles       = tile_width * tile_height;
-    const uint32_t global_tile   = (uint32_t)active_tiles[ord];
-    const uint32_t image_id      = global_tile / n_tiles;
-    const uint32_t tile_in_image = global_tile % n_tiles;
-    const uint32_t tile_y        = tile_in_image / tile_width;
-    const uint32_t tile_x        = tile_in_image % tile_width;
+    auto block                = cg::this_thread_block();
+    const uint32_t ord        = block.group_index().x;
+    const uint32_t n_tiles    = tile_width * tile_height;
+    const int32_t global_tile = active_tiles[ord];
+    uint32_t image_id, tile_x, tile_y;
+    sparse_decode_tile(global_tile, n_tiles, tile_width, image_id, tile_x, tile_y);
 
     if(backgrounds != nullptr)
     {
         backgrounds += image_id * CDIM;
     }
     // Masked tile contributes only a constant background -> zero gradient.
-    if(masks != nullptr && !masks[image_id * n_tiles + tile_in_image])
+    if(masks != nullptr && !masks[global_tile])
     {
         return;
     }
@@ -115,20 +114,8 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
     const int64_t pix_start         = (ord == 0) ? 0 : tile_pixel_cumsum[ord - 1];
     const uint64_t *tile_mask_words = tile_pixel_mask + (int64_t)ord * words;
     const uint32_t in_tile          = local_row * tile_size + local_col;
-    const uint32_t word             = in_tile >> 6;
-    const uint32_t bit              = in_tile & 63u;
-    const bool inside               = (tile_mask_words[word] >> bit) & 1ull;
-    int64_t out_idx                 = -1;
-    if(inside)
-    {
-        uint32_t rank = 0;
-        for(uint32_t w = 0; w < word; ++w)
-        {
-            rank += __popcll(tile_mask_words[w]);
-        }
-        rank    += __popcll(tile_mask_words[word] & (((uint64_t)1 << bit) - 1));
-        out_idx  = pixel_map[pix_start + rank];
-    }
+    const int64_t out_idx           = sparse_pixel_slot(tile_mask_words, in_tile, pix_start, pixel_map);
+    const bool inside               = out_idx >= 0;
 
     const int32_t range_start  = tile_offsets[ord];
     const int32_t range_end    = tile_offsets[ord + 1];
@@ -203,15 +190,14 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
 
             if(valid)
             {
-                conic        = conic_batch[t];
-                vec3 xy_opac = xy_opacity_batch[t];
-                opac         = xy_opac.z;
-                delta        = {xy_opac.x - px, xy_opac.y - py};
-                float sigma
-                    = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                vis   = __expf(-sigma);
-                alpha = min(MAX_ALPHA, opac * vis);
-                if(sigma < 0.f || alpha < ALPHA_THRESHOLD)
+                conic                   = conic_batch[t];
+                vec3 xy_opac            = xy_opacity_batch[t];
+                opac                    = xy_opac.z;
+                delta                   = {xy_opac.x - px, xy_opac.y - py};
+                const GaussianWeight gw = eval_gaussian_weight(conic, delta.x, delta.y, opac);
+                vis                     = gw.vis;
+                alpha                   = gw.alpha;
+                if(!gw.valid)
                 {
                     valid = false;
                 }

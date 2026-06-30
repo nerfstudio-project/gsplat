@@ -27,6 +27,7 @@
 #    include "Common.h"
 #    include "Dispatch.h"
 #    include "Rasterization.h"
+#    include "RasterizeToPixels3DGSDevice.cuh"
 #    include "Utils.cuh"
 
 namespace gsplat
@@ -234,13 +235,13 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
                     continue;
                 }
 
-                const float dy    = xy_opac.y - py[p];
-                const float sigma = 0.5f * (conic.x * dx * dx + conic.z * dy * dy) + conic.y * dx * dy;
-                float alpha       = min(MAX_ALPHA, opac * __expf(-sigma));
-                if(sigma < 0.f || alpha < ALPHA_THRESHOLD)
+                const float dy          = xy_opac.y - py[p];
+                const GaussianWeight gw = eval_gaussian_weight(conic, dx, dy, opac);
+                if(!gw.valid)
                 {
                     continue;
                 }
+                const float alpha = gw.alpha;
 
                 const float next_T = T[p] * (1.0f - alpha);
                 if(next_T <= TRANSMITTANCE_THRESHOLD)
