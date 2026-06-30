@@ -27,6 +27,8 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
+from gsplat.geometry.kernels.quaternion_ops import SLERP_SMALL_ANGLE_DOT_THRESHOLD
+
 from .. import _backend
 
 _backend._SENSORS_CUDA  # noqa: B018  # ensures torch.ops gsplat_sensors registrations exist
@@ -4295,7 +4297,8 @@ def _quat_slerp_wxyz(q0: Tensor, q1: Tensor, alpha: Tensor) -> Tensor:
     """Differentiable quaternion SLERP in wxyz convention.
 
     Falls back to normalized linear interpolation (NLERP) when the two
-    quaternions are nearly identical (dot > 0.9995) to avoid acos singularities.
+    quaternions are nearly identical (dot above the small-angle threshold) to
+    avoid acos singularities.
 
     Args:
         q0: (*, 4) start quaternions in wxyz order.
@@ -4308,7 +4311,7 @@ def _quat_slerp_wxyz(q0: Tensor, q1: Tensor, alpha: Tensor) -> Tensor:
     q1 = torch.nn.functional.normalize(q1, dim=-1)
     q1 = torch.where((q0 * q1).sum(dim=-1, keepdim=True) < 0, -q1, q1)
     dot = (q0 * q1).sum(dim=-1, keepdim=True)
-    close = dot > 0.9995
+    close = dot > SLERP_SMALL_ANGLE_DOT_THRESHOLD
     # torch.where computes both branches before selecting, so torch.acos must
     # have a finite derivative on the slerp branch even when q0 == q1
     # (otherwise the unselected branch's NaN gradient pollutes q0 / q1.grad).

@@ -190,7 +190,7 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_no_external_forwar
         float4 rot1   = read_quat_xyzw_from_wxyz(end_rotation, 0);
         block_pose_t  = lerp3(trans0, trans1, 0.5f);
         float qx, qy, qz, qw;
-        trajectory_cuda::quat_slerp_pair_fwd_f(
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
             rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &qx, &qy, &qz, &qw
         );
         block_pose_r_xyzw = make_float4(qx, qy, qz, qw);
@@ -408,7 +408,7 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_bivariate_windshie
         float4 rot1            = read_quat_xyzw_from_wxyz(end_rotation, 0);
         block_pose_t           = lerp3(trans0, trans1, 0.5f);
         float qx, qy, qz, qw;
-        trajectory_cuda::quat_slerp_pair_fwd_f(
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
             rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &qx, &qy, &qz, &qw
         );
         block_pose_r_xyzw = make_float4(qx, qy, qz, qw);
@@ -602,7 +602,7 @@ __global__ void
         alpha  = relative_time;
         pose_t = lerp3(trans0, trans1, alpha);
         float qx, qy, qz, qw;
-        trajectory_cuda::quat_slerp_pair_fwd_f(
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
             rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &qx, &qy, &qz, &qw
         );
         pose_r_xyzw = make_float4(qx, qy, qz, qw);
@@ -730,7 +730,7 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_extern
     float4 rot0   = read_quat_xyzw_from_wxyz(start_rotation, 0);
     float4 rot1   = read_quat_xyzw_from_wxyz(end_rotation, 0);
     float qx, qy, qz, qw;
-    trajectory_cuda::quat_slerp_pair_fwd_f(
+    gsplat_geometry::quat_slerp_pair_fwd<float>(
         rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &qx, &qy, &qz, &qw
     );
     float4 pose_r_xyzw = make_float4(qx, qy, qz, qw);
@@ -835,7 +835,7 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_bivariate_winds
         alpha  = relative_time;
         pose_t = lerp3(trans0, trans1, alpha);
         float qx, qy, qz, qw;
-        trajectory_cuda::quat_slerp_pair_fwd_f(
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
             rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &qx, &qy, &qz, &qw
         );
         pose_r_xyzw = make_float4(qx, qy, qz, qw);
@@ -964,7 +964,7 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate
     float4 rot0   = read_quat_xyzw_from_wxyz(start_rotation, 0);
     float4 rot1   = read_quat_xyzw_from_wxyz(end_rotation, 0);
     float qx, qy, qz, qw;
-    trajectory_cuda::quat_slerp_pair_fwd_f(
+    gsplat_geometry::quat_slerp_pair_fwd<float>(
         rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &qx, &qy, &qz, &qw
     );
     float4 pose_r_xyzw = make_float4(qx, qy, qz, qw);

@@ -206,14 +206,13 @@ __device__ __forceinline__ float4 xyzw_to_wxyz(float4 q)
 // helpers keep sensorlib callsites float3/float4-shaped while delegating the
 // actual quaternion math to libs/geometry/kernels/cuda/csrc/quaternion.cuh.
 
-// Rotates v by q (xyzw order). Wraps quat_rotate_vector_fwd_impl<float>
-// from libs/geometry; inputs and outputs stay in float3/float4 shapes.
+// Rotates v by xyzw q while preserving sensor float3/float4 call shapes.
 __device__ __forceinline__ float3 quat_rotate_xyzw_geom(float4 q, float3 v)
 {
     float ox = 0.0f;
     float oy = 0.0f;
     float oz = 0.0f;
-    quat_rotate_vector_fwd_impl<float>(q.x, q.y, q.z, q.w, v.x, v.y, v.z, &ox, &oy, &oz);
+    gsplat_geometry::quat_rotate_vector_fwd_impl<float>(q.x, q.y, q.z, q.w, v.x, v.y, v.z, &ox, &oy, &oz);
     return make_float3(ox, oy, oz);
 }
 
@@ -224,12 +223,11 @@ __device__ __forceinline__ float3 quat_inverse_rotate_xyzw_geom(float4 q, float3
     return quat_rotate_xyzw_geom(make_float4(-q.x, -q.y, -q.z, q.w), v);
 }
 
-// Fills r0/r1/r2 with the rows of the rotation matrix for q (xyzw order).
-// Wraps quat_to_matrix_fwd_write<float> from libs/geometry.
+// Fills row vectors for q's rotation matrix without exposing flat geometry buffers.
 __device__ __forceinline__ void quat_to_matrix_xyzw_geom(float4 q, float3 &r0, float3 &r1, float3 &r2)
 {
     float r[9];
-    quat_to_matrix_fwd_write<float>(q.x, q.y, q.z, q.w, r);
+    gsplat_geometry::quat_to_matrix_fwd_write<float>(q.x, q.y, q.z, q.w, r);
     r0 = make_float3(r[0], r[1], r[2]);
     r1 = make_float3(r[3], r[4], r[5]);
     r2 = make_float3(r[6], r[7], r[8]);
@@ -250,7 +248,7 @@ __device__ __forceinline__ float4 normalize_quat_geom(float4 q)
     float oy = 0.0f;
     float oz = 0.0f;
     float ow = 0.0f;
-    quat_normalize_safe_fwd_write<float>(q.x, q.y, q.z, q.w, &ox, &oy, &oz, &ow);
+    gsplat_geometry::quat_normalize_safe_fwd_write<float>(q.x, q.y, q.z, q.w, &ox, &oy, &oz, &ow);
     return make_float4(ox, oy, oz, ow);
 }
 
@@ -266,7 +264,7 @@ __device__ __forceinline__ void quat_rotate_bwd_xyzw_geom(float4 q, float3 v, fl
     float gvx = 0.0f;
     float gvy = 0.0f;
     float gvz = 0.0f;
-    quat_rotate_vector_bwd_impl<float>(
+    gsplat_geometry::quat_rotate_vector_bwd_impl<float>(
         q.x, q.y, q.z, q.w, v.x, v.y, v.z, d_v_out.x, d_v_out.y, d_v_out.z, &gqx, &gqy, &gqz, &gqw, &gvx, &gvy, &gvz
     );
     d_q.x += gqx;
@@ -289,7 +287,7 @@ __device__ __forceinline__ void quat_inverse_rotate_bwd_xyzw_geom(
     float gvx = 0.0f;
     float gvy = 0.0f;
     float gvz = 0.0f;
-    quat_rotate_vector_bwd_impl<float>(
+    gsplat_geometry::quat_rotate_vector_bwd_impl<float>(
         -q.x, -q.y, -q.z, q.w, v.x, v.y, v.z, d_v_out.x, d_v_out.y, d_v_out.z, &gqx, &gqy, &gqz, &gqw, &gvx, &gvy, &gvz
     );
     // Conjugate chain rule: imaginary parts negate, real part unchanged.

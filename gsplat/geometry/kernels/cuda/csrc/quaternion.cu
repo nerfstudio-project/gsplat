@@ -38,7 +38,7 @@ __global__ void quat_multiply_fwd_kernel(
     {
         return;
     }
-    quat_multiply_fwd_device(i, n, q1, q2, out);
+    gsplat_geometry::quat_multiply_fwd_device(i, n, q1, q2, out);
 }
 
 // Grid-stride: VJP for Hamilton product; grad_out layout matches q1/q2 (4 per row).
@@ -57,7 +57,7 @@ __global__ void quat_multiply_bwd_kernel(
     {
         return;
     }
-    quat_multiply_bwd_device(i, n, q1, q2, grad_out, grad_q1, grad_q2);
+    gsplat_geometry::quat_multiply_bwd_device(i, n, q1, q2, grad_out, grad_q1, grad_q2);
 }
 
 // Launch batched Hamilton products on the current CUDA stream.
@@ -113,7 +113,7 @@ void launch_quat_multiply_bwd(
 void quat_multiply_cuda(const at::Tensor &q1, const at::Tensor &q2, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        q1.scalar_type(), "quat_multiply_cuda", [&] { launch_quat_multiply_fwd<scalar_t>(q1, q2, out); }
+        q1.scalar_type(), "quat_multiply_cuda", ([&] { launch_quat_multiply_fwd<scalar_t>(q1, q2, out); })
     );
 }
 
@@ -127,7 +127,7 @@ void quat_multiply_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_multiply_bwd_cuda",
-        [&] { launch_quat_multiply_bwd<scalar_t>(q1, q2, grad_out, grad_q1, grad_q2); }
+        ([&] { launch_quat_multiply_bwd<scalar_t>(q1, q2, grad_out, grad_q1, grad_q2); })
     );
 }
 
@@ -146,7 +146,7 @@ __global__ void quat_rotate_vector_fwd_kernel(
     {
         return;
     }
-    quat_rotate_vector_fwd_device(i, n, quat, vec, out);
+    gsplat_geometry::quat_rotate_vector_fwd_device(i, n, quat, vec, out);
 }
 
 // Grid-stride: grad_out (N,3) → grad_quat (N,4), grad_vec (N,3) per row.
@@ -165,7 +165,7 @@ __global__ void quat_rotate_vector_bwd_kernel(
     {
         return;
     }
-    quat_rotate_vector_bwd_device(i, n, quat, vec, grad_out, grad_quat, grad_vec);
+    gsplat_geometry::quat_rotate_vector_bwd_device(i, n, quat, vec, grad_out, grad_quat, grad_vec);
 }
 
 // Launch quaternion-vector rotation on the current CUDA stream.
@@ -225,7 +225,9 @@ void launch_quat_rotate_vector_bwd(
 void quat_rotate_vector_cuda(const at::Tensor &quat, const at::Tensor &vec, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_rotate_vector_cuda", [&] { launch_quat_rotate_vector_fwd<scalar_t>(quat, vec, out); }
+        quat.scalar_type(),
+        "quat_rotate_vector_cuda",
+        ([&] { launch_quat_rotate_vector_fwd<scalar_t>(quat, vec, out); })
     );
 }
 
@@ -243,7 +245,7 @@ void quat_rotate_vector_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         quat.scalar_type(),
         "quat_rotate_vector_bwd_cuda",
-        [&] { launch_quat_rotate_vector_bwd<scalar_t>(quat, vec, grad_out, grad_quat, grad_vec); }
+        ([&] { launch_quat_rotate_vector_bwd<scalar_t>(quat, vec, grad_out, grad_quat, grad_vec); })
     );
 }
 
@@ -256,7 +258,7 @@ __global__ void quat_to_matrix_fwd_kernel(int64_t n, const scalar_t *__restrict_
     {
         return;
     }
-    quat_to_matrix_fwd_device(i, n, quat, out_flat);
+    gsplat_geometry::quat_to_matrix_fwd_device(i, n, quat, out_flat);
 }
 
 // Grid-stride: grad_flat (N*9) ∂L/∂R row-major → grad_quat (N,4).
@@ -273,7 +275,7 @@ __global__ void quat_to_matrix_bwd_kernel(
     {
         return;
     }
-    quat_to_matrix_bwd_device(i, n, quat, grad_flat, grad_quat);
+    gsplat_geometry::quat_to_matrix_bwd_device(i, n, quat, grad_flat, grad_quat);
 }
 
 // Launch quaternion -> matrix conversion on the current CUDA stream.
@@ -321,7 +323,7 @@ void launch_quat_to_matrix_bwd(const at::Tensor &quat, const at::Tensor &grad_fl
 void quat_to_matrix_cuda(const at::Tensor &quat, at::Tensor &out_flat)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_to_matrix_cuda", [&] { launch_quat_to_matrix_fwd<scalar_t>(quat, out_flat); }
+        quat.scalar_type(), "quat_to_matrix_cuda", ([&] { launch_quat_to_matrix_fwd<scalar_t>(quat, out_flat); })
     );
 }
 
@@ -333,7 +335,7 @@ void quat_to_matrix_bwd_cuda(const at::Tensor &quat, const at::Tensor &grad_matr
     AT_DISPATCH_FLOATING_TYPES(
         quat.scalar_type(),
         "quat_to_matrix_bwd_cuda",
-        [&] { launch_quat_to_matrix_bwd<scalar_t>(quat, grad_matrix_flat, grad_quat); }
+        ([&] { launch_quat_to_matrix_bwd<scalar_t>(quat, grad_matrix_flat, grad_quat); })
     );
 }
 
@@ -350,7 +352,7 @@ __global__ void quat_normalize_safe_fwd_kernel(int64_t n, const scalar_t *__rest
     {
         return;
     }
-    quat_normalize_safe_fwd_device(i, n, quat, out);
+    gsplat_geometry::quat_normalize_safe_fwd_device(i, n, quat, out);
 }
 
 // Grid-stride: VJP through safe normalize (grad_out → grad_quat).
@@ -367,7 +369,7 @@ __global__ void quat_normalize_safe_bwd_kernel(
     {
         return;
     }
-    quat_normalize_safe_bwd_device(i, n, quat, grad_out, grad_quat);
+    gsplat_geometry::quat_normalize_safe_bwd_device(i, n, quat, grad_out, grad_quat);
 }
 
 // Launch safe quaternion normalization on the current CUDA stream.
@@ -415,7 +417,7 @@ void launch_quat_normalize_safe_bwd(const at::Tensor &quat, const at::Tensor &gr
 void quat_normalize_safe_cuda(const at::Tensor &quat, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_normalize_safe_cuda", [&] { launch_quat_normalize_safe_fwd<scalar_t>(quat, out); }
+        quat.scalar_type(), "quat_normalize_safe_cuda", ([&] { launch_quat_normalize_safe_fwd<scalar_t>(quat, out); })
     );
 }
 
@@ -427,7 +429,7 @@ void quat_normalize_safe_bwd_cuda(const at::Tensor &quat, const at::Tensor &grad
     AT_DISPATCH_FLOATING_TYPES(
         quat.scalar_type(),
         "quat_normalize_safe_bwd_cuda",
-        [&] { launch_quat_normalize_safe_bwd<scalar_t>(quat, grad_out, grad_quat); }
+        ([&] { launch_quat_normalize_safe_bwd<scalar_t>(quat, grad_out, grad_quat); })
     );
 }
 
@@ -444,7 +446,7 @@ __global__ void quat_conjugate_fwd_kernel(int64_t n, const scalar_t *__restrict_
     {
         return;
     }
-    quat_conjugate_fwd_device(i, n, quat, out);
+    gsplat_geometry::quat_conjugate_fwd_device(i, n, quat, out);
 }
 
 // Grid-stride: VJP for conjugate; grad_out layout matches quaternion.
@@ -458,7 +460,7 @@ __global__ void quat_conjugate_bwd_kernel(
     {
         return;
     }
-    quat_conjugate_bwd_device(i, n, grad_out, grad_quat);
+    gsplat_geometry::quat_conjugate_bwd_device(i, n, grad_out, grad_quat);
 }
 
 // Launch quaternion conjugation on the current CUDA stream.
@@ -505,7 +507,7 @@ void launch_quat_conjugate_bwd(const at::Tensor &grad_out, at::Tensor &grad_quat
 void quat_conjugate_cuda(const at::Tensor &quat, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_conjugate_cuda", [&] { launch_quat_conjugate_fwd<scalar_t>(quat, out); }
+        quat.scalar_type(), "quat_conjugate_cuda", ([&] { launch_quat_conjugate_fwd<scalar_t>(quat, out); })
     );
 }
 
@@ -515,7 +517,9 @@ void quat_conjugate_cuda(const at::Tensor &quat, at::Tensor &out)
 void quat_conjugate_bwd_cuda(const at::Tensor &quat, const at::Tensor &grad_out, at::Tensor &grad_quat)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        quat.scalar_type(), "quat_conjugate_bwd_cuda", [&] { launch_quat_conjugate_bwd<scalar_t>(grad_out, grad_quat); }
+        quat.scalar_type(),
+        "quat_conjugate_bwd_cuda",
+        ([&] { launch_quat_conjugate_bwd<scalar_t>(grad_out, grad_quat); })
     );
 }
 
@@ -535,7 +539,7 @@ __global__ void quat_from_axis_angle_fwd_kernel(
     {
         return;
     }
-    quat_from_axis_angle_fwd_device(i, n, axis, angle, quat);
+    gsplat_geometry::quat_from_axis_angle_fwd_device(i, n, axis, angle, quat);
 }
 
 // Grid-stride: grad_quat (N,4) → grad_axis (N,3), grad_angle (N).
@@ -554,7 +558,7 @@ __global__ void quat_from_axis_angle_bwd_kernel(
     {
         return;
     }
-    quat_from_axis_angle_bwd_device(i, n, axis, angle, grad_quat, grad_axis, grad_angle);
+    gsplat_geometry::quat_from_axis_angle_bwd_device(i, n, axis, angle, grad_quat, grad_axis, grad_angle);
 }
 
 // Launch axis-angle -> quaternion conversion on the current CUDA stream.
@@ -616,7 +620,7 @@ void quat_from_axis_angle_cuda(const at::Tensor &axis, const at::Tensor &angle, 
     AT_DISPATCH_FLOATING_TYPES(
         axis.scalar_type(),
         "quat_from_axis_angle_cuda",
-        [&] { launch_quat_from_axis_angle_fwd<scalar_t>(axis, angle, quat); }
+        ([&] { launch_quat_from_axis_angle_fwd<scalar_t>(axis, angle, quat); })
     );
 }
 
@@ -634,7 +638,7 @@ void quat_from_axis_angle_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         axis.scalar_type(),
         "quat_from_axis_angle_bwd_cuda",
-        [&] { launch_quat_from_axis_angle_bwd<scalar_t>(axis, angle, grad_quat, grad_axis, grad_angle); }
+        ([&] { launch_quat_from_axis_angle_bwd<scalar_t>(axis, angle, grad_quat, grad_axis, grad_angle); })
     );
 }
 
@@ -653,7 +657,7 @@ __global__ void quat_lerp_fwd_kernel(
     {
         return;
     }
-    quat_lerp_fwd_device(i, n, t, q1, q2, out);
+    gsplat_geometry::quat_lerp_fwd_device(i, n, t, q1, q2, out);
 }
 
 // Grid-stride: VJP for LERP; requires forward `result` buffer (N,4).
@@ -674,7 +678,7 @@ __global__ void quat_lerp_bwd_kernel(
     {
         return;
     }
-    quat_lerp_bwd_device(i, n, t, q1, q2, result, grad_out, grad_q1, grad_q2);
+    gsplat_geometry::quat_lerp_bwd_device(i, n, t, q1, q2, result, grad_out, grad_q1, grad_q2);
 }
 
 // Launch normalized quaternion LERP on the current CUDA stream.
@@ -740,7 +744,7 @@ void launch_quat_lerp_bwd(
 void quat_lerp_cuda(const at::Tensor &q1, const at::Tensor &q2, double t, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        q1.scalar_type(), "quat_lerp_cuda", [&] { launch_quat_lerp_fwd<scalar_t>(q1, q2, t, out); }
+        q1.scalar_type(), "quat_lerp_cuda", ([&] { launch_quat_lerp_fwd<scalar_t>(q1, q2, t, out); })
     );
 }
 
@@ -760,7 +764,7 @@ void quat_lerp_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_lerp_bwd_cuda",
-        [&] { launch_quat_lerp_bwd<scalar_t>(q1, q2, result, grad_out, t, grad_q1, grad_q2); }
+        ([&] { launch_quat_lerp_bwd<scalar_t>(q1, q2, result, grad_out, t, grad_q1, grad_q2); })
     );
 }
 
@@ -779,7 +783,7 @@ __global__ void quat_slerp_batched_fwd_kernel(
     {
         return;
     }
-    quat_slerp_batched_fwd_device(i, n, q1, q2, t, out);
+    gsplat_geometry::quat_slerp_batched_fwd_device(i, n, q1, q2, t, out);
 }
 
 // Grid-stride: VJP batched SLERP; writes grad_t[i] per row; needs forward `result`.
@@ -801,7 +805,7 @@ __global__ void quat_slerp_batched_bwd_kernel(
     {
         return;
     }
-    quat_slerp_batched_bwd_device(i, n, q1, q2, t, result, grad_out, grad_q1, grad_q2, grad_t);
+    gsplat_geometry::quat_slerp_batched_bwd_device(i, n, q1, q2, t, result, grad_out, grad_q1, grad_q2, grad_t);
 }
 
 // Launch batched SLERP on the current CUDA stream.
@@ -864,10 +868,16 @@ void launch_quat_slerp_batched_bwd(
 // Public CUDA entrypoint for batched SLERP.
 // Inputs: q1 (N,4), q2 (N,4), and per-row interpolation parameters t.
 // Output: out (N,4) with one SLERP result per row.
+// Host accessor for the SLERP small-angle dot threshold, bound to Python in ext.cpp.
+double slerp_small_angle_dot_threshold()
+{
+    return gsplat_geometry::kSlerpSmallAngleDotThreshold;
+}
+
 void quat_slerp_batched_cuda(const at::Tensor &q1, const at::Tensor &q2, const at::Tensor &t, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        q1.scalar_type(), "quat_slerp_batched_cuda", [&] { launch_quat_slerp_batched_fwd<scalar_t>(q1, q2, t, out); }
+        q1.scalar_type(), "quat_slerp_batched_cuda", ([&] { launch_quat_slerp_batched_fwd<scalar_t>(q1, q2, t, out); })
     );
 }
 
@@ -888,7 +898,7 @@ void quat_slerp_batched_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_slerp_batched_bwd_cuda",
-        [&] { launch_quat_slerp_batched_bwd<scalar_t>(q1, q2, t, result, grad_out, grad_q1, grad_q2, grad_t); }
+        ([&] { launch_quat_slerp_batched_bwd<scalar_t>(q1, q2, t, result, grad_out, grad_q1, grad_q2, grad_t); })
     );
 }
 
@@ -903,7 +913,7 @@ __global__ void quat_angular_distance_fwd_kernel(
     {
         return;
     }
-    quat_angular_distance_fwd_device(i, n, q1, q2, dist_out);
+    gsplat_geometry::quat_angular_distance_fwd_device(i, n, q1, q2, dist_out);
 }
 
 // Grid-stride: grad_dist (N,) → grad_q1, grad_q2 (N,4).
@@ -922,7 +932,7 @@ __global__ void quat_angular_distance_bwd_kernel(
     {
         return;
     }
-    quat_angular_distance_bwd_device(i, n, q1, q2, grad_dist, grad_q1, grad_q2);
+    gsplat_geometry::quat_angular_distance_bwd_device(i, n, q1, q2, grad_dist, grad_q1, grad_q2);
 }
 
 // Launch angular distance evaluation on the current CUDA stream.
@@ -977,7 +987,9 @@ void launch_quat_angular_distance_bwd(
 void quat_angular_distance_cuda(const at::Tensor &q1, const at::Tensor &q2, at::Tensor &out)
 {
     AT_DISPATCH_FLOATING_TYPES(
-        q1.scalar_type(), "quat_angular_distance_cuda", [&] { launch_quat_angular_distance_fwd<scalar_t>(q1, q2, out); }
+        q1.scalar_type(),
+        "quat_angular_distance_cuda",
+        ([&] { launch_quat_angular_distance_fwd<scalar_t>(q1, q2, out); })
     );
 }
 
@@ -991,7 +1003,7 @@ void quat_angular_distance_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_angular_distance_bwd_cuda",
-        [&] { launch_quat_angular_distance_bwd<scalar_t>(q1, q2, grad_dist, grad_q1, grad_q2); }
+        ([&] { launch_quat_angular_distance_bwd<scalar_t>(q1, q2, grad_dist, grad_q1, grad_q2); })
     );
 }
 
@@ -1017,7 +1029,7 @@ __global__ void quat_manifold_interp_fwd_kernel(
     {
         return;
     }
-    quat_manifold_interp_fwd_device(i, n, t, q1, q2, out);
+    gsplat_geometry::quat_manifold_interp_fwd_device(i, n, t, q1, q2, out);
 }
 
 // Grid-stride: VJP manifold interp; grad_out (N,4) → grad_q1, grad_q2, grad_t.
@@ -1038,7 +1050,7 @@ __global__ void quat_manifold_interp_bwd_kernel(
     {
         return;
     }
-    quat_manifold_interp_bwd_device(i, n, t, q1, q2, grad_out, grad_q1, grad_q2, grad_t);
+    gsplat_geometry::quat_manifold_interp_bwd_device(i, n, t, q1, q2, grad_out, grad_q1, grad_q2, grad_t);
 }
 
 // Launch manifold quaternion interpolation on the current CUDA stream.
@@ -1105,7 +1117,7 @@ void quat_manifold_interp_cuda(const at::Tensor &q1, const at::Tensor &q2, const
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_manifold_interp_cuda",
-        [&] { launch_quat_manifold_interp_fwd<scalar_t>(q1, q2, t, out); }
+        ([&] { launch_quat_manifold_interp_fwd<scalar_t>(q1, q2, t, out); })
     );
 }
 
@@ -1125,6 +1137,6 @@ void quat_manifold_interp_bwd_cuda(
     AT_DISPATCH_FLOATING_TYPES(
         q1.scalar_type(),
         "quat_manifold_interp_bwd_cuda",
-        [&] { launch_quat_manifold_interp_bwd<scalar_t>(q1, q2, t, grad_out, grad_q1, grad_q2, grad_t); }
+        ([&] { launch_quat_manifold_interp_bwd<scalar_t>(q1, q2, t, grad_out, grad_q1, grad_q2, grad_t); })
     );
 }
