@@ -634,10 +634,9 @@ def _build_sparse_tile_layout(
       * ``active_tiles`` -- int32 ``[AT]``, ascending dense ids of tiles holding
         >= 1 active pixel.
       * ``active_tile_mask`` -- bool ``[n_images, tile_height, tile_width]``.
-      * ``tile_pixel_mask`` -- int64 ``[AT, words_per_tile]`` raster-order bitmask
+      * ``tile_pixel_mask`` -- uint64 ``[AT, words_per_tile]`` raster-order bitmask
         of active pixels per active tile (``words_per_tile =
-        ceil(tile_size^2 / 64)``); bits stored as the int64 two's-complement
-        pattern (bit 63 -> negative).
+        ceil(tile_size^2 / 64)``).
       * ``tile_pixel_cumsum`` -- int64 ``[AT]``, *inclusive* prefix sum of the
         active-pixel count per active tile (consumers read ``cumsum[t-1]`` as the
         start of active tile ``t``).
@@ -658,7 +657,7 @@ def _build_sparse_tile_layout(
             torch.zeros(
                 n_images, tile_height, tile_width, dtype=torch.bool, device=device
             ),
-            torch.empty(0, words, dtype=torch.int64, device=device),
+            torch.empty(0, words, dtype=torch.uint64, device=device),
             torch.zeros(1, dtype=torch.int64, device=device),
             torch.empty(0, dtype=torch.int64, device=device),
         )
@@ -688,8 +687,7 @@ def _build_sparse_tile_layout(
     active_tiles = active_tiles.to(torch.int32)
     tile_pixel_cumsum = counts.cumsum(0)  # inclusive
 
-    # Per-active-tile raster-order bitmask (built in python ints, then wrapped to
-    # the int64 two's-complement bit pattern so bit 63 round-trips).
+    # Per-active-tile raster-order bitmask.
     AT = active_tiles.shape[0]
     starts_l = (tile_pixel_cumsum - counts).tolist()
     counts_l = counts.tolist()
@@ -700,14 +698,8 @@ def _build_sparse_tile_layout(
         for k in range(s, s + counts_l[t]):
             bit = pit_cpu[k]
             mask_words[t][bit // 64] |= 1 << (bit % 64)
-    for t in range(AT):
-        for wi in range(words):
-            v = mask_words[t][wi]
-            if v >= (1 << 63):
-                v -= 1 << 64
-            mask_words[t][wi] = v
     tile_pixel_mask = torch.tensor(
-        mask_words, dtype=torch.int64, device=device
+        mask_words, dtype=torch.uint64, device=device
     ).reshape(AT, words)
 
     return (

@@ -1305,9 +1305,9 @@ def build_sparse_tile_layout(
         - **active_tiles**. Int32 [AT]. Ascending dense tile ids of tiles holding
           at least one active pixel. Equals ``nonzero(active_tile_mask.flatten())``.
         - **active_tile_mask**. Bool [n_images, tile_height, tile_width].
-        - **tile_pixel_mask**. Int64 [AT, words_per_tile], ``words_per_tile =
+        - **tile_pixel_mask**. UInt64 [AT, words_per_tile], ``words_per_tile =
           ceil(tile_size**2 / 64)``. Raster-order bitmask of active pixels in each
-          active tile (stored as the int64 two's-complement bit pattern).
+          active tile.
         - **tile_pixel_cumsum**. Int64 [AT]. *Inclusive* prefix sum of the
           active-pixel count per active tile; consumers read ``cumsum[t-1]`` as
           the start of active tile ``t``.
