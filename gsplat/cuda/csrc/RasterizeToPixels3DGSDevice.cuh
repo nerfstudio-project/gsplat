@@ -28,6 +28,32 @@
 
 namespace gsplat
 {
+// Per-(gaussian, pixel) gaussian-weight evaluation shared by every 3DGS
+// conic-based kernel. Computes the Mahalanobis exponent from the conic and the
+// pixel offset (dx, dy) = (mean - pixel), the resulting alpha (clamped to
+// MAX_ALPHA), and whether the sample contributes. `valid == false` means the
+// caller skips this gaussian (negative exponent or sub-threshold alpha). `vis`
+// (== exp(-sigma)) is retained for the backward pass, which needs it directly.
+struct GaussianWeight
+{
+    float vis;   // __expf(-sigma)
+    float alpha; // min(MAX_ALPHA, opac * vis)
+    bool valid;  // sigma >= 0 and alpha >= ALPHA_THRESHOLD
+};
+
+__device__ __forceinline__ GaussianWeight
+    eval_gaussian_weight(const vec3 &conic, const float dx, const float dy, const float opac)
+{
+    const float sigma = 0.5f * (conic.x * dx * dx + conic.z * dy * dy) + conic.y * dx * dy;
+    const float vis   = __expf(-sigma);
+    const float alpha = min(MAX_ALPHA, opac * vis);
+    GaussianWeight out;
+    out.vis   = vis;
+    out.alpha = alpha;
+    out.valid = !(sigma < 0.f || alpha < ALPHA_THRESHOLD);
+    return out;
+}
+
 // Forward: blend one gaussian into one pixel's running color/transmittance.
 // Returns true when the pixel has saturated (transmittance fell to the
 // threshold) and should stop accumulating -- the caller marks it done and the
@@ -45,15 +71,15 @@ __device__ __forceinline__ bool rasterize_to_pixels_3dgs_blend_fwd(
     uint32_t &cur_idx                    // last contributing gaussian, updated
 )
 {
-    const float opac  = xy_opacity.z;
-    const float dx    = xy_opacity.x - px;
-    const float dy    = xy_opacity.y - py;
-    const float sigma = 0.5f * (conic.x * dx * dx + conic.z * dy * dy) + conic.y * dx * dy;
-    const float alpha = min(MAX_ALPHA, opac * __expf(-sigma));
-    if(sigma < 0.f || alpha < ALPHA_THRESHOLD)
+    const float opac        = xy_opacity.z;
+    const float dx          = xy_opacity.x - px;
+    const float dy          = xy_opacity.y - py;
+    const GaussianWeight gw = eval_gaussian_weight(conic, dx, dy, opac);
+    if(!gw.valid)
     {
         return false; // negligible contribution; pixel not done
     }
+    const float alpha  = gw.alpha;
     const float next_T = T * (1.0f - alpha);
     if(next_T <= TRANSMITTANCE_THRESHOLD)
     {

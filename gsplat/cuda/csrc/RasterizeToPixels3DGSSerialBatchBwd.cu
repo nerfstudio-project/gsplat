@@ -28,6 +28,7 @@
 
 #    include "Common.h"
 #    include "Rasterization.h"
+#    include "RasterizeToPixels3DGSDevice.cuh"
 #    include "Utils.cuh"
 #    include "Dispatch.h"
 
@@ -198,15 +199,14 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
 
             if(valid)
             {
-                conic        = conic_batch[t];
-                vec3 xy_opac = xy_opacity_batch[t];
-                opac         = xy_opac.z;
-                delta        = {xy_opac.x - px, xy_opac.y - py};
-                float sigma
-                    = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                vis   = __expf(-sigma);
-                alpha = min(MAX_ALPHA, opac * vis);
-                if(sigma < 0.f || alpha < ALPHA_THRESHOLD)
+                conic                   = conic_batch[t];
+                vec3 xy_opac            = xy_opacity_batch[t];
+                opac                    = xy_opac.z;
+                delta                   = {xy_opac.x - px, xy_opac.y - py};
+                const GaussianWeight gw = eval_gaussian_weight(conic, delta.x, delta.y, opac);
+                vis                     = gw.vis;
+                alpha                   = gw.alpha;
+                if(!gw.valid)
                 {
                     valid = false;
                 }
