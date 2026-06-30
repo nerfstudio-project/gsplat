@@ -18,6 +18,8 @@
 #pragma once
 
 #include "Common.h"
+#include "RasterizeSparseAddressing.cuh"
+#include "RasterizeToPixels3DGSDevice.cuh"
 
 namespace gsplat
 {
@@ -66,12 +68,12 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_contributing_common_sparse
     static_assert(PIXELS_PER_THREAD > 0, "PIXELS_PER_THREAD == 0 - CTA_SIZE must not exceed TILE_SIZE * TILE_SIZE");
 
     // Each block owns one active tile; decode its dense (image, tile) id.
-    const uint32_t ord           = blockIdx.x;
-    const uint32_t n_tiles       = tile_width * tile_height;
-    const uint32_t global_tile   = static_cast<uint32_t>(active_tiles[ord]);
-    const uint32_t tile_in_image = global_tile % n_tiles;
-    const uint32_t tile_y        = tile_in_image / tile_width;
-    const uint32_t tile_x        = tile_in_image % tile_width;
+    const uint32_t ord        = blockIdx.x;
+    const uint32_t n_tiles    = tile_width * tile_height;
+    const int32_t global_tile = active_tiles[ord];
+    uint32_t image_id, tile_x, tile_y;
+    sparse_decode_tile(global_tile, n_tiles, tile_width, image_id, tile_x, tile_y);
+    (void)image_id; // outputs are global [P, ...]; no per-image offset needed
 
     const uint32_t tid      = threadIdx.x;
     const uint32_t thread_x = tid & TILE_MASK;
@@ -100,20 +102,13 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_contributing_common_sparse
 
         // Raster-order index within the tile, matching build_sparse_tile_layout.
         const uint32_t in_tile = local_row * TILE_SIZE + thread_x;
-        const uint32_t word    = in_tile >> 6;
-        const uint32_t bit     = in_tile & 63u;
-        if(!((tile_mask_words[word] >> bit) & 1ull))
+        const int64_t slot     = sparse_pixel_slot(tile_mask_words, in_tile, pix_start, pixel_map);
+        if(slot < 0)
         {
             done_mask |= (1u << p);
             continue;
         }
-        uint32_t rank = 0;
-        for(uint32_t w = 0; w < word; ++w)
-        {
-            rank += __popcll(tile_mask_words[w]);
-        }
-        rank        += __popcll(tile_mask_words[word] & (((uint64_t)1 << bit) - 1));
-        pix_slot[p]  = static_cast<int32_t>(pixel_map[pix_start + rank]);
+        pix_slot[p] = static_cast<int32_t>(slot);
     }
 
     const int32_t range_start  = tile_offsets[ord];
@@ -173,13 +168,13 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_contributing_common_sparse
                     continue;
                 }
 
-                const float dy    = xy_opac.y - py[p];
-                const float sigma = 0.5f * (conic.x * dx * dx + conic.z * dy * dy) + conic.y * dx * dy;
-                const float alpha = min(MAX_ALPHA, opac * __expf(-sigma));
-                if(sigma < 0.f || alpha < ALPHA_THRESHOLD)
+                const float dy          = xy_opac.y - py[p];
+                const GaussianWeight gw = eval_gaussian_weight(conic, dx, dy, opac);
+                if(!gw.valid)
                 {
                     continue;
                 }
+                const float alpha = gw.alpha;
 
                 const float T      = accum.transmittance(p);
                 const float next_T = T * (1.0f - alpha);
