@@ -153,7 +153,10 @@ namespace
         );
         TORCH_CHECK(means2d.size(-1) == 2, "means2d must have shape [..., N, 2] or [nnz, 2], got ", means2d.sizes());
 
-        at::DimVector image_dims(means2d.sizes().slice(0, means2d.dim() - 2));
+        at::DimVector image_dims(
+            packed ? isect_offsets.sizes().slice(0, isect_offsets.dim() - 2)
+                   : means2d.sizes().slice(0, means2d.dim() - 2)
+        );
         const int64_t channels = colors.size(-1);
         if(packed)
         {
@@ -204,8 +207,18 @@ namespace
         {
             at::DimVector backgrounds_shape(image_dims);
             backgrounds_shape.append({channels});
+
+            int64_t image_count = 1;
+            for(const int64_t image_dim: image_dims)
+            {
+                image_count *= image_dim;
+            }
+            const bool has_legacy_single_image_shape = packed
+                                                    && image_count == 1
+                                                    && backgrounds.value().dim() == 1
+                                                    && backgrounds.value().size(0) == channels;
             TORCH_CHECK(
-                backgrounds.value().sizes() == backgrounds_shape,
+                backgrounds.value().sizes() == backgrounds_shape || has_legacy_single_image_shape,
                 "backgrounds must have shape [..., channels], got ",
                 backgrounds.value().sizes()
             );
@@ -557,6 +570,10 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
         const at::Tensor one_minus_alpha
             = at::sub(at::ones_like(render_alphas).to(at::kFloat), render_alphas.to(at::kFloat));
         v_backgrounds = at::mul(v_render_colors, one_minus_alpha).sum({-3, -2});
+        if(backgrounds.has_value())
+        {
+            v_backgrounds = v_backgrounds.reshape(backgrounds.value().sizes());
+        }
     }
 
     return RasterizeToPixels3DGSBwdResult{
@@ -923,6 +940,10 @@ std::tuple<at::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor, at::Ten
         const at::Tensor one_minus_alpha
             = at::sub(at::ones_like(render_alphas).to(at::kFloat), render_alphas.to(at::kFloat));
         v_backgrounds = at::mul(v_render_colors, one_minus_alpha).sum({-3, -2});
+        if(backgrounds.has_value())
+        {
+            v_backgrounds = v_backgrounds.reshape(backgrounds.value().sizes());
+        }
     }
 
     return std::make_tuple(
