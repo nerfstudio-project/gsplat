@@ -252,8 +252,9 @@ def _world_to_cam(
     means_c = (
         torch.einsum("...cij,...nj->...cni", R, means) + t[..., None, :]
     )  # [..., C, N, 3]
-    covars_c = torch.einsum(
-        "...cij,...njk,...clk->...cnil", R, covars, R
+    R_expanded = R[..., :, None, :, :]  # [..., C, 1, 3, 3]
+    covars_c = (
+        R_expanded @ covars[..., None, :, :, :] @ R_expanded.transpose(-1, -2)
     )  # [..., C, N, 3, 3]
     return means_c, covars_c
 
