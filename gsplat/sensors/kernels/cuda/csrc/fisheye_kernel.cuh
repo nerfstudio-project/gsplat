@@ -73,7 +73,7 @@ struct OpenCVFisheyeParamGrads
 // OpenCVFisheyeParams. Reads off the four component pointers rather than a flat
 // packed tensor; the resolution scalars are integer config fields.
 __device__ __forceinline__ OpenCVFisheyeParams
-    load_opencv_fisheye_params(OpenCVFisheyeProjection_KernelParameters projection)
+    load_opencv_fisheye_params(const OpenCVFisheyeProjection_KernelParameters &projection)
 {
     OpenCVFisheyeParams p;
     p.principal_point.x = projection.principal_point[0];
@@ -396,3 +396,342 @@ __device__ __forceinline__ void fisheye_backproject_image_point_bwd(
     d_params.focal[0]  += -d_normalized.x * state.normalized.x * inv_fx;
     d_params.focal[1]  += -d_normalized.y * state.normalized.y * inv_fy;
 }
+
+__device__ __forceinline__ float opencv_fisheye_pack_flags(
+    bool behind_camera, bool angle_clamped, bool oob, bool xy_norm_clamped
+)
+{
+    uint32_t flags  = 0u;
+    flags          |= behind_camera ? 1u : 0u;
+    flags          |= angle_clamped ? 2u : 0u;
+    flags          |= oob ? 4u : 0u;
+    flags          |= xy_norm_clamped ? 8u : 0u;
+    return static_cast<float>(flags);
+}
+
+__device__ __forceinline__ void opencv_fisheye_unpack_flags(
+    float packed, bool &behind_camera, bool &angle_clamped, bool &oob, bool &xy_norm_clamped
+)
+{
+    const uint32_t flags = static_cast<uint32_t>(packed);
+    behind_camera        = (flags & 1u) != 0u;
+    angle_clamped        = (flags & 2u) != 0u;
+    oob                  = (flags & 4u) != 0u;
+    xy_norm_clamped      = (flags & 8u) != 0u;
+}
+
+struct OpenCVFisheyeProjectionPolicy
+{
+    using KernelParameters = OpenCVFisheyeProjection_KernelParameters;
+    using Params           = OpenCVFisheyeParams;
+    using ProjectState     = FisheyeProjectState;
+    using BackprojectState = FisheyeBackprojectState;
+    using ParamGrads       = OpenCVFisheyeParamGrads;
+
+    struct IntrinsicGradOutputs
+    {
+        float *principal_point;
+        float *focal_length;
+        float *forward_poly;
+    };
+
+    template<DistortionOpFamily Op>
+    struct ScratchIO;
+
+    static constexpr DistortionSensor kScratchSensor     = DistortionSensor::OpenCVFisheye;
+    static constexpr bool kGatePosePointBeforeDistortion = false;
+
+    static __device__ Params load(const KernelParameters &projection)
+    {
+        return load_opencv_fisheye_params(projection);
+    }
+
+    static __device__ float2 project(float3 camera_ray, const Params &params, ProjectState &state, bool &valid)
+    {
+        return fisheye_project_ray(camera_ray, params, state, valid);
+    }
+
+    static __device__ void project_bwd(
+        float3 camera_ray,
+        const Params &params,
+        const ProjectState &state,
+        float2 d_image_point,
+        float3 &d_camera_ray,
+        ParamGrads &d_params
+    )
+    {
+        fisheye_project_ray_bwd(camera_ray, params, state, d_image_point, d_camera_ray, d_params);
+    }
+
+    static __device__ float3 backproject(float2 image_point, const Params &params, BackprojectState &state)
+    {
+        return fisheye_backproject_image_point(image_point, params, state);
+    }
+
+    static __device__ float3 backproject_output(const BackprojectState &state)
+    {
+        return normalize3(state.ray_raw);
+    }
+
+    static __device__ void backproject_bwd(
+        float2 image_point,
+        const Params &params,
+        const BackprojectState &state,
+        float3 d_camera_ray,
+        float2 &d_image_point,
+        ParamGrads &d_params
+    )
+    {
+        fisheye_backproject_image_point_bwd(image_point, params, state, d_camera_ray, d_image_point, d_params);
+    }
+
+    static __device__ bool final_project_valid(float2, const Params &, bool projection_valid)
+    {
+        return projection_valid;
+    }
+
+    static __device__ void set_rejected_pose_project_state(ProjectState &state)
+    {
+        state.ray_xy_norm     = 0.0f;
+        state.theta           = 0.0f;
+        state.delta           = 0.0f;
+        state.behind_camera   = true;
+        state.angle_clamped   = false;
+        state.oob             = false;
+        state.xy_norm_clamped = false;
+    }
+
+    static __device__ void prepare_pose_project_state_for_backward(ProjectState &, float3) { }
+
+    static __device__ bool pose_project_backward_enabled(const ProjectState &state)
+    {
+        return !state.behind_camera && !state.oob;
+    }
+
+    template<int BlockThreads>
+    static __device__ void reduce_intrinsic_grads(const ParamGrads &local, const IntrinsicGradOutputs &outputs)
+    {
+        static_assert(kFisheyeForwardPolyTerms == 4);
+        const float pp0    = block_sum<BlockThreads>(local.pp[0]);
+        const float pp1    = block_sum<BlockThreads>(local.pp[1]);
+        const float focal0 = block_sum<BlockThreads>(local.focal[0]);
+        const float focal1 = block_sum<BlockThreads>(local.focal[1]);
+        float forward[kFisheyeForwardPolyTerms];
+#pragma unroll
+        for(int i = 0; i < kFisheyeForwardPolyTerms; ++i)
+        {
+            forward[i] = block_sum<BlockThreads>(local.forward_poly[i]);
+        }
+
+        if(threadIdx.x == 0)
+        {
+            if(outputs.principal_point != nullptr)
+            {
+                atomicAdd(&outputs.principal_point[0], pp0);
+                atomicAdd(&outputs.principal_point[1], pp1);
+            }
+            if(outputs.focal_length != nullptr)
+            {
+                atomicAdd(&outputs.focal_length[0], focal0);
+                atomicAdd(&outputs.focal_length[1], focal1);
+            }
+            if(outputs.forward_poly != nullptr)
+            {
+#pragma unroll
+                for(int i = 0; i < kFisheyeForwardPolyTerms; ++i)
+                {
+                    atomicAdd(&outputs.forward_poly[i], forward[i]);
+                }
+            }
+        }
+    }
+};
+
+template<>
+struct OpenCVFisheyeProjectionPolicy::ScratchIO<DistortionOpFamily::CameraRaysToImagePoints>
+{
+    template<typename Scratch>
+    static __device__ void validate()
+    {
+        static_assert(Scratch::kScratchStride >= 8);
+        static_assert(Scratch::kInverseStashOffset == -1);
+    }
+
+    template<typename Scratch>
+    static __device__ void save_forward(float *scratch, int64_t off, const ProjectState &state)
+    {
+        validate<Scratch>();
+        scratch[off + 0] = state.ray_xy_norm;
+        scratch[off + 1] = state.theta;
+        scratch[off + 2] = state.delta;
+        scratch[off + 3]
+            = opencv_fisheye_pack_flags(state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped);
+        scratch[off + 4] = 0.0f;
+        scratch[off + 5] = 0.0f;
+        scratch[off + 6] = 0.0f;
+        scratch[off + 7] = 0.0f;
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(const float *scratch, int64_t off, ProjectState &state)
+    {
+        validate<Scratch>();
+        state.ray_xy_norm = scratch[off + 0];
+        state.theta       = scratch[off + 1];
+        state.delta       = scratch[off + 2];
+        opencv_fisheye_unpack_flags(
+            scratch[off + 3], state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped
+        );
+    }
+};
+
+struct OpenCVFisheyeBackprojectScratchIO
+{
+    template<typename Scratch>
+    static __device__ void validate()
+    {
+        static_assert(Scratch::kScratchStride >= 8);
+        static_assert(
+            Scratch::kInverseStashOffset == -1
+            || (Scratch::kInverseStashOffset >= 8 && Scratch::kInverseStashOffset + 3 <= Scratch::kScratchStride)
+        );
+    }
+
+    template<typename Scratch>
+    static __device__ void save_state(float *scratch, int64_t off, const FisheyeBackprojectState &state)
+    {
+        validate<Scratch>();
+        scratch[off + 0] = state.normalized.x;
+        scratch[off + 1] = state.normalized.y;
+        scratch[off + 2] = state.delta;
+        scratch[off + 3] = state.theta;
+        scratch[off + 4] = state.ray_raw.x;
+        scratch[off + 5] = state.ray_raw.y;
+        scratch[off + 6] = state.ray_raw.z;
+        scratch[off + 7] = state.min2d_clamped ? 1.0f : 0.0f;
+    }
+
+    template<typename Scratch>
+    static __device__ void load_state(const float *scratch, int64_t off, FisheyeBackprojectState &state)
+    {
+        validate<Scratch>();
+        state.normalized    = make_float2(scratch[off + 0], scratch[off + 1]);
+        state.delta         = scratch[off + 2];
+        state.theta         = scratch[off + 3];
+        state.ray_raw       = make_float3(scratch[off + 4], scratch[off + 5], scratch[off + 6]);
+        state.min2d_clamped = static_cast<uint32_t>(scratch[off + 7]) != 0u;
+    }
+};
+
+template<>
+struct OpenCVFisheyeProjectionPolicy::ScratchIO<DistortionOpFamily::ImagePointsToCameraRays>
+    : OpenCVFisheyeBackprojectScratchIO
+{
+    template<typename Scratch>
+    static __device__ void save_forward(float *scratch, int64_t off, const BackprojectState &state)
+    {
+        save_state<Scratch>(scratch, off, state);
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(const float *scratch, int64_t off, BackprojectState &state)
+    {
+        load_state<Scratch>(scratch, off, state);
+    }
+};
+
+template<>
+struct OpenCVFisheyeProjectionPolicy::ScratchIO<DistortionOpFamily::ProjectWorldPointsMeanPose>
+{
+    template<typename Scratch>
+    static __device__ void validate()
+    {
+        static_assert(Scratch::kScratchStride >= 14);
+        static_assert(Scratch::kInverseStashOffset == -1);
+    }
+
+    template<typename Scratch>
+    static __device__ void save_forward(
+        float *scratch, int64_t off, float3 p_rel, float3 camera_point, const ProjectState &state
+    )
+    {
+        validate<Scratch>();
+        scratch[off + 0] = p_rel.x;
+        scratch[off + 1] = p_rel.y;
+        scratch[off + 2] = p_rel.z;
+        scratch[off + 3] = camera_point.x;
+        scratch[off + 4] = camera_point.y;
+        scratch[off + 5] = camera_point.z;
+        scratch[off + 6] = state.ray_xy_norm;
+        scratch[off + 7] = state.theta;
+        scratch[off + 8] = state.delta;
+        scratch[off + 9]
+            = opencv_fisheye_pack_flags(state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped);
+        scratch[off + 10] = 0.0f;
+        scratch[off + 11] = 0.0f;
+        scratch[off + 12] = 0.0f;
+        scratch[off + 13] = 0.0f;
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(
+        const float *scratch, int64_t off, float3 &p_rel, float3 &camera_point, ProjectState &state
+    )
+    {
+        validate<Scratch>();
+        p_rel             = make_float3(scratch[off + 0], scratch[off + 1], scratch[off + 2]);
+        camera_point      = make_float3(scratch[off + 3], scratch[off + 4], scratch[off + 5]);
+        state.ray_xy_norm = scratch[off + 6];
+        state.theta       = scratch[off + 7];
+        state.delta       = scratch[off + 8];
+        opencv_fisheye_unpack_flags(
+            scratch[off + 9], state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped
+        );
+    }
+};
+
+template<>
+struct OpenCVFisheyeProjectionPolicy::ScratchIO<DistortionOpFamily::ImagePointsToWorldRaysStaticPose>
+    : OpenCVFisheyeBackprojectScratchIO
+{
+    template<typename Scratch>
+    static __device__ void save_forward(float *scratch, int64_t off, const BackprojectState &state)
+    {
+        save_state<Scratch>(scratch, off, state);
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(const float *scratch, int64_t off, BackprojectState &state)
+    {
+        load_state<Scratch>(scratch, off, state);
+    }
+};
+
+template<>
+struct OpenCVFisheyeProjectionPolicy::ScratchIO<DistortionOpFamily::ImagePointsToWorldRaysShutterPose>
+    : OpenCVFisheyeBackprojectScratchIO
+{
+    template<typename Scratch>
+    static __device__ void validate()
+    {
+        OpenCVFisheyeBackprojectScratchIO::validate<Scratch>();
+        static_assert(Scratch::kScratchStride > 8);
+        static_assert(Scratch::kInverseStashOffset == -1 || Scratch::kInverseStashOffset >= 9);
+    }
+
+    template<typename Scratch>
+    static __device__ void save_forward(float *scratch, int64_t off, const BackprojectState &state, float alpha)
+    {
+        validate<Scratch>();
+        save_state<Scratch>(scratch, off, state);
+        scratch[off + 8] = alpha;
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(const float *scratch, int64_t off, BackprojectState &state, float &alpha)
+    {
+        validate<Scratch>();
+        load_state<Scratch>(scratch, off, state);
+        alpha = scratch[off + 8];
+    }
+};

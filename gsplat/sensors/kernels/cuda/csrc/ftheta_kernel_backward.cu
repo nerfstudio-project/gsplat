@@ -23,6 +23,7 @@
 #include "camera_kernel.cuh"
 #include "external_distortion_kernel.cuh"
 #include "ftheta_kernel.cuh"
+#include "projection_backward_impl.cuh"
 
 #include <c10/cuda/CUDAException.h>
 
@@ -115,91 +116,6 @@ __device__ __forceinline__ void reduce_ftheta_intrinsic_grads(
     }
 }
 
-// Fused block reduction for all BIVARIATE_NUM_DIFF_PARAMS bivariate-coeff
-// gradients: single __syncthreads + one warp-shuffle pass per slot, then
-// parallel atomicAdds from the first warp.
-__device__ __forceinline__ void reduce_ftheta_bivariate_grads(
-    const BivariateParamGrads &local,
-    BivariateWindshieldDistortion_KernelParameters distortion,
-    bool is_undistort,
-    float *__restrict__ grad_distortion_coeffs
-)
-{
-    static_assert(kThreads % 32 == 0, "kThreads must be a multiple of warp size");
-    constexpr int kNumWarps = kThreads / 32;
-    constexpr int kSlots    = BIVARIATE_NUM_DIFF_PARAMS;
-    __shared__ float warp_sums[kNumWarps][kSlots];
-
-    float values[kSlots];
-#pragma unroll
-    for(int i = 0; i < BIVARIATE_H_POLY_TERMS; ++i)
-    {
-        values[i] = local.h_poly[i];
-    }
-#pragma unroll
-    for(int i = 0; i < BIVARIATE_V_POLY_TERMS; ++i)
-    {
-        values[BIVARIATE_H_POLY_TERMS + i] = local.v_poly[i];
-    }
-
-    unsigned int mask = 0xFFFFFFFFu;
-    int lane          = threadIdx.x & 31;
-    int warp          = threadIdx.x >> 5;
-#pragma unroll
-    for(int i = 0; i < kSlots; ++i)
-    {
-        float v = values[i];
-        for(int offset = 16; offset > 0; offset >>= 1)
-        {
-            v += __shfl_xor_sync(mask, v, offset);
-        }
-        if(lane == 0)
-        {
-            warp_sums[warp][i] = v;
-        }
-    }
-    __syncthreads();
-
-    if(warp == 0 && lane < kSlots)
-    {
-        float total = 0.0f;
-#pragma unroll
-        for(int w = 0; w < kNumWarps; ++w)
-        {
-            total += warp_sums[w][lane];
-        }
-        if(grad_distortion_coeffs != nullptr)
-        {
-            uint32_t base = bivariate_coeff_base(distortion.reference_polynomial, is_undistort);
-            atomicAdd(&grad_distortion_coeffs[base + lane], total);
-        }
-    }
-}
-
-// Unpacks the 8-slot forward project scratch into FThetaProjectState.
-__device__ __forceinline__ void ftheta_load_proj_state_8(
-    const float *__restrict__ scratch, int64_t off, FThetaProjectState &state
-)
-{
-    state.ray_norm = make_float3(scratch[off + 0], scratch[off + 1], scratch[off + 2]);
-    state.theta    = scratch[off + 3];
-    state.r        = scratch[off + 4];
-    state.xy_norm  = scratch[off + 5];
-    ftheta_unpack_flags(scratch[off + 6], state.behind_camera, state.angle_clamped, state.min2d_clamped);
-}
-
-// Unpacks the 8-slot forward backproject scratch into FThetaBackprojectState.
-__device__ __forceinline__ void ftheta_load_bp_state_8(
-    const float *__restrict__ scratch, int64_t off, FThetaBackprojectState &state
-)
-{
-    state.transformed   = make_float2(scratch[off + 0], scratch[off + 1]);
-    state.rdist         = scratch[off + 2];
-    state.theta         = scratch[off + 3];
-    state.ray_raw       = make_float3(scratch[off + 4], scratch[off + 5], scratch[off + 6]);
-    state.min2d_clamped = ftheta_bp_unpack_flags(scratch[off + 7]);
-}
-
 // =============================================================================
 // camera_rays_to_image_points backward
 // =============================================================================
@@ -221,34 +137,19 @@ __global__ void camera_rays_to_image_points_ftheta_backward_kernel(
     const float *__restrict__ scratch
 )
 {
-    using Scratch = FThetaBackwardScratch<DistortionOpFamily::CameraRaysToImagePoints, typename DistortionPolicy::Tag>;
-    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    FThetaParams params    = load_ftheta_params(projection);
-    auto distortion_params = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    FThetaParamGrads d_params{};
-    BivariateParamGrads d_distortion{};
-
-    if(idx < count)
-    {
-        FThetaProjectState state;
-        ftheta_load_proj_state_8(scratch, idx * Scratch::kScratchStride, state);
-        float3 ray             = read_vec3(camera_rays, idx);
-        float3 projected_ray   = DistortionPolicy::apply_fwd(ray, distortion_params);
-        float2 d_img           = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
-        float3 d_projected_ray = make_float3(0.0f, 0.0f, 0.0f);
-        ftheta_project_ray_bwd(projected_ray, params, state, d_img, d_projected_ray, d_params);
-        float3 d_ray = make_float3(0.0f, 0.0f, 0.0f);
-        DistortionPolicy::apply_bwd(ray, distortion_params, d_projected_ray, d_ray, d_distortion);
-        if(grad_camera_rays != nullptr)
-        {
-            write_vec3(grad_camera_rays, idx, d_ray);
-        }
-    }
-    reduce_ftheta_intrinsic_grads(d_params, grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv);
-    if constexpr(DistortionPolicy::kHasDistortion)
-    {
-        reduce_ftheta_bivariate_grads(d_distortion, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
-    }
+    camera_rays_to_image_points_backward_impl<kThreads, FThetaProjectionPolicy, DistortionPolicy>(
+        count,
+        projection,
+        distortion,
+        camera_rays,
+        grad_image_points,
+        grad_camera_rays,
+        FThetaProjectionPolicy::IntrinsicGradOutputs{
+            grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv
+        },
+        grad_distortion_coeffs,
+        scratch
+    );
 }
 
 // =============================================================================
@@ -272,48 +173,25 @@ __global__ void image_points_to_camera_rays_ftheta_backward_kernel(
     const float *__restrict__ scratch
 )
 {
-    using Scratch = FThetaBackwardScratch<DistortionOpFamily::ImagePointsToCameraRays, typename DistortionPolicy::Tag>;
-    int64_t idx   = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    FThetaParams params    = load_ftheta_params(projection);
-    auto distortion_params = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    FThetaParamGrads d_params{};
-    BivariateParamGrads d_distortion{};
-
-    if(idx < count)
-    {
-        int64_t off = idx * Scratch::kScratchStride;
-        FThetaBackprojectState state;
-        ftheta_load_bp_state_8(scratch, off, state);
-        float2 img        = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-        float3 ftheta_ray = normalize3(state.ray_raw);
-        float3 inverse_primal
-            = DistortionPolicy::inverse_bwd_input(ftheta_ray, scratch, off + Scratch::kInverseStashOffset);
-        float3 d_distortion_output = read_vec3(grad_camera_rays, idx);
-        if constexpr(DistortionPolicy::kHasDistortion)
-        {
-            d_distortion_output = normalize3_bwd(inverse_primal, d_distortion_output);
-        }
-        float3 d_ftheta_ray = make_float3(0.0f, 0.0f, 0.0f);
-        DistortionPolicy::apply_bwd(ftheta_ray, distortion_params, d_distortion_output, d_ftheta_ray, d_distortion);
-        float2 d_img = make_float2(0.0f, 0.0f);
-        ftheta_backproject_image_point_bwd(img, params, state, d_ftheta_ray, d_img, d_params);
-        if(grad_image_points != nullptr)
-        {
-            grad_image_points[idx * 2 + 0] = d_img.x;
-            grad_image_points[idx * 2 + 1] = d_img.y;
-        }
-    }
-    reduce_ftheta_intrinsic_grads(d_params, grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv);
-    if constexpr(DistortionPolicy::kHasDistortion)
-    {
-        reduce_ftheta_bivariate_grads(d_distortion, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
-    }
+    image_points_to_camera_rays_backward_impl<kThreads, FThetaProjectionPolicy, DistortionPolicy>(
+        count,
+        projection,
+        distortion,
+        image_points,
+        grad_camera_rays,
+        grad_image_points,
+        FThetaProjectionPolicy::IntrinsicGradOutputs{
+            grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv
+        },
+        grad_distortion_coeffs,
+        scratch
+    );
 }
 
 // Unpacks the 10-slot mean/shutter forward scratch
 // ([p_rel(3), cam_pt(3), theta, r, xy_norm, flags]) into FThetaProjectState
-// plus p_rel and cam_pt. ray_norm is left zero; callers must recompute it
-// from cam_pt (or from the distorted ray on bivariate variants).
+// plus p_rel and cam_pt. ray_norm is left zero; the caller recomputes it
+// from the distortion policy's projected ray (apply_fwd of cam_pt).
 __device__ __forceinline__ void ftheta_load_meanpose_10(
     const float *__restrict__ scratch, int64_t off, float3 &p_rel, float3 &cam_pt, FThetaProjectState &state
 )
@@ -354,158 +232,25 @@ __global__ void project_world_points_mean_pose_ftheta_backward_kernel(
     const float *__restrict__ scratch
 )
 {
-    using Scratch
-        = FThetaBackwardScratch<DistortionOpFamily::ProjectWorldPointsMeanPose, typename DistortionPolicy::Tag>;
-    int64_t idx            = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    FThetaParams params    = load_ftheta_params(projection);
-    auto distortion_params = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    FThetaParamGrads d_params{};
-    BivariateParamGrads d_distortion{};
-    float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
-    float3 d_trans1 = make_float3(0.0f, 0.0f, 0.0f);
-
-    if(idx < count)
-    {
-        int64_t off = idx * Scratch::kScratchStride;
-        float3 p_rel;
-        float3 cam_pt;
-        FThetaProjectState state;
-        ftheta_load_meanpose_10(scratch, off, p_rel, cam_pt, state);
-
-        if(!state.behind_camera)
-        {
-            float2 d_img                = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
-            float3 projected_ray        = DistortionPolicy::apply_fwd(cam_pt, distortion_params);
-            FThetaProjectState replayed = state;
-            replayed.ray_norm           = normalize3(projected_ray);
-
-            float3 d_projected_ray = make_float3(0.0f, 0.0f, 0.0f);
-            ftheta_project_ray_bwd(projected_ray, params, replayed, d_img, d_projected_ray, d_params);
-            float3 d_cam_pt = make_float3(0.0f, 0.0f, 0.0f);
-            DistortionPolicy::apply_bwd(cam_pt, distortion_params, d_projected_ray, d_cam_pt, d_distortion);
-
-            float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
-            float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
-            float rx, ry, rz, rw;
-            gsplat_geometry::quat_slerp_pair_fwd<float>(
-                rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &rx, &ry, &rz, &rw
-            );
-            float4 rot_mid_xyzw   = make_float4(rx, ry, rz, rw);
-            float4 d_rot_mid_xyzw = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-            float3 d_p_rel        = make_float3(0.0f, 0.0f, 0.0f);
-            quat_inverse_rotate_bwd_xyzw_geom(rot_mid_xyzw, p_rel, d_cam_pt, d_rot_mid_xyzw, d_p_rel);
-
-            if(grad_world_points != nullptr)
-            {
-                write_vec3(grad_world_points, idx, d_p_rel);
-            }
-            float3 d_mean_t  = scale3(d_p_rel, -1.0f);
-            d_trans0.x      += 0.5f * d_mean_t.x;
-            d_trans0.y      += 0.5f * d_mean_t.y;
-            d_trans0.z      += 0.5f * d_mean_t.z;
-            d_trans1.x      += 0.5f * d_mean_t.x;
-            d_trans1.y      += 0.5f * d_mean_t.y;
-            d_trans1.z      += 0.5f * d_mean_t.z;
-
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
-            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
-                rot0.x,
-                rot0.y,
-                rot0.z,
-                rot0.w,
-                rot1.x,
-                rot1.y,
-                rot1.z,
-                rot1.w,
-                0.5f,
-                rx,
-                ry,
-                rz,
-                rw,
-                d_rot_mid_xyzw.x,
-                d_rot_mid_xyzw.y,
-                d_rot_mid_xyzw.z,
-                d_rot_mid_xyzw.w,
-                &gq0x,
-                &gq0y,
-                &gq0z,
-                &gq0w,
-                &gq1x,
-                &gq1y,
-                &gq1z,
-                &gq1w
-            );
-            float4 d_r0  = make_float4(gq0x, gq0y, gq0z, gq0w);
-            float4 d_r1  = make_float4(gq1x, gq1y, gq1z, gq1w);
-            d_rot0.x    += d_r0.x;
-            d_rot0.y    += d_r0.y;
-            d_rot0.z    += d_r0.z;
-            d_rot0.w    += d_r0.w;
-            d_rot1.x    += d_r1.x;
-            d_rot1.y    += d_r1.y;
-            d_rot1.z    += d_r1.z;
-            d_rot1.w    += d_r1.w;
-        }
-        else
-        {
-            if(grad_world_points != nullptr)
-            {
-                write_vec3(grad_world_points, idx, make_float3(0.0f, 0.0f, 0.0f));
-            }
-        }
-    }
-
-    float t0x = block_sum<kThreads>(d_trans0.x);
-    float t0y = block_sum<kThreads>(d_trans0.y);
-    float t0z = block_sum<kThreads>(d_trans0.z);
-    float t1x = block_sum<kThreads>(d_trans1.x);
-    float t1y = block_sum<kThreads>(d_trans1.y);
-    float t1z = block_sum<kThreads>(d_trans1.z);
-    float r0x = block_sum<kThreads>(d_rot0.x);
-    float r0y = block_sum<kThreads>(d_rot0.y);
-    float r0z = block_sum<kThreads>(d_rot0.z);
-    float r0w = block_sum<kThreads>(d_rot0.w);
-    float r1x = block_sum<kThreads>(d_rot1.x);
-    float r1y = block_sum<kThreads>(d_rot1.y);
-    float r1z = block_sum<kThreads>(d_rot1.z);
-    float r1w = block_sum<kThreads>(d_rot1.w);
-
-    if(threadIdx.x == 0)
-    {
-        if(grad_start_translation != nullptr)
-        {
-            atomicAdd(&grad_start_translation[0], t0x);
-            atomicAdd(&grad_start_translation[1], t0y);
-            atomicAdd(&grad_start_translation[2], t0z);
-        }
-        if(grad_end_translation != nullptr)
-        {
-            atomicAdd(&grad_end_translation[0], t1x);
-            atomicAdd(&grad_end_translation[1], t1y);
-            atomicAdd(&grad_end_translation[2], t1z);
-        }
-        if(grad_start_rotation != nullptr)
-        {
-            atomicAdd(&grad_start_rotation[0], r0w);
-            atomicAdd(&grad_start_rotation[1], r0x);
-            atomicAdd(&grad_start_rotation[2], r0y);
-            atomicAdd(&grad_start_rotation[3], r0z);
-        }
-        if(grad_end_rotation != nullptr)
-        {
-            atomicAdd(&grad_end_rotation[0], r1w);
-            atomicAdd(&grad_end_rotation[1], r1x);
-            atomicAdd(&grad_end_rotation[2], r1y);
-            atomicAdd(&grad_end_rotation[3], r1z);
-        }
-    }
-    reduce_ftheta_intrinsic_grads(d_params, grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv);
-    if constexpr(DistortionPolicy::kHasDistortion)
-    {
-        reduce_ftheta_bivariate_grads(d_distortion, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
-    }
+    project_world_points_mean_pose_backward_impl<kThreads, FThetaProjectionPolicy, DistortionPolicy>(
+        count,
+        projection,
+        distortion,
+        world_points,
+        start_rotation,
+        end_rotation,
+        grad_image_points,
+        grad_world_points,
+        grad_start_translation,
+        grad_end_translation,
+        grad_start_rotation,
+        grad_end_rotation,
+        FThetaProjectionPolicy::IntrinsicGradOutputs{
+            grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv
+        },
+        grad_distortion_coeffs,
+        scratch
+    );
 }
 
 // =============================================================================
@@ -533,86 +278,23 @@ __global__ void image_points_to_world_rays_static_pose_ftheta_backward_kernel(
     const float *__restrict__ scratch
 )
 {
-    using Scratch
-        = FThetaBackwardScratch<DistortionOpFamily::ImagePointsToWorldRaysStaticPose, typename DistortionPolicy::Tag>;
-    int64_t idx            = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    FThetaParams params    = load_ftheta_params(projection);
-    auto distortion_params = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    FThetaParamGrads d_params{};
-    BivariateParamGrads d_distortion{};
-    float4 d_rot_xyzw = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float3 d_trans    = make_float3(0.0f, 0.0f, 0.0f);
-
-    if(idx < count)
-    {
-        int64_t off = idx * Scratch::kScratchStride;
-        FThetaBackprojectState state;
-        ftheta_load_bp_state_8(scratch, off, state);
-        float3 ftheta_ray = normalize3(state.ray_raw);
-        float3 inverse_primal
-            = DistortionPolicy::inverse_bwd_input(ftheta_ray, scratch, off + Scratch::kInverseStashOffset);
-        float2 img = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-        float3 d_origin
-            = make_float3(grad_world_rays[idx * 6 + 0], grad_world_rays[idx * 6 + 1], grad_world_rays[idx * 6 + 2]);
-        float3 d_direction
-            = make_float3(grad_world_rays[idx * 6 + 3], grad_world_rays[idx * 6 + 4], grad_world_rays[idx * 6 + 5]);
-
-        d_trans = d_origin;
-
-        float4 pose_r_xyzw = read_quat_xyzw_from_wxyz(rotation, 0);
-        float3 camera_ray  = inverse_primal;
-        if constexpr(DistortionPolicy::kHasDistortion)
-        {
-            camera_ray = normalize3(inverse_primal);
-        }
-        float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
-        quat_rotate_bwd_xyzw_geom(pose_r_xyzw, camera_ray, d_direction, d_rot_xyzw, d_camera_ray);
-        float3 d_distortion_output = d_camera_ray;
-        if constexpr(DistortionPolicy::kHasDistortion)
-        {
-            d_distortion_output = normalize3_bwd(inverse_primal, d_camera_ray);
-        }
-        float3 d_ftheta_ray = make_float3(0.0f, 0.0f, 0.0f);
-        DistortionPolicy::apply_bwd(ftheta_ray, distortion_params, d_distortion_output, d_ftheta_ray, d_distortion);
-
-        float2 d_img = make_float2(0.0f, 0.0f);
-        ftheta_backproject_image_point_bwd(img, params, state, d_ftheta_ray, d_img, d_params);
-        if(grad_image_points != nullptr)
-        {
-            grad_image_points[idx * 2 + 0] = d_img.x;
-            grad_image_points[idx * 2 + 1] = d_img.y;
-        }
-    }
-
-    float tx = block_sum<kThreads>(d_trans.x);
-    float ty = block_sum<kThreads>(d_trans.y);
-    float tz = block_sum<kThreads>(d_trans.z);
-    float rx = block_sum<kThreads>(d_rot_xyzw.x);
-    float ry = block_sum<kThreads>(d_rot_xyzw.y);
-    float rz = block_sum<kThreads>(d_rot_xyzw.z);
-    float rw = block_sum<kThreads>(d_rot_xyzw.w);
-
-    if(threadIdx.x == 0)
-    {
-        if(grad_translation != nullptr)
-        {
-            atomicAdd(&grad_translation[0], tx);
-            atomicAdd(&grad_translation[1], ty);
-            atomicAdd(&grad_translation[2], tz);
-        }
-        if(grad_rotation != nullptr)
-        {
-            atomicAdd(&grad_rotation[0], rw);
-            atomicAdd(&grad_rotation[1], rx);
-            atomicAdd(&grad_rotation[2], ry);
-            atomicAdd(&grad_rotation[3], rz);
-        }
-    }
-    reduce_ftheta_intrinsic_grads(d_params, grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv);
-    if constexpr(DistortionPolicy::kHasDistortion)
-    {
-        reduce_ftheta_bivariate_grads(d_distortion, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
-    }
+    image_points_to_world_rays_static_pose_backward_impl<kThreads, FThetaProjectionPolicy, DistortionPolicy>(
+        count,
+        projection,
+        distortion,
+        image_points,
+        translation,
+        rotation,
+        grad_world_rays,
+        grad_image_points,
+        grad_translation,
+        grad_rotation,
+        FThetaProjectionPolicy::IntrinsicGradOutputs{
+            grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv
+        },
+        grad_distortion_coeffs,
+        scratch
+    );
 }
 
 // =============================================================================
@@ -655,7 +337,7 @@ __global__ void project_world_points_shutter_pose_ftheta_backward_kernel(
     FThetaParams params    = load_ftheta_params(projection);
     auto distortion_params = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
     FThetaParamGrads d_params{};
-    BivariateParamGrads d_distortion{};
+    typename DistortionPolicy::ParamGrads d_distortion{};
     float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
@@ -799,10 +481,9 @@ __global__ void project_world_points_shutter_pose_ftheta_backward_kernel(
         }
     }
     reduce_ftheta_intrinsic_grads(d_params, grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv);
-    if constexpr(DistortionPolicy::kHasDistortion)
-    {
-        reduce_ftheta_bivariate_grads(d_distortion, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
-    }
+    DistortionPolicy::template reduce_param_grads<kThreads>(
+        d_distortion, distortion, Scratch::kIsUndistort, grad_distortion_coeffs
+    );
 }
 
 // =============================================================================
@@ -833,162 +514,26 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_backward_kernel(
     const float *__restrict__ scratch
 )
 {
-    using Scratch
-        = FThetaBackwardScratch<DistortionOpFamily::ImagePointsToWorldRaysShutterPose, typename DistortionPolicy::Tag>;
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     (void)shutter_type;
-    FThetaParams params    = load_ftheta_params(projection);
-    auto distortion_params = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    FThetaParamGrads d_params{};
-    BivariateParamGrads d_distortion{};
-    float4 d_rot0   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float4 d_rot1   = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float3 d_trans0 = make_float3(0.0f, 0.0f, 0.0f);
-    float3 d_trans1 = make_float3(0.0f, 0.0f, 0.0f);
-
-    if(idx < count)
-    {
-        int64_t off = idx * Scratch::kScratchStride;
-        FThetaBackprojectState state;
-        ftheta_load_bp_state_8(scratch, off, state);
-        float3 ftheta_ray = normalize3(state.ray_raw);
-        float3 inverse_primal
-            = DistortionPolicy::inverse_bwd_input(ftheta_ray, scratch, off + Scratch::kInverseStashOffset);
-        float alpha = scratch[off + Scratch::kScratchStride - 1];
-
-        float2 img = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-        float3 d_origin
-            = make_float3(grad_world_rays[idx * 6 + 0], grad_world_rays[idx * 6 + 1], grad_world_rays[idx * 6 + 2]);
-        float3 d_direction
-            = make_float3(grad_world_rays[idx * 6 + 3], grad_world_rays[idx * 6 + 4], grad_world_rays[idx * 6 + 5]);
-
-        d_trans0.x += (1.0f - alpha) * d_origin.x;
-        d_trans0.y += (1.0f - alpha) * d_origin.y;
-        d_trans0.z += (1.0f - alpha) * d_origin.z;
-        d_trans1.x += alpha * d_origin.x;
-        d_trans1.y += alpha * d_origin.y;
-        d_trans1.z += alpha * d_origin.z;
-
-        float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
-        float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
-        float rx, ry, rz, rw;
-        gsplat_geometry::quat_slerp_pair_fwd<float>(
-            rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
-        );
-        float4 pose_r_xyzw = make_float4(rx, ry, rz, rw);
-        float3 camera_ray  = inverse_primal;
-        if constexpr(DistortionPolicy::kHasDistortion)
-        {
-            camera_ray = normalize3(inverse_primal);
-        }
-        float4 d_pose_r     = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-        float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
-        quat_rotate_bwd_xyzw_geom(pose_r_xyzw, camera_ray, d_direction, d_pose_r, d_camera_ray);
-
-        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
-        gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
-            rot0.x,
-            rot0.y,
-            rot0.z,
-            rot0.w,
-            rot1.x,
-            rot1.y,
-            rot1.z,
-            rot1.w,
-            alpha,
-            rx,
-            ry,
-            rz,
-            rw,
-            d_pose_r.x,
-            d_pose_r.y,
-            d_pose_r.z,
-            d_pose_r.w,
-            &gq0x,
-            &gq0y,
-            &gq0z,
-            &gq0w,
-            &gq1x,
-            &gq1y,
-            &gq1z,
-            &gq1w
-        );
-        float4 d_r0  = make_float4(gq0x, gq0y, gq0z, gq0w);
-        float4 d_r1  = make_float4(gq1x, gq1y, gq1z, gq1w);
-        d_rot0.x    += d_r0.x;
-        d_rot0.y    += d_r0.y;
-        d_rot0.z    += d_r0.z;
-        d_rot0.w    += d_r0.w;
-        d_rot1.x    += d_r1.x;
-        d_rot1.y    += d_r1.y;
-        d_rot1.z    += d_r1.z;
-        d_rot1.w    += d_r1.w;
-
-        float3 d_distortion_output = d_camera_ray;
-        if constexpr(DistortionPolicy::kHasDistortion)
-        {
-            d_distortion_output = normalize3_bwd(inverse_primal, d_camera_ray);
-        }
-        float3 d_ftheta_ray = make_float3(0.0f, 0.0f, 0.0f);
-        DistortionPolicy::apply_bwd(ftheta_ray, distortion_params, d_distortion_output, d_ftheta_ray, d_distortion);
-        float2 d_img = make_float2(0.0f, 0.0f);
-        ftheta_backproject_image_point_bwd(img, params, state, d_ftheta_ray, d_img, d_params);
-        if(grad_image_points != nullptr)
-        {
-            grad_image_points[idx * 2 + 0] = d_img.x;
-            grad_image_points[idx * 2 + 1] = d_img.y;
-        }
-    }
-
-    float t0x = block_sum<kThreads>(d_trans0.x);
-    float t0y = block_sum<kThreads>(d_trans0.y);
-    float t0z = block_sum<kThreads>(d_trans0.z);
-    float t1x = block_sum<kThreads>(d_trans1.x);
-    float t1y = block_sum<kThreads>(d_trans1.y);
-    float t1z = block_sum<kThreads>(d_trans1.z);
-    float r0x = block_sum<kThreads>(d_rot0.x);
-    float r0y = block_sum<kThreads>(d_rot0.y);
-    float r0z = block_sum<kThreads>(d_rot0.z);
-    float r0w = block_sum<kThreads>(d_rot0.w);
-    float r1x = block_sum<kThreads>(d_rot1.x);
-    float r1y = block_sum<kThreads>(d_rot1.y);
-    float r1z = block_sum<kThreads>(d_rot1.z);
-    float r1w = block_sum<kThreads>(d_rot1.w);
-
-    if(threadIdx.x == 0)
-    {
-        if(grad_start_translation != nullptr)
-        {
-            atomicAdd(&grad_start_translation[0], t0x);
-            atomicAdd(&grad_start_translation[1], t0y);
-            atomicAdd(&grad_start_translation[2], t0z);
-        }
-        if(grad_end_translation != nullptr)
-        {
-            atomicAdd(&grad_end_translation[0], t1x);
-            atomicAdd(&grad_end_translation[1], t1y);
-            atomicAdd(&grad_end_translation[2], t1z);
-        }
-        if(grad_start_rotation != nullptr)
-        {
-            atomicAdd(&grad_start_rotation[0], r0w);
-            atomicAdd(&grad_start_rotation[1], r0x);
-            atomicAdd(&grad_start_rotation[2], r0y);
-            atomicAdd(&grad_start_rotation[3], r0z);
-        }
-        if(grad_end_rotation != nullptr)
-        {
-            atomicAdd(&grad_end_rotation[0], r1w);
-            atomicAdd(&grad_end_rotation[1], r1x);
-            atomicAdd(&grad_end_rotation[2], r1y);
-            atomicAdd(&grad_end_rotation[3], r1z);
-        }
-    }
-    reduce_ftheta_intrinsic_grads(d_params, grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv);
-    if constexpr(DistortionPolicy::kHasDistortion)
-    {
-        reduce_ftheta_bivariate_grads(d_distortion, distortion, Scratch::kIsUndistort, grad_distortion_coeffs);
-    }
+    image_points_to_world_rays_shutter_pose_backward_impl<kThreads, FThetaProjectionPolicy, DistortionPolicy>(
+        count,
+        projection,
+        distortion,
+        image_points,
+        start_rotation,
+        end_rotation,
+        grad_world_rays,
+        grad_image_points,
+        grad_start_translation,
+        grad_end_translation,
+        grad_start_rotation,
+        grad_end_rotation,
+        FThetaProjectionPolicy::IntrinsicGradOutputs{
+            grad_principal_point, grad_fw_poly, grad_bw_poly, grad_A, grad_Ainv
+        },
+        grad_distortion_coeffs,
+        scratch
+    );
 }
 } // namespace
 

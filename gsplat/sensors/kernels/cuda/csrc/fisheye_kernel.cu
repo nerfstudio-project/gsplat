@@ -22,6 +22,7 @@
 #include "camera_kernel.cuh"
 #include "external_distortion_kernel.cuh"
 #include "fisheye_kernel.cuh"
+#include "projection_forward_impl.cuh"
 
 #include <c10/cuda/CUDAException.h>
 
@@ -34,56 +35,9 @@ dim3 grid_for_count(int64_t count)
     return dim3(static_cast<unsigned int>((count + kThreads - 1) / kThreads));
 }
 
-// Backward reads these flags as float values, not bit patterns.
-// Bit 0 behind_camera, bit 1 angle_clamped, bit 2 oob, bit 3 xy_norm_clamped.
-__device__ __forceinline__ float fisheye_pack_flags(
-    bool behind_camera, bool angle_clamped, bool oob, bool xy_norm_clamped
-)
-{
-    uint32_t f  = 0u;
-    f          |= behind_camera ? 1u : 0u;
-    f          |= angle_clamped ? 2u : 0u;
-    f          |= oob ? 4u : 0u;
-    f          |= xy_norm_clamped ? 8u : 0u;
-    return static_cast<float>(f);
-}
-
-// Mirrors the float-valued flag ABI used by the backproject backward path.
-__device__ __forceinline__ float fisheye_bp_pack_flags(bool min2d_clamped)
-{
-    return min2d_clamped ? 1.0f : 0.0f;
-}
-
-// Project/backproject intentionally disagree on theta/delta order to match the
-// existing backward ABI.
-__device__ __forceinline__ void fisheye_save_proj_state_8(
-    float *__restrict__ scratch, int64_t off, const FisheyeProjectState &state
-)
-{
-    scratch[off + 0] = state.ray_xy_norm;
-    scratch[off + 1] = state.theta;
-    scratch[off + 2] = state.delta;
-    scratch[off + 3] = fisheye_pack_flags(state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped);
-    scratch[off + 4] = 0.0f;
-    scratch[off + 5] = 0.0f;
-    scratch[off + 6] = 0.0f;
-    scratch[off + 7] = 0.0f;
-}
-
-// Keep this layout aligned with fisheye_load_bp_state_8.
-__device__ __forceinline__ void fisheye_save_bp_state_8(
-    float *__restrict__ scratch, int64_t off, const FisheyeBackprojectState &state
-)
-{
-    scratch[off + 0] = state.normalized.x;
-    scratch[off + 1] = state.normalized.y;
-    scratch[off + 2] = state.delta;
-    scratch[off + 3] = state.theta;
-    scratch[off + 4] = state.ray_raw.x;
-    scratch[off + 5] = state.ray_raw.y;
-    scratch[off + 6] = state.ray_raw.z;
-    scratch[off + 7] = fisheye_bp_pack_flags(state.min2d_clamped);
-}
+template<DistortionOpFamily Op, typename PolicyTag>
+using FisheyeForwardScratch
+    = DistortionScratchTraits<DistortionSensor::OpenCVFisheye, Op, DistortionDirection::Forward, PolicyTag>;
 
 // =============================================================================
 // D1 -- camera_rays_to_image_points_opencv_fisheye_{policy}
@@ -100,31 +54,9 @@ __global__ void camera_rays_to_image_points_opencv_fisheye_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    using Scratch = DistortionScratchTraits<
-        DistortionSensor::OpenCVFisheye,
-        DistortionOpFamily::CameraRaysToImagePoints,
-        DistortionDirection::Forward,
-        typename DistortionPolicy::Tag
-    >;
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
-    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    float3 ray                 = read_vec3(camera_rays, idx);
-    const float3 projected_ray = DistortionPolicy::apply_fwd(ray, distortion_params);
-    FisheyeProjectState state;
-    bool valid                = false;
-    const float2 img          = fisheye_project_ray(projected_ray, params, state, valid);
-    image_points[idx * 2 + 0] = img.x;
-    image_points[idx * 2 + 1] = img.y;
-    valid_flags[idx]          = valid;
-    if(scratch != nullptr)
-    {
-        fisheye_save_proj_state_8(scratch, idx * Scratch::kScratchStride, state);
-    }
+    camera_rays_to_image_points_forward_impl<kThreads, OpenCVFisheyeProjectionPolicy, DistortionPolicy>(
+        count, projection, distortion, camera_rays, image_points, valid_flags, scratch
+    );
 }
 
 // =============================================================================
@@ -141,31 +73,9 @@ __global__ void image_points_to_camera_rays_opencv_fisheye_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    using Scratch = DistortionScratchTraits<
-        DistortionSensor::OpenCVFisheye,
-        DistortionOpFamily::ImagePointsToCameraRays,
-        DistortionDirection::Forward,
-        typename DistortionPolicy::Tag
-    >;
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
-    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    float2 image_point         = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    FisheyeBackprojectState state;
-    const float3 distorted_ray = fisheye_backproject_image_point(image_point, params, state);
-    int64_t off                = idx * Scratch::kScratchStride;
-    const float3 ray           = DistortionPolicy::apply_inverse(
-        distorted_ray, distortion_params, scratch, off + Scratch::kInverseStashOffset
+    image_points_to_camera_rays_forward_impl<kThreads, OpenCVFisheyeProjectionPolicy, DistortionPolicy>(
+        count, projection, distortion, image_points, camera_rays, scratch
     );
-    write_vec3(camera_rays, idx, ray);
-    if(scratch != nullptr)
-    {
-        fisheye_save_bp_state_8(scratch, off, state);
-    }
 }
 
 // =============================================================================
@@ -196,82 +106,23 @@ __global__ void project_world_points_mean_pose_opencv_fisheye_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    using Scratch = DistortionScratchTraits<
-        DistortionSensor::OpenCVFisheye,
-        DistortionOpFamily::ProjectWorldPointsMeanPose,
-        DistortionDirection::Forward,
-        typename DistortionPolicy::Tag
-    >;
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    __shared__ OpenCVFisheyeParams block_params;
-    __shared__ typename DistortionPolicy::Params block_distortion_params;
-    __shared__ float3 block_pose_t;
-    __shared__ float4 block_pose_r_xyzw;
-    if(threadIdx.x == 0)
-    {
-        block_params            = load_opencv_fisheye_params(projection);
-        block_distortion_params = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-        float3 trans0           = read_vec3(start_translation, 0);
-        float3 trans1           = read_vec3(end_translation, 0);
-        float4 rot0             = read_quat_xyzw_from_wxyz(start_rotation, 0);
-        float4 rot1             = read_quat_xyzw_from_wxyz(end_rotation, 0);
-        block_pose_t            = lerp3(trans0, trans1, 0.5f);
-        float qx, qy, qz, qw;
-        gsplat_geometry::quat_slerp_pair_fwd<float>(
-            rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &qx, &qy, &qz, &qw
-        );
-        block_pose_r_xyzw = make_float4(qx, qy, qz, qw);
-    }
-    __syncthreads();
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVFisheyeParams params = block_params;
-    auto distortion_params     = block_distortion_params;
-    float3 world_point         = read_vec3(world_points, idx);
-    float3 pose_t              = block_pose_t;
-    float4 pose_r_xyzw         = block_pose_r_xyzw;
-    float3 p_rel               = sub3(world_point, pose_t);
-    float3 cam_pt              = quat_inverse_rotate_xyzw_geom(pose_r_xyzw, p_rel);
-    const float3 projected_ray = DistortionPolicy::apply_fwd(cam_pt, distortion_params);
-    FisheyeProjectState state;
-    bool valid                = false;
-    const float2 img          = fisheye_project_ray(projected_ray, params, state, valid);
-    image_points[idx * 2 + 0] = img.x;
-    image_points[idx * 2 + 1] = img.y;
-    valid_flags[idx]          = valid;
-    if(timestamps_us != nullptr)
-    {
-        timestamps_us[idx] = mean_timestamp_us;
-    }
-    if(pose_translations != nullptr)
-    {
-        write_vec3(pose_translations, idx, pose_t);
-    }
-    if(pose_rotations != nullptr)
-    {
-        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    }
-    if(scratch != nullptr)
-    {
-        int64_t off      = idx * Scratch::kScratchStride;
-        scratch[off + 0] = p_rel.x;
-        scratch[off + 1] = p_rel.y;
-        scratch[off + 2] = p_rel.z;
-        scratch[off + 3] = cam_pt.x;
-        scratch[off + 4] = cam_pt.y;
-        scratch[off + 5] = cam_pt.z;
-        scratch[off + 6] = state.ray_xy_norm;
-        scratch[off + 7] = state.theta;
-        scratch[off + 8] = state.delta;
-        scratch[off + 9]
-            = fisheye_pack_flags(state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped);
-        scratch[off + 10] = 0.0f;
-        scratch[off + 11] = 0.0f;
-        scratch[off + 12] = 0.0f;
-        scratch[off + 13] = 0.0f;
-    }
+    project_world_points_mean_pose_forward_impl<kThreads, OpenCVFisheyeProjectionPolicy, DistortionPolicy>(
+        count,
+        projection,
+        distortion,
+        world_points,
+        start_translation,
+        start_rotation,
+        end_translation,
+        end_rotation,
+        mean_timestamp_us,
+        image_points,
+        valid_flags,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
+    );
 }
 
 // =============================================================================
@@ -294,43 +145,20 @@ __global__ void image_points_to_world_rays_static_pose_opencv_fisheye_forward_ke
     float *__restrict__ scratch
 )
 {
-    using Scratch = DistortionScratchTraits<
-        DistortionSensor::OpenCVFisheye,
-        DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
-        DistortionDirection::Forward,
-        typename DistortionPolicy::Tag
-    >;
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
-    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    float2 image_point         = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    FisheyeBackprojectState state;
-    const float3 distorted_ray = fisheye_backproject_image_point(image_point, params, state);
-    int64_t off                = idx * Scratch::kScratchStride;
-    const float3 camera_ray    = DistortionPolicy::apply_inverse(
-        distorted_ray, distortion_params, scratch, off + Scratch::kInverseStashOffset
+    image_points_to_world_rays_static_pose_forward_impl<kThreads, OpenCVFisheyeProjectionPolicy, DistortionPolicy>(
+        count,
+        projection,
+        distortion,
+        image_points,
+        translations,
+        rotations,
+        timestamp_us,
+        world_rays,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
     );
-    float3 pose_t           = read_vec3(translations, 0);
-    float4 pose_r_xyzw      = read_quat_xyzw_from_wxyz(rotations, 0);
-    float3 origin           = pose_t;
-    float3 direction        = quat_rotate_xyzw_geom(pose_r_xyzw, camera_ray);
-    world_rays[idx * 6 + 0] = origin.x;
-    world_rays[idx * 6 + 1] = origin.y;
-    world_rays[idx * 6 + 2] = origin.z;
-    world_rays[idx * 6 + 3] = direction.x;
-    world_rays[idx * 6 + 4] = direction.y;
-    world_rays[idx * 6 + 5] = direction.z;
-    timestamps_us[idx]      = timestamp_us;
-    write_vec3(pose_translations, idx, pose_t);
-    write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    if(scratch != nullptr)
-    {
-        fisheye_save_bp_state_8(scratch, off, state);
-    }
 }
 
 // D4 backward uses isnan(alpha) as its convergence/validity gate.
@@ -379,11 +207,13 @@ __global__ void
         return;
     }
     OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
-    float3 world_point         = read_vec3(world_points, idx);
-    float3 trans0              = read_vec3(start_translation, 0);
-    float3 trans1              = read_vec3(end_translation, 0);
-    float4 rot0                = read_quat_xyzw_from_wxyz(start_rotation, 0);
-    float4 rot1                = read_quat_xyzw_from_wxyz(end_rotation, 0);
+    using Scratch
+        = FisheyeForwardScratch<DistortionOpFamily::ProjectWorldPointsShutterPose, NoExternalDistortionPolicyTag>;
+    float3 world_point = read_vec3(world_points, idx);
+    float3 trans0      = read_vec3(start_translation, 0);
+    float3 trans1      = read_vec3(end_translation, 0);
+    float4 rot0        = read_quat_xyzw_from_wxyz(start_rotation, 0);
+    float4 rot1        = read_quat_xyzw_from_wxyz(end_rotation, 0);
 
     float relative_time = initial_relative_time;
     float alpha         = 0.0f;
@@ -474,7 +304,7 @@ __global__ void
     }
     if(scratch != nullptr)
     {
-        int64_t off      = idx * 16;
+        int64_t off      = idx * Scratch::kScratchStride;
         scratch[off + 0] = p_rel.x;
         scratch[off + 1] = p_rel.y;
         scratch[off + 2] = p_rel.z;
@@ -485,7 +315,7 @@ __global__ void
         scratch[off + 7] = state.theta;
         scratch[off + 8] = state.delta;
         scratch[off + 9]
-            = fisheye_pack_flags(state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped);
+            = opencv_fisheye_pack_flags(state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped);
         scratch[off + 10] = 0.0f;
         scratch[off + 11] = 0.0f;
         scratch[off + 12] = 0.0f;
@@ -521,64 +351,24 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_fisheye_forward_k
     float *__restrict__ scratch
 )
 {
-    using Scratch = DistortionScratchTraits<
-        DistortionSensor::OpenCVFisheye,
-        DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
-        DistortionDirection::Forward,
-        typename DistortionPolicy::Tag
-    >;
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
-    auto distortion_params     = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    float2 image_point         = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    float alpha = compute_relative_frame_time_opencv(image_point, projection.width, projection.height, shutter_type);
-
-    float3 pose_t = lerp3(read_vec3(start_translation, 0), read_vec3(end_translation, 0), alpha);
-    float4 rot0   = read_quat_xyzw_from_wxyz(start_rotation, 0);
-    float4 rot1   = read_quat_xyzw_from_wxyz(end_rotation, 0);
-    float qx, qy, qz, qw;
-    gsplat_geometry::quat_slerp_pair_fwd<float>(
-        rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &qx, &qy, &qz, &qw
+    image_points_to_world_rays_shutter_pose_forward_impl<kThreads, OpenCVFisheyeProjectionPolicy, DistortionPolicy>(
+        count,
+        projection,
+        distortion,
+        image_points,
+        start_translation,
+        start_rotation,
+        end_translation,
+        end_rotation,
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        world_rays,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
     );
-    float4 pose_r_xyzw = make_float4(qx, qy, qz, qw);
-
-    FisheyeBackprojectState state;
-    const float3 distorted_ray = fisheye_backproject_image_point(image_point, params, state);
-    int64_t off                = idx * Scratch::kScratchStride;
-    const float3 camera_ray    = DistortionPolicy::apply_inverse(
-        distorted_ray, distortion_params, scratch, off + Scratch::kInverseStashOffset
-    );
-    float3 origin           = pose_t;
-    float3 direction        = quat_rotate_xyzw_geom(pose_r_xyzw, camera_ray);
-    world_rays[idx * 6 + 0] = origin.x;
-    world_rays[idx * 6 + 1] = origin.y;
-    world_rays[idx * 6 + 2] = origin.z;
-    world_rays[idx * 6 + 3] = direction.x;
-    world_rays[idx * 6 + 4] = direction.y;
-    world_rays[idx * 6 + 5] = direction.z;
-    if(timestamps_us != nullptr)
-    {
-        timestamps_us[idx] = timestamp_from_relative_time(alpha, start_timestamp_us, end_timestamp_us);
-    }
-    if(pose_translations != nullptr)
-    {
-        write_vec3(pose_translations, idx, pose_t);
-    }
-    if(pose_rotations != nullptr)
-    {
-        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    }
-    if(scratch != nullptr)
-    {
-        fisheye_save_bp_state_8(scratch, off, state);
-        // After the common backproject state, all D6 policies store alpha here;
-        // bivariate also stashes inverse data at Scratch::kInverseStashOffset.
-        scratch[off + 8] = alpha;
-    }
 }
 
 // =============================================================================
@@ -617,8 +407,10 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_bivariate_winds
     {
         return;
     }
-    OpenCVFisheyeParams params                 = load_opencv_fisheye_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, false);
+    OpenCVFisheyeParams params = load_opencv_fisheye_params(projection);
+    using Scratch
+        = FisheyeForwardScratch<DistortionOpFamily::ProjectWorldPointsShutterPose, BivariateWindshieldPolicyTag>;
+    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, Scratch::kIsUndistort);
     float3 world_point                         = read_vec3(world_points, idx);
     float3 trans0                              = read_vec3(start_translation, 0);
     float3 trans1                              = read_vec3(end_translation, 0);
@@ -715,7 +507,7 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_bivariate_winds
     }
     if(scratch != nullptr)
     {
-        int64_t off      = idx * 16;
+        int64_t off      = idx * Scratch::kScratchStride;
         scratch[off + 0] = p_rel.x;
         scratch[off + 1] = p_rel.y;
         scratch[off + 2] = p_rel.z;
@@ -726,7 +518,7 @@ __global__ void project_world_points_shutter_pose_opencv_fisheye_bivariate_winds
         scratch[off + 7] = state.theta;
         scratch[off + 8] = state.delta;
         scratch[off + 9]
-            = fisheye_pack_flags(state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped);
+            = opencv_fisheye_pack_flags(state.behind_camera, state.angle_clamped, state.oob, state.xy_norm_clamped);
         scratch[off + 10] = 0.0f;
         scratch[off + 11] = 0.0f;
         scratch[off + 12] = 0.0f;

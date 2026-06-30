@@ -109,7 +109,7 @@ struct FThetaBackprojectState
 // Unpacks the flat KernelParameters into a register-resident FThetaParams.
 // FTheta has no fx/fy denominators; the IFT det-guard at kFThetaIftDfEpsilon
 // plays the equivalent role on the polynomial Newton path.
-__device__ __forceinline__ FThetaParams load_ftheta_params(FThetaProjection_KernelParameters projection)
+__device__ __forceinline__ FThetaParams load_ftheta_params(const FThetaProjection_KernelParameters &projection)
 {
     FThetaParams p;
     p.principal_point.x = projection.principal_point[0];
@@ -809,3 +809,350 @@ __device__ __forceinline__ void ftheta_backproject_image_point_bwd(
     d_params.pp[0]  += -d_offset_x;
     d_params.pp[1]  += -d_offset_y;
 }
+
+struct FThetaProjectionPolicy
+{
+    using KernelParameters = FThetaProjection_KernelParameters;
+    using Params           = FThetaParams;
+    using ProjectState     = FThetaProjectState;
+    using BackprojectState = FThetaBackprojectState;
+    using ParamGrads       = FThetaParamGrads;
+
+    struct IntrinsicGradOutputs
+    {
+        float *principal_point;
+        float *forward_poly;
+        float *backward_poly;
+        float *A;
+        float *Ainv;
+    };
+
+    template<DistortionOpFamily Op>
+    struct ScratchIO;
+
+    static constexpr DistortionSensor kScratchSensor     = DistortionSensor::FTheta;
+    static constexpr bool kGatePosePointBeforeDistortion = true;
+
+    static __device__ Params load(const KernelParameters &projection)
+    {
+        return load_ftheta_params(projection);
+    }
+
+    static __device__ float2 project(float3 camera_ray, const Params &params, ProjectState &state, bool &valid)
+    {
+        return ftheta_project_ray(camera_ray, params, state, valid);
+    }
+
+    static __device__ void project_bwd(
+        float3 camera_ray,
+        const Params &params,
+        const ProjectState &state,
+        float2 d_image_point,
+        float3 &d_camera_ray,
+        ParamGrads &d_params
+    )
+    {
+        ftheta_project_ray_bwd(camera_ray, params, state, d_image_point, d_camera_ray, d_params);
+    }
+
+    static __device__ float3 backproject(float2 image_point, const Params &params, BackprojectState &state)
+    {
+        return ftheta_backproject_image_point(image_point, params, state);
+    }
+
+    static __device__ float3 backproject_output(const BackprojectState &state)
+    {
+        return normalize3(state.ray_raw);
+    }
+
+    static __device__ void backproject_bwd(
+        float2 image_point,
+        const Params &params,
+        const BackprojectState &state,
+        float3 d_camera_ray,
+        float2 &d_image_point,
+        ParamGrads &d_params
+    )
+    {
+        ftheta_backproject_image_point_bwd(image_point, params, state, d_camera_ray, d_image_point, d_params);
+    }
+
+    static __device__ bool final_project_valid(float2 image_point, const Params &params, bool projection_valid)
+    {
+        return projection_valid && ftheta_image_point_in_frame(image_point, params);
+    }
+
+    static __device__ void set_rejected_pose_project_state(ProjectState &state)
+    {
+        state.ray_norm      = make_float3(0.0f, 0.0f, 0.0f);
+        state.theta         = 0.0f;
+        state.r             = 0.0f;
+        state.xy_norm       = 0.0f;
+        state.behind_camera = true;
+        state.angle_clamped = false;
+        state.min2d_clamped = false;
+    }
+
+    static __device__ void prepare_pose_project_state_for_backward(ProjectState &state, float3 projected_ray)
+    {
+        state.ray_norm = normalize3(projected_ray);
+    }
+
+    static __device__ bool pose_project_backward_enabled(const ProjectState &state)
+    {
+        return !state.behind_camera;
+    }
+
+    template<int BlockThreads>
+    static __device__ void reduce_intrinsic_grads(const ParamGrads &local, const IntrinsicGradOutputs &outputs)
+    {
+        const float pp0 = block_sum<BlockThreads>(local.pp[0]);
+        const float pp1 = block_sum<BlockThreads>(local.pp[1]);
+        float forward[kFThetaMaxPolynomialTerms];
+        float backward[kFThetaMaxPolynomialTerms];
+#pragma unroll
+        for(int i = 0; i < kFThetaMaxPolynomialTerms; ++i)
+        {
+            forward[i]  = block_sum<BlockThreads>(local.fw_poly[i]);
+            backward[i] = block_sum<BlockThreads>(local.bw_poly[i]);
+        }
+        float affine[4];
+        float inverse_affine[4];
+#pragma unroll
+        for(int i = 0; i < 4; ++i)
+        {
+            affine[i]         = block_sum<BlockThreads>(local.A[i]);
+            inverse_affine[i] = block_sum<BlockThreads>(local.Ainv[i]);
+        }
+
+        if(threadIdx.x == 0)
+        {
+            if(outputs.principal_point != nullptr)
+            {
+                atomicAdd(&outputs.principal_point[0], pp0);
+                atomicAdd(&outputs.principal_point[1], pp1);
+            }
+            if(outputs.forward_poly != nullptr)
+            {
+#pragma unroll
+                for(int i = 0; i < kFThetaMaxPolynomialTerms; ++i)
+                {
+                    atomicAdd(&outputs.forward_poly[i], forward[i]);
+                }
+            }
+            if(outputs.backward_poly != nullptr)
+            {
+#pragma unroll
+                for(int i = 0; i < kFThetaMaxPolynomialTerms; ++i)
+                {
+                    atomicAdd(&outputs.backward_poly[i], backward[i]);
+                }
+            }
+            if(outputs.A != nullptr)
+            {
+#pragma unroll
+                for(int i = 0; i < 4; ++i)
+                {
+                    atomicAdd(&outputs.A[i], affine[i]);
+                }
+            }
+            if(outputs.Ainv != nullptr)
+            {
+#pragma unroll
+                for(int i = 0; i < 4; ++i)
+                {
+                    atomicAdd(&outputs.Ainv[i], inverse_affine[i]);
+                }
+            }
+        }
+    }
+};
+
+template<>
+struct FThetaProjectionPolicy::ScratchIO<DistortionOpFamily::CameraRaysToImagePoints>
+{
+    template<typename Scratch>
+    static __device__ void validate()
+    {
+        static_assert(Scratch::kScratchStride >= 8);
+        static_assert(Scratch::kInverseStashOffset == -1);
+    }
+
+    template<typename Scratch>
+    static __device__ void save_forward(float *scratch, int64_t off, const ProjectState &state)
+    {
+        validate<Scratch>();
+        scratch[off + 0] = state.ray_norm.x;
+        scratch[off + 1] = state.ray_norm.y;
+        scratch[off + 2] = state.ray_norm.z;
+        scratch[off + 3] = state.theta;
+        scratch[off + 4] = state.r;
+        scratch[off + 5] = state.xy_norm;
+        scratch[off + 6] = ftheta_pack_flags(state.behind_camera, state.angle_clamped, state.min2d_clamped);
+        scratch[off + 7] = 0.0f;
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(const float *scratch, int64_t off, ProjectState &state)
+    {
+        validate<Scratch>();
+        state.ray_norm = make_float3(scratch[off + 0], scratch[off + 1], scratch[off + 2]);
+        state.theta    = scratch[off + 3];
+        state.r        = scratch[off + 4];
+        state.xy_norm  = scratch[off + 5];
+        ftheta_unpack_flags(scratch[off + 6], state.behind_camera, state.angle_clamped, state.min2d_clamped);
+    }
+};
+
+struct FThetaBackprojectScratchIO
+{
+    template<typename Scratch>
+    static __device__ void validate()
+    {
+        static_assert(Scratch::kScratchStride >= 8);
+        static_assert(
+            Scratch::kInverseStashOffset == -1
+            || (Scratch::kInverseStashOffset >= 8 && Scratch::kInverseStashOffset + 3 <= Scratch::kScratchStride)
+        );
+    }
+
+    template<typename Scratch>
+    static __device__ void save_state(float *scratch, int64_t off, const FThetaBackprojectState &state)
+    {
+        validate<Scratch>();
+        scratch[off + 0] = state.transformed.x;
+        scratch[off + 1] = state.transformed.y;
+        scratch[off + 2] = state.rdist;
+        scratch[off + 3] = state.theta;
+        scratch[off + 4] = state.ray_raw.x;
+        scratch[off + 5] = state.ray_raw.y;
+        scratch[off + 6] = state.ray_raw.z;
+        scratch[off + 7] = ftheta_bp_pack_flags(state.min2d_clamped);
+    }
+
+    template<typename Scratch>
+    static __device__ void load_state(const float *scratch, int64_t off, FThetaBackprojectState &state)
+    {
+        validate<Scratch>();
+        state.transformed   = make_float2(scratch[off + 0], scratch[off + 1]);
+        state.rdist         = scratch[off + 2];
+        state.theta         = scratch[off + 3];
+        state.ray_raw       = make_float3(scratch[off + 4], scratch[off + 5], scratch[off + 6]);
+        state.min2d_clamped = ftheta_bp_unpack_flags(scratch[off + 7]);
+    }
+};
+
+template<>
+struct FThetaProjectionPolicy::ScratchIO<DistortionOpFamily::ImagePointsToCameraRays> : FThetaBackprojectScratchIO
+{
+    template<typename Scratch>
+    static __device__ void save_forward(float *scratch, int64_t off, const BackprojectState &state)
+    {
+        save_state<Scratch>(scratch, off, state);
+        if constexpr(Scratch::kInverseStashOffset >= 0)
+        {
+            scratch[off + Scratch::kScratchStride - 1] = 0.0f;
+        }
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(const float *scratch, int64_t off, BackprojectState &state)
+    {
+        load_state<Scratch>(scratch, off, state);
+    }
+};
+
+template<>
+struct FThetaProjectionPolicy::ScratchIO<DistortionOpFamily::ProjectWorldPointsMeanPose>
+{
+    template<typename Scratch>
+    static __device__ void validate()
+    {
+        static_assert(Scratch::kScratchStride >= 10);
+        static_assert(Scratch::kInverseStashOffset == -1);
+    }
+
+    template<typename Scratch>
+    static __device__ void save_forward(
+        float *scratch, int64_t off, float3 p_rel, float3 camera_point, const ProjectState &state
+    )
+    {
+        validate<Scratch>();
+        scratch[off + 0] = p_rel.x;
+        scratch[off + 1] = p_rel.y;
+        scratch[off + 2] = p_rel.z;
+        scratch[off + 3] = camera_point.x;
+        scratch[off + 4] = camera_point.y;
+        scratch[off + 5] = camera_point.z;
+        scratch[off + 6] = state.theta;
+        scratch[off + 7] = state.r;
+        scratch[off + 8] = state.xy_norm;
+        scratch[off + 9] = ftheta_pack_flags(state.behind_camera, state.angle_clamped, state.min2d_clamped);
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(
+        const float *scratch, int64_t off, float3 &p_rel, float3 &camera_point, ProjectState &state
+    )
+    {
+        validate<Scratch>();
+        p_rel          = make_float3(scratch[off + 0], scratch[off + 1], scratch[off + 2]);
+        camera_point   = make_float3(scratch[off + 3], scratch[off + 4], scratch[off + 5]);
+        state.ray_norm = make_float3(0.0f, 0.0f, 0.0f);
+        state.theta    = scratch[off + 6];
+        state.r        = scratch[off + 7];
+        state.xy_norm  = scratch[off + 8];
+        ftheta_unpack_flags(scratch[off + 9], state.behind_camera, state.angle_clamped, state.min2d_clamped);
+    }
+};
+
+template<>
+struct FThetaProjectionPolicy::ScratchIO<DistortionOpFamily::ImagePointsToWorldRaysStaticPose>
+    : FThetaBackprojectScratchIO
+{
+    template<typename Scratch>
+    static __device__ void save_forward(float *scratch, int64_t off, const BackprojectState &state)
+    {
+        save_state<Scratch>(scratch, off, state);
+        if constexpr(Scratch::kInverseStashOffset >= 0)
+        {
+            scratch[off + Scratch::kScratchStride - 1] = 0.0f;
+        }
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(const float *scratch, int64_t off, BackprojectState &state)
+    {
+        load_state<Scratch>(scratch, off, state);
+    }
+};
+
+template<>
+struct FThetaProjectionPolicy::ScratchIO<DistortionOpFamily::ImagePointsToWorldRaysShutterPose>
+    : FThetaBackprojectScratchIO
+{
+    template<typename Scratch>
+    static __device__ void validate()
+    {
+        FThetaBackprojectScratchIO::validate<Scratch>();
+        constexpr int kAlphaOffset = Scratch::kScratchStride - 1;
+        static_assert(kAlphaOffset >= 8);
+        static_assert(Scratch::kInverseStashOffset == -1 || kAlphaOffset >= Scratch::kInverseStashOffset + 3);
+    }
+
+    template<typename Scratch>
+    static __device__ void save_forward(float *scratch, int64_t off, const BackprojectState &state, float alpha)
+    {
+        validate<Scratch>();
+        save_state<Scratch>(scratch, off, state);
+        scratch[off + Scratch::kScratchStride - 1] = alpha;
+    }
+
+    template<typename Scratch>
+    static __device__ void load_backward(const float *scratch, int64_t off, BackprojectState &state, float &alpha)
+    {
+        validate<Scratch>();
+        load_state<Scratch>(scratch, off, state);
+        alpha = scratch[off + Scratch::kScratchStride - 1];
+    }
+};

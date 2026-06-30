@@ -64,10 +64,73 @@ __device__ __forceinline__ void apply_bivariate_distortion_bwd(
     float3 camera_ray, const BivariateWindshieldParams &p, float3 d_out, float3 &d_camera_ray, BivariateParamGrads &d_p
 );
 
+__device__ __forceinline__ uint32_t bivariate_coeff_base(int reference_polynomial, bool is_undistort);
+
+template<int BlockThreads>
+__device__ __forceinline__ void reduce_bivariate_param_grads(
+    const BivariateParamGrads &local,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    bool is_undistort,
+    float *__restrict__ grad_distortion_coeffs
+)
+{
+    static_assert(BlockThreads > 0 && BlockThreads <= 1024, "BlockThreads must be between 1 and 1024");
+    static_assert(BlockThreads % 32 == 0, "BlockThreads must be a multiple of warp size");
+    constexpr int kNumWarps = BlockThreads / 32;
+    constexpr int kSlots    = BIVARIATE_NUM_DIFF_PARAMS;
+    __shared__ float warp_sums[kNumWarps][kSlots];
+
+    float values[kSlots];
+#pragma unroll
+    for(int i = 0; i < BIVARIATE_H_POLY_TERMS; ++i)
+    {
+        values[i] = local.h_poly[i];
+    }
+#pragma unroll
+    for(int i = 0; i < BIVARIATE_V_POLY_TERMS; ++i)
+    {
+        values[BIVARIATE_H_POLY_TERMS + i] = local.v_poly[i];
+    }
+
+    unsigned int mask = 0xFFFFFFFFu;
+    int lane          = threadIdx.x & 31;
+    int warp          = threadIdx.x >> 5;
+#pragma unroll
+    for(int i = 0; i < kSlots; ++i)
+    {
+        float value = values[i];
+        for(int offset = 16; offset > 0; offset >>= 1)
+        {
+            value += __shfl_xor_sync(mask, value, offset);
+        }
+        if(lane == 0)
+        {
+            warp_sums[warp][i] = value;
+        }
+    }
+    __syncthreads();
+
+    if(warp == 0 && lane < kSlots)
+    {
+        float total = 0.0f;
+#pragma unroll
+        for(int w = 0; w < kNumWarps; ++w)
+        {
+            total += warp_sums[w][lane];
+        }
+        if(grad_distortion_coeffs != nullptr)
+        {
+            uint32_t base = bivariate_coeff_base(distortion.reference_polynomial, is_undistort);
+            atomicAdd(&grad_distortion_coeffs[base + lane], total);
+        }
+    }
+}
+
 struct NoExternalDistortionPolicy
 {
     using Tag              = NoExternalDistortionPolicyTag;
     using KernelParameters = NoExternalDistortion_KernelParameters;
+    using ParamGrads       = BivariateParamGrads;
 
     struct Params
     {
@@ -95,11 +158,16 @@ struct NoExternalDistortionPolicy
         return fallback_primal;
     }
 
-    static __device__ void apply_bwd(float3, const Params &, float3 d_out, float3 &d_in, BivariateParamGrads &)
+    static __device__ void apply_bwd(float3, const Params &, float3 d_out, float3 &d_in, ParamGrads &)
     {
         d_in.x += d_out.x;
         d_in.y += d_out.y;
         d_in.z += d_out.z;
+    }
+
+    template<int BlockThreads>
+    static __device__ void reduce_param_grads(const ParamGrads &, KernelParameters, bool, float *)
+    {
     }
 };
 
@@ -108,6 +176,7 @@ struct BivariateWindshieldPolicy
     using Tag              = BivariateWindshieldPolicyTag;
     using KernelParameters = BivariateWindshieldDistortion_KernelParameters;
     using Params           = BivariateWindshieldParams;
+    using ParamGrads       = BivariateParamGrads;
 
     static constexpr bool kHasDistortion = true;
 
@@ -138,11 +207,20 @@ struct BivariateWindshieldPolicy
         return make_float3(scratch[stash_offset + 0], scratch[stash_offset + 1], scratch[stash_offset + 2]);
     }
 
-    static __device__ void apply_bwd(
-        float3 ray, const Params &params, float3 d_out, float3 &d_in, BivariateParamGrads &d_params
-    )
+    static __device__ void apply_bwd(float3 ray, const Params &params, float3 d_out, float3 &d_in, ParamGrads &d_params)
     {
         apply_bivariate_distortion_bwd(ray, params, d_out, d_in, d_params);
+    }
+
+    template<int BlockThreads>
+    static __device__ void reduce_param_grads(
+        const ParamGrads &local,
+        KernelParameters distortion,
+        bool is_undistort,
+        float *__restrict__ grad_distortion_coeffs
+    )
+    {
+        reduce_bivariate_param_grads<BlockThreads>(local, distortion, is_undistort, grad_distortion_coeffs);
     }
 };
 
@@ -223,7 +301,7 @@ __device__ __forceinline__ float eval_poly_2d(float x, float y, const float *__r
     return y_coeff0 + y * (y_coeff1 + y * (y_coeff2 + y * (y_coeff3 + y * y_coeff4)));
 }
 
-// Keep derivative branches paired with eval_poly_2d's basis ordering.
+// Partial derivative dP/dx; branches mirror eval_poly_2d's basis ordering.
 __device__ __forceinline__ float eval_poly_2d_dfdx(float x, float y, const float *__restrict__ c, uint32_t order)
 {
     if(order == 0u)
@@ -254,7 +332,7 @@ __device__ __forceinline__ float eval_poly_2d_dfdx(float x, float y, const float
     return dc0 + y * (dc1 + y * (dc2 + y * dc3));
 }
 
-// Keep derivative branches paired with eval_poly_2d's basis ordering.
+// Partial derivative dP/dy; branches mirror eval_poly_2d's basis ordering.
 __device__ __forceinline__ float eval_poly_2d_dfdy(float x, float y, const float *__restrict__ c, uint32_t order)
 {
     if(order == 0u)
