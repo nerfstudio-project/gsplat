@@ -270,3 +270,19 @@ def test_backward_matches_dense(use_backgrounds):
 
     for gs, gd in zip(g_sparse, g_dense):
         torch.testing.assert_close(gs, gd, rtol=1e-3, atol=1e-3)
+
+
+def test_backward_accepts_reduction_gradients():
+    C, N, channels = 1, 64, 3
+    W, H = 40, 28
+    ts = 16
+    scene = _make_scene(C, N, W, H, channels, seed=17, requires_grad=True)
+    means2d, conics, colors, opacities, _radii, _depths = scene
+    pixels, image_ids = _subset_pixels(C, W, H, 0.5, seed=17)
+
+    rendered_colors, rendered_alphas = _sparse(scene, pixels, image_ids, W, H, ts)
+    (rendered_colors.sum() + rendered_alphas.sum()).backward()
+
+    for tensor in (means2d, conics, colors, opacities):
+        assert tensor.grad is not None
+        assert torch.isfinite(tensor.grad).all()
