@@ -7029,7 +7029,9 @@ def test_backward_high_opacity_no_nan(tile_size):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
-def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("I", [1, 2])
+def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized(packed: bool, I: int):
     # A masked-out tile takes the forward rasterizer's early-return branch.
     # The op allocates its outputs with at::empty, so render_colors and
     # render_alphas must still be explicitly initialized before returning.
@@ -7041,13 +7043,28 @@ def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
     channels = 3
     N = 1
 
-    means2d = torch.tensor([[[width / 2.0, height / 2.0]]], device=device)  # [1, 1, 2]
-    conics = torch.tensor([[[1.0, 0.0, 1.0]]], device=device)  # [1, 1, 3]
-    colors = torch.ones((1, N, channels), device=device)
-    opacities = torch.ones((1, N), device=device)
-    backgrounds = torch.tensor([[0.2, 0.4, 0.6]], device=device)
-    masks = torch.zeros((1, 1, 1), dtype=torch.bool, device=device)  # tile masked off
-    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    means2d = torch.full((I, N, 2), width / 2.0, device=device)
+    conics = torch.tensor([1.0, 0.0, 1.0], device=device).expand(I, N, 3).clone()
+    colors = torch.ones((I, N, channels), device=device)
+    opacities = torch.ones((I, N), device=device)
+    if packed:
+        means2d = means2d.flatten(0, 1)
+        conics = conics.flatten(0, 1)
+        colors = colors.flatten(0, 1)
+        opacities = opacities.flatten(0, 1)
+
+    backgrounds_batched = torch.tensor(
+        [[0.2, 0.4, 0.6], [0.6, 0.4, 0.2]], device=device
+    )[:I]
+    # Packed single-image callers historically passed [channels]. Preserve
+    # that safe legacy shape alongside the canonical [I, channels] form.
+    backgrounds = (
+        backgrounds_batched[0].clone()
+        if packed and I == 1
+        else backgrounds_batched.clone()
+    ).requires_grad_()
+    masks = torch.zeros((I, 1, 1), dtype=torch.bool, device=device)  # tiles masked off
+    isect_offsets = torch.zeros((I, 1, 1), dtype=torch.int32, device=device)
     flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
 
     (
@@ -7067,15 +7084,22 @@ def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
         tile_size,
         isect_offsets,
         flatten_ids,
-        False,  # packed
+        packed,
         False,  # absgrad
     )
 
     torch.testing.assert_close(
-        render_colors, backgrounds.reshape(1, 1, 1, channels).expand_as(render_colors)
+        render_colors,
+        backgrounds_batched[:, None, None, :].expand_as(render_colors),
     )
     torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
     assert means2d_absgrad.numel() == 0
+
+    render_colors.sum().backward()
+    torch.testing.assert_close(
+        backgrounds.grad,
+        torch.full_like(backgrounds, width * height),
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
