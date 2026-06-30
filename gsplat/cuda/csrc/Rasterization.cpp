@@ -761,9 +761,11 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
     CHECK_DENSE(grad.renders);
-    CHECK_INPUT(grad.renders);
     CHECK_DENSE(grad.alphas);
-    CHECK_INPUT(grad.alphas);
+    at::Tensor v_render_colors = grad.renders.contiguous();
+    at::Tensor v_render_alphas = grad.alphas.contiguous();
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
     if(backgrounds.has_value())
     {
         CHECK_INPUT(backgrounds.value());
@@ -803,8 +805,8 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
         pixel_map,
         render_alphas,
         last_ids,
-        grad.renders,
-        grad.alphas,
+        v_render_colors,
+        v_render_alphas,
         as_optional_tensor(v_means2d_abs),
         v_means2d,
         v_conics,
@@ -820,9 +822,9 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
         const at::Tensor one_minus_alpha = at::sub(
             at::ones_like(render_alphas).to(at::kFloat),
             render_alphas.to(at::kFloat)
-        );                                                                  // [P, 1]
-        const at::Tensor weighted = at::mul(grad.renders, one_minus_alpha); // [P, channels]
-        v_backgrounds             = at::zeros({n_images, colors.size(-1)}, grad.renders.options());
+        );                                                                     // [P, 1]
+        const at::Tensor weighted = at::mul(v_render_colors, one_minus_alpha); // [P, channels]
+        v_backgrounds             = at::zeros({n_images, colors.size(-1)}, v_render_colors.options());
         v_backgrounds.index_add_(0, image_ids.to(at::kLong), weighted);
     }
 
