@@ -712,6 +712,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> build_spa
     const int64_t words   = num_words_per_tile_bitmask(tile_size);
     const auto dev        = pixels.device();
     const auto i64        = at::TensorOptions().device(dev).dtype(at::kLong);
+    const auto u64        = at::TensorOptions().device(dev).dtype(at::kUInt64);
     const auto i32        = at::TensorOptions().device(dev).dtype(at::kInt);
     const auto bln        = at::TensorOptions().device(dev).dtype(at::kBool);
 
@@ -721,7 +722,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> build_spa
         return std::make_tuple(
             at::empty({0}, i32),
             at::zeros({n_images, tile_height, tile_width}, bln),
-            at::empty({0, words}, i64),
+            at::empty({0, words}, u64),
             at::zeros({1}, i64),
             at::empty({0}, i64)
         );
@@ -780,7 +781,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> build_spa
     // Per-active-tile raster-order bitmask (reads the in-tile position from the
     // low pos_bits of each sorted key).
     const int64_t AT     = active_tiles.size(0);
-    auto tile_pixel_mask = at::zeros({AT, words}, i64);
+    auto tile_pixel_mask = at::zeros({AT, words}, u64);
     launch_build_tile_bitmask_kernel(
         sorted_key, tile_pixel_cumsum, static_cast<uint32_t>(words), pos_bits, tile_pixel_mask
     );
