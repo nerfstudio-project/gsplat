@@ -57,7 +57,7 @@ def _check_layout(pixels, image_ids, n_images, ts, tw, th):
     # dtypes
     assert g_at.dtype == torch.int32
     assert g_mask.dtype == torch.bool
-    assert g_bm.dtype == torch.int64
+    assert g_bm.dtype == torch.uint64
     assert g_cs.dtype == torch.int64
     assert g_pm.dtype == torch.int64
     # shapes
@@ -140,7 +140,7 @@ def test_layout_empty():
     words = (ts * ts + 63) // 64
     assert at.shape == (0,) and at.dtype == torch.int32
     assert mask.shape == (2, th, tw) and not mask.any()
-    assert bm.shape == (0, words)
+    assert bm.shape == (0, words) and bm.dtype == torch.uint64
     assert cs.shape == (1,) and cs[0].item() == 0  # empty case returns a [1] zero
     assert pm.shape == (0,)
 

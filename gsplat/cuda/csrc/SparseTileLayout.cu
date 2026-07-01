@@ -169,7 +169,7 @@ void launch_build_tile_bitmask_kernel(
     const uint32_t words_per_tile,
     const int64_t pos_bits,
     // output
-    at::Tensor out_bitmask // [num_active_tiles, words_per_tile] int64 (zeroed)
+    at::Tensor out_bitmask // [num_active_tiles, words_per_tile] uint64 (zeroed)
 )
 {
     const uint32_t num_active_tiles = tile_pixel_cumsum.size(0);
@@ -186,7 +186,7 @@ void launch_build_tile_bitmask_kernel(
         static_cast<int32_t>(pos_bits),
         sorted_keys.const_data_ptr<int64_t>(),
         tile_pixel_cumsum.const_data_ptr<int64_t>(),
-        reinterpret_cast<uint64_t *>(out_bitmask.data_ptr<int64_t>())
+        out_bitmask.data_ptr<uint64_t>()
     );
 }
 } // namespace gsplat

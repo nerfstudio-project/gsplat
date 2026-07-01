@@ -111,7 +111,7 @@ std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
 // per-element batch index). Returns:
 //   active_tiles      [AT] int32, ascending dense tile ids with >=1 active pixel
 //   active_tile_mask  [n_images, tile_height, tile_width] bool
-//   tile_pixel_mask   [AT, words_per_tile] int64 raster-order bitmask of active
+//   tile_pixel_mask   [AT, words_per_tile] uint64 raster-order bitmask of active
 //                     pixels per active tile (words_per_tile = ceil(T*T/64))
 //   tile_pixel_cumsum [AT] int64, inclusive per-active-tile active-pixel count
 //   pixel_map         [P] int64, argsort to (tile_id, in-tile) sorted order
