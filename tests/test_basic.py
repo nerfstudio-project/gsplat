@@ -4129,6 +4129,32 @@ def test_eval3d_masked_tile_writes_safe_defaults(tile_size, renderer_config):
     isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
     flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
 
+    public_render_colors, public_render_alphas = gsplat.rasterize_to_pixels_eval3d(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+        masks=masks,
+        renderer_config=renderer_config,
+    )
+
+    expected_background = backgrounds.reshape(1, 1, 1, channels).expand_as(
+        public_render_colors
+    )
+    torch.testing.assert_close(public_render_colors, expected_background)
+    torch.testing.assert_close(
+        public_render_alphas, torch.zeros_like(public_render_alphas)
+    )
+
     (
         render_colors,
         render_alphas,
@@ -4155,9 +4181,7 @@ def test_eval3d_masked_tile_writes_safe_defaults(tile_size, renderer_config):
         renderer_config=renderer_config,
     )
 
-    expected_background = backgrounds.reshape(1, 1, 1, channels).expand_as(
-        render_colors
-    )
+    expected_background = expected_background.expand_as(render_colors)
     torch.testing.assert_close(render_colors, expected_background)
     torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
     torch.testing.assert_close(render_normals, torch.zeros_like(render_normals))
