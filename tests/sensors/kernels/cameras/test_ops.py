@@ -263,9 +263,7 @@ def make_ideal_ftheta_components(
     }
 
 
-def _opencv_project_reference(camera_rays, projection):
-    """Compute the expected OpenCV rational+tangential+thin-prism projection in pure PyTorch."""
-    xy = camera_rays[:, :2] / camera_rays[:, 2:3]
+def _opencv_distortion_terms(xy, projection):
     x = xy[:, 0]
     y = xy[:, 1]
     r2 = x * x + y * y
@@ -274,14 +272,74 @@ def _opencv_project_reference(camera_rays, projection):
     k = projection.radial_coeffs
     p = projection.tangential_coeffs
     s = projection.thin_prism_coeffs
-    radial = (1 + k[0] * r2 + k[1] * r4 + k[2] * r6) / (
-        1 + k[3] * r2 + k[4] * r4 + k[5] * r6
-    )
+    numerator = 1 + k[0] * r2 + k[1] * r4 + k[2] * r6
+    denominator = 1 + k[3] * r2 + k[4] * r4 + k[5] * r6
+    radial = numerator / denominator
     xy_prod = x * y
     delta_x = 2 * p[0] * xy_prod + p[1] * (r2 + 2 * x * x) + s[0] * r2 + s[1] * r4
     delta_y = p[0] * (r2 + 2 * y * y) + 2 * p[1] * xy_prod + s[2] * r2 + s[3] * r4
-    distorted = torch.stack((x * radial + delta_x, y * radial + delta_y), dim=-1)
+    return radial, torch.stack((delta_x, delta_y), dim=-1), r2, denominator
+
+
+def _opencv_project_reference(camera_rays, projection):
+    """Compute the expected OpenCV rational+tangential+thin-prism projection in pure PyTorch."""
+    xy = camera_rays[:, :2] / camera_rays[:, 2:3]
+    radial, delta, _, _ = _opencv_distortion_terms(xy, projection)
+    distorted = xy * radial[:, None] + delta
     return distorted * projection.focal_length + projection.principal_point
+
+
+def _opencv_undistort_reference(image_points, projection, *, fixed_ten):
+    distorted_xy = (image_points - projection.principal_point) / projection.focal_length
+    xy = distorted_xy.clone()
+    active = torch.ones(xy.shape[0], device=xy.device, dtype=torch.bool)
+    for _ in range(10):
+        radial, delta, _, _ = _opencv_distortion_terms(xy, projection)
+        next_xy = (distorted_xy - delta) / radial[:, None]
+        if fixed_ten:
+            xy = next_xy
+            continue
+        max_delta = (next_xy - xy).abs().amax(dim=-1)
+        xy = torch.where(active[:, None], next_xy, xy)
+        active = active & (max_delta >= 1.0e-8)
+    radial, _, r2, denominator = _opencv_distortion_terms(xy, projection)
+    return xy, torch.stack((r2, radial, denominator), dim=-1)
+
+
+def _eval_bivariate_reference(x, y, coefficients, degree):
+    result = torch.zeros_like(x)
+    index = 0
+    for y_power in range(degree + 1):
+        for x_power in range(degree - y_power + 1):
+            result = result + coefficients[index] * x.pow(x_power) * y.pow(y_power)
+            index += 1
+    return result
+
+
+def _apply_bivariate_reference(rays, distortion, *, is_undistort):
+    reference = int(distortion.reference_polynomial)
+    base = 21 if is_undistort == (reference == int(ReferencePolynomial.FORWARD)) else 0
+    coefficients = distortion.distortion_coeffs
+    normalized = torch.nn.functional.normalize(rays, dim=-1)
+    phi = torch.asin(normalized[:, 0])
+    theta = torch.asin(normalized[:, 1])
+    adjusted_phi = _eval_bivariate_reference(
+        phi,
+        theta,
+        coefficients[base : base + 6],
+        int(distortion.h_poly_degree),
+    )
+    adjusted_theta = _eval_bivariate_reference(
+        phi,
+        theta,
+        coefficients[base + 6 : base + 21],
+        int(distortion.v_poly_degree),
+    )
+    x = torch.sin(adjusted_phi)
+    y = torch.sin(adjusted_theta)
+    z = torch.sqrt((1.0 - x * x - y * y).clamp(0.0, 1.0))
+    z = torch.where(normalized[:, 2] >= 0.0, z, -z)
+    return torch.stack((x, y, z), dim=-1)
 
 
 def test_construction_with_zero_distortion_succeeds(ideal_projection, no_external):
@@ -4419,6 +4477,24 @@ def _ftheta_projection_with_reference(base_projection, reference_polynomial):
     )
 
 
+def _pinhole_projection_from_grad_tensors(
+    base_projection,
+    focal_length,
+    principal_point,
+    radial_coeffs,
+    tangential_coeffs,
+    thin_prism_coeffs,
+):
+    return OpenCVPinholeProjection(
+        focal_length=focal_length,
+        principal_point=principal_point,
+        radial_coeffs=radial_coeffs,
+        tangential_coeffs=tangential_coeffs,
+        thin_prism_coeffs=thin_prism_coeffs,
+        resolution=base_projection.resolution,
+    )
+
+
 def _operation_primary_input(
     operation: str,
     projection,
@@ -4779,6 +4855,133 @@ def test_ftheta_bivariate_joint_gradcheck_reference_cross_product(
     )
 
 
+def _pinhole_joint_gradcheck(
+    operation,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+    external_reference,
+    *,
+    rolling_d4=False,
+):
+    primary_input = _operation_primary_input(
+        operation, distorted_projection, count=1, dtype=torch.float64
+    )
+    pose_inputs = _operation_pose_inputs(
+        operation, distorted_projection.principal_point.device, dtype=torch.float64
+    )
+    intrinsic_inputs = tuple(
+        value.detach().clone().to(dtype=torch.float64).requires_grad_(True)
+        for value in (
+            distorted_projection.focal_length,
+            distorted_projection.principal_point,
+            distorted_projection.radial_coeffs,
+            distorted_projection.tangential_coeffs,
+            distorted_projection.thin_prism_coeffs,
+        )
+    )
+    distortion_inputs = ()
+    if external_reference is not None:
+        distortion_inputs = (
+            _nonidentity_distortion_coeffs(
+                windshield_distortion, dtype=torch.float64, requires_grad=True
+            ),
+        )
+
+    def fn(*inputs):
+        primary = inputs[0]
+        pose_end = 1 + len(pose_inputs)
+        poses = tuple(
+            torch.nn.functional.normalize(value, dim=0)
+            if value.shape == (4,)
+            else value
+            for value in inputs[1:pose_end]
+        )
+        intrinsic_end = pose_end + len(intrinsic_inputs)
+        projection = _pinhole_projection_from_grad_tensors(
+            distorted_projection, *inputs[pose_end:intrinsic_end]
+        )
+        distortion = no_external
+        if external_reference is not None:
+            distortion = _build_distortion(
+                windshield_distortion,
+                external_reference,
+                inputs[intrinsic_end],
+            )
+        if rolling_d4:
+            start_t, start_r, end_t, end_r = poses
+            pose = DynamicPose(
+                Pose(translation=start_t, rotation=start_r),
+                Pose(translation=end_t, rotation=end_r),
+            )
+            return project_world_points_shutter_pose(
+                primary,
+                projection,
+                distortion,
+                (100, 80),
+                ShutterType.ROLLING_TOP_TO_BOTTOM,
+                pose,
+                start_timestamp_us=0,
+                end_timestamp_us=10,
+                max_iterations=2,
+                stop_mean_error_px=0.0,
+                stop_delta_mean_error_px=0.0,
+                initial_relative_time=0.37,
+                allow_device_transfer=True,
+            )[0]
+        return _operation_output(operation, primary, projection, distortion, poses)
+
+    kwargs = (
+        GRADCHECK_KWARGS_DYNAMIC
+        if operation in _DYNAMIC_POSE_OPERATIONS
+        else GRADCHECK_KWARGS
+    )
+    return torch.autograd.gradcheck(
+        fn,
+        (primary_input, *pose_inputs, *intrinsic_inputs, *distortion_inputs),
+        **kwargs,
+    )
+
+
+@pytest.mark.gradcheck
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize(
+    "external_reference",
+    [None, ReferencePolynomial.FORWARD, ReferencePolynomial.BACKWARD],
+    ids=["no-external", "bivariate-forward", "bivariate-backward"],
+)
+def test_pinhole_joint_intrinsics_gradcheck_all_public_operations(
+    operation,
+    external_reference,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    """Jointly check pinhole primary, pose, intrinsic, and distortion VJPs."""
+    assert _pinhole_joint_gradcheck(
+        operation,
+        distorted_projection,
+        no_external,
+        windshield_distortion,
+        external_reference,
+    )
+
+
+@pytest.mark.gradcheck
+def test_pinhole_rolling_d4_joint_intrinsics_gradcheck(
+    distorted_projection, no_external, windshield_distortion
+):
+    """Check the full pinhole VJP through two rolling-shutter iterations."""
+    assert _pinhole_joint_gradcheck(
+        "project_world_points_shutter_pose",
+        distorted_projection,
+        no_external,
+        windshield_distortion,
+        ReferencePolynomial.FORWARD,
+        rolling_d4=True,
+    )
+
+
 def _active_distortion_slice(
     operation: str, reference_polynomial: ReferencePolynomial
 ) -> slice:
@@ -4848,6 +5051,34 @@ def _partial_block_projection(sensor: str, base_projection):
         )
         return projection, (principal_point, fw_poly, bw_poly, A)
 
+    if sensor == "pinhole":
+        focal_length, principal_point, radial, tangential, thin_prism = (
+            tensor.detach().clone().requires_grad_(True)
+            for tensor in (
+                base_projection.focal_length,
+                base_projection.principal_point,
+                base_projection.radial_coeffs,
+                base_projection.tangential_coeffs,
+                base_projection.thin_prism_coeffs,
+            )
+        )
+        projection = _pinhole_projection_from_grad_tensors(
+            base_projection,
+            focal_length,
+            principal_point,
+            radial,
+            tangential,
+            thin_prism,
+        )
+        return projection, (
+            focal_length,
+            principal_point,
+            radial,
+            tangential,
+            thin_prism,
+        )
+
+    assert sensor == "fisheye"
     principal_point, focal_length, forward_poly = (
         tensor.detach().clone().requires_grad_(True)
         for tensor in (
@@ -4936,10 +5167,21 @@ def _assert_partial_block_grad_matches(
     assert torch.allclose(actual.grad, expected.grad, atol=3e-4, rtol=2e-3), label
 
 
-@pytest.mark.parametrize("sensor", ["fisheye", "ftheta"])
+@pytest.mark.parametrize(
+    ("sensor", "count"),
+    [
+        ("fisheye", 255),
+        ("fisheye", 257),
+        ("ftheta", 255),
+        ("ftheta", 257),
+        ("pinhole", 1),
+        ("pinhole", 255),
+        ("pinhole", 256),
+        ("pinhole", 257),
+    ],
+)
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 @pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
-@pytest.mark.parametrize("count", [255, 257])
 def test_backward_partial_blocks_cover_every_specialization(
     sensor,
     distortion_policy,
@@ -4947,13 +5189,16 @@ def test_backward_partial_blocks_cover_every_specialization(
     count,
     fisheye_projection,
     ftheta_projection_forward_ref,
+    distorted_projection,
     no_external,
     windshield_distortion,
 ):
     """The last lane/block must contribute every applicable backward output."""
-    base_projection = (
-        fisheye_projection if sensor == "fisheye" else ftheta_projection_forward_ref
-    )
+    base_projection = {
+        "fisheye": fisheye_projection,
+        "ftheta": ftheta_projection_forward_ref,
+        "pinhole": distorted_projection,
+    }[sensor]
     batched = _partial_block_state(
         sensor=sensor,
         distortion_policy=distortion_policy,
@@ -5006,7 +5251,7 @@ def test_backward_partial_blocks_cover_every_specialization(
         _assert_partial_block_grad_matches(
             actual, expected, label=f"intrinsic[{index}]"
         )
-        if sensor == "fisheye" or index != 2:
+        if sensor != "ftheta" or index != 2:
             assert expected.grad.abs().sum() > 0, f"intrinsic[{index}]"
 
     for index, (actual, expected) in enumerate(
@@ -5028,6 +5273,39 @@ def test_backward_partial_blocks_cover_every_specialization(
         assert torch.count_nonzero(batched_coeffs.grad[inactive]).item() == 0
 
 
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_empty_batch_forward_and_backward(
+    operation,
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    distortion = _projection_policy_distortion(
+        distortion_policy, no_external, windshield_distortion
+    )
+    primary_input = _operation_primary_input(
+        operation, distorted_projection, count=0, dtype=torch.float32
+    )
+    pose_inputs = _operation_pose_inputs(
+        operation,
+        distorted_projection.principal_point.device,
+        dtype=torch.float32,
+    )
+    output = _operation_output(
+        operation,
+        primary_input,
+        distorted_projection,
+        distortion,
+        pose_inputs,
+    )
+    assert output.shape[0] == 0
+    output.sum().backward()
+    assert primary_input.grad is not None
+    assert primary_input.grad.shape == primary_input.shape
+
+
 # ===========================================================================
 # ProjectionPolicy scratch and metamorphic regression gates.
 # ===========================================================================
@@ -5042,13 +5320,25 @@ _PROJECTION_POLICY_SCRATCH_STRIDES = {
         "no_external": (8, 8, 14, 16, 8, 12),
         "bivariate": (8, 12, 14, 16, 12, 16),
     },
+    "pinhole": {
+        "no_external": (6, 5, 9, 10, 5, 9),
+        "bivariate": (10, 9, 9, 10, 9, 12),
+    },
 }
 
 
 def _projection_policy_projection(
-    sensor: str, fisheye_projection, ftheta_projection_forward_ref
+    sensor: str,
+    fisheye_projection,
+    ftheta_projection_forward_ref,
+    distorted_projection,
 ):
-    return fisheye_projection if sensor == "fisheye" else ftheta_projection_forward_ref
+    if sensor == "fisheye":
+        return fisheye_projection
+    if sensor == "ftheta":
+        return ftheta_projection_forward_ref
+    assert sensor == "pinhole"
+    return distorted_projection
 
 
 def _projection_policy_distortion(
@@ -5067,6 +5357,36 @@ def _projection_policy_primary_input(operation: str, projection) -> Tensor:
     return projection.principal_point.detach().reshape(1, 2) + offsets
 
 
+def _pinhole_project_scratch_state(camera_rays, projection):
+    inverse_z = camera_rays[:, 2].reciprocal()
+    xy = camera_rays[:, :2] * inverse_z[:, None]
+    radial, _, r2, denominator = _opencv_distortion_terms(xy, projection)
+    return torch.cat(
+        (
+            xy,
+            inverse_z[:, None],
+            r2[:, None],
+            radial[:, None],
+            denominator[:, None],
+        ),
+        dim=-1,
+    )
+
+
+def _pinhole_scratch_distortion(device):
+    coefficients = torch.zeros(42, device=device)
+    coefficients[0] = 0.1
+    coefficients[6] = -0.1
+    coefficients[21] = 1.0
+    coefficients[27] = 1.0
+    return BivariateWindshieldDistortion(
+        coefficients,
+        int(ReferencePolynomial.FORWARD),
+        0,
+        0,
+    )
+
+
 def _projection_policy_raw_forward(
     operation: str,
     sensor: str,
@@ -5077,8 +5397,16 @@ def _projection_policy_raw_forward(
     *,
     shutter_type: ShutterType = ShutterType.GLOBAL,
     pose_inputs: tuple[Tensor, ...] | None = None,
+    max_iterations: int = 10,
+    stop_mean_error_px: float = 0.01,
+    stop_delta_mean_error_px: float = 0.01,
+    initial_relative_time: float = 0.5,
 ):
-    projection_name = "opencv_fisheye" if sensor == "fisheye" else "ftheta"
+    projection_name = {
+        "fisheye": "opencv_fisheye",
+        "ftheta": "ftheta",
+        "pinhole": "opencv_pinhole",
+    }[sensor]
     distortion_name = (
         "bivariate_windshield" if distortion_policy == "bivariate" else "no_external"
     )
@@ -5127,10 +5455,10 @@ def _projection_policy_raw_forward(
             int(shutter_type),
             1_000,
             2_000,
-            10,
-            0.01,
-            0.01,
-            0.5,
+            max_iterations,
+            stop_mean_error_px,
+            stop_delta_mean_error_px,
+            initial_relative_time,
         )
     if operation == "image_points_to_world_rays_static_pose":
         translations = start_t.unsqueeze(0) if start_t.ndim == 1 else start_t
@@ -5160,7 +5488,322 @@ def _projection_policy_raw_forward(
     )
 
 
-@pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
+_PINHOLE_BACKWARD_OUTPUT_SHAPES = {
+    "camera_rays_to_image_points": ((2, 3), (2,), (2,), (6,), (2,), (4,)),
+    "image_points_to_camera_rays": ((2, 2), (2,), (2,), (6,), (2,), (4,)),
+    "project_world_points_mean_pose": (
+        (2, 3),
+        (3,),
+        (3,),
+        (4,),
+        (4,),
+        (2,),
+        (2,),
+        (6,),
+        (2,),
+        (4,),
+    ),
+    "project_world_points_shutter_pose": (
+        (2, 3),
+        (3,),
+        (3,),
+        (4,),
+        (4,),
+        (2,),
+        (2,),
+        (6,),
+        (2,),
+        (4,),
+    ),
+    "image_points_to_world_rays_static_pose": (
+        (2, 2),
+        (1, 3),
+        (1, 4),
+        (2,),
+        (2,),
+        (6,),
+        (2,),
+        (4,),
+    ),
+    "image_points_to_world_rays_shutter_pose": (
+        (2, 2),
+        (3,),
+        (3,),
+        (4,),
+        (4,),
+        (2,),
+        (2,),
+        (6,),
+        (2,),
+        (4,),
+    ),
+}
+
+
+def _pinhole_direct_backward_case(
+    operation,
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    distortion = _projection_policy_distortion(
+        distortion_policy, no_external, windshield_distortion
+    )
+    primary_input = _projection_policy_primary_input(
+        operation, distorted_projection
+    ).requires_grad_(True)
+    device = primary_input.device
+    pose_inputs = (
+        torch.zeros(3, device=device),
+        torch.tensor([1.0, 0.0, 0.0, 0.0], device=device),
+        torch.tensor([0.1, -0.05, 0.02], device=device),
+        torch.tensor([1.0, 0.0, 0.0, 0.0], device=device),
+    )
+    start_t, start_r, _, end_r = pose_inputs
+    forward = _projection_policy_raw_forward(
+        operation,
+        "pinhole",
+        distortion_policy,
+        distorted_projection,
+        distortion,
+        primary_input,
+        pose_inputs=pose_inputs,
+    )
+    upstream = torch.linspace(
+        0.25,
+        1.0,
+        forward[0].numel(),
+        device=device,
+        dtype=forward[0].dtype,
+    ).reshape_as(forward[0])
+    scratch = forward[-1]
+    if operation in {
+        "camera_rays_to_image_points",
+        "image_points_to_camera_rays",
+    }:
+        backward_args = (
+            distorted_projection,
+            distortion,
+            primary_input,
+            upstream,
+            scratch,
+        )
+    elif operation == "project_world_points_mean_pose":
+        backward_args = (
+            distorted_projection,
+            distortion,
+            primary_input,
+            start_r,
+            end_r,
+            upstream,
+            scratch,
+        )
+    elif operation == "project_world_points_shutter_pose":
+        backward_args = (
+            distorted_projection,
+            distortion,
+            primary_input,
+            start_r,
+            end_r,
+            int(ShutterType.GLOBAL),
+            10,
+            0.5,
+            forward[1],
+            upstream,
+            scratch,
+        )
+    elif operation == "image_points_to_world_rays_static_pose":
+        backward_args = (
+            distorted_projection,
+            distortion,
+            primary_input,
+            start_t.unsqueeze(0),
+            start_r.unsqueeze(0),
+            upstream,
+            scratch,
+        )
+    else:
+        assert operation == "image_points_to_world_rays_shutter_pose"
+        backward_args = (
+            distorted_projection,
+            distortion,
+            primary_input,
+            start_r,
+            end_r,
+            int(ShutterType.GLOBAL),
+            upstream,
+            scratch,
+        )
+    distortion_name = (
+        "bivariate_windshield" if distortion_policy == "bivariate" else "no_external"
+    )
+    backward_op = getattr(
+        torch.ops.gsplat_sensors,
+        f"{operation}_opencv_pinhole_{distortion_name}_backward",
+    ).default
+    output_shapes = _PINHOLE_BACKWARD_OUTPUT_SHAPES[operation]
+    if distortion_policy == "bivariate":
+        output_shapes += ((42,),)
+    return backward_op, backward_args, output_shapes
+
+
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_direct_backward_requested_gradient_matrix(
+    operation,
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    backward_op, backward_args, output_shapes = _pinhole_direct_backward_case(
+        operation,
+        distortion_policy,
+        distorted_projection,
+        no_external,
+        windshield_distortion,
+    )
+    output_count = len(output_shapes)
+    all_enabled = (True,) * output_count
+    expected = backward_op(*backward_args, *all_enabled)
+    assert len(expected) == output_count
+    expected_device = backward_args[2].device
+    for output, output_shape in zip(expected, output_shapes, strict=True):
+        assert output.shape == output_shape
+        assert output.dtype == torch.float32
+        assert output.device == expected_device
+        assert torch.isfinite(output).all()
+
+    request_vectors = [(False,) * output_count]
+    request_vectors.extend(
+        tuple(index == enabled for index in range(output_count))
+        for enabled in range(output_count)
+    )
+    request_vectors.extend(
+        tuple(index != disabled for index in range(output_count))
+        for disabled in range(output_count)
+    )
+    for requested in request_vectors:
+        actual = backward_op(*backward_args, *requested)
+        assert len(actual) == output_count
+        for index, (enabled, actual_output, expected_output) in enumerate(
+            zip(requested, actual, expected, strict=True)
+        ):
+            if enabled:
+                assert actual_output.shape == output_shapes[index]
+                atol, rtol = (2e-5, 2e-5) if index == 0 else (3e-4, 2e-3)
+                torch.testing.assert_close(
+                    actual_output,
+                    expected_output,
+                    atol=atol,
+                    rtol=rtol,
+                )
+            else:
+                assert actual_output.shape == (0,)
+
+
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_direct_backward_scratch_storage_contract(
+    operation,
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    backward_op, backward_args, output_shapes = _pinhole_direct_backward_case(
+        operation,
+        distortion_policy,
+        distorted_projection,
+        no_external,
+        windshield_distortion,
+    )
+    requested = (True,) * len(output_shapes)
+    expected = backward_op(*backward_args, *requested)
+    scratch = backward_args[-1]
+    accepted = (
+        scratch.flatten(),
+        scratch.reshape(-1, 1),
+        torch.cat((scratch.flatten(), scratch.new_full((7,), 17.0))),
+    )
+    for candidate in accepted:
+        assert candidate.is_contiguous()
+        actual = backward_op(*backward_args[:-1], candidate, *requested)
+        for index, (actual_output, expected_output) in enumerate(
+            zip(actual, expected, strict=True)
+        ):
+            assert actual_output.shape == output_shapes[index]
+            atol, rtol = (2e-5, 2e-5) if index == 0 else (3e-4, 2e-3)
+            torch.testing.assert_close(
+                actual_output,
+                expected_output,
+                atol=atol,
+                rtol=rtol,
+            )
+
+    noncontiguous = scratch.transpose(0, 1)
+    assert not noncontiguous.is_contiguous()
+    rejected = (
+        (scratch.flatten()[:-1].contiguous(), "scratch too small"),
+        (scratch.cpu(), "scratch must be a CUDA tensor"),
+        (scratch.double(), "scratch must be float32"),
+        (noncontiguous, "scratch must be contiguous"),
+    )
+    for candidate, message in rejected:
+        with pytest.raises(RuntimeError, match=message):
+            backward_op(*backward_args[:-1], candidate, *requested)
+
+
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_projection_or_distortion_grad_allocates_scratch(
+    operation,
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    projection_with_grad, _ = _partial_block_projection("pinhole", distorted_projection)
+    primary_input = _projection_policy_primary_input(operation, distorted_projection)
+    distortion = _projection_policy_distortion(
+        distortion_policy, no_external, windshield_distortion
+    )
+    *_, projection_scratch = _projection_policy_raw_forward(
+        operation,
+        "pinhole",
+        distortion_policy,
+        projection_with_grad,
+        distortion,
+        primary_input,
+    )
+    stride_index = _DISTORTION_POLICY_OPERATIONS.index(operation)
+    expected_stride = _PROJECTION_POLICY_SCRATCH_STRIDES["pinhole"][distortion_policy][
+        stride_index
+    ]
+    assert projection_scratch.shape == (primary_input.shape[0], expected_stride)
+
+    if distortion_policy == "bivariate":
+        coeffs = windshield_distortion.distortion_coeffs.detach().clone()
+        coeffs.requires_grad_(True)
+        distortion_with_grad = _build_distortion(
+            windshield_distortion, ReferencePolynomial.FORWARD, coeffs
+        )
+        *_, distortion_scratch = _projection_policy_raw_forward(
+            operation,
+            "pinhole",
+            distortion_policy,
+            distorted_projection,
+            distortion_with_grad,
+            primary_input,
+        )
+        assert distortion_scratch.shape == (
+            primary_input.shape[0],
+            expected_stride,
+        )
+
+
+@pytest.mark.parametrize("sensor", ["ftheta", "fisheye", "pinhole"])
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 @pytest.mark.parametrize(
     ("operation", "stride_index"),
@@ -5176,12 +5819,16 @@ def test_projection_policy_scratch_stride_and_grad_gating_matrix(
     stride_index,
     fisheye_projection,
     ftheta_projection_forward_ref,
+    distorted_projection,
     no_external,
     windshield_distortion,
 ):
     """Every projection/distortion/operation pair preserves its scratch ABI."""
     projection = _projection_policy_projection(
-        sensor, fisheye_projection, ftheta_projection_forward_ref
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
     )
     distortion = _projection_policy_distortion(
         distortion_policy, no_external, windshield_distortion
@@ -5214,11 +5861,18 @@ def test_projection_policy_scratch_stride_and_grad_gating_matrix(
 
 @pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
 def test_projection_policy_d2_bivariate_inverse_stash(
-    sensor, fisheye_projection, ftheta_projection_forward_ref, windshield_distortion
+    sensor,
+    fisheye_projection,
+    ftheta_projection_forward_ref,
+    distorted_projection,
+    windshield_distortion,
 ):
     """D2 stores the bivariate inverse primal in exactly slots [8, 11)."""
     projection = _projection_policy_projection(
-        sensor, fisheye_projection, ftheta_projection_forward_ref
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
     )
     distortion_coeffs = torch.zeros_like(windshield_distortion.distortion_coeffs)
     distortion_coeffs[21] = 1.0
@@ -5253,19 +5907,330 @@ def test_projection_policy_d2_bivariate_inverse_stash(
     assert not torch.allclose(scratch[:, 8:11], camera_rays)
 
 
-@pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
+@pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_projection_policy_scratch_contents(
+    operation,
+    distortion_policy,
+    distorted_projection,
+    no_external,
+):
+    device = distorted_projection.principal_point.device
+    distortion = (
+        _pinhole_scratch_distortion(device)
+        if distortion_policy == "bivariate"
+        else no_external
+    )
+    primary_input = _projection_policy_primary_input(
+        operation, distorted_projection
+    ).requires_grad_(True)
+    zero_translation = torch.zeros(3, device=device)
+    identity_rotation = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
+    pose_inputs = (
+        zero_translation,
+        identity_rotation,
+        zero_translation.clone(),
+        identity_rotation.clone(),
+    )
+    result = _projection_policy_raw_forward(
+        operation,
+        "pinhole",
+        distortion_policy,
+        distorted_projection,
+        distortion,
+        primary_input,
+        pose_inputs=pose_inputs,
+    )
+    scratch = result[-1]
+
+    if operation in _PROJECT_LIKE_OPERATIONS:
+        projection_input = primary_input
+        if operation == "project_world_points_shutter_pose":
+            projection_input = torch.nn.functional.normalize(projection_input, dim=-1)
+        if distortion_policy == "bivariate":
+            projection_input = _apply_bivariate_reference(
+                projection_input, distortion, is_undistort=False
+            )
+        project_state = _pinhole_project_scratch_state(
+            projection_input, distorted_projection
+        )
+        if operation == "camera_rays_to_image_points":
+            expected = project_state
+            if distortion_policy == "bivariate":
+                expected = torch.cat(
+                    (
+                        projection_input,
+                        project_state,
+                        torch.ones(
+                            primary_input.shape[0],
+                            1,
+                            device=device,
+                        ),
+                    ),
+                    dim=-1,
+                )
+        else:
+            expected = torch.cat(
+                (primary_input, primary_input, project_state[:, 3:]),
+                dim=-1,
+            )
+            if operation == "project_world_points_shutter_pose":
+                expected = torch.cat(
+                    (
+                        expected,
+                        torch.full(
+                            (primary_input.shape[0], 1),
+                            0.5,
+                            device=device,
+                        ),
+                    ),
+                    dim=-1,
+                )
+    else:
+        xy, distortion_state = _opencv_undistort_reference(
+            primary_input,
+            distorted_projection,
+            fixed_ten=distortion_policy == "bivariate",
+        )
+        expected = torch.cat((xy, distortion_state), dim=-1)
+        if distortion_policy == "bivariate":
+            projected_ray = torch.nn.functional.normalize(
+                torch.cat((xy, torch.ones_like(xy[:, :1])), dim=-1),
+                dim=-1,
+            )
+            inverse_stash = _apply_bivariate_reference(
+                projected_ray, distortion, is_undistort=True
+            )
+            expected = torch.cat((expected, inverse_stash), dim=-1)
+            output_direction = (
+                result[0]
+                if operation == "image_points_to_camera_rays"
+                else result[0][:, 3:]
+            )
+            assert not torch.allclose(
+                inverse_stash, output_direction, atol=1.0e-4, rtol=1.0e-4
+            )
+        if operation in {
+            "image_points_to_camera_rays",
+            "image_points_to_world_rays_static_pose",
+        }:
+            expected = (
+                torch.cat((expected, torch.zeros_like(expected[:, :1])), dim=-1)
+                if distortion_policy == "bivariate"
+                else expected
+            )
+        else:
+            assert operation == "image_points_to_world_rays_shutter_pose"
+            placeholders = torch.tensor([0.0, 1.0, 0.0], device=device).expand(
+                primary_input.shape[0], -1
+            )
+            expected = torch.cat(
+                (
+                    expected,
+                    torch.zeros_like(expected[:, :1]),
+                    placeholders,
+                ),
+                dim=-1,
+            )
+
+    torch.testing.assert_close(scratch, expected, atol=2e-6, rtol=2e-6)
+
+
+def test_pinhole_inverse_solver_schedules_are_distinct(
+    sensor_device,
+    no_external,
+    windshield_distortion,
+):
+    projection = OpenCVPinholeProjection(
+        focal_length=torch.ones(2, device=sensor_device),
+        principal_point=torch.zeros(2, device=sensor_device),
+        radial_coeffs=torch.zeros(6, device=sensor_device),
+        tangential_coeffs=torch.tensor([0.0, 1.0e7], device=sensor_device),
+        thin_prism_coeffs=torch.zeros(4, device=sensor_device),
+        resolution=(2, 2),
+    )
+    image_points = torch.tensor(
+        [[1.0e-8, 0.0]], device=sensor_device, requires_grad=True
+    )
+    _, early_scratch = _projection_policy_raw_forward(
+        "image_points_to_camera_rays",
+        "pinhole",
+        "no_external",
+        projection,
+        no_external,
+        image_points,
+    )
+    _, fixed_scratch = _projection_policy_raw_forward(
+        "image_points_to_camera_rays",
+        "pinhole",
+        "bivariate",
+        projection,
+        windshield_distortion,
+        image_points,
+    )
+    early_xy, early_state = _opencv_undistort_reference(
+        image_points, projection, fixed_ten=False
+    )
+    fixed_xy, fixed_state = _opencv_undistort_reference(
+        image_points, projection, fixed_ten=True
+    )
+
+    assert (fixed_xy - early_xy).abs().amax() > 5.0e-10
+    torch.testing.assert_close(
+        early_scratch[:, :5],
+        torch.cat((early_xy, early_state), dim=-1),
+        atol=5.0e-11,
+        rtol=5.0e-4,
+    )
+    torch.testing.assert_close(
+        fixed_scratch[:, :5],
+        torch.cat((fixed_xy, fixed_state), dim=-1),
+        atol=5.0e-11,
+        rtol=5.0e-4,
+    )
+
+
+def _run_realistic_count_pinhole_case(
+    operation,
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+    *,
+    chunk_size,
+):
+    count = 1920 * 1080
+    device = distorted_projection.principal_point.device
+    index = torch.arange(count, device=device, dtype=torch.float32)
+    u = index.remainder(257.0) / 256.0
+    v = (index * 37.0).remainder(251.0) / 250.0
+    if operation == "camera_rays_to_image_points":
+        primary_input = torch.stack(
+            (
+                0.07 + 0.32 * (u - 0.5),
+                -0.04 + 0.24 * (v - 0.5),
+                1.0 + 0.1 * u,
+            ),
+            dim=-1,
+        )
+        weights = torch.tensor([0.37, -0.61], device=device)
+    else:
+        assert operation == "image_points_to_camera_rays"
+        primary_input = torch.stack((8.0 + 84.0 * u, 8.0 + 64.0 * v), dim=-1)
+        weights = torch.tensor([0.37, -0.61, 0.29], device=device)
+    primary_input.requires_grad_(True)
+    projection, intrinsic_inputs = _partial_block_projection(
+        "pinhole", distorted_projection
+    )
+    distortion = no_external
+    distortion_inputs = ()
+    if distortion_policy == "bivariate":
+        coefficients = _nonidentity_distortion_coeffs(
+            windshield_distortion,
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+        distortion = _build_distortion(
+            windshield_distortion,
+            ReferencePolynomial.FORWARD,
+            coefficients,
+        )
+        distortion_inputs = (coefficients,)
+
+    outputs = []
+    valid_flags = []
+    step = count if chunk_size is None else chunk_size
+    for start in range(0, count, step):
+        chunk = primary_input[start : start + step]
+        if operation == "camera_rays_to_image_points":
+            output, valid = camera_rays_to_image_points(
+                chunk,
+                projection,
+                distortion,
+                allow_device_transfer=True,
+            )
+            valid_flags.append(valid)
+        else:
+            output = image_points_to_camera_rays(
+                chunk,
+                projection,
+                distortion,
+                allow_device_transfer=True,
+            )
+        outputs.append(output)
+    output = torch.cat(outputs)
+    loss = (output * weights).sum()
+    gradients = torch.autograd.grad(
+        loss,
+        (primary_input, *intrinsic_inputs, *distortion_inputs),
+    )
+    valid = torch.cat(valid_flags) if valid_flags else None
+    return (
+        output.detach(),
+        None if valid is None else valid.detach(),
+        tuple(gradient.detach() for gradient in gradients),
+    )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["camera_rays_to_image_points", "image_points_to_camera_rays"],
+)
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_realistic_count_matches_chunked_execution(
+    operation,
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    full = _run_realistic_count_pinhole_case(
+        operation,
+        distortion_policy,
+        distorted_projection,
+        no_external,
+        windshield_distortion,
+        chunk_size=None,
+    )
+    chunked = _run_realistic_count_pinhole_case(
+        operation,
+        distortion_policy,
+        distorted_projection,
+        no_external,
+        windshield_distortion,
+        chunk_size=262144,
+    )
+
+    torch.testing.assert_close(full[0], chunked[0], atol=2e-6, rtol=2e-6)
+    if full[1] is not None:
+        assert torch.equal(full[1], chunked[1])
+    for index, (actual, expected) in enumerate(zip(full[2], chunked[2], strict=True)):
+        tolerance = (2e-5, 2e-5) if index == 0 else (3e-4, 2e-3)
+        torch.testing.assert_close(
+            actual,
+            expected,
+            atol=tolerance[0],
+            rtol=tolerance[1],
+        )
+
+
+@pytest.mark.parametrize("sensor", ["ftheta", "fisheye", "pinhole"])
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 def test_projection_policy_d4_validity_and_alpha_contract(
     sensor,
     distortion_policy,
     fisheye_projection,
     ftheta_projection_forward_ref,
+    distorted_projection,
     no_external,
     windshield_distortion,
 ):
     """D4 keeps projection-local validity and alpha sentinel behavior."""
     projection = _projection_policy_projection(
-        sensor, fisheye_projection, ftheta_projection_forward_ref
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
     )
     distortion = _projection_policy_distortion(
         distortion_policy, no_external, windshield_distortion
@@ -5292,7 +6257,7 @@ def test_projection_policy_d4_validity_and_alpha_contract(
     )
 
     assert valid.tolist() == [True, False]
-    alpha_slot = 14 if sensor == "fisheye" else 10
+    alpha_slot = {"fisheye": 14, "ftheta": 10, "pinhole": 9}[sensor]
     assert torch.isfinite(scratch[0, alpha_slot])
     if sensor == "fisheye":
         assert torch.isnan(scratch[1, alpha_slot])
@@ -5303,15 +6268,223 @@ def test_projection_policy_d4_validity_and_alpha_contract(
         )
 
 
+def _assert_tensor_tuples_close(actual, expected):
+    assert len(actual) == len(expected)
+    for actual_tensor, expected_tensor in zip(actual, expected, strict=True):
+        if actual_tensor.is_floating_point():
+            torch.testing.assert_close(
+                actual_tensor, expected_tensor, atol=2e-6, rtol=2e-6
+            )
+        else:
+            assert torch.equal(actual_tensor, expected_tensor)
+
+
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_d4_rolling_early_exit_matches_one_iteration(
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    distortion = _projection_policy_distortion(
+        distortion_policy, no_external, windshield_distortion
+    )
+    world_points = _projection_policy_primary_input(
+        "project_world_points_shutter_pose", distorted_projection
+    ).requires_grad_(True)
+    common = (
+        "project_world_points_shutter_pose",
+        "pinhole",
+        distortion_policy,
+        distorted_projection,
+        distortion,
+        world_points,
+    )
+    one_iteration = _projection_policy_raw_forward(
+        *common,
+        shutter_type=ShutterType.ROLLING_TOP_TO_BOTTOM,
+        max_iterations=1,
+        stop_mean_error_px=1.0e9,
+        stop_delta_mean_error_px=1.0e9,
+        initial_relative_time=0.37,
+    )
+    early_exit = _projection_policy_raw_forward(
+        *common,
+        shutter_type=ShutterType.ROLLING_TOP_TO_BOTTOM,
+        max_iterations=10,
+        stop_mean_error_px=1.0e9,
+        stop_delta_mean_error_px=1.0e9,
+        initial_relative_time=0.37,
+    )
+    _assert_tensor_tuples_close(early_exit, one_iteration)
+
+
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_d4_rolling_max_iteration_uses_updated_alpha(
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    distortion = _projection_policy_distortion(
+        distortion_policy, no_external, windshield_distortion
+    )
+    world_points = torch.tensor(
+        [[0.17, 0.097, 1.83]],
+        device=distorted_projection.principal_point.device,
+        requires_grad=True,
+    )
+    common = (
+        "project_world_points_shutter_pose",
+        "pinhole",
+        distortion_policy,
+        distorted_projection,
+        distortion,
+        world_points,
+    )
+    first = _projection_policy_raw_forward(
+        *common,
+        shutter_type=ShutterType.ROLLING_TOP_TO_BOTTOM,
+        max_iterations=1,
+        stop_mean_error_px=0.0,
+        stop_delta_mean_error_px=0.0,
+        initial_relative_time=0.23,
+    )
+    expected_second_alpha = relative_frame_times(
+        first[0], (100, 80), ShutterType.ROLLING_TOP_TO_BOTTOM
+    )
+    two_iterations = _projection_policy_raw_forward(
+        *common,
+        shutter_type=ShutterType.ROLLING_TOP_TO_BOTTOM,
+        max_iterations=2,
+        stop_mean_error_px=0.0,
+        stop_delta_mean_error_px=0.0,
+        initial_relative_time=0.23,
+    )
+    restarted = _projection_policy_raw_forward(
+        *common,
+        shutter_type=ShutterType.ROLLING_TOP_TO_BOTTOM,
+        max_iterations=1,
+        stop_mean_error_px=0.0,
+        stop_delta_mean_error_px=0.0,
+        initial_relative_time=float(expected_second_alpha.item()),
+    )
+
+    torch.testing.assert_close(
+        two_iterations[-1][:, 9],
+        expected_second_alpha,
+        atol=1e-7,
+        rtol=1e-6,
+    )
+    _assert_tensor_tuples_close(two_iterations, restarted)
+
+
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_d4_invalid_intermediate_keeps_last_successful_pixel(
+    distortion_policy,
+    ideal_projection,
+    no_external,
+    windshield_distortion,
+):
+    projection, intrinsic_inputs = _partial_block_projection(
+        "pinhole", ideal_projection
+    )
+    distortion_inputs = ()
+    distortion = no_external
+    if distortion_policy == "bivariate":
+        coeffs = windshield_distortion.distortion_coeffs.detach().clone()
+        coeffs.requires_grad_(True)
+        distortion = _build_distortion(
+            windshield_distortion, ReferencePolynomial.FORWARD, coeffs
+        )
+        distortion_inputs = (coeffs,)
+    device = projection.principal_point.device
+    world_points = torch.tensor([[0.0, -0.15, 1.0]], device=device, requires_grad=True)
+    start_t = torch.tensor([0.0, 0.0, 2.0], device=device, requires_grad=True)
+    end_t = torch.tensor([0.0, 0.0, -1.0], device=device, requires_grad=True)
+    start_r = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device, requires_grad=True)
+    end_r = start_r.detach().clone().requires_grad_(True)
+    pose_inputs = (start_t, start_r, end_t, end_r)
+    common = (
+        "project_world_points_shutter_pose",
+        "pinhole",
+        distortion_policy,
+        projection,
+        distortion,
+        world_points,
+    )
+    first = _projection_policy_raw_forward(
+        *common,
+        shutter_type=ShutterType.ROLLING_TOP_TO_BOTTOM,
+        pose_inputs=pose_inputs,
+        max_iterations=1,
+        stop_mean_error_px=0.0,
+        stop_delta_mean_error_px=0.0,
+        initial_relative_time=0.5,
+    )
+    invalid = _projection_policy_raw_forward(
+        *common,
+        shutter_type=ShutterType.ROLLING_TOP_TO_BOTTOM,
+        pose_inputs=pose_inputs,
+        max_iterations=2,
+        stop_mean_error_px=0.0,
+        stop_delta_mean_error_px=0.0,
+        initial_relative_time=0.5,
+    )
+
+    assert first[1].item()
+    assert not invalid[1].item()
+    torch.testing.assert_close(invalid[0], first[0], atol=2e-6, rtol=2e-6)
+    expected_invalid_alpha = relative_frame_times(
+        first[0], (100, 80), ShutterType.ROLLING_TOP_TO_BOTTOM
+    )
+    torch.testing.assert_close(
+        invalid[-1][:, 9], expected_invalid_alpha, atol=1e-7, rtol=1e-6
+    )
+
+    pose = DynamicPose(
+        Pose(translation=start_t, rotation=start_r),
+        Pose(translation=end_t, rotation=end_r),
+    )
+    image_points, valid, *_ = project_world_points_shutter_pose(
+        world_points,
+        projection,
+        distortion,
+        (100, 80),
+        ShutterType.ROLLING_TOP_TO_BOTTOM,
+        pose,
+        max_iterations=2,
+        stop_mean_error_px=0.0,
+        stop_delta_mean_error_px=0.0,
+        initial_relative_time=0.5,
+        return_valid_flags=True,
+        allow_device_transfer=True,
+    )
+    assert not valid.item()
+    gradient_inputs = (
+        world_points,
+        *pose_inputs,
+        *intrinsic_inputs,
+        *distortion_inputs,
+    )
+    gradients = torch.autograd.grad(image_points.sum(), gradient_inputs)
+    for gradient, value in zip(gradients, gradient_inputs, strict=True):
+        torch.testing.assert_close(
+            gradient, torch.zeros_like(value), atol=0.0, rtol=0.0
+        )
+
+
 _D6_LAYOUTS = {
-    ("ftheta", "no_external"): (8, None),
-    ("ftheta", "bivariate"): (11, slice(8, 11)),
-    ("fisheye", "no_external"): (8, None),
-    ("fisheye", "bivariate"): (8, slice(12, 15)),
+    ("ftheta", "no_external"): (8, None, None),
+    ("ftheta", "bivariate"): (11, slice(8, 11), None),
+    ("fisheye", "no_external"): (8, None, None),
+    ("fisheye", "bivariate"): (8, slice(12, 15), None),
+    ("pinhole", "no_external"): (5, None, slice(6, 9)),
+    ("pinhole", "bivariate"): (8, slice(5, 8), slice(9, 12)),
 }
 
 
-@pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
+@pytest.mark.parametrize("sensor", ["ftheta", "fisheye", "pinhole"])
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 @pytest.mark.parametrize("shutter_type", list(ShutterType))
 def test_projection_policy_d6_shutter_layout_and_outputs(
@@ -5320,12 +6493,16 @@ def test_projection_policy_d6_shutter_layout_and_outputs(
     shutter_type,
     fisheye_projection,
     ftheta_projection_forward_ref,
+    distorted_projection,
     no_external,
     windshield_distortion,
 ):
     """D6 preserves alpha, timestamp, origin, and inverse-stash layout."""
     projection = _projection_policy_projection(
-        sensor, fisheye_projection, ftheta_projection_forward_ref
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
     )
     distortion = _projection_policy_distortion(
         distortion_policy, no_external, windshield_distortion
@@ -5352,7 +6529,9 @@ def test_projection_policy_d6_shutter_layout_and_outputs(
     expected_alpha = relative_frame_times(
         image_points.detach(), (100, 80), shutter_type
     )
-    alpha_slot, stash_slice = _D6_LAYOUTS[(sensor, distortion_policy)]
+    alpha_slot, stash_slice, placeholder_slice = _D6_LAYOUTS[
+        (sensor, distortion_policy)
+    ]
 
     torch.testing.assert_close(
         scratch[:, alpha_slot], expected_alpha, atol=1e-7, rtol=1e-6
@@ -5368,6 +6547,11 @@ def test_projection_policy_d6_shutter_layout_and_outputs(
         torch.testing.assert_close(
             scratch[:, stash_slice], world_rays[:, 3:], atol=2e-6, rtol=2e-6
         )
+    if placeholder_slice is not None:
+        expected_placeholders = torch.tensor(
+            [0.0, 1.0, 0.0], device=scratch.device
+        ).expand(scratch.shape[0], -1)
+        torch.testing.assert_close(scratch[:, placeholder_slice], expected_placeholders)
 
 
 def _quat_rotate_wxyz(rotation: Tensor, vectors: Tensor, *, inverse: bool) -> Tensor:
@@ -5486,19 +6670,23 @@ def _projection_policy_d3_d1_result(
     return image_points.detach(), valid.detach(), grads
 
 
-@pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
+@pytest.mark.parametrize("sensor", ["ftheta", "fisheye", "pinhole"])
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 def test_projection_policy_d3_matches_d1_at_midpoint_pose(
     sensor,
     distortion_policy,
     fisheye_projection,
     ftheta_projection_forward_ref,
+    distorted_projection,
     no_external,
     windshield_distortion,
 ):
     """D3 is D1 composed with the differentiable midpoint world-to-camera pose."""
     base_projection = _projection_policy_projection(
-        sensor, fisheye_projection, ftheta_projection_forward_ref
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
     )
     expected_output, expected_valid, expected_grads = _projection_policy_d3_d1_result(
         use_d3=False,
@@ -5523,19 +6711,23 @@ def test_projection_policy_d3_matches_d1_at_midpoint_pose(
         torch.testing.assert_close(actual, expected, atol=2e-3, rtol=5e-3)
 
 
-@pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
+@pytest.mark.parametrize("sensor", ["ftheta", "fisheye", "pinhole"])
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 def test_projection_policy_d3_rejection_contract(
     sensor,
     distortion_policy,
     fisheye_projection,
     ftheta_projection_forward_ref,
+    distorted_projection,
     no_external,
     windshield_distortion,
 ):
     """D3 rejects projection-specific invalid points with zero input VJPs."""
     projection = _projection_policy_projection(
-        sensor, fisheye_projection, ftheta_projection_forward_ref
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
     )
     distortion = _projection_policy_distortion(
         distortion_policy, no_external, windshield_distortion
@@ -5547,9 +6739,14 @@ def test_projection_policy_d3_rejection_contract(
             device=device,
             requires_grad=True,
         )
-    else:
+    elif sensor == "fisheye":
         world_points = torch.tensor(
             [[2.0, 0.0, 1.0]], device=device, requires_grad=True
+        )
+    else:
+        assert sensor == "pinhole"
+        world_points = torch.tensor(
+            [[0.2, 0.0, -1.0]], device=device, requires_grad=True
         )
     translation = torch.zeros(3, device=device)
     rotation = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
@@ -5640,19 +6837,23 @@ def _projection_policy_d5_d2_result(
     return world_rays.detach(), grads
 
 
-@pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
+@pytest.mark.parametrize("sensor", ["ftheta", "fisheye", "pinhole"])
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 def test_projection_policy_d5_matches_d2_plus_static_pose(
     sensor,
     distortion_policy,
     fisheye_projection,
     ftheta_projection_forward_ref,
+    distorted_projection,
     no_external,
     windshield_distortion,
 ):
     """D5 is D2 composed with one static camera-to-world pose."""
     base_projection = _projection_policy_projection(
-        sensor, fisheye_projection, ftheta_projection_forward_ref
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
     )
     expected_output, expected_grads = _projection_policy_d5_d2_result(
         use_d5=False,
@@ -5676,19 +6877,23 @@ def test_projection_policy_d5_matches_d2_plus_static_pose(
         torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-4)
 
 
-@pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
+@pytest.mark.parametrize("sensor", ["ftheta", "fisheye", "pinhole"])
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 def test_projection_policy_d5_static_outputs(
     sensor,
     distortion_policy,
     fisheye_projection,
     ftheta_projection_forward_ref,
+    distorted_projection,
     no_external,
     windshield_distortion,
 ):
     """D5 returns the exact static timestamp, origin, and pose."""
     projection = _projection_policy_projection(
-        sensor, fisheye_projection, ftheta_projection_forward_ref
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
     )
     distortion = _projection_policy_distortion(
         distortion_policy, no_external, windshield_distortion
@@ -5717,3 +6922,307 @@ def test_projection_policy_d5_static_outputs(
     assert torch.equal(world_rays[:, :3], expected_translation)
     assert torch.equal(pose_t, expected_translation)
     assert torch.equal(pose_r, expected_rotation)
+
+
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+@pytest.mark.parametrize("shutter_type", list(ShutterType))
+def test_pinhole_d6_identical_pose_matches_d5_output_and_image_vjp(
+    distortion_policy,
+    shutter_type,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    distortion = _projection_policy_distortion(
+        distortion_policy, no_external, windshield_distortion
+    )
+    image_points = _projection_policy_primary_input(
+        "image_points_to_world_rays_static_pose", distorted_projection
+    )
+    d5_image_points = image_points.detach().clone().requires_grad_(True)
+    d6_image_points = image_points.detach().clone().requires_grad_(True)
+    device = image_points.device
+    translation = torch.tensor([0.3, -0.2, 0.1], device=device)
+    rotation = torch.nn.functional.normalize(
+        torch.tensor([1.0, 0.02, -0.03, 0.015], device=device), dim=0
+    )
+    static_pose = Pose(translation=translation, rotation=rotation)
+    dynamic_pose = DynamicPose(
+        Pose(translation=translation.clone(), rotation=rotation.clone()),
+        Pose(translation=translation.clone(), rotation=rotation.clone()),
+    )
+
+    d5_world_rays = image_points_to_world_rays_static_pose(
+        d5_image_points,
+        distorted_projection,
+        distortion,
+        static_pose,
+        allow_device_transfer=True,
+    )[0]
+    d6_world_rays = image_points_to_world_rays_shutter_pose(
+        d6_image_points,
+        distorted_projection,
+        distortion,
+        (100, 80),
+        shutter_type,
+        dynamic_pose,
+        allow_device_transfer=True,
+    )[0]
+    torch.testing.assert_close(d6_world_rays, d5_world_rays, atol=2e-6, rtol=2e-6)
+
+    weights = torch.tensor([0.37, -0.61, 0.29, 0.19, -0.47, 0.83], device=device)
+    d5_grad = torch.autograd.grad((d5_world_rays * weights).sum(), d5_image_points)[0]
+    d6_grad = torch.autograd.grad((d6_world_rays * weights).sum(), d6_image_points)[0]
+    torch.testing.assert_close(d6_grad, d5_grad, atol=2e-5, rtol=2e-4)
+
+
+def test_pinhole_d1_raw_and_normalized_rays_match_composed_vjp(
+    distorted_projection, no_external
+):
+    raw_rays = torch.tensor(
+        [[0.1, -0.05, 2.0], [-0.08, 0.04, 1.6]],
+        device=distorted_projection.focal_length.device,
+    )
+    weights = torch.tensor([0.37, -0.61], device=raw_rays.device)
+
+    direct_rays = raw_rays.detach().clone().requires_grad_(True)
+    direct_image_points, direct_valid = camera_rays_to_image_points(
+        direct_rays,
+        distorted_projection,
+        no_external,
+        allow_device_transfer=True,
+    )
+    direct_grad = torch.autograd.grad(
+        (direct_image_points * weights).sum(), direct_rays
+    )[0]
+
+    normalized_input = raw_rays.detach().clone().requires_grad_(True)
+    normalized_image_points, normalized_valid = camera_rays_to_image_points(
+        torch.nn.functional.normalize(normalized_input, dim=-1),
+        distorted_projection,
+        no_external,
+        allow_device_transfer=True,
+    )
+    normalized_grad = torch.autograd.grad(
+        (normalized_image_points * weights).sum(), normalized_input
+    )[0]
+
+    torch.testing.assert_close(
+        normalized_image_points,
+        direct_image_points,
+        atol=2e-6,
+        rtol=2e-6,
+    )
+    assert torch.equal(normalized_valid, direct_valid)
+    torch.testing.assert_close(normalized_grad, direct_grad, atol=2e-5, rtol=2e-5)
+
+
+def test_pinhole_near_zero_z_preserves_camera_and_pose_gates(
+    ideal_projection, no_external
+):
+    camera_rays = torch.tensor(
+        [[1.0e-5, -2.0e-5, 1.0e-4], [1.0e-5, -2.0e-5, -1.0e-4]],
+        device=ideal_projection.focal_length.device,
+        requires_grad=True,
+    )
+    d1_image_points, d1_valid = camera_rays_to_image_points(
+        camera_rays,
+        ideal_projection,
+        no_external,
+        allow_device_transfer=True,
+    )
+    d1_grad = torch.autograd.grad(d1_image_points.sum(), camera_rays)[0]
+
+    world_points = camera_rays.detach().clone().requires_grad_(True)
+    translation = torch.zeros(3, device=world_points.device)
+    rotation = torch.tensor([1.0, 0.0, 0.0, 0.0], device=world_points.device)
+    pose = DynamicPose(
+        Pose(translation=translation, rotation=rotation),
+        Pose(translation=translation.clone(), rotation=rotation.clone()),
+    )
+    d3_image_points, d3_valid, *_ = project_world_points_mean_pose(
+        world_points,
+        ideal_projection,
+        no_external,
+        pose,
+        (100, 80),
+        return_valid_flags=True,
+        allow_device_transfer=True,
+    )
+    d3_grad = torch.autograd.grad(d3_image_points.sum(), world_points)[0]
+
+    assert d1_valid.tolist() == [True, False]
+    assert torch.equal(d3_valid, d1_valid)
+    torch.testing.assert_close(d3_image_points, d1_image_points, atol=2e-6, rtol=2e-6)
+    torch.testing.assert_close(d1_grad[1], torch.zeros_like(d1_grad[1]))
+    torch.testing.assert_close(d3_grad[1], torch.zeros_like(d3_grad[1]))
+    assert torch.isfinite(d1_grad[0]).all()
+    assert torch.isfinite(d3_grad[0]).all()
+    torch.testing.assert_close(d3_grad[0], d1_grad[0], atol=2e-2, rtol=2e-5)
+
+
+@pytest.mark.parametrize(
+    ("target_denominator", "uses_regular_projection"),
+    [
+        (1.0 / 0.81, True),
+        (1.0 / 0.79, False),
+        (1.0 / 1.19, True),
+        (1.0 / 1.21, False),
+        (1.0e-4, False),
+        (-1.0e-4, False),
+    ],
+    ids=[
+        "above-lower-clamp",
+        "below-lower-clamp",
+        "below-upper-clamp",
+        "above-upper-clamp",
+        "near-positive-singularity",
+        "near-negative-singularity",
+    ],
+)
+def test_pinhole_radial_clamp_and_denominator_boundaries(
+    target_denominator,
+    uses_regular_projection,
+    ideal_projection,
+    no_external,
+):
+    device = ideal_projection.focal_length.device
+    radial_coeffs = torch.zeros(6, device=device)
+    radial_coeffs[3] = (target_denominator - 1.0) / 0.01
+    projection = OpenCVPinholeProjection(
+        focal_length=ideal_projection.focal_length,
+        principal_point=ideal_projection.principal_point,
+        radial_coeffs=radial_coeffs,
+        tangential_coeffs=ideal_projection.tangential_coeffs,
+        thin_prism_coeffs=ideal_projection.thin_prism_coeffs,
+        resolution=ideal_projection.resolution,
+    )
+    camera_rays = torch.tensor([[0.1, 0.0, 1.0]], device=device, requires_grad=True)
+
+    (
+        image_points,
+        valid,
+        scratch,
+    ) = torch.ops.gsplat_sensors.camera_rays_to_image_points_opencv_pinhole_no_external(
+        projection, no_external, camera_rays
+    )
+    radial_factor = scratch[0, 4]
+    saved_denominator = scratch[0, 5]
+
+    torch.testing.assert_close(
+        saved_denominator,
+        saved_denominator.new_tensor(target_denominator),
+        atol=2e-6,
+        rtol=2e-5,
+    )
+    assert (0.8 <= radial_factor.item() <= 1.2) == uses_regular_projection
+    if uses_regular_projection:
+        expected = torch.tensor(
+            [[50.0 + 10.0 * radial_factor.item(), 40.0]], device=device
+        )
+        assert valid.item()
+    else:
+        expected = torch.tensor(
+            [[50.0 + float(np.hypot(100.0, 80.0)), 40.0]], device=device
+        )
+        assert not valid.item()
+    torch.testing.assert_close(image_points, expected, atol=2e-5, rtol=2e-6)
+
+
+@pytest.mark.parametrize(
+    ("adjusted_phi", "adjusted_theta", "expected_front_facing"),
+    [(0.1, -0.1, True), (np.pi / 2.0, np.pi / 2.0, False)],
+    ids=["front-facing", "zero-z"],
+)
+def test_pinhole_post_bivariate_z_gate_is_distinct_from_pose_gate(
+    adjusted_phi,
+    adjusted_theta,
+    expected_front_facing,
+    ideal_projection,
+):
+    device = ideal_projection.focal_length.device
+    coefficients = torch.zeros(42, device=device)
+    coefficients[0] = adjusted_phi
+    coefficients[6] = adjusted_theta
+    distortion = BivariateWindshieldDistortion(
+        coefficients,
+        int(ReferencePolynomial.FORWARD),
+        0,
+        0,
+    )
+    camera_ray = torch.tensor([[0.0, 0.0, 1.0]], device=device, requires_grad=True)
+    (
+        d1_image_points,
+        d1_valid,
+        d1_scratch,
+    ) = torch.ops.gsplat_sensors.camera_rays_to_image_points_opencv_pinhole_bivariate_windshield(
+        ideal_projection, distortion, camera_ray
+    )
+
+    translation = torch.zeros(3, device=device)
+    rotation = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
+    world_point = camera_ray.detach().clone().requires_grad_(True)
+    (
+        d3_image_points,
+        d3_valid,
+        *_,
+        d3_scratch,
+    ) = torch.ops.gsplat_sensors.project_world_points_mean_pose_opencv_pinhole_bivariate_windshield(
+        ideal_projection,
+        distortion,
+        world_point,
+        translation,
+        rotation,
+        translation,
+        rotation,
+        0,
+        1,
+    )
+
+    assert (d1_scratch[0, 9].item() != 0.0) == expected_front_facing
+    assert d3_scratch[0, 5].item() > 0.0
+    assert d1_valid.item() == expected_front_facing
+    assert d3_valid.item() == expected_front_facing
+    torch.testing.assert_close(d3_image_points, d1_image_points, atol=2e-6, rtol=2e-6)
+    if not expected_front_facing:
+        torch.testing.assert_close(d1_image_points, torch.zeros_like(d1_image_points))
+        torch.testing.assert_close(
+            d3_scratch[:, 6:9], torch.zeros_like(d3_scratch[:, 6:9])
+        )
+
+
+def test_pinhole_image_bound_transitions_preserve_validity_and_vjp(
+    ideal_projection, no_external
+):
+    image_points = torch.tensor(
+        [
+            [-0.25, 40.0],
+            [0.0, 40.0],
+            [99.75, 40.0],
+            [100.0, 40.0],
+            [50.0, -0.25],
+            [50.0, 0.0],
+            [50.0, 79.75],
+            [50.0, 80.0],
+        ],
+        device=ideal_projection.focal_length.device,
+    )
+    normalized_xy = (
+        image_points - ideal_projection.principal_point
+    ) / ideal_projection.focal_length
+    camera_rays = torch.cat(
+        (normalized_xy, torch.ones_like(normalized_xy[:, :1])), dim=-1
+    ).requires_grad_(True)
+
+    projected, valid = camera_rays_to_image_points(
+        camera_rays,
+        ideal_projection,
+        no_external,
+        allow_device_transfer=True,
+    )
+
+    torch.testing.assert_close(projected, image_points, atol=2e-6, rtol=2e-6)
+    assert valid.tolist() == [False, True, True, False, False, True, True, False]
+    camera_grad = torch.autograd.grad(projected.sum(), camera_rays)[0]
+    assert torch.isfinite(camera_grad).all()
+    assert (camera_grad.abs().sum(dim=-1) > 0.0).all()

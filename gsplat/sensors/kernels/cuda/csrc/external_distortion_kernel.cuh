@@ -193,13 +193,15 @@ struct BivariateWindshieldPolicy
     static __device__ float3 apply_inverse(float3 ray, const Params &params, float *scratch, int64_t stash_offset)
     {
         float3 unnorm_out = apply_bivariate_distortion(ray, params);
+        // Finish normalization before the inverse stash extends these values.
+        float3 camera_ray = normalize3(unnorm_out);
         if(scratch != nullptr && stash_offset >= 0)
         {
             scratch[stash_offset + 0] = unnorm_out.x;
             scratch[stash_offset + 1] = unnorm_out.y;
             scratch[stash_offset + 2] = unnorm_out.z;
         }
-        return normalize3(unnorm_out);
+        return camera_ray;
     }
 
     static __device__ float3 inverse_bwd_input(float3, const float *scratch, int64_t stash_offset)

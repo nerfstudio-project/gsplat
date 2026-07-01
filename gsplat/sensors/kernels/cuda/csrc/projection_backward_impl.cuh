@@ -394,8 +394,7 @@ __device__ __forceinline__ void image_points_to_world_rays_static_pose_backward_
     ProjectionScratchContract<ProjectionPolicy, kOp, DistortionPolicy>::validate();
 
     (void)translation;
-    const int64_t idx                              = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const typename ProjectionPolicy::Params params = ProjectionPolicy::load(projection);
+    const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const typename DistortionPolicy::Params distortion_params
         = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
     typename ProjectionPolicy::ParamGrads d_projection{};
@@ -408,7 +407,6 @@ __device__ __forceinline__ void image_points_to_world_rays_static_pose_backward_
         const int64_t off = idx * Scratch::kScratchStride;
         typename ProjectionPolicy::BackprojectState state;
         ProjectionPolicy::template ScratchIO<kOp>::template load_backward<Scratch>(scratch, off, state);
-        const float2 image_point = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
         const float3 d_origin
             = make_float3(grad_world_rays[idx * 6 + 0], grad_world_rays[idx * 6 + 1], grad_world_rays[idx * 6 + 2]);
         const float3 d_direction
@@ -434,8 +432,11 @@ __device__ __forceinline__ void image_points_to_world_rays_static_pose_backward_
         }
         float3 d_projected_ray = make_float3(0.0f, 0.0f, 0.0f);
         DistortionPolicy::apply_bwd(projected_ray, distortion_params, d_inverse, d_projected_ray, d_distortion);
-        float2 d_image_point = make_float2(0.0f, 0.0f);
-        ProjectionPolicy::backproject_bwd(image_point, params, state, d_projected_ray, d_image_point, d_projection);
+        const float2 image_point = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
+        float2 d_image_point     = make_float2(0.0f, 0.0f);
+        ProjectionPolicy::backproject_bwd_from_kernel_parameters(
+            projection, image_point, state, d_projected_ray, d_image_point, d_projection
+        );
         if(grad_image_points != nullptr)
         {
             grad_image_points[idx * 2 + 0] = d_image_point.x;
@@ -492,7 +493,8 @@ __device__ __forceinline__ void image_points_to_world_rays_shutter_pose_backward
         typename ProjectionPolicy::BackprojectState state;
         float alpha = 0.0f;
         ProjectionPolicy::template ScratchIO<kOp>::template load_backward<Scratch>(scratch, off, state, alpha);
-        const float2 image_point = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
+        const float2 image_point
+            = load_shutter_image_point<ProjectionPolicy, DistortionPolicy>(image_points, idx, projection.width);
         const float3 d_origin
             = make_float3(grad_world_rays[idx * 6 + 0], grad_world_rays[idx * 6 + 1], grad_world_rays[idx * 6 + 2]);
         const float3 d_direction
@@ -574,7 +576,7 @@ __device__ __forceinline__ void image_points_to_world_rays_shutter_pose_backward
         DistortionPolicy::apply_bwd(projected_ray, distortion_params, d_inverse, d_projected_ray, d_distortion);
         float2 d_image_point = make_float2(0.0f, 0.0f);
         ProjectionPolicy::backproject_bwd(image_point, params, state, d_projected_ray, d_image_point, d_projection);
-        if(grad_image_points != nullptr)
+        if(image_points != nullptr && grad_image_points != nullptr)
         {
             grad_image_points[idx * 2 + 0] = d_image_point.x;
             grad_image_points[idx * 2 + 1] = d_image_point.y;

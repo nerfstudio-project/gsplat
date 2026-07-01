@@ -1,3 +1,20 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Sensors Module Design
 
 ## Overview
@@ -73,38 +90,33 @@ gsplat/sensors/
   design-kernels.md
   design-models.md
   __init__.py
-  pyproject.toml
-  conftest.py
-  test_data/
   functional/
     __init__.py
     cameras.py
     lidars.py
     return_types.py
-    test_cameras.py
-    test_lidars.py
   kernels/
     __init__.py
     _backend.py
     projective_sensor_ops.py
-    test_projective_sensor_ops.py
-    test_backend.py
     common/
       __init__.py
       pose.py
+      pose_interp.py
+      tensor_ops.py
       utils.py
     cameras/
       __init__.py
+      _projection_validate.py
       ops.py
       types.py
       windshield.py
-      test_ops.py
     lidars/
       __init__.py
+      _projection_validate.py
       dispatch.py
       ops.py
       types.py
-      test_ops.py
     cuda/
       __init__.py
       build.py
@@ -114,6 +126,8 @@ gsplat/sensors/
         camera_kernel.cuh
         camera_kernel.cu
         camera_kernel_backward.cu
+        projection_forward_impl.cuh
+        projection_backward_impl.cuh
         ftheta_kernel.cuh
         ftheta_kernel.cu
         ftheta_kernel_backward.cu
@@ -126,9 +140,6 @@ gsplat/sensors/
         external_distortion_kernel.cuh
         external_distortion_torch.h
         external_distortion_torch.cpp
-        ftheta_kernel.cuh
-        ftheta_kernel.cu
-        ftheta_kernel_backward.cu
         lidar_params.h
         lidar_kernel.cuh
         lidar_kernel.cu
@@ -143,8 +154,6 @@ gsplat/sensors/
       __init__.py
       camera_model.py
       image_frame.py
-      test_camera_model.py
-      test_camera_model_opencv_pinhole.py
     common/
       __init__.py
       frame.py
@@ -153,18 +162,18 @@ gsplat/sensors/
       __init__.py
       lidar_frame.py
       lidar_model.py
-      test_lidar_frame.py
-      test_lidar_model.py
+
+tests/sensors/                  # mirrored functional, kernel, and model tests + fixtures
 ```
 
 The `kernels/` Python tree is organized by sensor family (`cameras/` and
-`lidars/`) so each family's wrappers, type handles, dispatch tables, and tests
-live together.
+`lidars/`) so each family's wrappers, type handles, and dispatch tables live
+together. The mirrored tests and fixtures live under `tests/sensors/`.
 `kernels/common/` owns cross-family Python helpers — most importantly the
 pose dataclasses (`Pose`, `DynamicPose`, `Trajectory`).
-`kernels/projective_sensor_ops.py` and its conformance test sit at the top of
-`kernels/` because they own the camera `(projection, distortion)` dispatch
-tables. `kernels/lidars/dispatch.py` owns the single-key LiDAR dispatch tables.
+`kernels/projective_sensor_ops.py` owns the camera `(projection, distortion)`
+dispatch tables. `kernels/lidars/dispatch.py` owns the single-key LiDAR dispatch
+tables; their conformance tests mirror those paths under `tests/sensors/`.
 
 ## Package Roles
 
@@ -246,9 +255,16 @@ constraints live in each per-layer doc.
 - Public stateless sensor functions live exclusively in `functional/`. Kernel
   Python wrappers below it return raw `tuple[Tensor, ...]`.
 - Native sources are split per family into three tiers with strict isolation:
-  a POD bridge header (`*_params.h`), CUDA-only `*_kernel.cuh` / `.cu`, and
-  Torch-only `*_torch.h` / `.cpp`. Only the bridge POD and `shutter_type.h`
-  are shared between the two halves.
+  a POD bridge header (`*_params.h`), CUDA-only `*_kernel.cuh`,
+  `projection_*_impl.cuh`, and `.cu` files, and Torch-only `*_torch.h` / `.cpp`.
+  Only the bridge POD and `shutter_type.h` are shared between the CUDA and
+  Torch halves.
+- Using the D1–D6 operation mapping in `design-kernels.md`, D1/D2/D3/D5/D6
+  implementations are shared inside the CUDA tier through compile-time
+  projection and external-distortion policies. Pinhole D4 remains
+  projection-local, with one forward and one backward body selected by
+  external-distortion policy. These policies do not change the concrete Torch
+  registrations or Python dispatch tables.
 - Sensor parameter types (`OpenCVPinholeProjection`, `FThetaProjection`,
   `OpenCVFisheyeProjection`, `BivariateWindshieldDistortion`,
   `NoExternalDistortion`, and `RowOffsetStructuredSpinningLidarProjection`)
@@ -260,10 +276,10 @@ constraints live in each per-layer doc.
   parameter object rather than a free function.
 - Runtime dispatch happens in Python via explicit `dict` tables. Camera ops
   use `(projection_type, distortion_type)` keys and
-  `kernels/test_projective_sensor_ops.py` enforces the full Cartesian product
-  of registered camera projection and distortion types. LiDAR ops use one
-  projection-type key in `kernels/lidars/dispatch.py`, with conformance
-  covered by `kernels/test_lidar_dispatch.py`.
+  `tests/sensors/kernels/test_projective_sensor_ops.py` enforces the full
+  Cartesian product of registered camera projection and distortion types.
+  LiDAR ops use one projection-type key in `kernels/lidars/dispatch.py`, with
+  conformance covered by `tests/sensors/kernels/test_lidar_dispatch.py`.
 - `gsplat/geometry` is the canonical owner of pose / quaternion / trajectory /
   coordinate-conversion math. The pose dataclasses in `kernels/common/pose.py` are thin containers
   that build on those primitives.

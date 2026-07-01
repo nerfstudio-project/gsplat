@@ -865,6 +865,8 @@ struct FThetaProjectionPolicy
         return normalize3(state.ray_raw);
     }
 
+    static __device__ void finalize_backproject_state_for_scratch(const Params &, BackprojectState &) { }
+
     static __device__ void backproject_bwd(
         float2 image_point,
         const Params &params,
@@ -875,6 +877,19 @@ struct FThetaProjectionPolicy
     )
     {
         ftheta_backproject_image_point_bwd(image_point, params, state, d_camera_ray, d_image_point, d_params);
+    }
+
+    static __device__ __forceinline__ void backproject_bwd_from_kernel_parameters(
+        const KernelParameters &projection,
+        float2 image_point,
+        const BackprojectState &state,
+        float3 d_camera_ray,
+        float2 &__restrict__ d_image_point,
+        ParamGrads &__restrict__ d_params
+    )
+    {
+        const Params params = load(projection);
+        backproject_bwd(image_point, params, state, d_camera_ray, d_image_point, d_params);
     }
 
     static __device__ bool final_project_valid(float2 image_point, const Params &params, bool projection_valid)

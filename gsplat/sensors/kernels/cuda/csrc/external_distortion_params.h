@@ -54,6 +54,7 @@ enum class DistortionSensor
 {
     FTheta,
     OpenCVFisheye,
+    OpenCVPinhole,
 };
 
 enum class DistortionOpFamily
@@ -87,6 +88,7 @@ struct DistortionScratchTraits;
         policy                                                                                   \
     >                                                                                            \
     {                                                                                            \
+        using PolicyTag                          = policy;                                       \
         static constexpr int kScratchStride      = stride;                                       \
         static constexpr int kInverseStashOffset = stash;                                        \
         static constexpr bool kIsUndistort       = undistort;                                    \
@@ -230,6 +232,84 @@ GSPLAT_SENSOR_DISTORTION_TRAITS(
 );
 GSPLAT_SENSOR_DISTORTION_TRAITS(
     FTheta, ImagePointsToWorldRaysShutterPose, Backward, BivariateWindshieldPolicyTag, 12, 8, true
+);
+
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, CameraRaysToImagePoints, Forward, NoExternalDistortionPolicyTag, 6, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, CameraRaysToImagePoints, Backward, NoExternalDistortionPolicyTag, 6, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, CameraRaysToImagePoints, Forward, BivariateWindshieldPolicyTag, 10, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, CameraRaysToImagePoints, Backward, BivariateWindshieldPolicyTag, 10, -1, false
+);
+
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToCameraRays, Forward, NoExternalDistortionPolicyTag, 5, -1, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToCameraRays, Backward, NoExternalDistortionPolicyTag, 5, -1, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToCameraRays, Forward, BivariateWindshieldPolicyTag, 9, 5, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToCameraRays, Backward, BivariateWindshieldPolicyTag, 9, 5, true
+);
+
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ProjectWorldPointsMeanPose, Forward, NoExternalDistortionPolicyTag, 9, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ProjectWorldPointsMeanPose, Backward, NoExternalDistortionPolicyTag, 9, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ProjectWorldPointsMeanPose, Forward, BivariateWindshieldPolicyTag, 9, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ProjectWorldPointsMeanPose, Backward, BivariateWindshieldPolicyTag, 9, -1, false
+);
+
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ProjectWorldPointsShutterPose, Forward, NoExternalDistortionPolicyTag, 10, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ProjectWorldPointsShutterPose, Backward, NoExternalDistortionPolicyTag, 10, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ProjectWorldPointsShutterPose, Forward, BivariateWindshieldPolicyTag, 10, -1, false
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ProjectWorldPointsShutterPose, Backward, BivariateWindshieldPolicyTag, 10, -1, false
+);
+
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToWorldRaysStaticPose, Forward, NoExternalDistortionPolicyTag, 5, -1, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToWorldRaysStaticPose, Backward, NoExternalDistortionPolicyTag, 5, -1, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToWorldRaysStaticPose, Forward, BivariateWindshieldPolicyTag, 9, 5, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToWorldRaysStaticPose, Backward, BivariateWindshieldPolicyTag, 9, 5, true
+);
+
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToWorldRaysShutterPose, Forward, NoExternalDistortionPolicyTag, 9, -1, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToWorldRaysShutterPose, Backward, NoExternalDistortionPolicyTag, 9, -1, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToWorldRaysShutterPose, Forward, BivariateWindshieldPolicyTag, 12, 5, true
+);
+GSPLAT_SENSOR_DISTORTION_TRAITS(
+    OpenCVPinhole, ImagePointsToWorldRaysShutterPose, Backward, BivariateWindshieldPolicyTag, 12, 5, true
 );
 
 #undef GSPLAT_SENSOR_DISTORTION_TRAITS

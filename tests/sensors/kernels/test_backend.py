@@ -22,11 +22,13 @@ _TENSOR = "Tensor"
 _INT = "int"
 _FLOAT = "float"
 _BOOL = "bool"
+_PINHOLE_PROJECTION = "OpenCVPinholeProjection"
 _FTHETA_PROJECTION = "FThetaProjection"
 _FISHEYE_PROJECTION = "OpenCVFisheyeProjection"
 _NO_EXTERNAL = "NoExternalDistortion"
 _BIVARIATE = "BivariateWindshieldDistortion"
 _CUSTOM_CLASSES = {
+    _PINHOLE_PROJECTION,
     _FTHETA_PROJECTION,
     _FISHEYE_PROJECTION,
     _NO_EXTERNAL,
@@ -137,6 +139,14 @@ def _forward_arg_names(name):
 
 
 def _intrinsic_backward_names(name):
+    if "_opencv_pinhole_" in name:
+        return [
+            "need_focal_length_grad",
+            "need_principal_point_grad",
+            "need_radial_coeffs_grad",
+            "need_tangential_coeffs_grad",
+            "need_thin_prism_coeffs_grad",
+        ]
     if "_ftheta_" in name:
         return [
             "need_principal_point_grad",
@@ -197,12 +207,16 @@ def _backward_arg_names(name):
             *distortion_names,
         ]
     if name.startswith("image_points_to_world_rays_static_pose_"):
+        translation_name = (
+            "translations" if "_opencv_fisheye_" in name else "translation"
+        )
+        rotation_name = "rotations" if "_opencv_fisheye_" in name else "rotation"
         return [
             "projection",
             "external_distortion",
             "image_points",
-            "translations",
-            "rotations",
+            translation_name,
+            rotation_name,
             "grad_world_rays",
             "scratch",
             "need_image_point_grad",
@@ -212,6 +226,27 @@ def _backward_arg_names(name):
             *distortion_names,
         ]
     if name.startswith("project_world_points_shutter_pose_ftheta_"):
+        return [
+            "projection",
+            "external_distortion",
+            "world_points",
+            "start_rotation",
+            "end_rotation",
+            "shutter_type",
+            "max_iterations",
+            "initial_relative_time",
+            "valid_flags",
+            "grad_image_points",
+            "scratch",
+            "need_world_point_grad",
+            "need_start_translation_grad",
+            "need_end_translation_grad",
+            "need_start_rotation_grad",
+            "need_end_rotation_grad",
+            *intrinsic_names,
+            *distortion_names,
+        ]
+    if name.startswith("project_world_points_shutter_pose_opencv_pinhole_"):
         return [
             "projection",
             "external_distortion",
@@ -286,6 +321,9 @@ def _assert_schema(name, expected_args, expected_returns):
         assert actual_names == _expected_arg_names(name)
     assert actual_types == expected_args
     assert actual_returns == expected_return_types
+    assert [arg.has_default_value() for arg in schema.arguments] == [False] * len(
+        expected_args
+    )
 
 
 def test_extension_loads():
@@ -421,6 +459,124 @@ def _forward_schema_cases(projection, distortion, sensor_suffix):
             5,
         ),
     ]
+
+
+_PINHOLE_NO_EXTERNAL_BACKWARD = [
+    (
+        "camera_rays_to_image_points_opencv_pinhole_no_external_backward",
+        [_PINHOLE_PROJECTION, _NO_EXTERNAL, _TENSOR, _TENSOR, _TENSOR] + [_BOOL] * 6,
+        6,
+    ),
+    (
+        "image_points_to_camera_rays_opencv_pinhole_no_external_backward",
+        [_PINHOLE_PROJECTION, _NO_EXTERNAL, _TENSOR, _TENSOR, _TENSOR] + [_BOOL] * 6,
+        6,
+    ),
+    (
+        "project_world_points_mean_pose_opencv_pinhole_no_external_backward",
+        [_PINHOLE_PROJECTION, _NO_EXTERNAL, _TENSOR, _TENSOR, _TENSOR, _TENSOR, _TENSOR]
+        + [_BOOL] * 10,
+        10,
+    ),
+    (
+        "image_points_to_world_rays_static_pose_opencv_pinhole_no_external_backward",
+        [_PINHOLE_PROJECTION, _NO_EXTERNAL, _TENSOR, _TENSOR, _TENSOR, _TENSOR, _TENSOR]
+        + [_BOOL] * 8,
+        8,
+    ),
+    (
+        "project_world_points_shutter_pose_opencv_pinhole_no_external_backward",
+        [
+            _PINHOLE_PROJECTION,
+            _NO_EXTERNAL,
+            _TENSOR,
+            _TENSOR,
+            _TENSOR,
+            _INT,
+            _INT,
+            _FLOAT,
+            _TENSOR,
+            _TENSOR,
+            _TENSOR,
+        ]
+        + [_BOOL] * 10,
+        10,
+    ),
+    (
+        "image_points_to_world_rays_shutter_pose_opencv_pinhole_no_external_backward",
+        [
+            _PINHOLE_PROJECTION,
+            _NO_EXTERNAL,
+            _TENSOR,
+            _TENSOR,
+            _TENSOR,
+            _INT,
+            _TENSOR,
+            _TENSOR,
+        ]
+        + [_BOOL] * 10,
+        10,
+    ),
+]
+
+
+_PINHOLE_BIVARIATE_BACKWARD = [
+    (
+        "camera_rays_to_image_points_opencv_pinhole_bivariate_windshield_backward",
+        [_PINHOLE_PROJECTION, _BIVARIATE, _TENSOR, _TENSOR, _TENSOR] + [_BOOL] * 7,
+        7,
+    ),
+    (
+        "image_points_to_camera_rays_opencv_pinhole_bivariate_windshield_backward",
+        [_PINHOLE_PROJECTION, _BIVARIATE, _TENSOR, _TENSOR, _TENSOR] + [_BOOL] * 7,
+        7,
+    ),
+    (
+        "project_world_points_mean_pose_opencv_pinhole_bivariate_windshield_backward",
+        [_PINHOLE_PROJECTION, _BIVARIATE, _TENSOR, _TENSOR, _TENSOR, _TENSOR, _TENSOR]
+        + [_BOOL] * 11,
+        11,
+    ),
+    (
+        "image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield_backward",
+        [_PINHOLE_PROJECTION, _BIVARIATE, _TENSOR, _TENSOR, _TENSOR, _TENSOR, _TENSOR]
+        + [_BOOL] * 9,
+        9,
+    ),
+    (
+        "project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield_backward",
+        [
+            _PINHOLE_PROJECTION,
+            _BIVARIATE,
+            _TENSOR,
+            _TENSOR,
+            _TENSOR,
+            _INT,
+            _INT,
+            _FLOAT,
+            _TENSOR,
+            _TENSOR,
+            _TENSOR,
+        ]
+        + [_BOOL] * 11,
+        11,
+    ),
+    (
+        "image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield_backward",
+        [
+            _PINHOLE_PROJECTION,
+            _BIVARIATE,
+            _TENSOR,
+            _TENSOR,
+            _TENSOR,
+            _INT,
+            _TENSOR,
+            _TENSOR,
+        ]
+        + [_BOOL] * 11,
+        11,
+    ),
+]
 
 
 _FTHETA_NO_EXTERNAL_BACKWARD = [
@@ -618,7 +774,17 @@ _FISHEYE_BIVARIATE_BACKWARD = [
 
 
 _SCHEMA_SNAPSHOT_CASES = (
-    _forward_schema_cases(_FTHETA_PROJECTION, _NO_EXTERNAL, "ftheta_no_external")
+    _forward_schema_cases(
+        _PINHOLE_PROJECTION, _NO_EXTERNAL, "opencv_pinhole_no_external"
+    )
+    + _forward_schema_cases(
+        _PINHOLE_PROJECTION,
+        _BIVARIATE,
+        "opencv_pinhole_bivariate_windshield",
+    )
+    + _PINHOLE_NO_EXTERNAL_BACKWARD
+    + _PINHOLE_BIVARIATE_BACKWARD
+    + _forward_schema_cases(_FTHETA_PROJECTION, _NO_EXTERNAL, "ftheta_no_external")
     + _forward_schema_cases(
         _FTHETA_PROJECTION, _BIVARIATE, "ftheta_bivariate_windshield"
     )
@@ -638,8 +804,8 @@ _SCHEMA_SNAPSHOT_CASES = (
 @pytest.mark.parametrize(
     "name, expected_args, expected_returns", _SCHEMA_SNAPSHOT_CASES
 )
-def test_ftheta_and_fisheye_torch_op_schemas(name, expected_args, expected_returns):
-    """Snapshot FTheta/fisheye op schemas so ABI changes are intentional."""
+def test_camera_torch_op_schemas(name, expected_args, expected_returns):
+    """Snapshot camera op schemas so ABI changes are intentional."""
     _assert_schema(name, expected_args, expected_returns)
 
 
@@ -651,6 +817,11 @@ def test_bivariate_windshield_class_registered():
 def test_ftheta_projection_class_registered():
     """FTheta projection must remain available as a TorchScript custom class."""
     assert hasattr(torch.classes.gsplat_sensors, "FThetaProjection")
+
+
+def test_opencv_pinhole_projection_class_registered():
+    """OpenCV pinhole projection must remain available as a TorchScript custom class."""
+    assert hasattr(torch.classes.gsplat_sensors, "OpenCVPinholeProjection")
 
 
 def test_row_offset_spinning_lidar_projection_class_registered():

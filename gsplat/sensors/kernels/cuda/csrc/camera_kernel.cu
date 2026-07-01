@@ -24,7 +24,7 @@
 // image_points_to_world_rays_shutter_pose}). Backwards live in
 // camera_kernel_backward.cu.
 
-#include "camera_kernel.cuh"
+#include "projection_forward_impl.cuh"
 
 #include <c10/cuda/CUDAException.h>
 
@@ -36,70 +36,6 @@ constexpr int kThreads = 256;
 dim3 grid_for_count(int64_t count)
 {
     return dim3(static_cast<unsigned int>((count + kThreads - 1) / kThreads));
-}
-
-// fixed_iterative_undistort — used only by the bivariate_camera_ray helper.
-// Runs exactly 10 Newton iterations unconditionally so all threads in a warp
-// take the same number of steps (avoids divergence from early-exit heuristic).
-__device__ __forceinline__ float2 fixed_iterative_undistort(float2 xy0, const OpenCVPinholeParams &params)
-{
-    // Same Newton update as iterative_undistort(), but always exactly 10
-    // unrolled iterations with no early exit so bivariate forward lanes do not
-    // diverge on per-pixel convergence.
-    float2 xy = xy0;
-#pragma unroll
-    for(int i = 0; i < 10; ++i)
-    {
-        DistortionResult d = compute_distortion(xy, params);
-        xy.x               = (xy0.x - d.delta_x) / d.icD;
-        xy.y               = (xy0.y - d.delta_y) / d.icD;
-    }
-    return xy;
-}
-
-// bivariate_camera_ray_from_image_point — shared helper for the three
-// bivariate unprojection kernels (image_points_to_camera_rays,
-// image_points_to_world_rays_static_pose,
-// image_points_to_world_rays_shutter_pose).
-// Undistorts the image point, maps to a normalized camera ray via the pinhole
-// model, then applies the inverse bivariate windshield polynomial.
-//
-// Scratch layout per-thread (stride depends on caller; see each kernel):
-//   [0] xy.x          (undistorted normalised x)
-//   [1] xy.y          (undistorted normalised y)
-//   [2] d.r2          (r^2 = xy.x^2 + xy.y^2)
-//   [3] d.icD         (combined radial factor num/den)
-//   [4] den           (denominator value before inversion)
-//   [5] camera_ray_pre_norm.x  (unnormalised bivariate-distorted ray x)
-//   [6] camera_ray_pre_norm.y
-//   [7] camera_ray_pre_norm.z
-__device__ __forceinline__ float3 bivariate_camera_ray_from_image_point(
-    const OpenCVPinholeParams &params,
-    const BivariateWindshieldParams &bivariate_params,
-    float2 image_point,
-    float *scratch,
-    int64_t scratch_offset
-)
-{
-    float2 xy0         = make_float2((image_point.x - params.cx) / params.fx, (image_point.y - params.cy) / params.fy);
-    float2 xy          = fixed_iterative_undistort(xy0, params);
-    DistortionResult d = compute_distortion(xy, params);
-    float den          = d.den;
-    float3 distorted_ray       = normalize3(make_float3(xy.x, xy.y, 1.0f));
-    float3 camera_ray_pre_norm = apply_bivariate_distortion(distorted_ray, bivariate_params);
-    float3 camera_ray          = normalize3(camera_ray_pre_norm);
-    if(scratch != nullptr)
-    {
-        scratch[scratch_offset + 0] = xy.x;
-        scratch[scratch_offset + 1] = xy.y;
-        scratch[scratch_offset + 2] = d.r2;
-        scratch[scratch_offset + 3] = d.icD;
-        scratch[scratch_offset + 4] = den;
-        scratch[scratch_offset + 5] = camera_ray_pre_norm.x;
-        scratch[scratch_offset + 6] = camera_ray_pre_norm.y;
-        scratch[scratch_offset + 7] = camera_ray_pre_norm.z;
-    }
-    return camera_ray;
 }
 
 // ===========================================================================
@@ -134,7 +70,6 @@ __global__ void generate_image_points_kernel(int64_t width, int64_t height, floa
 //   [3] r2    (r^2 = x^2 + y^2)
 //   [4] icD   (combined radial factor num/den)
 //   [5] den   (distortion denominator before inversion)
-// All 6 slots are written by project_camera_ray_opencv at base idx*6.
 // ===========================================================================
 
 __global__ void camera_rays_to_image_points_forward_kernel(
@@ -146,26 +81,18 @@ __global__ void camera_rays_to_image_points_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params = load_opencv_pinhole_params(projection);
-    float3 ray                 = read_vec3(camera_rays, idx);
-    ProjectionEval eval        = project_camera_ray_opencv(params, ray, scratch, idx * 6);
-    image_points[idx * 2 + 0]  = eval.image_point.x;
-    image_points[idx * 2 + 1]  = eval.image_point.y;
-    valid_flags[idx]           = eval.valid;
+    camera_rays_to_image_points_forward_impl<kThreads, PinholeEarlyExitPolicy, NoExternalDistortionPolicy>(
+        count, projection, NoExternalDistortion_KernelParameters{}, camera_rays, image_points, valid_flags, scratch
+    );
 }
 
 // ===========================================================================
 // Kernel 3 — image_points_to_camera_rays (no-external / pinhole only).
 // Inverts the pinhole+distortion model: pixel → normalised camera-space ray.
-// Uses iterative_undistort (early-exit Newton, unlike the bivariate variant).
+// Uses the early-exit fixed-point inverse strategy.
 //
 // Scratch layout per-thread (stride 5, written only when scratch != nullptr):
-//   [0] xy.x   (undistorted normalised x after iterative Newton)
+//   [0] xy.x   (undistorted normalised x)
 //   [1] xy.y   (undistorted normalised y)
 //   [2] d.r2   (r^2 = xy.x^2 + xy.y^2)
 //   [3] d.icD  (combined radial factor num/den)
@@ -180,27 +107,9 @@ __global__ void image_points_to_camera_rays_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params = load_opencv_pinhole_params(projection);
-    float2 image_point         = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    float2 xy0 = make_float2((image_point.x - params.cx) / params.fx, (image_point.y - params.cy) / params.fy);
-    float2 xy  = iterative_undistort(xy0, params);
-    float3 ray = normalize3(make_float3(xy.x, xy.y, 1.0f));
-    write_vec3(camera_rays, idx, ray);
-    if(scratch != nullptr)
-    {
-        DistortionResult d = compute_distortion(xy, params);
-        int64_t off        = idx * 5;
-        scratch[off + 0]   = xy.x;
-        scratch[off + 1]   = xy.y;
-        scratch[off + 2]   = d.r2;
-        scratch[off + 3]   = d.icD;
-        scratch[off + 4]   = distortion_den(d.r2, params);
-    }
+    image_points_to_camera_rays_forward_impl<kThreads, PinholeEarlyExitPolicy, NoExternalDistortionPolicy>(
+        count, projection, NoExternalDistortion_KernelParameters{}, image_points, camera_rays, scratch
+    );
 }
 
 // ===========================================================================
@@ -216,9 +125,9 @@ __global__ void image_points_to_camera_rays_forward_kernel(
 //   [3]  cam_pt.x   (p_rel rotated into camera space)
 //   [4]  cam_pt.y
 //   [5]  cam_pt.z
-//   [6]  r2         (from project_camera_ray_opencv, ray_scratch[3])
-//   [7]  icD        (ray_scratch[4])
-//   [8]  den        (ray_scratch[5])
+//   [6]  r2
+//   [7]  icD
+//   [8]  den
 // ===========================================================================
 
 __global__ void project_world_points_mean_pose_forward_kernel(
@@ -238,77 +147,30 @@ __global__ void project_world_points_mean_pose_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    __shared__ OpenCVPinholeParams block_params;
-    __shared__ float3 block_pose_t;
-    __shared__ float4 block_pose_r_xyzw;
-    if(threadIdx.x == 0)
-    {
-        block_params  = load_opencv_pinhole_params(projection);
-        float3 trans0 = read_vec3(start_translation, 0);
-        float3 trans1 = read_vec3(end_translation, 0);
-        float4 rot0   = read_quat_xyzw_from_wxyz(start_rotation, 0);
-        float4 rot1   = read_quat_xyzw_from_wxyz(end_rotation, 0);
-        block_pose_t  = lerp3(trans0, trans1, 0.5f);
-        float qx, qy, qz, qw;
-        gsplat_geometry::quat_slerp_pair_fwd<float>(
-            rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &qx, &qy, &qz, &qw
-        );
-        block_pose_r_xyzw = make_float4(qx, qy, qz, qw);
-    }
-    __syncthreads();
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params = block_params;
-    float3 world_point         = read_vec3(world_points, idx);
-    float3 pose_t              = block_pose_t;
-    float4 pose_r_xyzw         = block_pose_r_xyzw;
-    float3 p_rel               = sub3(world_point, pose_t);
-    float3 cam_pt              = quat_inverse_rotate_xyzw_geom(pose_r_xyzw, p_rel);
-    ProjectionEval eval        = {make_float2(0.0f, 0.0f), false};
-    float ray_scratch[6]       = {};
-    if(cam_pt.z > 0.0f)
-    {
-        float3 camera_ray = normalize3(cam_pt);
-        eval = project_camera_ray_opencv(params, camera_ray, scratch != nullptr ? ray_scratch : nullptr, 0);
-    }
-    image_points[idx * 2 + 0] = eval.image_point.x;
-    image_points[idx * 2 + 1] = eval.image_point.y;
-    valid_flags[idx]          = eval.valid;
-    if(timestamps_us != nullptr)
-    {
-        timestamps_us[idx] = mean_timestamp_us;
-    }
-    if(pose_translations != nullptr)
-    {
-        write_vec3(pose_translations, idx, pose_t);
-    }
-    if(pose_rotations != nullptr)
-    {
-        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    }
-    if(scratch != nullptr)
-    {
-        int64_t off      = idx * 9;
-        scratch[off + 0] = p_rel.x;
-        scratch[off + 1] = p_rel.y;
-        scratch[off + 2] = p_rel.z;
-        scratch[off + 3] = cam_pt.x;
-        scratch[off + 4] = cam_pt.y;
-        scratch[off + 5] = cam_pt.z;
-        scratch[off + 6] = ray_scratch[3];
-        scratch[off + 7] = ray_scratch[4];
-        scratch[off + 8] = ray_scratch[5];
-    }
+    project_world_points_mean_pose_forward_impl<kThreads, PinholeEarlyExitPolicy, NoExternalDistortionPolicy>(
+        count,
+        projection,
+        NoExternalDistortion_KernelParameters{},
+        world_points,
+        start_translation,
+        start_rotation,
+        end_translation,
+        end_rotation,
+        mean_timestamp_us,
+        image_points,
+        valid_flags,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
+    );
 }
 
 // ===========================================================================
-// Kernel 5 — project_world_points_shutter_pose (no-external / pinhole only).
-// Projects 3-D world points iteratively: each iteration reprojects the current
-// image point to find its rolling-shutter timestamp, updates the interpolated
-// pose, and re-projects until pixel error converges or max_iterations reached.
+// Kernel 5 — pinhole-local project_world_points_shutter_pose body.
+// Both external-distortion variants use this body. Each iteration reprojects
+// the current image point to find its rolling-shutter timestamp, updates the
+// interpolated pose, and re-projects until convergence or max_iterations.
 // Global-shutter mode terminates after a single iteration.
 //
 // Scratch layout per-thread (stride 10, written only when scratch != nullptr):
@@ -318,11 +180,149 @@ __global__ void project_world_points_mean_pose_forward_kernel(
 //   [3]  cam_pt.x   (p_rel rotated into camera space)
 //   [4]  cam_pt.y
 //   [5]  cam_pt.z
-//   [6]  r2         (ray_scratch[3] from project_camera_ray_opencv)
-//   [7]  icD        (ray_scratch[4])
-//   [8]  den        (ray_scratch[5])
+//   [6]  r2
+//   [7]  icD
+//   [8]  den
 //   [9]  alpha      (final relative_time / interpolation parameter)
 // ===========================================================================
+
+template<typename DistortionPolicy>
+inline __device__ void project_world_points_shutter_pose_pinhole_forward_impl(
+    int64_t count,
+    OpenCVPinholeProjection_KernelParameters projection,
+    typename DistortionPolicy::KernelParameters distortion,
+    const float *__restrict__ world_points,
+    const float *__restrict__ start_translation,
+    const float *__restrict__ start_rotation,
+    const float *__restrict__ end_translation,
+    const float *__restrict__ end_rotation,
+    int64_t shutter_type,
+    int64_t start_timestamp_us,
+    int64_t end_timestamp_us,
+    int64_t max_iterations,
+    float stop_mean_error_px,
+    float stop_delta_mean_error_px,
+    float initial_relative_time,
+    float *__restrict__ image_points,
+    bool *__restrict__ valid_flags,
+    int64_t *__restrict__ timestamps_us,
+    float *__restrict__ pose_translations,
+    float *__restrict__ pose_rotations,
+    float *__restrict__ scratch
+)
+{
+    constexpr DistortionOpFamily kOp = DistortionOpFamily::ProjectWorldPointsShutterPose;
+    using ForwardScratch             = DistortionScratchTraits<
+        DistortionSensor::OpenCVPinhole,
+        kOp,
+        DistortionDirection::Forward,
+        typename DistortionPolicy::Tag
+    >;
+    using BackwardScratch = DistortionScratchTraits<
+        DistortionSensor::OpenCVPinhole,
+        kOp,
+        DistortionDirection::Backward,
+        typename DistortionPolicy::Tag
+    >;
+    static_assert(ForwardScratch::kScratchStride == BackwardScratch::kScratchStride);
+    static_assert(ForwardScratch::kInverseStashOffset == BackwardScratch::kInverseStashOffset);
+    static_assert(ForwardScratch::kIsUndistort == BackwardScratch::kIsUndistort);
+    OpenCVPinholeScratchIO<kOp>::validate<ForwardScratch>();
+    OpenCVPinholeScratchIO<kOp>::validate<BackwardScratch>();
+
+    const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if(idx >= count)
+    {
+        return;
+    }
+    const OpenCVPinholeParams params = load_opencv_pinhole_params(projection);
+    const typename DistortionPolicy::Params distortion_params
+        = DistortionPolicy::load(distortion, ForwardScratch::kIsUndistort);
+    const float3 world_point       = read_vec3(world_points, idx);
+    const float3 start_t           = read_vec3(start_translation, 0);
+    const float3 end_t             = read_vec3(end_translation, 0);
+    const float4 start_r           = read_quat_xyzw_from_wxyz(start_rotation, 0);
+    const float4 end_r             = read_quat_xyzw_from_wxyz(end_rotation, 0);
+    float relative_time            = initial_relative_time;
+    float alpha                    = 0.0f;
+    float2 image_point             = make_float2(0.0f, 0.0f);
+    float2 previous_image_point    = make_float2(0.0f, 0.0f);
+    float3 pose_translation        = start_t;
+    float4 pose_rotation_xyzw      = start_r;
+    float3 p_rel                   = make_float3(0.0f, 0.0f, 0.0f);
+    float3 camera_point            = make_float3(0.0f, 0.0f, 0.0f);
+    float compact_project_state[6] = {};
+    bool valid                     = false;
+    for(int64_t i = 0; i < max_iterations; ++i)
+    {
+        alpha            = relative_time;
+        pose_translation = lerp3(start_t, end_t, alpha);
+        float qx, qy, qz, qw;
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
+            start_r.x, start_r.y, start_r.z, start_r.w, end_r.x, end_r.y, end_r.z, end_r.w, alpha, &qx, &qy, &qz, &qw
+        );
+        pose_rotation_xyzw = make_float4(qx, qy, qz, qw);
+        p_rel              = sub3(world_point, pose_translation);
+        camera_point       = quat_inverse_rotate_xyzw_geom(pose_rotation_xyzw, p_rel);
+        if(camera_point.z <= 0.0f)
+        {
+            valid = false;
+            break;
+        }
+        const float3 camera_ray    = normalize3(camera_point);
+        const float3 projected_ray = DistortionPolicy::apply_fwd(camera_ray, distortion_params);
+        image_point                = opencv_pinhole_project_compact(
+            projected_ray, params, scratch != nullptr ? compact_project_state : nullptr, valid
+        );
+        if(static_cast<gsplat_sensors::ShutterType>(shutter_type) == gsplat_sensors::ShutterType::GLOBAL || !valid)
+        {
+            break;
+        }
+        const float next_relative_time
+            = compute_relative_frame_time_opencv(image_point, projection.width, projection.height, shutter_type);
+        const float2 delta
+            = make_float2(image_point.x - previous_image_point.x, image_point.y - previous_image_point.y);
+        const float pixel_error = sqrtf(delta.x * delta.x + delta.y * delta.y);
+        if(i > 0 && pixel_error < stop_delta_mean_error_px)
+        {
+            break;
+        }
+        const float time_delta = fabsf(next_relative_time - relative_time);
+        const float approximate_pixel_error
+            = time_delta * static_cast<float>(std::max(projection.width, projection.height));
+        if(approximate_pixel_error < stop_mean_error_px)
+        {
+            break;
+        }
+        previous_image_point = image_point;
+        relative_time        = next_relative_time;
+    }
+    image_points[idx * 2 + 0] = image_point.x;
+    image_points[idx * 2 + 1] = image_point.y;
+    valid_flags[idx]          = valid;
+    if(timestamps_us != nullptr)
+    {
+        timestamps_us[idx] = timestamp_from_relative_time(relative_time, start_timestamp_us, end_timestamp_us);
+    }
+    if(pose_translations != nullptr)
+    {
+        write_vec3(pose_translations, idx, pose_translation);
+    }
+    if(pose_rotations != nullptr)
+    {
+        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_rotation_xyzw);
+    }
+    if(scratch != nullptr)
+    {
+        OpenCVPinholeProjectState state{};
+        state.r2  = compact_project_state[3];
+        state.icD = compact_project_state[4];
+        state.den = compact_project_state[5];
+        OpenCVPinholeScratchIO<kOp>::save_forward<ForwardScratch>(
+            scratch, idx * ForwardScratch::kScratchStride, p_rel, camera_point, state, alpha
+        );
+    }
+}
 
 __global__ void project_world_points_shutter_pose_forward_kernel(
     int64_t count,
@@ -347,99 +347,29 @@ __global__ void project_world_points_shutter_pose_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params  = load_opencv_pinhole_params(projection);
-    float3 world_point          = read_vec3(world_points, idx);
-    float3 trans0               = read_vec3(start_translation, 0);
-    float3 trans1               = read_vec3(end_translation, 0);
-    float4 rot0                 = read_quat_xyzw_from_wxyz(start_rotation, 0);
-    float4 rot1                 = read_quat_xyzw_from_wxyz(end_rotation, 0);
-    int64_t iterations          = max_iterations;
-    float relative_time         = initial_relative_time;
-    float alpha                 = 0.0f;
-    float2 previous_image_point = make_float2(0.0f, 0.0f);
-    float3 pose_t               = trans0;
-    float4 pose_r_xyzw          = rot0;
-    float3 p_rel                = make_float3(0.0f, 0.0f, 0.0f);
-    float3 cam_pt               = make_float3(0.0f, 0.0f, 0.0f);
-    ProjectionEval eval         = {make_float2(0.0f, 0.0f), false};
-    float ray_scratch[6]        = {};
-    for(int64_t i = 0; i < iterations; ++i)
-    {
-        alpha  = relative_time;
-        pose_t = lerp3(trans0, trans1, alpha);
-        {
-            float qx, qy, qz, qw;
-            gsplat_geometry::quat_slerp_pair_fwd<float>(
-                rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &qx, &qy, &qz, &qw
-            );
-            pose_r_xyzw = make_float4(qx, qy, qz, qw);
-        }
-        p_rel  = sub3(world_point, pose_t);
-        cam_pt = quat_inverse_rotate_xyzw_geom(pose_r_xyzw, p_rel);
-        if(cam_pt.z <= 0.0f)
-        {
-            // Preserve the last successful image_point; only flip valid.
-            eval.valid = false;
-            break;
-        }
-        float3 camera_ray = normalize3(cam_pt);
-        eval = project_camera_ray_opencv(params, camera_ray, scratch != nullptr ? ray_scratch : nullptr, 0);
-        if(shutter_type == static_cast<int64_t>(gsplat_sensors::ShutterType::GLOBAL) || !eval.valid)
-        {
-            break;
-        }
-        float next_relative_time
-            = compute_relative_frame_time_opencv(eval.image_point, projection.width, projection.height, shutter_type);
-        float2 delta_px
-            = make_float2(eval.image_point.x - previous_image_point.x, eval.image_point.y - previous_image_point.y);
-        float pixel_error = sqrtf(delta_px.x * delta_px.x + delta_px.y * delta_px.y);
-        if(i > 0 && pixel_error < stop_delta_mean_error_px)
-        {
-            break;
-        }
-        float time_delta              = fabsf(next_relative_time - relative_time);
-        float approximate_pixel_error = time_delta * static_cast<float>(std::max(projection.width, projection.height));
-        if(approximate_pixel_error < stop_mean_error_px)
-        {
-            break;
-        }
-        previous_image_point = eval.image_point;
-        relative_time        = next_relative_time;
-    }
-    image_points[idx * 2 + 0] = eval.image_point.x;
-    image_points[idx * 2 + 1] = eval.image_point.y;
-    valid_flags[idx]          = eval.valid;
-    if(timestamps_us != nullptr)
-    {
-        timestamps_us[idx] = timestamp_from_relative_time(relative_time, start_timestamp_us, end_timestamp_us);
-    }
-    if(pose_translations != nullptr)
-    {
-        write_vec3(pose_translations, idx, pose_t);
-    }
-    if(pose_rotations != nullptr)
-    {
-        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    }
-    if(scratch != nullptr)
-    {
-        int64_t off      = idx * 10;
-        scratch[off + 0] = p_rel.x;
-        scratch[off + 1] = p_rel.y;
-        scratch[off + 2] = p_rel.z;
-        scratch[off + 3] = cam_pt.x;
-        scratch[off + 4] = cam_pt.y;
-        scratch[off + 5] = cam_pt.z;
-        scratch[off + 6] = ray_scratch[3];
-        scratch[off + 7] = ray_scratch[4];
-        scratch[off + 8] = ray_scratch[5];
-        scratch[off + 9] = alpha;
-    }
+    project_world_points_shutter_pose_pinhole_forward_impl<NoExternalDistortionPolicy>(
+        count,
+        projection,
+        NoExternalDistortion_KernelParameters{},
+        world_points,
+        start_translation,
+        start_rotation,
+        end_translation,
+        end_rotation,
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        max_iterations,
+        stop_mean_error_px,
+        stop_delta_mean_error_px,
+        initial_relative_time,
+        image_points,
+        valid_flags,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
+    );
 }
 
 // ===========================================================================
@@ -470,39 +400,20 @@ __global__ void image_points_to_world_rays_static_pose_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params = load_opencv_pinhole_params(projection);
-    float2 image_point         = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    float2 xy0         = make_float2((image_point.x - params.cx) / params.fx, (image_point.y - params.cy) / params.fy);
-    float2 xy          = iterative_undistort(xy0, params);
-    DistortionResult d = compute_distortion(xy, params);
-    float3 camera_ray  = normalize3(make_float3(xy.x, xy.y, 1.0f));
-    float3 pose_t      = read_vec3(translations, 0);
-    float4 pose_r_xyzw = read_quat_xyzw_from_wxyz(rotations, 0);
-    float3 origin      = pose_t;
-    float3 direction   = quat_rotate_xyzw_geom(pose_r_xyzw, camera_ray);
-    world_rays[idx * 6 + 0] = origin.x;
-    world_rays[idx * 6 + 1] = origin.y;
-    world_rays[idx * 6 + 2] = origin.z;
-    world_rays[idx * 6 + 3] = direction.x;
-    world_rays[idx * 6 + 4] = direction.y;
-    world_rays[idx * 6 + 5] = direction.z;
-    timestamps_us[idx]      = timestamp_us;
-    write_vec3(pose_translations, idx, pose_t);
-    write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    if(scratch != nullptr)
-    {
-        int64_t off      = idx * 5;
-        scratch[off + 0] = xy.x;
-        scratch[off + 1] = xy.y;
-        scratch[off + 2] = d.r2;
-        scratch[off + 3] = d.icD;
-        scratch[off + 4] = distortion_den(d.r2, params);
-    }
+    image_points_to_world_rays_static_pose_forward_impl<kThreads, PinholeEarlyExitPolicy, NoExternalDistortionPolicy>(
+        count,
+        projection,
+        NoExternalDistortion_KernelParameters{},
+        image_points,
+        translations,
+        rotations,
+        timestamp_us,
+        world_rays,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
+    );
 }
 
 // ===========================================================================
@@ -542,60 +453,24 @@ __global__ void image_points_to_world_rays_shutter_pose_forward_kernel(
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params = load_opencv_pinhole_params(projection);
-    float2 image_point         = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    float relative_time
-        = compute_relative_frame_time_opencv(image_point, projection.width, projection.height, shutter_type);
-    float2 xy0        = make_float2((image_point.x - params.cx) / params.fx, (image_point.y - params.cy) / params.fy);
-    float2 xy         = iterative_undistort(xy0, params);
-    float3 camera_ray = normalize3(make_float3(xy.x, xy.y, 1.0f));
-    float3 pose_t     = lerp3(read_vec3(start_translation, 0), read_vec3(end_translation, 0), relative_time);
-    float4 rot0       = read_quat_xyzw_from_wxyz(start_rotation, 0);
-    float4 rot1       = read_quat_xyzw_from_wxyz(end_rotation, 0);
-    float qx, qy, qz, qw;
-    gsplat_geometry::quat_slerp_pair_fwd<float>(
-        rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, relative_time, &qx, &qy, &qz, &qw
+    image_points_to_world_rays_shutter_pose_forward_impl<kThreads, PinholeEarlyExitPolicy, NoExternalDistortionPolicy>(
+        count,
+        projection,
+        NoExternalDistortion_KernelParameters{},
+        image_points,
+        start_translation,
+        start_rotation,
+        end_translation,
+        end_rotation,
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        world_rays,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
     );
-    float4 pose_r_xyzw      = make_float4(qx, qy, qz, qw);
-    float3 origin           = pose_t;
-    float3 direction        = quat_rotate_xyzw_geom(pose_r_xyzw, camera_ray);
-    world_rays[idx * 6 + 0] = origin.x;
-    world_rays[idx * 6 + 1] = origin.y;
-    world_rays[idx * 6 + 2] = origin.z;
-    world_rays[idx * 6 + 3] = direction.x;
-    world_rays[idx * 6 + 4] = direction.y;
-    world_rays[idx * 6 + 5] = direction.z;
-    if(timestamps_us != nullptr)
-    {
-        timestamps_us[idx] = timestamp_from_relative_time(relative_time, start_timestamp_us, end_timestamp_us);
-    }
-    if(pose_translations != nullptr)
-    {
-        write_vec3(pose_translations, idx, pose_t);
-    }
-    if(pose_rotations != nullptr)
-    {
-        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    }
-    if(scratch != nullptr)
-    {
-        DistortionResult d = compute_distortion(xy, params);
-        int64_t off        = idx * 9;
-        scratch[off + 0]   = xy.x;
-        scratch[off + 1]   = xy.y;
-        scratch[off + 2]   = d.r2;
-        scratch[off + 3]   = d.icD;
-        scratch[off + 4]   = distortion_den(d.r2, params);
-        scratch[off + 5]   = relative_time;
-        scratch[off + 6]   = 0.0f;
-        scratch[off + 7]   = 1.0f;
-        scratch[off + 8]   = 0.0f;
-    }
 }
 
 // ===========================================================================
@@ -607,12 +482,12 @@ __global__ void image_points_to_world_rays_shutter_pose_forward_kernel(
 //   [0] distorted_ray.x   (output of apply_bivariate_distortion)
 //   [1] distorted_ray.y
 //   [2] distorted_ray.z
-//   [3] x     (normalised x inside project_camera_ray_opencv, ray_scratch[0])
-//   [4] y     (ray_scratch[1])
-//   [5] inv_z (ray_scratch[2])
-//   [6] r2    (ray_scratch[3])
-//   [7] icD   (ray_scratch[4])
-//   [8] den   (ray_scratch[5])
+//   [3] x
+//   [4] y
+//   [5] inv_z
+//   [6] r2
+//   [7] icD
+//   [8] den
 //   [9] front-face mask: 1.0 if distorted_ray.z > 0, else 0.0
 // ===========================================================================
 
@@ -626,43 +501,17 @@ __global__ void camera_rays_to_image_points_opencv_pinhole_bivariate_windshield_
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params                 = load_opencv_pinhole_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, false);
-    float3 ray                                 = read_vec3(camera_rays, idx);
-    float3 distorted_ray                       = apply_bivariate_distortion(ray, bivariate_params);
-    float ray_scratch[6]                       = {};
-    ProjectionEval eval
-        = project_camera_ray_opencv(params, distorted_ray, scratch != nullptr ? ray_scratch : nullptr, 0);
-    image_points[idx * 2 + 0] = eval.image_point.x;
-    image_points[idx * 2 + 1] = eval.image_point.y;
-    valid_flags[idx]          = eval.valid;
-    if(scratch != nullptr)
-    {
-        int64_t off      = idx * 10;
-        scratch[off + 0] = distorted_ray.x;
-        scratch[off + 1] = distorted_ray.y;
-        scratch[off + 2] = distorted_ray.z;
-        scratch[off + 3] = ray_scratch[0];
-        scratch[off + 4] = ray_scratch[1];
-        scratch[off + 5] = ray_scratch[2];
-        scratch[off + 6] = ray_scratch[3];
-        scratch[off + 7] = ray_scratch[4];
-        scratch[off + 8] = ray_scratch[5];
-        scratch[off + 9] = distorted_ray.z > 0.0f ? 1.0f : 0.0f;
-    }
+    camera_rays_to_image_points_forward_impl<kThreads, PinholeFixedTenPolicy, BivariateWindshieldPolicy>(
+        count, projection, distortion, camera_rays, image_points, valid_flags, scratch
+    );
 }
 
 // ===========================================================================
 // Kernel 9 — image_points_to_camera_rays (bivariate_windshield).
-// Delegates to bivariate_camera_ray_from_image_point which runs fixed 10-iter
-// Newton undistortion followed by inverse bivariate polynomial.
+// Uses the fixed-ten intrinsic inverse followed by the inverse bivariate
+// polynomial.
 //
-// Scratch layout per-thread (stride 9, via bivariate_camera_ray helper):
+// Scratch layout per-thread (stride 9):
 //   [0] xy.x
 //   [1] xy.y
 //   [2] d.r2
@@ -683,22 +532,9 @@ __global__ void image_points_to_camera_rays_opencv_pinhole_bivariate_windshield_
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params                 = load_opencv_pinhole_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, true);
-    float2 image_point                         = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    float3 camera_ray = bivariate_camera_ray_from_image_point(params, bivariate_params, image_point, scratch, idx * 9);
-    write_vec3(camera_rays, idx, camera_ray);
-    if(scratch != nullptr)
-    {
-        // K9 stride is fixed at 9 floats by the wrapper-side scratch allocation.
-        // Slot 8 is unused by the K9 backward; zero it to make the layout explicit.
-        scratch[idx * 9 + 8] = 0.0f;
-    }
+    image_points_to_camera_rays_forward_impl<kThreads, PinholeFixedTenPolicy, BivariateWindshieldPolicy>(
+        count, projection, distortion, image_points, camera_rays, scratch
+    );
 }
 
 // ===========================================================================
@@ -715,9 +551,9 @@ __global__ void image_points_to_camera_rays_opencv_pinhole_bivariate_windshield_
 //   [3]  cam_pt.x
 //   [4]  cam_pt.y
 //   [5]  cam_pt.z
-//   [6]  r2    (ray_scratch[3] from project_camera_ray_opencv on distorted ray)
-//   [7]  icD   (ray_scratch[4])
-//   [8]  den   (ray_scratch[5])
+//   [6]  r2
+//   [7]  icD
+//   [8]  den
 // ===========================================================================
 
 __global__ void project_world_points_mean_pose_opencv_pinhole_bivariate_windshield_forward_kernel(
@@ -738,74 +574,23 @@ __global__ void project_world_points_mean_pose_opencv_pinhole_bivariate_windshie
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    __shared__ OpenCVPinholeParams block_params;
-    __shared__ BivariateWindshieldParams block_bivariate_params;
-    __shared__ float3 block_pose_t;
-    __shared__ float4 block_pose_r_xyzw;
-    if(threadIdx.x == 0)
-    {
-        block_params           = load_opencv_pinhole_params(projection);
-        block_bivariate_params = load_bivariate_windshield_params(distortion, false);
-        float3 trans0          = read_vec3(start_translation, 0);
-        float3 trans1          = read_vec3(end_translation, 0);
-        float4 rot0            = read_quat_xyzw_from_wxyz(start_rotation, 0);
-        float4 rot1            = read_quat_xyzw_from_wxyz(end_rotation, 0);
-        block_pose_t           = lerp3(trans0, trans1, 0.5f);
-        float qx, qy, qz, qw;
-        gsplat_geometry::quat_slerp_pair_fwd<float>(
-            rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &qx, &qy, &qz, &qw
-        );
-        block_pose_r_xyzw = make_float4(qx, qy, qz, qw);
-    }
-    __syncthreads();
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params                 = block_params;
-    BivariateWindshieldParams bivariate_params = block_bivariate_params;
-    float3 world_point                         = read_vec3(world_points, idx);
-    float3 pose_t                              = block_pose_t;
-    float4 pose_r_xyzw                         = block_pose_r_xyzw;
-    float3 p_rel                               = sub3(world_point, pose_t);
-    float3 cam_pt                              = quat_inverse_rotate_xyzw_geom(pose_r_xyzw, p_rel);
-    ProjectionEval eval                        = {make_float2(0.0f, 0.0f), false};
-    float ray_scratch[6]                       = {};
-    if(cam_pt.z > 0.0f)
-    {
-        float3 camera_ray    = normalize3(cam_pt);
-        float3 distorted_ray = apply_bivariate_distortion(camera_ray, bivariate_params);
-        eval = project_camera_ray_opencv(params, distorted_ray, scratch != nullptr ? ray_scratch : nullptr, 0);
-    }
-    image_points[idx * 2 + 0] = eval.image_point.x;
-    image_points[idx * 2 + 1] = eval.image_point.y;
-    valid_flags[idx]          = eval.valid;
-    if(timestamps_us != nullptr)
-    {
-        timestamps_us[idx] = mean_timestamp_us;
-    }
-    if(pose_translations != nullptr)
-    {
-        write_vec3(pose_translations, idx, pose_t);
-    }
-    if(pose_rotations != nullptr)
-    {
-        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    }
-    if(scratch != nullptr)
-    {
-        int64_t off      = idx * 9;
-        scratch[off + 0] = p_rel.x;
-        scratch[off + 1] = p_rel.y;
-        scratch[off + 2] = p_rel.z;
-        scratch[off + 3] = cam_pt.x;
-        scratch[off + 4] = cam_pt.y;
-        scratch[off + 5] = cam_pt.z;
-        scratch[off + 6] = ray_scratch[3];
-        scratch[off + 7] = ray_scratch[4];
-        scratch[off + 8] = ray_scratch[5];
-    }
+    project_world_points_mean_pose_forward_impl<kThreads, PinholeFixedTenPolicy, BivariateWindshieldPolicy>(
+        count,
+        projection,
+        distortion,
+        world_points,
+        start_translation,
+        start_rotation,
+        end_translation,
+        end_rotation,
+        mean_timestamp_us,
+        image_points,
+        valid_flags,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
+    );
 }
 
 // ===========================================================================
@@ -821,9 +606,9 @@ __global__ void project_world_points_mean_pose_opencv_pinhole_bivariate_windshie
 //   [3]  cam_pt.x
 //   [4]  cam_pt.y
 //   [5]  cam_pt.z
-//   [6]  r2    (ray_scratch[3] on distorted ray)
-//   [7]  icD   (ray_scratch[4])
-//   [8]  den   (ray_scratch[5])
+//   [6]  r2
+//   [7]  icD
+//   [8]  den
 //   [9]  alpha  (final relative_time)
 // ===========================================================================
 
@@ -851,109 +636,38 @@ __global__ void project_world_points_shutter_pose_opencv_pinhole_bivariate_winds
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params                 = load_opencv_pinhole_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, false);
-    float3 world_point                         = read_vec3(world_points, idx);
-    float3 trans0                              = read_vec3(start_translation, 0);
-    float3 trans1                              = read_vec3(end_translation, 0);
-    float4 rot0                                = read_quat_xyzw_from_wxyz(start_rotation, 0);
-    float4 rot1                                = read_quat_xyzw_from_wxyz(end_rotation, 0);
-    float relative_time                        = initial_relative_time;
-    float alpha                                = 0.0f;
-    float2 previous_image_point                = make_float2(0.0f, 0.0f);
-    float3 pose_t                              = trans0;
-    float4 pose_r_xyzw                         = rot0;
-    float3 p_rel                               = make_float3(0.0f, 0.0f, 0.0f);
-    float3 cam_pt                              = make_float3(0.0f, 0.0f, 0.0f);
-    ProjectionEval eval                        = {make_float2(0.0f, 0.0f), false};
-    float ray_scratch[6]                       = {};
-    for(int64_t i = 0; i < max_iterations; ++i)
-    {
-        alpha  = relative_time;
-        pose_t = lerp3(trans0, trans1, alpha);
-        {
-            float qx, qy, qz, qw;
-            gsplat_geometry::quat_slerp_pair_fwd<float>(
-                rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &qx, &qy, &qz, &qw
-            );
-            pose_r_xyzw = make_float4(qx, qy, qz, qw);
-        }
-        p_rel  = sub3(world_point, pose_t);
-        cam_pt = quat_inverse_rotate_xyzw_geom(pose_r_xyzw, p_rel);
-        if(cam_pt.z <= 0.0f)
-        {
-            // Preserve the last successful image_point; only flip valid.
-            eval.valid = false;
-            break;
-        }
-        float3 camera_ray    = normalize3(cam_pt);
-        float3 distorted_ray = apply_bivariate_distortion(camera_ray, bivariate_params);
-        eval = project_camera_ray_opencv(params, distorted_ray, scratch != nullptr ? ray_scratch : nullptr, 0);
-        if(shutter_type == static_cast<int64_t>(gsplat_sensors::ShutterType::GLOBAL) || !eval.valid)
-        {
-            break;
-        }
-        float next_relative_time
-            = compute_relative_frame_time_opencv(eval.image_point, projection.width, projection.height, shutter_type);
-        float2 delta_px
-            = make_float2(eval.image_point.x - previous_image_point.x, eval.image_point.y - previous_image_point.y);
-        float pixel_error = sqrtf(delta_px.x * delta_px.x + delta_px.y * delta_px.y);
-        if(i > 0 && pixel_error < stop_delta_mean_error_px)
-        {
-            break;
-        }
-        float time_delta              = fabsf(next_relative_time - relative_time);
-        float approximate_pixel_error = time_delta * static_cast<float>(std::max(projection.width, projection.height));
-        if(approximate_pixel_error < stop_mean_error_px)
-        {
-            break;
-        }
-        previous_image_point = eval.image_point;
-        relative_time        = next_relative_time;
-    }
-    image_points[idx * 2 + 0] = eval.image_point.x;
-    image_points[idx * 2 + 1] = eval.image_point.y;
-    valid_flags[idx]          = eval.valid;
-    if(timestamps_us != nullptr)
-    {
-        timestamps_us[idx] = timestamp_from_relative_time(relative_time, start_timestamp_us, end_timestamp_us);
-    }
-    if(pose_translations != nullptr)
-    {
-        write_vec3(pose_translations, idx, pose_t);
-    }
-    if(pose_rotations != nullptr)
-    {
-        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    }
-    if(scratch != nullptr)
-    {
-        int64_t off      = idx * 10;
-        scratch[off + 0] = p_rel.x;
-        scratch[off + 1] = p_rel.y;
-        scratch[off + 2] = p_rel.z;
-        scratch[off + 3] = cam_pt.x;
-        scratch[off + 4] = cam_pt.y;
-        scratch[off + 5] = cam_pt.z;
-        scratch[off + 6] = ray_scratch[3];
-        scratch[off + 7] = ray_scratch[4];
-        scratch[off + 8] = ray_scratch[5];
-        scratch[off + 9] = alpha;
-    }
+    project_world_points_shutter_pose_pinhole_forward_impl<BivariateWindshieldPolicy>(
+        count,
+        projection,
+        distortion,
+        world_points,
+        start_translation,
+        start_rotation,
+        end_translation,
+        end_rotation,
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        max_iterations,
+        stop_mean_error_px,
+        stop_delta_mean_error_px,
+        initial_relative_time,
+        image_points,
+        valid_flags,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
+    );
 }
 
 // ===========================================================================
 // Kernel 12 — image_points_to_world_rays_static_pose (bivariate_windshield).
-// Delegates undistortion to bivariate_camera_ray_from_image_point, then
-// rotates the resulting camera ray into world space with a single static pose.
+// Inverts the intrinsic and bivariate models, then rotates the resulting
+// camera ray into world space with a single static pose.
 // Output world_rays layout: [origin.xyz, direction.xyz] per ray (stride 6).
 //
-// Scratch layout per-thread (stride 9, via bivariate_camera_ray helper):
+// Scratch layout per-thread (stride 9):
 //   [0] xy.x
 //   [1] xy.y
 //   [2] d.r2
@@ -980,45 +694,30 @@ __global__ void image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params                 = load_opencv_pinhole_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, true);
-    float2 image_point                         = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    float3 camera_ray  = bivariate_camera_ray_from_image_point(params, bivariate_params, image_point, scratch, idx * 9);
-    float3 pose_t      = read_vec3(translations, 0);
-    float4 pose_r_xyzw = read_quat_xyzw_from_wxyz(rotations, 0);
-    float3 origin      = pose_t;
-    float3 direction   = quat_rotate_xyzw_geom(pose_r_xyzw, camera_ray);
-    world_rays[idx * 6 + 0] = origin.x;
-    world_rays[idx * 6 + 1] = origin.y;
-    world_rays[idx * 6 + 2] = origin.z;
-    world_rays[idx * 6 + 3] = direction.x;
-    world_rays[idx * 6 + 4] = direction.y;
-    world_rays[idx * 6 + 5] = direction.z;
-    timestamps_us[idx]      = timestamp_us;
-    write_vec3(pose_translations, idx, pose_t);
-    write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    if(scratch != nullptr)
-    {
-        // K12 stride is fixed at 9 floats by the wrapper-side scratch allocation.
-        // Slot 8 is unused by the K12 backward; zero it to make the layout explicit.
-        scratch[idx * 9 + 8] = 0.0f;
-    }
+    image_points_to_world_rays_static_pose_forward_impl<kThreads, PinholeFixedTenPolicy, BivariateWindshieldPolicy>(
+        count,
+        projection,
+        distortion,
+        image_points,
+        translations,
+        rotations,
+        timestamp_us,
+        world_rays,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
+    );
 }
 
 // ===========================================================================
 // Kernel 13 — image_points_to_world_rays_shutter_pose (bivariate_windshield).
 // Computes the rolling-shutter pose via LERP/SLERP at the per-pixel relative
-// time, then calls bivariate_camera_ray_from_image_point and rotates into
-// world space. Accepts nullptr image_points (generates pixel centres from idx).
+// time, inverts the intrinsic and bivariate models, and rotates into world
+// space.
 // Output world_rays layout: [origin.xyz, direction.xyz] per ray (stride 6).
 //
-// Scratch layout per-thread (stride 12, via bivariate_camera_ray helper +
-// trailing slots written directly):
+// Scratch layout per-thread (stride 12):
 //   [0] xy.x
 //   [1] xy.y
 //   [2] d.r2
@@ -1052,65 +751,24 @@ __global__ void image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate
     float *__restrict__ scratch
 )
 {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx >= count)
-    {
-        return;
-    }
-    OpenCVPinholeParams params                 = load_opencv_pinhole_params(projection);
-    BivariateWindshieldParams bivariate_params = load_bivariate_windshield_params(distortion, true);
-    float2 image_point;
-    if(image_points != nullptr)
-    {
-        image_point = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
-    }
-    else
-    {
-        // Generated-elements path: regenerate pixel coords from (idx % width, idx / width).
-        int64_t res_x = projection.width;
-        int64_t y_idx = idx / res_x;
-        int64_t x_idx = idx - y_idx * res_x;
-        image_point   = make_float2(0.5f + static_cast<float>(x_idx), 0.5f + static_cast<float>(y_idx));
-    }
-    float relative_time
-        = compute_relative_frame_time_opencv(image_point, projection.width, projection.height, shutter_type);
-    float3 pose_t = lerp3(read_vec3(start_translation, 0), read_vec3(end_translation, 0), relative_time);
-    float4 rot0   = read_quat_xyzw_from_wxyz(start_rotation, 0);
-    float4 rot1   = read_quat_xyzw_from_wxyz(end_rotation, 0);
-    float qx, qy, qz, qw;
-    gsplat_geometry::quat_slerp_pair_fwd<float>(
-        rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, relative_time, &qx, &qy, &qz, &qw
+    image_points_to_world_rays_shutter_pose_forward_impl<kThreads, PinholeFixedTenPolicy, BivariateWindshieldPolicy>(
+        count,
+        projection,
+        distortion,
+        image_points,
+        start_translation,
+        start_rotation,
+        end_translation,
+        end_rotation,
+        shutter_type,
+        start_timestamp_us,
+        end_timestamp_us,
+        world_rays,
+        timestamps_us,
+        pose_translations,
+        pose_rotations,
+        scratch
     );
-    float4 pose_r_xyzw = make_float4(qx, qy, qz, qw);
-    float3 camera_ray = bivariate_camera_ray_from_image_point(params, bivariate_params, image_point, scratch, idx * 12);
-    float3 origin     = pose_t;
-    float3 direction  = quat_rotate_xyzw_geom(pose_r_xyzw, camera_ray);
-    world_rays[idx * 6 + 0] = origin.x;
-    world_rays[idx * 6 + 1] = origin.y;
-    world_rays[idx * 6 + 2] = origin.z;
-    world_rays[idx * 6 + 3] = direction.x;
-    world_rays[idx * 6 + 4] = direction.y;
-    world_rays[idx * 6 + 5] = direction.z;
-    if(timestamps_us != nullptr)
-    {
-        timestamps_us[idx] = timestamp_from_relative_time(relative_time, start_timestamp_us, end_timestamp_us);
-    }
-    if(pose_translations != nullptr)
-    {
-        write_vec3(pose_translations, idx, pose_t);
-    }
-    if(pose_rotations != nullptr)
-    {
-        write_quat_wxyz_from_xyzw(pose_rotations, idx, pose_r_xyzw);
-    }
-    if(scratch != nullptr)
-    {
-        int64_t off       = idx * 12;
-        scratch[off + 8]  = relative_time;
-        scratch[off + 9]  = 0.0f;
-        scratch[off + 10] = 1.0f;
-        scratch[off + 11] = 0.0f;
-    }
 }
 } // namespace
 

@@ -56,6 +56,27 @@ constexpr __device__ __forceinline__ void validate_projection_block_size()
     static_assert(BlockThreads % 32 == 0);
 }
 
+template<typename ProjectionPolicy, typename DistortionPolicy>
+constexpr bool kSupportsGeneratedShutterImagePoints
+    = ProjectionPolicy::kScratchSensor == DistortionSensor::OpenCVPinhole
+   && std::is_same_v<typename DistortionPolicy::Tag, BivariateWindshieldPolicyTag>;
+
+template<typename ProjectionPolicy, typename DistortionPolicy>
+__device__ __forceinline__ float2
+    load_shutter_image_point(const float *__restrict__ image_points, int64_t idx, int64_t width)
+{
+    if constexpr(kSupportsGeneratedShutterImagePoints<ProjectionPolicy, DistortionPolicy>)
+    {
+        if(image_points == nullptr)
+        {
+            const int64_t y = idx / width;
+            const int64_t x = idx - y * width;
+            return make_float2(0.5f + static_cast<float>(x), 0.5f + static_cast<float>(y));
+        }
+    }
+    return make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
+}
+
 template<int BlockThreads, typename ProjectionPolicy, typename DistortionPolicy>
 __device__ __forceinline__ void camera_rays_to_image_points_forward_impl(
     int64_t count,
@@ -132,6 +153,7 @@ __device__ __forceinline__ void image_points_to_camera_rays_forward_impl(
     write_vec3(camera_rays, idx, camera_ray);
     if(scratch != nullptr)
     {
+        ProjectionPolicy::finalize_backproject_state_for_scratch(params, state);
         ProjectionPolicy::template ScratchIO<kOp>::template save_forward<Scratch>(scratch, off, state);
     }
 }
@@ -269,8 +291,10 @@ __device__ __forceinline__ void image_points_to_world_rays_static_pose_forward_i
     const float2 image_point = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
     typename ProjectionPolicy::BackprojectState state;
     const float3 projected_ray = ProjectionPolicy::backproject(image_point, params, state);
-    const int64_t off          = idx * Scratch::kScratchStride;
-    const float3 camera_ray    = DistortionPolicy::apply_inverse(
+    // Avoid overlapping lens-state construction with the pose-output live range.
+    ProjectionPolicy::finalize_backproject_state_for_scratch(params, state);
+    const int64_t off       = idx * Scratch::kScratchStride;
+    const float3 camera_ray = DistortionPolicy::apply_inverse(
         projected_ray, distortion_params, scratch, off + Scratch::kInverseStashOffset
     );
     const float3 pose_translation   = read_vec3(translations, 0);
@@ -326,7 +350,8 @@ __device__ __forceinline__ void image_points_to_world_rays_shutter_pose_forward_
     const typename ProjectionPolicy::Params params = ProjectionPolicy::load(projection);
     const typename DistortionPolicy::Params distortion_params
         = DistortionPolicy::load(distortion, Scratch::kIsUndistort);
-    const float2 image_point = make_float2(image_points[idx * 2 + 0], image_points[idx * 2 + 1]);
+    const float2 image_point
+        = load_shutter_image_point<ProjectionPolicy, DistortionPolicy>(image_points, idx, projection.width);
     const float alpha
         = compute_relative_frame_time_opencv(image_point, projection.width, projection.height, shutter_type);
 
@@ -369,6 +394,7 @@ __device__ __forceinline__ void image_points_to_world_rays_shutter_pose_forward_
     }
     if(scratch != nullptr)
     {
+        ProjectionPolicy::finalize_backproject_state_for_scratch(params, state);
         ProjectionPolicy::template ScratchIO<kOp>::template save_forward<Scratch>(scratch, off, state, alpha);
     }
 }
