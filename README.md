@@ -17,6 +17,17 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gsplat/releases/tag/v1.5.3) tag (not yet on PyPI).
 
+- [Jun 2026] **G-SHARP** -- dynamic surgical-scene reconstruction for Gaussian splatting.
+- [Jun 2026] **New camera & sensor support** in the sensors library: pinhole, FTheta, fisheye, and LiDAR models.
+- [Jun 2026] **Faster rasterization** -- a series of performance improvements across the 3DGS and 3DGUT rasterization paths. Noticing roughly 30% improvement on the 3DGUT MCMC path on an NVIDIA A100.
+- [Jun 2026] **Gaussian ID rasterization** -- a new op to rasterize Gaussian IDs, counts, and top contributors per pixel.
+- [Jun 2026] **Various performance and code improvements**:
+  - **Spherical-harmonics improvements** -- support for arbitrary channel counts and fp16.
+  - **Profiling and tracing tools** for diagnosing performance.
+  - **Robustness and stability fixes** across the library.
+  - **Stronger test coverage**, plus ahead-of-time (AOT) build/test CI.
+  - **CUDA 13 and NumPy 2 support**.
+  - **Simplified package layout** -- everything now lives under the `gsplat` namespace.
 - [May 2026] **Inference Rendering (HiGS)** -- An experimental inference-only rendering path based on HiGS (Hierarchically Tiled Gaussian Splatting) is now available under the `experimental` package. The inference path uses macro-tile fused rasterization with fp16 scene packing for low-latency rendering of pre-trained Gaussian scenes. For more details, see the [Inference Rendering](#inference-rendering) section and the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/).
 - [May 2026] Native CUDA **MCMC perturb** (`inject_noise`) speeds up the noise-injection step used in MCMC-style Gaussian optimization.
 - [Apr 2026] **AccuTile** adds a conservative ellipse-based tile–Gaussian intersection test on the 3DGS path for tighter work scheduling before rasterization ([PR #927](https://github.com/nerfstudio-project/gsplat/pull/927)).
