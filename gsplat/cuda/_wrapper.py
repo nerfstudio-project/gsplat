@@ -931,7 +931,14 @@ def rasterize_to_pixels(
         assert colors.shape == image_dims + (N, channels), colors.shape
         assert opacities.shape == image_dims + (N,), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
+        if packed:
+            # When packed, image_dims is empty but backgrounds should still
+            # be (C, channels) where C is the number of cameras.
+            assert backgrounds.shape[-1] == channels, (
+                f"backgrounds last dim {backgrounds.shape[-1]} != channels {channels}"
+            )
+        else:
+            assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
         backgrounds = backgrounds.contiguous()
     if masks is not None:
         assert masks.shape == isect_offsets.shape, masks.shape
