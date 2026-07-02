@@ -761,8 +761,7 @@ def compute_histogram_equalization(
     angles_az = angles[..., 0]
     angles_el = angles[..., 1]
 
-    # TODO: use parameters.fov_eps_rad
-    fov_eps_rad = 2 * torch.finfo(torch.float32).eps
+    fov_eps_rad = parameters.fov_eps_rad
     ranges_azimuth = (-fov_eps_rad, parameters.fov_horiz_rad.span + fov_eps_rad)
     ranges_elevation = (-fov_eps_rad, parameters.fov_vert_rad.span + fov_eps_rad)
     assert torch.all(
