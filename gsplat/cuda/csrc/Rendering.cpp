@@ -276,6 +276,11 @@ namespace
         TORCH_CHECK(!return_normals || with_eval3d, "return_normals=True requires with_eval3d=True");
         TORCH_CHECK(!sparse_grad || packed, "sparse_grad is only supported when packed is True");
         TORCH_CHECK(!sparse_grad || means.dim() == 2, "sparse_grad does not support batch dimensions");
+        TORCH_CHECK(
+            camera_model != CameraModelType::ORTHO
+                || (!radial_coeffs.has_value() && !tangential_coeffs.has_value() && !thin_prism_coeffs.has_value()),
+            "ortho camera model does not support radial_coeffs, tangential_coeffs, or thin_prism_coeffs parameters"
+        );
 
         TORCH_CHECK(means.dim() >= 2 && means.size(-1) == 3, "means must have shape [..., N, 3], got ", means.sizes());
         const int64_t batch_ndim = means.dim() - 2;

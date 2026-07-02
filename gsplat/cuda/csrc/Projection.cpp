@@ -2002,6 +2002,13 @@ ProjectionUT3DGSFusedResult projection_ut_3dgs_fused_impl(
         at::DimVector Ks_shape(batch_dims);
         Ks_shape.append({C, 3, 3});
         TORCH_CHECK(Ks.sizes() == Ks_shape, "Ks must have shape [..., C, 3, 3], got ", Ks.sizes());
+        if(camera_model == CameraModelType::ORTHO)
+        {
+            TORCH_CHECK(
+                !radial_coeffs.has_value() && !tangential_coeffs.has_value() && !thin_prism_coeffs.has_value(),
+                "ortho camera model does not support radial_coeffs, tangential_coeffs, or thin_prism_coeffs parameters"
+            );
+        }
         if(radial_coeffs.has_value())
         {
             const at::Tensor &radial = radial_coeffs.value();
