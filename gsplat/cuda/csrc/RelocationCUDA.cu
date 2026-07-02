@@ -55,7 +55,8 @@ __global__ void relocation_kernel(
     for (int i = 1; i <= n_idx; ++i) {
         for (int k = 0; k <= (i - 1); ++k) {
             float bin_coeff = binoms[(i - 1) * n_max + k];
-            float term = (pow(-1.0f, k) / sqrt(static_cast<float>(k + 1))) *
+            float sign = (k % 2 == 0) ? 1.0f : -1.0f;
+            float term = (sign / sqrt(static_cast<float>(k + 1))) *
                          pow(new_opacities[idx], k + 1);
             denom_sum += (bin_coeff * term);
         }
