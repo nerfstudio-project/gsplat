@@ -58,6 +58,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
         .value("FTHETA", gsplat::CameraModelType::FTHETA)
         .value("LIDAR", gsplat::CameraModelType::LIDAR)
+        .value("EUCM", gsplat::CameraModelType::EUCM)
         .export_values();
 
     py::enum_<gsplat::RendererConfig>(m, "RendererConfig", py::module_local())

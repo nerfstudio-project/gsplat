@@ -338,6 +338,17 @@ void launch_projection_ut_3dgs_fused_kernel(
                 )
             );
         }
+        else if (camera_model == CameraModelType::EUCM) {
+            return to_sensor_model_kernel_params(
+                get_camera_model_kernel_params<EUCMCameraModel>(
+                    {image_width, image_height},
+                    rs_type,
+                    external_distortion_kernel_params,
+                    Ks.const_data_ptr<float>(),
+                    tangential_coeffs.has_value() ? tangential_coeffs.value().const_data_ptr<float>() : nullptr
+                )
+            );
+        }
         else if (camera_model == CameraModelType::LIDAR) {
             TORCH_CHECK(lidar_coeffs.has_value(), "Lidar coefficients must be given for lidar camera model");
             return RowOffsetStructuredSpinningLidarModel::KernelParameters{*lidar_coeffs.value()};

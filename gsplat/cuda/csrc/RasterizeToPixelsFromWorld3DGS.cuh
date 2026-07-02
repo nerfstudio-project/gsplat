@@ -436,6 +436,24 @@ __device__ __forceinline__ WorldRay compute_world_ray(
             CameraModel::KernelParameters kernel_params = { *lidar_device_coeffs };
             CameraModel camera_model(kernel_params, iid);
             ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+        } else if (camera_model_type == CameraModelType::EUCM) {
+            if (external_distortion_device_params.has_value()) {
+                using CameraModel = EUCMCameraModel<extdist::BivariateWindshieldModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                    Ks, tangential_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            } else {
+                using CameraModel = EUCMCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    { {image_width, image_height}, rs_type, {} },
+                    Ks, tangential_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
         } else {
             assert(false);
             ray.valid_flag = false;

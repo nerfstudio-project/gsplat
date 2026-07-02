@@ -37,7 +37,7 @@ from gsplat.cuda._lidar import (
 )
 
 ExternalDistortionModelMeta = Literal["bivariate-windshield"]
-CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar"]
+CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar", "eucm"]
 
 
 def _make_lazy_cuda_func(name: str) -> Callable:
@@ -400,6 +400,7 @@ def spherical_harmonics(
     Returns:
         Spherical harmonics. ``[..., N, D]``.
     """
+    
     assert dirs.dim() >= 2 and dirs.shape[-1] == 3, dirs.shape
     assert coeffs.dim() == 3 and coeffs.shape[-1] >= 1, coeffs.shape
     assert coeffs.shape[0] == dirs.shape[-2], (coeffs.shape, dirs.shape)
