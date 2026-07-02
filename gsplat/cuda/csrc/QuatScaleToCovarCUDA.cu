@@ -133,7 +133,7 @@ void launch_quat_scale_to_covar_preci_fwd_kernel(
 
     int64_t n_elements             = N;
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -181,7 +181,7 @@ void launch_quat_scale_to_covar_preci_fwd_kernels(
 
         int64_t offset, count;
         std::tie(offset, count) = chunk(n_elements, device_id);
-        unsigned int blocks     = ::cuda::ceil_div(count, threads);
+        unsigned int blocks     = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(count, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_FLOATING_TYPES(
@@ -325,7 +325,7 @@ void launch_quat_scale_to_covar_preci_bwd_kernel(
 
     int64_t n_elements             = N;
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -387,7 +387,7 @@ void launch_quat_scale_to_covar_preci_bwd_kernels(
 
         int64_t offset, count;
         std::tie(offset, count) = chunk(n_elements, device_id);
-        unsigned int blocks     = ::cuda::ceil_div(count, threads);
+        unsigned int blocks     = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(count, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_FLOATING_TYPES(

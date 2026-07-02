@@ -248,7 +248,7 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
 
     int64_t n_elements             = B * C * N;
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -331,7 +331,7 @@ void launch_projection_ewa_3dgs_fused_fwd_kernels(
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
         int64_t n_elements                        = static_cast<int64_t>(B) * C * gaussian_count;
-        unsigned int blocks                       = ::cuda::ceil_div(n_elements, threads);
+        unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_FLOATING_TYPES(
@@ -674,7 +674,7 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
 
     int64_t n_elements             = B * C * N;
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -772,7 +772,7 @@ void launch_projection_ewa_3dgs_fused_bwd_kernels(
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
         int64_t n_elements                        = static_cast<int64_t>(B) * C * gaussian_count;
-        unsigned int blocks                       = ::cuda::ceil_div(n_elements, threads);
+        unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_FLOATING_TYPES(
