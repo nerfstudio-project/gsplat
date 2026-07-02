@@ -1108,6 +1108,9 @@ def rasterization(
         }
     )
 
+    if rays is not None:
+        rays = rays.reshape(rays.shape[:-3] + (rays.shape[-3] * rays.shape[-2], 6))
+
     # print("rank", world_rank, "Before rasterize_to_pixels")
     if proj_features.shape[-1] > channel_chunk:
         # slice into chunks

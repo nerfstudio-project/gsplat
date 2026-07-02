@@ -516,27 +516,75 @@ def sensor_angles_to_rays(
     return SensorRayReturn(sensor_rays=sensor_rays, valid_flag=valid)
 
 
-def compute_angles_to_columns_map(
+# Clamp margin (radians) for measured element angles: keeps the reconstructed
+# absolute angles strictly inside the FOV after the float32
+# relative->absolute->relative round-trip performed by the tiling code
+# (~1e-6 rad of accumulated rounding; 1e-5 rad is <0.001 deg — geometrically nil).
+ELEMENT_ANGLES_FOV_MARGIN_RAD: float = 1e-5
+
+
+def clamp_element_angles_to_fov(
+    parameters: RowOffsetStructuredSpinningLidarModelParameters,
+    element_angles: Tensor,
+) -> Tensor:
+    """Sanitize measured per-element sensor angles so they can replace the
+    idealized ``elements_to_sensor_angles`` grid in the tiling code.
+
+    element_angles: [..., 2] with [..., 0]=azimuth, [..., 1]=elevation
+    (radians, sensor frame). Returns absolute angles of the same shape.
+
+    Real angles of a non-separable scan pattern (e.g. galvo + prism) can stick
+    out slightly past the FOV of the fitted separable model. Downstream tiling
+    code requires angles inside the FOV (bounds asserts in
+    ``compute_histogram_equalization``; the ``int() % n_bins`` quantization in
+    ``angles_to_dense_ray_mask_cdf`` wraps out-of-range angles around), so we
+    clamp in relative-angle space and convert back to absolute angles.
+    """
+    element_angles = element_angles.to(
+        device=parameters.device, dtype=parameters.dtype
+    )
+    rel = relative_sensor_angles(parameters, element_angles)
+    rel_az = rel[..., 0]
+    rel_el = rel[..., 1]
+
+    span_az = parameters.fov_horiz_rad.span
+    span_el = parameters.fov_vert_rad.span
+    margin_az = min(ELEMENT_ANGLES_FOV_MARGIN_RAD, span_az / 4)
+    margin_el = min(ELEMENT_ANGLES_FOV_MARGIN_RAD, span_el / 4)
+
+    # Relative azimuth is normalized to [0, 2*pi); values in (span, 2*pi) are
+    # out of FOV — snap them to the angularly nearest FOV end.
+    beyond = rel_az > span_az
+    nearest_is_end = (rel_az - span_az) <= (2 * math.pi - rel_az)
+    rel_az = torch.where(
+        beyond & nearest_is_end, torch.full_like(rel_az, span_az), rel_az
+    )
+    rel_az = torch.where(
+        beyond & ~nearest_is_end, torch.zeros_like(rel_az), rel_az
+    )
+    rel_az = torch.clamp(rel_az, margin_az, span_az - margin_az)
+    # Relative elevation is a plain offset (not normalized) — direct clamp.
+    rel_el = torch.clamp(rel_el, margin_el, span_el - margin_el)
+
+    # Invert relative_sensor_angles: absolute = FOV start advanced by the
+    # relative angle along the respective direction.
+    if parameters.spinning_direction == SpinningDirection.CLOCKWISE:
+        azimuth = parameters.fov_horiz_rad.start - rel_az
+    else:
+        azimuth = parameters.fov_horiz_rad.start + rel_az
+    # Vertical FOV always runs clockwise (descending elevations).
+    elevation = parameters.fov_vert_rad.start - rel_el
+
+    return torch.stack([normalize_azimuth(azimuth), elevation], dim=-1)
+
+
+def _compute_fov_grid_rays(
     lidar: RowOffsetStructuredSpinningLidarModelParameters,
     resolution_factor: float = 4,
-    dtype: torch.dtype = torch.int32,
-):
-    """Computes angles to column map as a 2D array of shape resolution_factor * (n_rows, n_columns)."""
+) -> Tensor:
+    """Regular, high-density grid of unit rays spanning the sensor's FOV,
+    shape (resolution_factor * n_rows, resolution_factor * n_columns, 3)."""
 
-    # The idea here is to create a regular high-resolution grid spanning the whole FOV
-    # and store in each grid cell the projected azimuth of the closest lidar ray to it.
-    # The lidar (unitary) ray chosen is the one closest (L^2)
-    # to the top-left corner of the grid cell, when 'un-projected' to an unitary ray.
-
-    assert (
-        torch.iinfo(dtype).max >= lidar.n_columns - 1
-    ), "The dtype for the angles to columns map must be able to store the maximum column index, consider increasing angles_to_columns_map_dtype"
-
-    assert (
-        not dtype.is_floating_point and not dtype.is_complex
-    ), "The dtype for the angles to columns map must be an integer type"
-
-    # Create regular, high-density angle grid spanning the sensor's FOV.
     grid_elevations_rad, grid_azimuths_rad = torch.meshgrid(
         # Elevations
         torch.linspace(
@@ -570,6 +618,86 @@ def compute_angles_to_columns_map(
         grid_rays.valid_flag
     ), "Bug: grid rays must be valid in the FOV of the sensor"
 
+    return grid_rays.sensor_rays
+
+
+def compute_angles_to_values_map(
+    lidar: RowOffsetStructuredSpinningLidarModelParameters,
+    element_rays: Tensor,
+    values: Tensor,
+    resolution_factor: float = 4,
+    dtype: torch.dtype = torch.int32,
+):
+    """Generalization of ``compute_angles_to_columns_map``: computes a 2D map of
+    shape resolution_factor * (n_rows, n_columns) spanning the FOV, where each
+    grid cell stores ``values[i]`` of the nearest (L^2 over unit rays) element
+    ray ``i``.
+
+    Since the only consumer of the map is ``shutter_relative_frame_time``
+    (which divides the stored value by ``n_columns - 1``), storing quantized
+    emission times ``round(t_rel * (n_columns - 1))`` instead of column indices
+    yields correct rolling-shutter timing for lidars whose scan pattern is not
+    column-sequential (e.g. galvo + prism).
+
+    element_rays: (N, 3) unit rays in the sensor frame.
+    values: (N,) integer values to store in the map.
+    """
+    assert (
+        element_rays.ndim == 2 and element_rays.shape[-1] == 3
+    ), element_rays.shape
+    assert values.shape == element_rays.shape[:1], (
+        values.shape,
+        element_rays.shape,
+    )
+    assert (
+        not values.dtype.is_floating_point and not values.dtype.is_complex
+    ), "The values for the angles to values map must be integers"
+
+    assert (
+        not dtype.is_floating_point and not dtype.is_complex
+    ), "The dtype for the angles to values map must be an integer type"
+    assert (
+        torch.iinfo(dtype).max >= int(values.max().item())
+        and torch.iinfo(dtype).min <= int(values.min().item())
+    ), "The dtype for the angles to values map must be able to store all values"
+
+    grid_rays = _compute_fov_grid_rays(lidar, resolution_factor)
+
+    # Compute the NN of each grid ray in the element rays
+    # TODO: this is quite slow and should be moved to CUDA.
+    #       We can get away with it for now because we're caching the results,
+    #       and usually this function would be called only once per lidar model needed.
+    from scipy import spatial as scipy_spatial  # requires pip install gsplat[lidar]
+
+    kdtree = scipy_spatial.cKDTree(
+        element_rays.contiguous().cpu().numpy()
+    )  # ty:ignore[unresolved-attribute]
+    _, idxs = kdtree.query(grid_rays.reshape(-1, 3).contiguous().cpu().numpy())
+    idxs = torch.from_numpy(idxs)
+
+    return (
+        values.cpu()[idxs]
+        .to(device=lidar.device, dtype=dtype)
+        .reshape(grid_rays.shape[:-1])
+    )
+
+
+def compute_angles_to_columns_map(
+    lidar: RowOffsetStructuredSpinningLidarModelParameters,
+    resolution_factor: float = 4,
+    dtype: torch.dtype = torch.int32,
+):
+    """Computes angles to column map as a 2D array of shape resolution_factor * (n_rows, n_columns)."""
+
+    # The idea here is to create a regular high-resolution grid spanning the whole FOV
+    # and store in each grid cell the projected azimuth of the closest lidar ray to it.
+    # The lidar (unitary) ray chosen is the one closest (L^2)
+    # to the top-left corner of the grid cell, when 'un-projected' to an unitary ray.
+
+    assert (
+        torch.iinfo(dtype).max >= lidar.n_columns - 1
+    ), "The dtype for the angles to columns map must be able to store the maximum column index, consider increasing angles_to_columns_map_dtype"
+
     elements = lidar.create_elements()
     elem_az = elements[..., 0]
     elem_el = elements[..., 1]
@@ -597,20 +725,18 @@ def compute_angles_to_columns_map(
         sensor_rays.valid_flag
     ), "Bug: sensor rays must be valid in the FOV of the sensor"
 
-    # Compute the NN of each grid ray in the sensor rays
-    # TODO: this is quite slow and should be moved to CUDA.
-    #       We can get away with it for now because we're caching the results,
-    #       and usually this function would be called only once per lidar model needed.
-    from scipy import spatial as scipy_spatial  # requires pip install gsplat[lidar]
-
-    kdtree = scipy_spatial.cKDTree(
-        sensor_rays.sensor_rays.contiguous().cpu().numpy()
-    )  # ty:ignore[unresolved-attribute]
-    _, idxs = kdtree.query(grid_rays.sensor_rays.contiguous().cpu().numpy())
-    idxs = torch.from_numpy(idxs).to(device=lidar.device, dtype=torch.int32)
-
     # Elements are in row-major order (flat_idx = row * n_columns + col), so column index = idx % n_columns.
-    return (idxs % lidar.n_columns).to(dtype).reshape(grid_angles.shape[:-1])
+    columns = (
+        torch.arange(sensor_angles.shape[0], dtype=torch.int64) % lidar.n_columns
+    )
+
+    return compute_angles_to_values_map(
+        lidar,
+        sensor_rays.sensor_rays,
+        columns,
+        resolution_factor=resolution_factor,
+        dtype=dtype,
+    )
 
 
 # --------------------- Computation of LidarTiling structures ---------------------------
@@ -699,6 +825,7 @@ def compute_tiles_to_elements_map(
     n_bins_azimuth: int,
     densification_factor_azimuth: float,
     cdf_elevation: torch.Tensor,
+    element_angles: Optional[Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Computes the mapping from tiles to elements for the given lidar model and parameters"""
 
@@ -709,7 +836,18 @@ def compute_tiles_to_elements_map(
 
     # create all element indices [relative to the static model]
     elements = parameters.create_elements()
-    angles = parameters.elements_to_sensor_angles(elements)
+    if element_angles is None:
+        angles = parameters.elements_to_sensor_angles(elements)
+    else:
+        # Measured per-element angles (non-separable scan patterns) instead of
+        # the idealized separable grid; see clamp_element_angles_to_fov.
+        angles = clamp_element_angles_to_fov(
+            parameters, element_angles.reshape(-1, 2)
+        )
+        assert angles.shape[:1] == elements.shape[:1], (
+            angles.shape,
+            elements.shape,
+        )
 
     tile_indices = angles_to_tile_indices(
         parameters,
@@ -751,18 +889,24 @@ def compute_histogram_equalization(
     n_bins_elevation: int,
     max_pts_per_tile: int,
     resolution_elevation: int,
+    element_angles: Optional[Tensor] = None,
 ) -> tuple[int, torch.Tensor]:
 
-    elements = parameters.create_elements()
-    angles = parameters.elements_to_sensor_angles(elements).reshape(
-        parameters.n_rows, parameters.n_columns, 2
-    )
+    if element_angles is None:
+        elements = parameters.create_elements()
+        angles = parameters.elements_to_sensor_angles(elements)
+    else:
+        # Measured per-element angles (non-separable scan patterns) instead of
+        # the idealized separable grid; see clamp_element_angles_to_fov.
+        angles = clamp_element_angles_to_fov(
+            parameters, element_angles.reshape(-1, 2)
+        )
+    angles = angles.reshape(parameters.n_rows, parameters.n_columns, 2)
     angles = relative_sensor_angles(parameters, angles)
     angles_az = angles[..., 0]
     angles_el = angles[..., 1]
 
-    # TODO: use parameters.fov_eps_rad
-    fov_eps_rad = 2 * torch.finfo(torch.float32).eps
+    fov_eps_rad = parameters.fov_eps_rad
     ranges_azimuth = (-fov_eps_rad, parameters.fov_horiz_rad.span + fov_eps_rad)
     ranges_elevation = (-fov_eps_rad, parameters.fov_vert_rad.span + fov_eps_rad)
     assert torch.all(
@@ -855,7 +999,16 @@ def compute_tiling(
     max_pts_per_tile=16 * 16,
     resolution_elevation: int = 1600,
     densification_factor_azimuth: int = 8,
+    element_angles: Optional[Tensor] = None,
 ) -> LidarTiling:
+    """Computes the lidar tiling acceleration structure.
+
+    element_angles: optional measured per-element (azimuth, elevation) angles,
+    shape (n_rows * n_columns, 2) in the row-major ``create_elements`` order.
+    When given, elements are binned into tiles by their REAL angles instead of
+    the idealized separable grid — required for non-separable scan patterns
+    (e.g. galvo + prism lidars) where elevation varies within a row.
+    """
     params = SimpleNamespace()
     params.n_bins_elevation = n_bins_elevation
 
@@ -864,6 +1017,7 @@ def compute_tiling(
         n_bins_elevation=n_bins_elevation,
         max_pts_per_tile=max_pts_per_tile,
         resolution_elevation=resolution_elevation,
+        element_angles=element_angles,
     )
 
     (
@@ -875,6 +1029,7 @@ def compute_tiling(
         n_bins_azimuth=params.n_bins_azimuth,
         densification_factor_azimuth=densification_factor_azimuth,
         cdf_elevation=params.cdf_elevation,
+        element_angles=element_angles,
     )
 
     params.cdf_elevation = params.cdf_elevation.int()
