@@ -566,7 +566,7 @@ void launch_spherical_harmonics_fwd_kernel(
     {
         int64_t n_elements             = B * N;
         constexpr unsigned int threads = 256;
-        unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+        unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
         auto *masks_ptr = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
 
@@ -608,7 +608,7 @@ void launch_spherical_harmonics_fwd_kernel(
     {
         int64_t n_elements             = static_cast<int64_t>(B) * N * D;
         constexpr unsigned int threads = 256;
-        unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+        unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
         // Dispatch on the coeff dtype (fp16/fp32); dirs/colors read as opmath_t (float).
         AT_DISPATCH_V2(
@@ -669,7 +669,7 @@ void launch_spherical_harmonics_fwd_kernels(
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
         int64_t n_elements                        = static_cast<int64_t>(B) * gaussian_count * D;
-        unsigned int blocks                       = ::cuda::ceil_div(n_elements, threads);
+        unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_V2(
@@ -783,7 +783,7 @@ void launch_spherical_harmonics_bwd_kernel(
     // parallelize over B * N * D
     int64_t n_elements             = static_cast<int64_t>(B) * N * D;
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -1351,7 +1351,7 @@ void launch_spherical_harmonics_bwd_kernels(
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
         int64_t n_elements                        = static_cast<int64_t>(B) * gaussian_count * D;
-        unsigned int blocks                       = ::cuda::ceil_div(n_elements, threads);
+        unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_V2(

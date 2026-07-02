@@ -523,7 +523,7 @@ void launch_intersect_tile_kernel(
     );
 
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -624,7 +624,7 @@ void launch_intersect_tile_kernels(
 
         int64_t offset, count;
         std::tie(offset, count) = chunk(n_elements, device_id);
-        unsigned int blocks     = ::cuda::ceil_div(count, threads);
+        unsigned int blocks     = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(count, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_FLOATING_TYPES(
@@ -735,7 +735,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_kernels_privateuse
     const int device_count         = static_cast<int>(c10::cuda::device_count());
     TORCH_CHECK(device_count > 0, "PrivateUse1 intersect_tile requires at least one CUDA device");
     const int64_t total_tile_keys = static_cast<int64_t>(I) * n_tiles;
-    const unsigned int blocks     = ::cuda::ceil_div(n_elements, threads);
+    const unsigned int blocks     = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
     std::vector<int32_t *> device_counts(device_count, nullptr);
     std::vector<int64_t *> device_cumsum(device_count, nullptr);
@@ -1000,7 +1000,7 @@ void launch_intersect_offset_kernel(
 {
     int64_t n_elements             = isect_ids.size(0); // total number of intersections
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = ::cuda::ceil_div(n_elements, threads);
+    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -1055,7 +1055,7 @@ void launch_intersect_offset_kernels(
 
         int64_t offset, count;
         std::tie(offset, count) = chunk(n_elements, device_id);
-        unsigned int blocks     = ::cuda::ceil_div(count, threads);
+        unsigned int blocks     = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(count, threads));
         if(blocks > 0)
         {
             intersect_offset_kernel<<<blocks, threads, 0, stream>>>(
