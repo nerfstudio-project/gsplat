@@ -30,16 +30,24 @@
 namespace gsplat::extdist
 {
 
- constexpr int32_t compute_order(int32_t num_coeffs) {
-    // MAX_ORDER is so small we can just avoid math and use
-    // (order+1)*(order+2)/2 = num_coeffs to inverse check equivalence.
-    if (num_coeffs == 1) return 0;
-    if (num_coeffs == 3) return 1;
-    if (num_coeffs == 6) return 2;
-    if (num_coeffs == 10) return 3;
-    if (num_coeffs == 15) return 4;
-    if (num_coeffs == 21) return BivariateWindshieldModelParameters::MAX_ORDER;
-    return -1;
+struct BivariateWindshieldModelDeviceParams;
+
+// NOTE: Some of the device functions herein are marked GSPLAT_NOINLINE to prevent compilation
+// combinatorial explosion. e.g. eval_bivariate_poly and distort_camera_ray in ProjectionUT3DGSFused.cu:
+// - 7 sigma points (unrolled loop - inside world_gaussian_to_image_gaussian_unscented_transform_shutter_pose)
+// - 5 camera models
+// - N CUDA architectures/compute capability targets (e.g. 80, 86, 89, 90, 100, 120)
+// - Inlining into all contexts creates O(n³) register allocation complexity
+
+// Host-only: uses std::sqrt (host stdlib). All call sites construct host-side
+// device parameter structs or live in host launcher functions, so __device__
+// annotation is unnecessary and triggers stricter nvcc 12.9+ diagnostics.
+inline __host__ int32_t compute_order(int32_t num_coeffs) {
+    // For bivariate polynomial: num_coeffs = (order + 1) * (order + 2) / 2
+    // Solve: order^2 + 3*order + 2 - 2*num_coeffs = 0
+    // Using quadratic formula: order = (-3 + sqrt(1 + 8*num_coeffs)) / 2
+    int32_t sqrt_discriminant = static_cast<int32_t>(std::sqrt(1 + 8 * num_coeffs));
+    return (-3 + sqrt_discriminant) / 2;
 }
 
 // Device-side polynomial evaluation — always iterates over MAX_ORDER.

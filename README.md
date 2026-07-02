@@ -15,6 +15,10 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 ### Unreleased
 
+[May 2026] [NHT (Neural Harmonic Textures)](https://research.nvidia.com/labs/sil/projects/neural-harmonic-textures/) is integrated in gsplat! Checkout [here](docs/nht.md) for more details.
+
+[Jan 2026] [PPISP](https://research.nvidia.com/labs/sil/projects/ppisp/) is integrated as an alternative way of bilateral grid to compensate the training views.
+
 Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gsplat/releases/tag/v1.5.3) tag (not yet on PyPI).
 
 - [Jun 2026] **G-SHARP** -- dynamic surgical-scene reconstruction for Gaussian splatting.

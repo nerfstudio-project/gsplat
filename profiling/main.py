@@ -59,12 +59,23 @@ def main(
     scene_grid: int = 15,
     packed: bool = True,
     sparse_grad: bool = False,
-    backend: Literal["gsplat", "inria"] = "gsplat",
+    backend: Literal["gsplat", "inria", "nht"] = "gsplat",
     repeats: int = 100,
     memory_history: bool = False,
     world_rank: int = 0,
     world_size: int = 1,
 ):
+    # NHT (Neural Harmonic Textures) builds on 3DGUT (with_ut + with_eval3d)
+    if backend == "nht":
+        if packed:
+            raise ValueError("NHT backend requires packed=False.")
+        if sparse_grad:
+            raise ValueError("NHT backend does not support sparse_grad=True.")
+        if channels % 4 != 0:
+            raise ValueError(
+                f"NHT feature_dim must be divisible by 4; got channels={channels}."
+            )
+
     (
         means,
         quats,
@@ -107,12 +118,25 @@ def main(
     if memory_history:
         torch.cuda.memory._record_memory_history()
 
+    extra_kwargs = {}
     if backend == "gsplat":
         rasterization_fn = rasterization
     elif backend == "inria":
         from gsplat import rasterization_inria_wrapper
 
         rasterization_fn = rasterization_inria_wrapper
+    elif backend == "nht":
+        from gsplat.nht import NHTParams
+
+        rasterization_fn = rasterization
+        # NHT routes through the 3DGUT (unscented transform + world-space
+        # evaluation) pipeline; nht_params toggles the NHT-specific kernel.
+        extra_kwargs.update(
+            with_ut=True,
+            with_eval3d=True,
+            nht_params=NHTParams(),
+            sh_degree=None,
+        )
     else:
         assert False, f"Backend {backend} is not valid."
 
@@ -123,7 +147,7 @@ def main(
         quats,  # [N, 4]
         scales,  # [N, 3]
         opacities,  # [N]
-        colors,  # [N, K, 3]
+        colors,  # [N, K, 3] for gsplat/inria; [N, feature_dim] for nht
         viewmats,  # [C, 4, 4]
         Ks,  # [C, 3, 3]
         render_width,
@@ -134,6 +158,7 @@ def main(
         radius_clip=3.0,
         sparse_grad=sparse_grad,
         distributed=world_size > 1,
+        **extra_kwargs,
     )
     mem_toc_fwd = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
 
@@ -167,13 +192,27 @@ def main(
 
 
 def worker(local_rank: int, world_rank: int, world_size: int, args):
-    from tabulate import tabulate
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        # Fallback. tabulate is not part of the standard dependencies
+        def tabulate(rows, headers, tablefmt="rst"):
+            widths = [
+                max(len(str(h)), *(len(str(r[i])) for r in rows))
+                for i, h in enumerate(headers)
+            ]
+            sep = "  ".join("-" * w for w in widths)
+            line = lambda row: "  ".join(  # noqa: E731
+                str(c).ljust(w) for c, w in zip(row, widths)
+            )
+            return "\n".join([line(headers), sep, *(line(r) for r in rows)])
 
     # Tested on a NVIDIA TITAN RTX with (24 GB).
 
     collection = []
+    rgb_backends_active = any(b in args.backends for b in ("gsplat", "inria"))
     for batch_size in args.batch_size:
-        for channels in args.channels:
+        for channels in args.channels if rgb_backends_active else []:
             print("========================================")
             print(f"Batch Size: {batch_size}, Channels: {channels}")
             print("========================================")
@@ -302,6 +341,43 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
                     )
                     torch.cuda.empty_cache()
 
+        if "nht" in args.backends:
+            for nht_feature_dim in args.nht_feature_dim:
+                print("========================================")
+                print(f"Batch Size: {batch_size}, NHT Feature Dim: {nht_feature_dim}")
+                print("========================================")
+                print("nht (3DGUT + Neural Harmonic Textures)")
+                for scene_grid in args.scene_grid:
+                    stats = main(
+                        batch_size=batch_size,
+                        channels=nht_feature_dim,
+                        reso="1080p",
+                        scene_grid=scene_grid,
+                        packed=False,
+                        sparse_grad=False,
+                        backend="nht",
+                        repeats=args.repeats,
+                        memory_history=args.memory_history,
+                        world_rank=world_rank,
+                        world_size=world_size,
+                    )
+                    collection.append(
+                        [
+                            "gsplat-nht v1.0.0",
+                            False,
+                            False,
+                            # configs
+                            batch_size,
+                            nht_feature_dim,
+                            scene_grid,
+                            # stats
+                            f"{stats['mem_all']:0.2f}",
+                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
+                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
+                        ]
+                    )
+                    torch.cuda.empty_cache()
+
     if world_rank == 0:
         headers = [
             "Backend",
@@ -323,7 +399,13 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
             headers.pop(5)
             for row in collection:
                 row.pop(5)
-        if len(args.channels) == 1:
+
+        active_channel_values = set()
+        if any(b in args.backends for b in ("gsplat", "inria")):
+            active_channel_values |= set(args.channels)
+        if "nht" in args.backends:
+            active_channel_values |= set(args.nht_feature_dim)
+        if len(active_channel_values) <= 1:
             headers.pop(4)
             for row in collection:
                 row.pop(4)
@@ -344,7 +426,7 @@ if __name__ == "__main__":
         nargs="+",
         type=str,
         default=["gsplat"],
-        help="gsplat, inria",
+        help="gsplat, inria, nht",
     )
     parser.add_argument(
         "--repeats",
@@ -371,7 +453,19 @@ if __name__ == "__main__":
         nargs="+",
         type=int,
         default=[3],
-        help="Number of color channels for profiling",
+        help="Number of color channels for profiling (gsplat / inria only)",
+    )
+    parser.add_argument(
+        "--nht_feature_dim",
+        nargs="+",
+        type=int,
+        default=[48],
+        help=(
+            "Per-primitive feature dimension(s) for the NHT backend. Must be "
+            "divisible by 4 (4 tetrahedral vertices). Supported values: "
+            "4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 80, 96, 128, 256. "
+            "Other values divisible by 4 are padded up to the next supported size."
+        ),
     )
     parser.add_argument(
         "--memory_history",

@@ -16,6 +16,7 @@
 from .components.base import Scene
 from .components.gaussian_scene import GaussianScene
 from .components.gaussian_inference_scene import GaussianInferenceScene
+from .components.gaussian_nht_scene import GaussianNHTScene
 from .sh_compression import SHCompressionMode
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "Scene",
     "GaussianScene",
     "GaussianInferenceScene",
+    "GaussianNHTScene",
     "SHCompressionMode",
 ]
 
