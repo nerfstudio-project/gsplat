@@ -1,0 +1,133 @@
+name: GPU Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # Route C++/CUDA compilation through ccache via torch's own env vars.
+  PYTORCH_NVCC: "ccache /usr/local/cuda/bin/nvcc"
+  CXX: "ccache g++"
+  # ccache cannot handle nvcc's --generate-dependencies-with-compile and silently
+  # passes through without caching. This var disables that flag.
+  TORCH_EXTENSION_SKIP_NVCC_GEN_DEPENDENCIES: "1"
+  # "ccache g++" is not recognized by torch, which logs a compiler ABI warning.
+  # Skip the check entirely to keep the output clean.
+  TORCH_DONT_CHECK_COMPILER_ABI: "1"
+  # Mark known-failing tests as xfail via the root conftest.py.
+  # CI-only, to retire once existing failures are fixed.
+  GPU_CI_XFAIL: "1"
+
+jobs:
+  # The first job defined here owns some shared definitions: the container
+  # spec and common setup steps carry YAML anchors (&name) that later jobs
+  # reuse via aliases (*name).
+  jit-test-debug:
+    runs-on: [self-hosted, linux, X64, gpu]
+    timeout-minutes: 90
+    container: &container-cuda
+      image: nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d39279f2cf664fbb9b5d5f21de104b79745ea29bf2cb
+      options: --gpus all
+      volumes:
+        - gsplat-ccache:/ccache
+        - gsplat-pip-cache:/github/home/.cache/pip
+      env:
+        CCACHE_DIR: /ccache
+        CCACHE_MAXSIZE: 20G
+    env:
+      DEBUG: "1"
+      VERBOSE: "1"
+    steps:
+      - &step-check-gpu
+        name: Check GPU
+        run: nvidia-smi -L && nvidia-smi
+      - &step-check-disk
+        name: Check disk space
+        run: |
+          USAGE=$(df $HOME/.cache/pip | awk 'NR==2 {print $5}' | sed 's/%//')
+          df -h $HOME/.cache/pip | awk 'NR==2 {print "Runner disk: "$3" used of "$2" ("$5" full)"}'
+          if [ "$USAGE" -gt 90 ]; then
+            echo "Disk ${USAGE}% full — wiping pip cache"
+            rm -rf $HOME/.cache/pip/*
+          fi
+      - &step-install-system-deps
+        name: Install system deps
+        run: |
+          apt-get update -qq
+          apt-get install -y python3-venv python-is-python3 libpython3-dev git ninja-build curl libgl1 libglib2.0-0
+          # Ubuntu 24.04 apt has ccache 4.9.1 which lacks proper nvcc support; install 4.12.2 from upstream
+          curl -fsSL https://github.com/ccache/ccache/releases/download/v4.12.2/ccache-4.12.2-linux-x86_64.tar.xz \
+            | tar xJ --strip-components=1 -C /usr/local/bin ccache-4.12.2-linux-x86_64/ccache
+      - &step-checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - &step-install-python-deps
+        name: Install Python deps
+        run: |
+          python3 -m venv /opt/venv
+          . /opt/venv/bin/activate
+          echo "/opt/venv/bin" >> $GITHUB_PATH
+          # Pin to torch 2.9.1 with CUDA support: torch 2.12+ switched JIT to C++20,
+          # breaking nerfacc 0.5.3's build.
+          TORCH_VERSION=2.9.1
+          TORCH_INDEX=https://download.pytorch.org/whl/cu129
+          # pip's HTTP cache cannot retain pypi.nvidia.com packages (Cache-Control: no-store).
+          # Use a separate 'pip download' to write .whl files directly, this checks for
+          # existing files before hitting the network, so the few GB of nvidia-* packages are
+          # only downloaded on cold run. Then do an explicit offline install.
+          TORCH_DEPS=$HOME/.cache/pip/torch-deps
+          mkdir -p $TORCH_DEPS
+          pip download --dest $TORCH_DEPS --index-url $TORCH_INDEX torch==$TORCH_VERSION
+          export PIP_FIND_LINKS=$TORCH_DEPS
+          pip install --no-index "torch==$TORCH_VERSION"
+          # BUILD_NO_CUDA=1 skips the CUDA extensions build at install time; kernels are
+          # compiled on first import (JIT jobs) or during 'pip wheel' (AOT jobs).
+          BUILD_NO_CUDA=1 pip install -e .[dev]
+      - name: Run gsplat tests
+        run: |
+          ccache -z
+          pytest -sv
+          ccache -s -v
+
+  aot-test-release:
+    runs-on: [self-hosted, linux, X64, gpu]
+    timeout-minutes: 90
+    container: *container-cuda
+    env:
+      DEBUG: "0"
+      VERBOSE: "1"
+      # Mirror pytest.ini env entries needed by the explicit AOT build.
+      GSPLAT_DISABLE_JIT: "1"
+      BUILD_CAMERA_WRAPPERS: "1"
+      NUM_CHANNELS: "1,3,4,6,8,21,23,24,32,128"
+    steps:
+      - *step-check-gpu
+      - *step-check-disk
+      - *step-install-system-deps
+      - *step-checkout
+      - *step-install-python-deps
+      - name: Build gsplat wheel
+        run: |
+          ccache -z
+          pip wheel -v --no-build-isolation --no-deps --wheel-dir dist .
+          ccache -s -v
+      - name: Install and test gsplat wheel
+        run: |
+          # Drop the editable install from the Python deps step so gsplat
+          # resolves solely from the wheel
+          pip uninstall -y gsplat
+          rm -rf gsplat.egg-info
+          # Install wheel
+          pip install dist/*.whl
+          # Remove the source __init__.py so pytest imports the installed wheel,
+          # not the source tree (pytest.ini sets pythonpath = .).
+          rm gsplat/__init__.py
+          python -c "import gsplat; print('gsplat:', gsplat.__file__)"
+          pytest -sv
