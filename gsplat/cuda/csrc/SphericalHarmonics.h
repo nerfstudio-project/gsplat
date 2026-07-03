@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: Copyright 2025 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,11 +46,31 @@ void launch_spherical_harmonics_fwd_kernel(
     at::Tensor colors // [..., N, D]
 );
 
+void launch_spherical_harmonics_l1_plus_fwd_kernel(
+    // inputs
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor coeffs,              // [N, K - 1, D]
+    const at::optional<at::Tensor> masks, // [..., N]
+    // outputs
+    at::Tensor colors // [..., N, D]
+);
+
 void launch_spherical_harmonics_fwd_kernels(
     // inputs
     const uint32_t degrees_to_use,
     const at::Tensor dirs,                // [..., N, 3]
     const at::Tensor coeffs,              // [N, K, D]
+    const at::optional<at::Tensor> masks, // [..., N]
+    // outputs
+    at::Tensor colors // [..., N, D]
+);
+
+void launch_spherical_harmonics_l1_plus_fwd_kernels(
+    // inputs
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor coeffs,              // [N, K - 1, D]
     const at::optional<at::Tensor> masks, // [..., N]
     // outputs
     at::Tensor colors // [..., N, D]
@@ -64,6 +85,18 @@ void launch_spherical_harmonics_bwd_kernel(
     const at::Tensor v_colors,            // [..., N, D]
     // outputs
     at::Tensor v_coeffs,            // [N, K, D]
+    at::optional<at::Tensor> v_dirs // [..., N, 3]
+);
+
+void launch_spherical_harmonics_l1_plus_bwd_kernel(
+    // inputs
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor coeffs,              // [N, K - 1, D]
+    const at::optional<at::Tensor> masks, // [..., N]
+    const at::Tensor v_colors,            // [..., N, D]
+    // outputs
+    at::Tensor v_coeffs,            // [N, K - 1, D]
     at::optional<at::Tensor> v_dirs // [..., N, 3]
 );
 
@@ -151,6 +184,18 @@ void launch_spherical_harmonics_bwd_kernels(
     const at::Tensor v_colors,            // [..., N, D]
     // outputs
     at::Tensor v_coeffs,            // [N, K, D]
+    at::optional<at::Tensor> v_dirs // [..., N, 3]
+);
+
+void launch_spherical_harmonics_l1_plus_bwd_kernels(
+    // inputs
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor coeffs,              // [N, K - 1, D]
+    const at::optional<at::Tensor> masks, // [..., N]
+    const at::Tensor v_colors,            // [..., N, D]
+    // outputs
+    at::Tensor v_coeffs,            // [N, K - 1, D]
     at::optional<at::Tensor> v_dirs // [..., N, 3]
 );
 } // namespace gsplat

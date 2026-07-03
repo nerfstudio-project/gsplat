@@ -97,6 +97,8 @@ def _ensure_autograd_registrations() -> None:
     if _AUTOGRAD_REGISTRATIONS_DONE:
         return
     _register_autograd(RegisterSphericalHarmonics)
+    _register_autograd(RegisterSphericalHarmonicsL0)
+    _register_autograd(RegisterSphericalHarmonicsL1Plus)
     _register_autograd(RegisterQuatScaleToCovarPreci)
     _register_autograd(RegisterProjectionEWASimple)
     _register_autograd(RegisterProjectionEWA3DGSFused)
@@ -461,6 +463,50 @@ def spherical_harmonics(
     )
 
 
+@trace_function("sh-l0-fwd")
+def spherical_harmonics_l0(
+    sh0: Tensor,  # [N, 1, D]
+) -> Tensor:
+    """Computes the l=0 component of spherical harmonics.
+
+    Args:
+        sh0: SH coefficients for l=0. ``[N, 1, D]``.
+
+    Returns:
+        l=0 features. ``[N, D]``.
+    """
+    return _make_lazy_cuda_func("spherical_harmonics_l0")(sh0.contiguous())
+
+
+@trace_function("sh-l1-plus-fwd")
+def spherical_harmonics_l1_plus(
+    degrees_to_use: int,
+    dirs: Tensor,  # [..., N, 3]
+    shN: Tensor,  # [N, K - 1, D]
+    masks: Optional[Tensor] = None,  # [..., N]
+) -> Tensor:
+    """Computes the l>=1 components of spherical harmonics.
+
+    Unlike :func:`spherical_harmonics`, ``shN`` starts at the degree-one SH
+    basis; the degree-zero coefficient is intentionally omitted.
+
+    Args:
+        degrees_to_use: SH degree to evaluate.
+        dirs: View directions. ``[..., N, 3]``; any leading shape, rank >= 2.
+        shN: SH coefficients for l>=1. ``[N, K - 1, D]``.
+        masks: Optional boolean masks. ``[..., N]`` matching
+            ``dirs.shape[:-1]``.
+
+    Returns:
+        l>=1 features. ``[..., N, D]``.
+    """
+    if masks is not None:
+        masks = masks.contiguous()
+    return _make_lazy_cuda_func("spherical_harmonics_l1_plus")(
+        degrees_to_use, dirs.contiguous(), shN.contiguous(), masks
+    )
+
+
 class RegisterSphericalHarmonics:
     """Python autograd hooks for the gsplat::spherical_harmonics op."""
 
@@ -492,6 +538,28 @@ class RegisterSphericalHarmonics:
             v_coeffs,
             None,  # masks
         )
+
+
+class RegisterSphericalHarmonicsL0:
+    """Python autograd hooks for the l=0 SH op."""
+
+    base = "spherical_harmonics_l0"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (sh0,) = inputs
+        ctx.save_for_backward(sh0)
+
+    @classmethod
+    def backward(cls, ctx, v_colors: Tensor):
+        (sh0,) = ctx.saved_tensors
+        return (_make_lazy_cuda_func(f"{cls.base}_bwd")(sh0, v_colors),)
+
+
+class RegisterSphericalHarmonicsL1Plus(RegisterSphericalHarmonics):
+    """Python autograd hooks for the l>=1 SH op."""
+
+    base = "spherical_harmonics_l1_plus"
 
 
 def quat_scale_to_covar_preci(
