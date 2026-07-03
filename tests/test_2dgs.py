@@ -521,6 +521,233 @@ def test_rasterization_packed_2dgs(test_data, batch_dims: Tuple[int, ...]):
     assert torch.isfinite(render_colors).all()
 
 
+def _make_2dgs_chunk_scene(channels: int) -> dict:
+    """Create a small visible scene for high-channel orchestration tests."""
+    n_gaussians = 24
+    n_cameras = 2
+    width, height = 48, 40
+
+    means = torch.randn(n_gaussians, 3, device=device) * 0.2
+    means[:, 2] = means[:, 2].abs() + 2.0
+    quats = torch.nn.functional.normalize(
+        torch.randn(n_gaussians, 4, device=device), dim=-1
+    )
+    scales = torch.rand(n_gaussians, 3, device=device) * 0.04 + 0.02
+    opacities = torch.rand(n_gaussians, device=device) * 0.8 + 0.1
+    colors = torch.rand(n_cameras, n_gaussians, channels, device=device)
+    backgrounds = torch.rand(n_cameras, channels, device=device)
+
+    viewmats = torch.eye(4, device=device).expand(n_cameras, 4, 4).clone()
+    viewmats[1, 0, 3] = 0.1
+    Ks = torch.eye(3, device=device).expand(n_cameras, 3, 3).clone()
+    Ks[:, 0, 0] = 70.0
+    Ks[:, 1, 1] = 72.0
+    Ks[:, 0, 2] = width / 2
+    Ks[:, 1, 2] = height / 2
+
+    return {
+        "means": means,
+        "quats": quats,
+        "scales": scales,
+        "opacities": opacities,
+        "colors": colors,
+        "viewmats": viewmats,
+        "Ks": Ks,
+        "backgrounds": backgrounds,
+        "width": width,
+        "height": height,
+    }
+
+
+def _clone_2dgs_chunk_scene(scene: dict, *, requires_grad: bool) -> dict:
+    cloned = {
+        name: value.detach().clone() if isinstance(value, torch.Tensor) else value
+        for name, value in scene.items()
+    }
+    if requires_grad:
+        for name in (
+            "means",
+            "quats",
+            "scales",
+            "opacities",
+            "colors",
+            "backgrounds",
+        ):
+            cloned[name].requires_grad_(True)
+    return cloned
+
+
+def _loss_2dgs_outputs(outputs, cotangents):
+    colors, alphas, normals, _surface_normals, distort, median, _meta = outputs
+    tensors = (colors, alphas, normals, distort, median)
+    return sum(
+        (tensor * cotangent).sum() for tensor, cotangent in zip(tensors, cotangents)
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+def test_rasterization_2dgs_multichunk_forward_backward(packed: bool):
+    from gsplat.rendering import rasterization_2dgs
+
+    torch.manual_seed(43)
+    source = _make_2dgs_chunk_scene(channels=46)
+    actual_scene = _clone_2dgs_chunk_scene(source, requires_grad=True)
+    reference_scene = _clone_2dgs_chunk_scene(source, requires_grad=True)
+
+    # 31 is deliberately not compiled. It is an upper bound, under which the
+    # minimum plan for 46 channels is 23+23.
+    actual = rasterization_2dgs(
+        **actual_scene,
+        packed=packed,
+        channel_chunk=31,
+    )
+    first = rasterization_2dgs(
+        **{
+            **reference_scene,
+            "colors": reference_scene["colors"][..., :23],
+            "backgrounds": reference_scene["backgrounds"][..., :23],
+        },
+        packed=packed,
+        channel_chunk=23,
+    )
+    second = rasterization_2dgs(
+        **{
+            **reference_scene,
+            "colors": reference_scene["colors"][..., 23:],
+            "backgrounds": reference_scene["backgrounds"][..., 23:],
+        },
+        packed=packed,
+        channel_chunk=23,
+    )
+
+    expected_colors = torch.cat([first[0], second[0]], dim=-1)
+    torch.testing.assert_close(actual[0], expected_colors, rtol=1e-4, atol=1e-4)
+    for actual_tensor, expected_tensor in zip(
+        (actual[1], actual[2], actual[4], actual[5]),
+        (first[1], first[2], second[4], second[5]),
+    ):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=1e-4, atol=1e-4)
+    assert actual[3] is None
+
+    cotangents = tuple(
+        torch.randn_like(tensor)
+        for tensor in (actual[0], actual[1], actual[2], actual[4], actual[5])
+    )
+    actual_inputs = tuple(
+        actual_scene[name]
+        for name in ("means", "quats", "scales", "opacities", "colors", "backgrounds")
+    )
+    actual_grads = torch.autograd.grad(
+        _loss_2dgs_outputs(actual, cotangents),
+        actual_inputs + (actual[6]["gradient_2dgs"],),
+    )
+
+    expected = (
+        expected_colors,
+        first[1],
+        first[2],
+        None,
+        second[4],
+        second[5],
+        first[6],
+    )
+    reference_inputs = tuple(
+        reference_scene[name]
+        for name in ("means", "quats", "scales", "opacities", "colors", "backgrounds")
+    )
+    reference_grads = torch.autograd.grad(
+        _loss_2dgs_outputs(expected, cotangents),
+        reference_inputs + (first[6]["gradient_2dgs"], second[6]["gradient_2dgs"]),
+    )
+
+    for actual_grad, expected_grad in zip(actual_grads[:-1], reference_grads[:-2]):
+        torch.testing.assert_close(actual_grad, expected_grad, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(
+        actual_grads[-1],
+        reference_grads[-2] + reference_grads[-1],
+        rtol=1e-3,
+        atol=1e-3,
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("depth_mode", ["expected", "median"])
+def test_rasterization_2dgs_multichunk_depth_auxiliaries(packed: bool, depth_mode: str):
+    from gsplat.rendering import rasterization_2dgs
+
+    torch.manual_seed(44)
+    source = _make_2dgs_chunk_scene(channels=34)
+    # The first chunk's final feature must not accidentally resemble the
+    # positive projection depth appended to the final chunk.
+    source["colors"][..., 31] = -10.0
+    actual_scene = _clone_2dgs_chunk_scene(source, requires_grad=False)
+    reference_scene = _clone_2dgs_chunk_scene(source, requires_grad=False)
+
+    actual = rasterization_2dgs(
+        **actual_scene,
+        render_mode="RGB+ED",
+        distloss=True,
+        packed=packed,
+        depth_mode=depth_mode,
+        channel_chunk=32,
+    )
+    first = rasterization_2dgs(
+        **{
+            **reference_scene,
+            "colors": reference_scene["colors"][..., :32],
+            "backgrounds": reference_scene["backgrounds"][..., :32],
+        },
+        render_mode="RGB",
+        packed=packed,
+        channel_chunk=32,
+    )
+    final = rasterization_2dgs(
+        **{
+            **reference_scene,
+            "colors": reference_scene["colors"][..., 32:],
+            "backgrounds": reference_scene["backgrounds"][..., 32:],
+        },
+        render_mode="RGB+ED",
+        distloss=True,
+        packed=packed,
+        depth_mode=depth_mode,
+        channel_chunk=32,
+    )
+
+    assert not torch.allclose(first[5], final[5])
+    torch.testing.assert_close(
+        actual[0], torch.cat([first[0], final[0]], dim=-1), rtol=1e-4, atol=1e-4
+    )
+    for actual_tensor, expected_tensor in zip(
+        (actual[1], actual[2]),
+        (first[1], first[2]),
+    ):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(actual[3], final[3], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(actual[4], final[4], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(actual[5], final[5], rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterization_2dgs_multichunk_absgrad_policy():
+    from gsplat.rendering import rasterization_2dgs
+
+    torch.manual_seed(44)
+    scene = _make_2dgs_chunk_scene(channels=34)
+    with pytest.raises(RuntimeError, match="does not support absgrad with multiple"):
+        rasterization_2dgs(
+            **scene,
+            render_mode="RGB+ED",
+            absgrad=True,
+            channel_chunk=32,
+        )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 def test_rasterization_packed_2dgs_pose_grad_large_nnz():

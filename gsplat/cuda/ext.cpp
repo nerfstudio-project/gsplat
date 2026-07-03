@@ -1214,8 +1214,9 @@ TORCH_LIBRARY(gsplat, m)
         "rasterization_2dgs(Tensor means, Tensor quats, Tensor scales, Tensor opacities, Tensor colors, Tensor "
         "viewmats, Tensor Ks, int image_width, int image_height, int tile_size, float eps2d, float near_plane, float "
         "far_plane, float radius_clip, Tensor? backgrounds, bool packed, bool sparse_grad, bool absgrad, bool "
-        "distloss, int? sh_degree, str render_mode, str depth_mode) -> (Tensor, Tensor, Tensor, Tensor?, Tensor, "
-        "Tensor, Tensor, Tensor?, Tensor?, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, "
+        "distloss, int? sh_degree, str render_mode, str depth_mode, int channel_chunk) -> (Tensor, Tensor, Tensor, "
+        "Tensor?, Tensor, Tensor, Tensor, Tensor?, Tensor?, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, "
+        "Tensor, Tensor, "
         "Tensor, Tensor, int, int, int)"
     );
 #endif

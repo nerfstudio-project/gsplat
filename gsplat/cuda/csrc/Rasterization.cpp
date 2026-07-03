@@ -1682,8 +1682,9 @@ namespace
         );
         TORCH_CHECK(means2d.size(-1) == 2, "means2d must have shape [..., N, 2] or [nnz, 2], got ", means2d.sizes());
 
-        at::DimVector image_dims(means2d.sizes().slice(0, means2d.dim() - 2));
-        const int64_t channels = colors.size(-1);
+        at::DimVector image_dims = packed ? at::DimVector(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2))
+                                          : at::DimVector(means2d.sizes().slice(0, means2d.dim() - 2));
+        const int64_t channels   = colors.size(-1);
         if(packed)
         {
             const int64_t nnz = means2d.size(0);

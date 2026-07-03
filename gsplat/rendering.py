@@ -1378,6 +1378,7 @@ def rasterization_2dgs(
     absgrad: bool = False,
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
+    channel_chunk: int = 32,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
 
@@ -1421,12 +1422,14 @@ def rasterization_2dgs(
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
-            `meta["means2d"].absgrad`. Default is False.
-        channel_chunk: The number of channels to render in one go. Default is 32.
-            If the required rendering channels are larger than this value, the rendering
-            will be done looply in chunks.
+            `meta["means2d"].absgrad`. This option raises ``RuntimeError`` when
+            the total rendered feature width requires multiple rasterization
+            passes. Default is False.
         distloss: If true, use distortion regularization to get better geometry detail.
         depth_mode: render depth mode. Choose from expected depth and median depth.
+        channel_chunk: Upper bound on the number of channels rendered by one
+            kernel launch. Each launch uses a channel width compiled through
+            ``GSPLAT_NUM_CHANNELS``. Default is 32.
 
     Returns:
         A tuple:
@@ -1529,6 +1532,7 @@ def rasterization_2dgs(
         sh_degree,
         render_mode,
         depth_mode,
+        channel_chunk,
     )
 
     if absgrad:
