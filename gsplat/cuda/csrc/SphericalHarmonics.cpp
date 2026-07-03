@@ -23,7 +23,17 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#if defined(__GNUC__) && !defined(__clang__)
+// GCC PR110498 can diagnose std::vector<bool>::reserve inside
+// torch::autograd::Function::apply as either of these warnings.
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Warray-bounds"
+#    pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
 #include <torch/csrc/autograd/custom_function.h>
+#if defined(__GNUC__) && !defined(__clang__)
+#    pragma GCC diagnostic pop
+#endif
 #include <torch/library.h>
 
 #include "Common.h"             // where all the macros are defined
