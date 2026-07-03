@@ -539,17 +539,44 @@ def test_apply_channel_override_collapses_sh_to_dc_band(load_profile):
     assert inputs["colors"].shape == (1, 5, 3)
 
 
-def test_apply_channel_override_reserves_extra_signal_channels(load_profile):
-    # extra_signals stays at its captured width and the color block absorbs the
-    # remainder, so the post-concat templated count equals --channels exactly.
+def test_apply_channel_override_keeps_extra_signals_that_fit(load_profile):
+    # A width that holds the captured colors and extra signals keeps both;
+    # the post-concat templated count equals --channels exactly.
+    inputs = {
+        "colors": torch.zeros(1, 5, 8),
+        "extra_signals": torch.zeros(1, 5, 2),
+        "sh_degree": None,
+    }
+    load_profile._apply_channel_override(inputs, 10)
+    assert inputs["colors"].shape[-1] == 8
+    assert inputs["extra_signals"].shape[-1] == 2
+
+
+def test_apply_channel_override_extra_signals_pay_first(load_profile):
+    # A width below the captured total trims the extra signals from the tail
+    # first; colors keep their native width while any extra signal remains.
+    inputs = {
+        "colors": torch.zeros(1, 5, 8),
+        "extra_signals": torch.zeros(1, 5, 2),
+        "sh_degree": None,
+    }
+    load_profile._apply_channel_override(inputs, 9)
+    assert inputs["colors"].shape[-1] == 8
+    assert inputs["extra_signals"].shape[-1] == 1
+
+
+def test_apply_channel_override_trims_colors_after_extra_signals(load_profile):
+    # Once the extra signals are exhausted they are dropped entirely (with
+    # their SH degree) and the color block pays for the remaining reduction.
     inputs = {
         "colors": torch.zeros(1, 5, 8),
         "extra_signals": torch.zeros(1, 5, 2),
         "sh_degree": None,
     }
     load_profile._apply_channel_override(inputs, 6)
-    assert inputs["colors"].shape[-1] == 4  # 6 - 2 extra-signal channels
-    assert inputs["extra_signals"].shape[-1] == 2  # untouched
+    assert inputs["colors"].shape[-1] == 6
+    assert inputs["extra_signals"] is None
+    assert inputs["extra_signals_sh_degree"] is None
 
 
 def test_apply_channel_override_resizes_backgrounds(load_profile):
@@ -581,7 +608,8 @@ def test_apply_channel_override_rejects_depth_only_render_mode(load_profile):
 
 
 def test_apply_channel_override_rejects_channels_too_small(load_profile):
-    # No room left for a color channel after reserving extra-signal + depth.
+    # Even with every extra signal dropped, at least one color channel must
+    # fit next to the reserved depth channel.
     inputs = {
         "colors": torch.zeros(1, 5, 8),
         "extra_signals": torch.zeros(1, 5, 2),
@@ -589,7 +617,21 @@ def test_apply_channel_override_rejects_channels_too_small(load_profile):
         "render_mode": "RGB+D",
     }
     with pytest.raises(ValueError):
-        load_profile._apply_channel_override(inputs, 2)
+        load_profile._apply_channel_override(inputs, 1)
+
+
+def test_apply_channel_override_depth_squeezes_out_extra_signals(load_profile):
+    # The old refusal boundary: depth + one color still fits once the extra
+    # signals pay, so --channels=2 now trims instead of raising.
+    inputs = {
+        "colors": torch.zeros(1, 5, 8),
+        "extra_signals": torch.zeros(1, 5, 2),
+        "sh_degree": None,
+        "render_mode": "RGB+D",
+    }
+    load_profile._apply_channel_override(inputs, 2)
+    assert inputs["colors"].shape[-1] == 1
+    assert inputs["extra_signals"] is None
 
 
 def test_apply_channel_override_rejects_malformed_sh(load_profile):

@@ -714,10 +714,15 @@ def _apply_channel_override(replay_inputs: dict[str, Any], channels: int) -> lis
     this drives that effective count to ``channels`` for any captured scene.
     Color SH is dropped (``sh_degree -> None``, DC band kept as the base) so the
     color block's last dim can be sliced/tiled freely; the extra-signals and
-    background-blend paths are preserved and resized to keep the post-concat
-    width equal to ``channels``. Channel *values* are irrelevant for kernel
-    timing: only the count drives the template / register / shared-memory
-    footprint, and geometry plus opacities (the alpha early-out) are untouched.
+    background-blend paths are resized to keep the post-concat width equal to
+    ``channels``. An explicit ``--channels`` is an override rather than a
+    faithful replay: when the requested width is below the captured total, the
+    extra-signal channels pay for the reduction first (trimmed from the tail);
+    colors are trimmed only after the extra signals are exhausted (keeping at
+    least one channel so a color-bearing ``render_mode`` stays valid).
+    Channel *values* are irrelevant for kernel timing: only the count drives
+    the template / register / shared-memory footprint, and geometry plus
+    opacities (the alpha early-out) are untouched.
     """
     if channels < 1:
         raise ValueError(f"--channels must be >= 1, got {channels}")
@@ -756,19 +761,41 @@ def _apply_channel_override(replay_inputs: dict[str, Any], channels: int) -> lis
             f"--channels needs a non-empty source color channel dim, got {cur}"
         )
 
+    if channels - depth_extra < 1:
+        raise ValueError(
+            f"--channels={channels} cannot fit a color channel next to the "
+            f"{depth_extra} reserved depth channel(s); needs >= "
+            f"{depth_extra + 1}"
+        )
+
     extra_signals = replay_inputs.get("extra_signals")
     e = extra_signals.shape[-1] if extra_signals is not None else 0
-    color_target = channels - e - depth_extra
-    if color_target < 1:
-        raise ValueError(
-            f"--channels={channels} leaves no room for colors after reserving "
-            f"{e} extra-signal + {depth_extra} depth channel(s); "
-            f"needs >= {e + depth_extra + 1}"
-        )
+    # Extra signals pay for a reduction first (trimmed from the tail); colors
+    # are trimmed only once the extra signals are exhausted.
+    budget = channels - depth_extra
+    e_keep = min(e, budget - min(cur, budget))
+    if extra_signals is not None and e_keep < e:
+        if e_keep == 0:
+            replay_inputs["extra_signals"] = None
+            replay_inputs["extra_signals_sh_degree"] = None
+            notes.append(
+                f"dropped all {e} extra-signal channel(s) to honor "
+                f"--channels={channels}"
+            )
+        else:
+            replay_inputs["extra_signals"] = _resize_color_last_dim(
+                extra_signals, e_keep
+            )
+            notes.append(
+                f"trimmed extra-signal channels {e} -> {e_keep} to honor "
+                f"--channels={channels}"
+            )
+        e = e_keep
+    color_target = budget - e
 
     replay_inputs["colors"] = _resize_color_last_dim(colors, color_target)
     notes.append(f"resized color channels {cur} -> {color_target}")
-    if extra_signals is not None:
+    if e > 0:
         notes.append(f"kept {e} extra-signal channel(s); effective CDIM = {channels}")
 
     backgrounds = replay_inputs.get("backgrounds")
