@@ -44,6 +44,8 @@ namespace gsplat
 {
 namespace
 {
+    constexpr double SH_C0 = 0.2820947917738781;
+
     void check_spherical_harmonics_inputs(
         int64_t degrees_to_use, const at::Tensor &dirs, const at::Tensor &coeffs, const at::optional<at::Tensor> &masks
     )
@@ -79,6 +81,51 @@ namespace
         {
             CHECK_INPUT(masks.value());
         }
+    }
+
+    void check_spherical_harmonics_l1_plus_inputs(
+        int64_t degrees_to_use, const at::Tensor &dirs, const at::Tensor &shN, const at::optional<at::Tensor> &masks
+    )
+    {
+        TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
+        TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
+        TORCH_CHECK(shN.dim() == 3, "shN must have shape [N, K - 1, D], got ", shN.sizes());
+        TORCH_CHECK(shN.size(-1) >= 1, "shN last dim D must be >= 1, got ", shN.size(-1));
+        TORCH_CHECK(
+            dirs.size(-2) == shN.size(-3), "dirs N (", dirs.size(-2), ") must match shN N (", shN.size(-3), ")"
+        );
+        TORCH_CHECK(
+            (degrees_to_use + 1) * (degrees_to_use + 1) - 1 <= shN.size(-2),
+            "degrees_to_use requires more l>=1 SH coefficients than provided; degree ",
+            degrees_to_use,
+            ", shN shape ",
+            shN.sizes()
+        );
+        if(masks.has_value())
+        {
+            at::DimVector mask_shape(dirs.sizes().slice(0, dirs.dim() - 1));
+            TORCH_CHECK(
+                masks.value().sizes() == mask_shape,
+                "masks must match dirs.shape[:-1]; got masks ",
+                masks.value().sizes(),
+                " and dirs ",
+                dirs.sizes()
+            );
+        }
+        CHECK_INPUT(dirs);
+        CHECK_INPUT(shN);
+        if(masks.has_value())
+        {
+            CHECK_INPUT(masks.value());
+        }
+    }
+
+    void check_spherical_harmonics_l0_inputs(const at::Tensor &sh0)
+    {
+        TORCH_CHECK(sh0.dim() == 3, "sh0 must have shape [N, 1, D], got ", sh0.sizes());
+        TORCH_CHECK(sh0.size(-2) == 1, "sh0 must contain exactly one SH coefficient, got ", sh0.sizes());
+        TORCH_CHECK(sh0.size(-1) >= 1, "sh0 last dim D must be >= 1, got ", sh0.size(-1));
+        CHECK_INPUT(sh0);
     }
 } // namespace
 
@@ -161,6 +208,53 @@ SphericalHarmonicsFwdResult spherical_harmonics_fwd(
     };
 }
 
+at::Tensor spherical_harmonics_l0_fwd(const at::Tensor &sh0)
+{
+    DEVICE_GUARD(sh0);
+    check_spherical_harmonics_l0_inputs(sh0);
+
+    // The full SH kernel evaluates coefficients in fp32, including when the
+    // stored coefficients are fp16. Match that contract for split evaluation.
+    return sh0.select(-2, 0).to(at::kFloat).mul(SH_C0); // [N, D]
+}
+
+at::Tensor spherical_harmonics_l0_bwd(const at::Tensor &sh0, const at::Tensor &v_colors)
+{
+    DEVICE_GUARD(sh0);
+    check_spherical_harmonics_l0_inputs(sh0);
+    CHECK_DENSE(v_colors);
+    TORCH_CHECK(
+        v_colors.dim() == 2 && v_colors.size(0) == sh0.size(0) && v_colors.size(1) == sh0.size(2),
+        "v_colors must have shape [N, D] matching sh0; got v_colors ",
+        v_colors.sizes(),
+        " and sh0 ",
+        sh0.sizes()
+    );
+    CHECK_DEVICE(v_colors);
+
+    return v_colors.unsqueeze(-2).mul(SH_C0).to(sh0.scalar_type()); // [N, 1, D]
+}
+
+SphericalHarmonicsFwdResult spherical_harmonics_l1_plus_fwd(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &shN,                // [N, K - 1, D]
+    const at::optional<at::Tensor> &masks // [..., N]
+)
+{
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
+
+    auto out_shape    = dirs.sizes().vec();
+    out_shape.back()  = shN.size(-1);
+    at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
+
+    launch_spherical_harmonics_l1_plus_fwd_kernel(degrees_to_use, dirs, shN, masks, colors);
+    return SphericalHarmonicsFwdResult{
+        .colors = colors,
+    };
+}
+
 at::Tensor spherical_harmonics_fwd_privateuseone(
     int64_t degrees_to_use,
     const at::Tensor &dirs,               // [..., N, 3]
@@ -177,6 +271,24 @@ at::Tensor spherical_harmonics_fwd_privateuseone(
 
     launch_spherical_harmonics_fwd_kernels(degrees_to_use, dirs, coeffs, masks, colors);
     return colors; // [..., N, D]
+}
+
+at::Tensor spherical_harmonics_l1_plus_fwd_privateuseone(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &shN,                // [N, K - 1, D]
+    const at::optional<at::Tensor> &masks // [..., N]
+)
+{
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
+
+    auto out_shape    = dirs.sizes().vec();
+    out_shape.back()  = shN.size(-1);
+    at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
+
+    launch_spherical_harmonics_l1_plus_fwd_kernels(degrees_to_use, dirs, shN, masks, colors);
+    return colors;
 }
 
 // Full backward for spherical_harmonics.
@@ -225,6 +337,48 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
         = (coeffs.scalar_type() == at::kFloat) ? v_coeffs_accum : v_coeffs_accum.to(coeffs.scalar_type());
     return SphericalHarmonicsBwdResult{
         .v_coeffs = v_coeffs,
+        .v_dirs   = as_optional_tensor(v_dirs),
+    };
+}
+
+SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,                // [..., N, 3]
+    const at::Tensor &shN,                 // [N, K - 1, D]
+    const at::optional<at::Tensor> &masks, // [..., N]
+    const SphericalHarmonicsGrad &grad,
+    bool compute_v_dirs
+)
+{
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
+    TORCH_INTERNAL_ASSERT(grad.colors.defined());
+    CHECK_DENSE(grad.colors);
+    at::Tensor grad_colors = grad.colors.contiguous();
+    CHECK_INPUT(grad_colors);
+    TORCH_CHECK(
+        grad_colors.size(-1) == shN.size(-1),
+        "v_colors last dim (",
+        grad_colors.size(-1),
+        ") must match shN last dim (",
+        shN.size(-1),
+        ")"
+    );
+
+    at::Tensor v_shN_accum = at::zeros(shN.sizes(), shN.options().dtype(at::kFloat));
+    at::Tensor v_dirs;
+    if(compute_v_dirs)
+    {
+        v_dirs = at::zeros_like(dirs);
+    }
+
+    launch_spherical_harmonics_l1_plus_bwd_kernel(
+        degrees_to_use, dirs, shN, masks, grad_colors, v_shN_accum, as_optional_tensor(v_dirs)
+    );
+
+    at::Tensor v_shN = (shN.scalar_type() == at::kFloat) ? v_shN_accum : v_shN_accum.to(shN.scalar_type());
+    return SphericalHarmonicsBwdResult{
+        .v_coeffs = v_shN,
         .v_dirs   = as_optional_tensor(v_dirs),
     };
 }
@@ -639,10 +793,56 @@ std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_bwd_private
     return std::make_tuple(v_coeffs, as_optional_tensor(v_dirs));
 }
 
+std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_l1_plus_bwd_privateuseone(
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,                // [..., N, 3]
+    const at::Tensor &shN,                 // [N, K - 1, D]
+    const at::optional<at::Tensor> &masks, // [..., N]
+    const at::Tensor &v_colors,            // [..., N, D]
+    bool compute_v_dirs
+)
+{
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
+    CHECK_INPUT(v_colors);
+    TORCH_CHECK(
+        v_colors.size(-1) == shN.size(-1),
+        "v_colors last dim (",
+        v_colors.size(-1),
+        ") must match shN last dim (",
+        shN.size(-1),
+        ")"
+    );
+
+    at::Tensor v_shN_accum = at::zeros(shN.sizes(), shN.options().dtype(at::kFloat));
+    at::Tensor v_dirs;
+    if(compute_v_dirs)
+    {
+        v_dirs = at::zeros_like(dirs);
+    }
+
+    launch_spherical_harmonics_l1_plus_bwd_kernels(
+        degrees_to_use,
+        dirs,
+        shN,
+        masks,
+        v_colors,
+        v_shN_accum,
+        v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
+    );
+
+    at::Tensor v_shN = (shN.scalar_type() == at::kFloat) ? v_shN_accum : v_shN_accum.to(shN.scalar_type());
+    return std::make_tuple(v_shN, as_optional_tensor(v_dirs));
+}
+
 void register_spherical_harmonics_cuda_impl(torch::Library &m)
 {
     m.impl("spherical_harmonics", to_torch_op<&spherical_harmonics_fwd>);
     m.impl("spherical_harmonics_bwd", to_torch_op<&spherical_harmonics_bwd>);
+    m.impl("spherical_harmonics_l0", to_torch_op<&spherical_harmonics_l0_fwd>);
+    m.impl("spherical_harmonics_l0_bwd", to_torch_op<&spherical_harmonics_l0_bwd>);
+    m.impl("spherical_harmonics_l1_plus", to_torch_op<&spherical_harmonics_l1_plus_fwd>);
+    m.impl("spherical_harmonics_l1_plus_bwd", to_torch_op<&spherical_harmonics_l1_plus_bwd>);
     m.impl("assemble_proj_features_unpacked_fwd", &assemble_proj_features_unpacked_fwd);
 }
 
@@ -650,5 +850,9 @@ void register_spherical_harmonics_privateuseone_impl(torch::Library &m)
 {
     m.impl("spherical_harmonics", to_torch_op<&spherical_harmonics_fwd_privateuseone>);
     m.impl("spherical_harmonics_bwd", to_torch_op<&spherical_harmonics_bwd_privateuseone>);
+    m.impl("spherical_harmonics_l0", to_torch_op<&spherical_harmonics_l0_fwd>);
+    m.impl("spherical_harmonics_l0_bwd", to_torch_op<&spherical_harmonics_l0_bwd>);
+    m.impl("spherical_harmonics_l1_plus", to_torch_op<&spherical_harmonics_l1_plus_fwd_privateuseone>);
+    m.impl("spherical_harmonics_l1_plus_bwd", to_torch_op<&spherical_harmonics_l1_plus_bwd_privateuseone>);
 }
 } // namespace gsplat

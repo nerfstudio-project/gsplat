@@ -1012,6 +1012,13 @@ TORCH_LIBRARY(gsplat, m)
         "spherical_harmonics_bwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks, Tensor v_colors, bool "
         "compute_v_dirs) -> (Tensor, Tensor?)"
     );
+    m.def("spherical_harmonics_l0(Tensor sh0) -> Tensor");
+    m.def("spherical_harmonics_l0_bwd(Tensor sh0, Tensor v_colors) -> Tensor");
+    m.def("spherical_harmonics_l1_plus(int degrees_to_use, Tensor dirs, Tensor shN, Tensor? masks) -> Tensor");
+    m.def(
+        "spherical_harmonics_l1_plus_bwd(int degrees_to_use, Tensor dirs, Tensor shN, Tensor? masks, Tensor "
+        "v_colors, bool compute_v_dirs) -> (Tensor, Tensor?)"
+    );
     m.def(
         "assemble_proj_features_unpacked_fwd(int degrees_to_use, int B, int C, int N, int Dc, int E, int color_post, "
         "int extra_post, bool has_depth, bool depth_is_zero, bool extra_has_c, Tensor means, Tensor campos, Tensor "
