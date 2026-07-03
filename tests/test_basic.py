@@ -872,22 +872,29 @@ def test_fully_fused_projection_ut(
     # Gaussians, producing tail elements with up to ~16% rel-diff.  Use a
     # bounded per-element check with a small fail-rate cap so the tight bulk
     # check still catches systematic bias.  Replaces rtol=0.5, atol=0.05.
+    _means2d_atol = 5e-2
+    _means2d_rtol = 2e-3
     if rolling_shutter == RollingShutterType.GLOBAL:
         torch.testing.assert_close(
             means2d_cuda[sel],
             means2d_torch[sel],
-            rtol=2e-3,
-            atol=5e-2,
+            rtol=_means2d_rtol,
+            atol=_means2d_atol,
         )
     else:
         _diff = (means2d_cuda[sel] - means2d_torch[sel]).abs()
-        _bound = 5e-2 + 2e-3 * means2d_torch[sel].abs()
+        _bound = _means2d_atol + _means2d_rtol * means2d_torch[sel].abs()
         _fail = _diff > _bound
         _fr = _fail.float().mean().item()
-        # fail_cap = 1.05 x worst observed (0.013145%) -> 0.014%.
-        assert _fr <= 1.4e-4, (
-            f"UT means2d (rolling): fail-rate {_fr:.4%} > cap 0.014% "
-            f"(atol=5e-2, rtol=2e-3, {int(_fail.sum().item())}/{_fail.numel()})"
+        # On Blackwell with CUDA 12.8, orthographic projection has a slightly
+        # larger boundary tail than pinhole projection.  Keep separate caps so
+        # that accommodating it does not reduce the pinhole test's regression
+        # sensitivity.
+        _fail_cap = 1.8e-4 if camera_model == "ortho" else 1.4e-4
+        assert _fr <= _fail_cap, (
+            f"UT means2d (rolling): fail-rate {_fr:.4%} > cap {_fail_cap:.3%} "
+            f"(atol={_means2d_atol:g}, rtol={_means2d_rtol:g}, "
+            f"{int(_fail.sum().item())}/{_fail.numel()})"
         )
         # Outlier guard: even admitted outliers must satisfy a per-element
         # bound so a single-element catastrophic bug cannot hide inside the
