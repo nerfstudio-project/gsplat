@@ -19,7 +19,9 @@
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
+#include <c10/util/TypeCast.h>
 #include <tuple>
+#include <vector>
 
 #include <ATen/Functions.h>
 #include <ATen/core/grad_mode.h>
@@ -37,6 +39,7 @@
 #endif
 #include <torch/library.h>
 
+#include "ChannelChunks.h"
 #include "Config.h"
 #include "Common.h"
 #include "PrimingChainEncoding.cuh"
@@ -672,7 +675,8 @@ RasterizeToPixels3DGSFwdResult rasterize_to_pixels_sparse_fwd(
     const at::Tensor &tile_pixel_cumsum, // [AT]
     const at::Tensor &pixel_map,         // [P]
     bool packed,
-    bool absgrad
+    bool absgrad,
+    int channel_chunk
 )
 {
     TORCH_CHECK(
@@ -703,41 +707,65 @@ RasterizeToPixels3DGSFwdResult rasterize_to_pixels_sparse_fwd(
         CHECK_INPUT(masks.value());
     }
 
-    const int64_t P        = pixel_map.size(0);
-    const int64_t channels = colors.size(-1);
-    at::TensorOptions opt  = means2d.options();
+    const int64_t P                     = pixel_map.size(0);
+    const int channels                  = c10::checked_convert<int>(colors.size(-1), "channels");
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, channel_chunk, {GSPLAT_NUM_CHANNELS});
+    TORCH_CHECK(
+        !absgrad || chunk_widths.size() == 1,
+        "rasterize_to_pixels_sparse does not support absgrad with multiple "
+        "channel chunks because per-chunk absolute gradients cannot be combined exactly"
+    );
+    at::TensorOptions opt = means2d.options();
 
-    at::Tensor renders  = at::empty({P, channels}, opt);
     at::Tensor alphas   = at::empty({P, 1}, opt);
     at::Tensor last_ids = at::empty({P}, opt.dtype(at::kInt));
+    std::vector<at::Tensor> render_chunks;
+    render_chunks.reserve(chunk_widths.size());
 
-    launch_rasterize_to_pixels_sparse_fwd_kernel(
-        means2d,
-        conics,
-        colors,
-        opacities,
-        backgrounds,
-        masks,
-        image_width,
-        image_height,
-        tile_size,
-        tile_width,
-        tile_height,
-        active_tiles,
-        tile_offsets,
-        flatten_ids,
-        tile_pixel_mask,
-        tile_pixel_cumsum,
-        pixel_map,
-        renders,
-        alphas,
-        last_ids
-    );
+    int start = 0;
+    for(int width: chunk_widths)
+    {
+        const int end           = start + width;
+        at::Tensor colors_chunk = start == 0 && end == channels ? colors : colors.slice(-1, start, end).contiguous();
+        at::optional<at::Tensor> backgrounds_chunk;
+        if(backgrounds.has_value())
+        {
+            const at::Tensor &value = backgrounds.value();
+            backgrounds_chunk       = start == 0 && end == channels ? value : value.slice(-1, start, end).contiguous();
+        }
+        at::Tensor renders_chunk = at::empty({P, width}, opt);
+
+        launch_rasterize_to_pixels_sparse_fwd_kernel(
+            means2d,
+            conics,
+            colors_chunk,
+            opacities,
+            backgrounds_chunk,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            tile_width,
+            tile_height,
+            active_tiles,
+            tile_offsets,
+            flatten_ids,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            renders_chunk,
+            alphas,
+            last_ids
+        );
+        render_chunks.push_back(renders_chunk);
+        start = end;
+    }
+    TORCH_INTERNAL_ASSERT(start == channels);
 
     at::Tensor absgrad_holder = absgrad ? at::zeros_like(means2d) : at::empty({0}, means2d.options());
 
     return RasterizeToPixels3DGSFwdResult{
-        .renders         = renders,
+        .renders         = render_chunks.size() == 1 ? render_chunks[0] : at::cat(render_chunks, -1),
         .alphas          = alphas,
         .last_ids        = last_ids,
         .means2d_absgrad = absgrad_holder,
@@ -776,7 +804,8 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
     int64_t tile_height,
     bool absgrad,
     const RasterizeToPixels3DGSGrad &grad,
-    bool compute_v_backgrounds
+    bool compute_v_backgrounds,
+    int channel_chunk
 )
 {
     DEVICE_GUARD(means2d);
@@ -807,6 +836,14 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
         CHECK_INPUT(masks.value());
     }
 
+    const int channels                  = c10::checked_convert<int>(colors.size(-1), "channels");
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, channel_chunk, {GSPLAT_NUM_CHANNELS});
+    TORCH_CHECK(
+        !absgrad || chunk_widths.size() == 1,
+        "rasterize_to_pixels_sparse does not support absgrad with multiple "
+        "channel chunks because per-chunk absolute gradients cannot be combined exactly"
+    );
+
     at::Tensor v_means2d   = at::zeros_like(means2d);
     at::Tensor v_conics    = at::zeros_like(conics);
     at::Tensor v_colors    = at::zeros_like(colors);
@@ -817,34 +854,62 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
         v_means2d_abs = at::zeros_like(means2d);
     }
 
-    launch_rasterize_to_pixels_sparse_bwd_kernel(
-        means2d,
-        conics,
-        colors,
-        opacities,
-        backgrounds,
-        masks,
-        image_width,
-        image_height,
-        tile_size,
-        tile_width,
-        tile_height,
-        active_tiles,
-        tile_offsets,
-        flatten_ids,
-        tile_pixel_mask,
-        tile_pixel_cumsum,
-        pixel_map,
-        render_alphas,
-        last_ids,
-        v_render_colors,
-        v_render_alphas,
-        as_optional_tensor(v_means2d_abs),
-        v_means2d,
-        v_conics,
-        v_colors,
-        v_opacities
-    );
+    // Alpha is channel-independent. Apply its incoming gradient exactly once,
+    // while accumulating each feature chunk's color contribution separately.
+    at::Tensor zero_v_render_alphas;
+    if(chunk_widths.size() > 1)
+    {
+        zero_v_render_alphas = at::zeros_like(v_render_alphas);
+    }
+
+    int start = 0;
+    for(size_t chunk_index = 0; chunk_index < chunk_widths.size(); ++chunk_index)
+    {
+        const int end           = start + chunk_widths[chunk_index];
+        at::Tensor colors_chunk = start == 0 && end == channels ? colors : colors.slice(-1, start, end).contiguous();
+        at::optional<at::Tensor> backgrounds_chunk;
+        if(backgrounds.has_value())
+        {
+            const at::Tensor &value = backgrounds.value();
+            backgrounds_chunk       = start == 0 && end == channels ? value : value.slice(-1, start, end).contiguous();
+        }
+        at::Tensor v_render_colors_chunk
+            = start == 0 && end == channels ? v_render_colors : v_render_colors.slice(-1, start, end).contiguous();
+        at::Tensor v_colors_chunk               = at::zeros_like(colors_chunk);
+        const at::Tensor &v_render_alphas_chunk = chunk_index == 0 ? v_render_alphas : zero_v_render_alphas;
+
+        launch_rasterize_to_pixels_sparse_bwd_kernel(
+            means2d,
+            conics,
+            colors_chunk,
+            opacities,
+            backgrounds_chunk,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            tile_width,
+            tile_height,
+            active_tiles,
+            tile_offsets,
+            flatten_ids,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            render_alphas,
+            last_ids,
+            v_render_colors_chunk,
+            v_render_alphas_chunk,
+            as_optional_tensor(v_means2d_abs),
+            v_means2d,
+            v_conics,
+            v_colors_chunk,
+            v_opacities
+        );
+        v_colors.slice(-1, start, end).copy_(v_colors_chunk);
+        start = end;
+    }
+    TORCH_INTERNAL_ASSERT(start == channels);
 
     // --- Background gradient (not produced by the CUDA kernel) ----------
     at::Tensor v_backgrounds;

@@ -120,7 +120,16 @@ def _dense(scene, width, height, tile_size, backgrounds=None, masks=None):
 
 
 def _sparse(
-    scene, pixels, image_ids, width, height, tile_size, backgrounds=None, masks=None
+    scene,
+    pixels,
+    image_ids,
+    width,
+    height,
+    tile_size,
+    backgrounds=None,
+    masks=None,
+    absgrad=False,
+    channel_chunk=32,
 ):
     from gsplat import (
         build_sparse_tile_layout,
@@ -160,6 +169,8 @@ def _sparse(
         th,
         backgrounds=backgrounds,
         masks=masks,
+        absgrad=absgrad,
+        channel_chunk=channel_chunk,
     )
 
 
@@ -168,6 +179,11 @@ def _gather(colors_img, alphas_img, pixels, image_ids):
     rows = pixels[:, 0].long()
     cols = pixels[:, 1].long()
     return colors_img[img, rows, cols], alphas_img[img, rows, cols]
+
+
+def _slice_scene_channels(scene, start, end):
+    means2d, conics, colors, opacities, radii, depths = scene
+    return means2d, conics, colors[..., start:end], opacities, radii, depths
 
 
 @pytest.mark.parametrize("C,N", [(1, 32), (2, 128), (3, 256)])
@@ -242,43 +258,107 @@ def test_forward_masks():
     torch.testing.assert_close(oa, ra, rtol=1e-4, atol=1e-4)
 
 
-@pytest.mark.parametrize("use_backgrounds", [False, True])
-def test_backward_matches_dense(use_backgrounds):
-    C, N, channels = 2, 96, 3
+@pytest.mark.parametrize(
+    "channels,channel_chunk,reference_chunk_widths,use_backgrounds,use_masks",
+    [
+        pytest.param(3, 32, (3,), False, False, id="single_chunk"),
+        pytest.param(3, 32, (3,), True, False, id="single_chunk_backgrounds"),
+        # 31 need not be compiled. The minimum eligible plan for 46 channels
+        # is two launches using the compiled width 23.
+        pytest.param(46, 31, (23, 23), True, True, id="multichunk_23x2"),
+    ],
+)
+def test_backward_matches_dense(
+    channels,
+    channel_chunk,
+    reference_chunk_widths,
+    use_backgrounds,
+    use_masks,
+):
+    C, N = 2, 96
     W, H = 40, 28
     ts = 16
     scene = _make_scene(C, N, W, H, channels, seed=5, requires_grad=True)
     means2d, conics, colors, opacities, _radii, _depths = scene
     inputs = (means2d, conics, colors, opacities)
 
+    gen0 = torch.Generator(device=device).manual_seed(50)
     backgrounds = None
     if use_backgrounds:
-        gen0 = torch.Generator(device=device).manual_seed(50)
         backgrounds = torch.rand(
             C, channels, device=device, generator=gen0, requires_grad=True
         )
+
+    masks = None
+    if use_masks:
+        th, tw = _grid(W, H, ts)
+        masks = (
+            torch.rand(C, th, tw, device=device, generator=gen0) > 0.25
+        ).contiguous()
 
     pixels, image_ids = _subset_pixels(C, W, H, 0.5, seed=5)
 
     grad_inputs = inputs + ((backgrounds,) if use_backgrounds else ())
 
     # Sparse forward + grads w.r.t. a random cotangent.
-    oc, oa = _sparse(scene, pixels, image_ids, W, H, ts, backgrounds=backgrounds)
+    oc, oa = _sparse(
+        scene,
+        pixels,
+        image_ids,
+        W,
+        H,
+        ts,
+        backgrounds=backgrounds,
+        masks=masks,
+        channel_chunk=channel_chunk,
+    )
     gen = torch.Generator(device=device).manual_seed(99)
     v_colors = torch.rand(oc.shape, device=device, generator=gen)
     v_alphas = torch.rand(oa.shape, device=device, generator=gen)
     g_sparse = torch.autograd.grad((oc, oa), grad_inputs, (v_colors, v_alphas))
 
-    # Dense forward + grads w.r.t. the same cotangent scattered into the image.
-    dc, da = _dense(scene, W, H, ts, backgrounds=backgrounds)
+    # Build an independent dense reference from exact compiled-width launches.
+    # Alpha is channel-independent, so its gradient must be applied through one
+    # reference chunk while geometry gradients from every color chunk combine.
+    assert sum(reference_chunk_widths) == channels
+    dense_color_chunks = []
+    dense_alphas = None
+    start = 0
+    for chunk_width in reference_chunk_widths:
+        end = start + chunk_width
+        chunk_backgrounds = (
+            backgrounds[..., start:end] if backgrounds is not None else None
+        )
+        chunk_colors, chunk_alphas = _dense(
+            _slice_scene_channels(scene, start, end),
+            W,
+            H,
+            ts,
+            backgrounds=chunk_backgrounds,
+            masks=masks,
+        )
+        dense_color_chunks.append(chunk_colors)
+        if dense_alphas is None:
+            dense_alphas = chunk_alphas
+        else:
+            torch.testing.assert_close(chunk_alphas, dense_alphas, rtol=1e-4, atol=1e-4)
+        start = end
+
+    assert dense_alphas is not None
+    dc = torch.cat(dense_color_chunks, dim=-1)
+    rc, ra = _gather(dc, dense_alphas, pixels, image_ids)
+    torch.testing.assert_close(oc, rc, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(oa, ra, rtol=1e-4, atol=1e-4)
+
+    # Dense grads use the same sparse-output cotangent scattered into the image.
     v_dc = torch.zeros_like(dc)
-    v_da = torch.zeros_like(da)
+    v_da = torch.zeros_like(dense_alphas)
     img = image_ids.long()
     rows = pixels[:, 0].long()
     cols = pixels[:, 1].long()
     v_dc[img, rows, cols] = v_colors
     v_da[img, rows, cols] = v_alphas
-    g_dense = torch.autograd.grad((dc, da), grad_inputs, (v_dc, v_da))
+    g_dense = torch.autograd.grad((dc, dense_alphas), grad_inputs, (v_dc, v_da))
 
     for gs, gd in zip(g_sparse, g_dense):
         torch.testing.assert_close(gs, gd, rtol=1e-3, atol=1e-3)
@@ -298,3 +378,23 @@ def test_backward_accepts_reduction_gradients():
     for tensor in (means2d, conics, colors, opacities):
         assert tensor.grad is not None
         assert torch.isfinite(tensor.grad).all()
+
+
+def test_multichunk_absgrad_is_rejected():
+    C, N, channels = 1, 32, 46
+    W, H = 32, 24
+    ts = 16
+    scene = _make_scene(C, N, W, H, channels, seed=71, requires_grad=True)
+    pixels, image_ids = _all_pixels(C, W, H)
+
+    with pytest.raises(RuntimeError, match="does not support absgrad with multiple"):
+        _sparse(
+            scene,
+            pixels,
+            image_ids,
+            W,
+            H,
+            ts,
+            absgrad=True,
+            channel_chunk=31,
+        )

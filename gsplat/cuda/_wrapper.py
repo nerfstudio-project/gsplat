@@ -1492,6 +1492,7 @@ def rasterize_to_pixels_sparse(
     masks: Optional[Tensor] = None,  # [n_images, tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
+    channel_chunk: int = 32,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to a packed set of pixels (sparse rasterization).
 
@@ -1511,7 +1512,6 @@ def rasterize_to_pixels_sparse(
         means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.
         conics: Inverse projected covariances (upper triangle). [..., N, 3] or [nnz, 3].
         colors: Gaussian colors or ND features. [..., N, channels] or [nnz, channels].
-            ``colors.shape[-1]`` must be a channel count compiled into ``GSPLAT_NUM_CHANNELS``.
         opacities: Gaussian opacities. [..., N] or [nnz].
         image_ids: Image index of each requested pixel. [P].
         active_tiles: Ascending dense ids of active tiles. [AT].
@@ -1528,7 +1528,12 @@ def rasterize_to_pixels_sparse(
         backgrounds: Background colors. [n_images, channels]. Default: None.
         masks: Tile mask to skip masked tiles. [n_images, tile_height, tile_width]. Default: None.
         packed: If True, inputs are packed with shape [nnz, ...]. Default: False.
-        absgrad: If True, backward computes a ``.absgrad`` attribute for ``means2d``. Default: False.
+        absgrad: If True, backward computes a ``.absgrad`` attribute for
+            ``means2d``. The total channel count must fit a single compiled-width
+            launch; a multi-launch plan raises ``RuntimeError``. Default: False.
+        channel_chunk: Upper bound on the number of channels rendered by one
+            kernel launch. Each launch uses a channel width compiled through
+            ``GSPLAT_NUM_CHANNELS``. Default: 32.
 
     Returns:
         A tuple:
@@ -1564,6 +1569,7 @@ def rasterize_to_pixels_sparse(
         pixel_map.contiguous(),
         packed,
         absgrad,
+        channel_chunk,
     )
     if absgrad:
         means2d.absgrad = means2d_absgrad
@@ -2053,6 +2059,7 @@ class RegisterRasterizeToPixelsSparse:
             pixel_map,
             _packed,
             absgrad,
+            channel_chunk,
         ) = inputs
         _render_colors, render_alphas, means2d_absgrad, last_ids = output
         # last_ids and the absgrad holder are forward-internal; the backward fills
@@ -2064,6 +2071,7 @@ class RegisterRasterizeToPixelsSparse:
         ctx.tile_width = tile_width
         ctx.tile_height = tile_height
         ctx.absgrad = absgrad
+        ctx.channel_chunk = channel_chunk
         ctx.save_for_backward(
             means2d,
             conics,
@@ -2139,6 +2147,7 @@ class RegisterRasterizeToPixelsSparse:
             ctx.needs_input_grad[
                 4
             ],  # compute_v_backgrounds (backgrounds is input index 4)
+            ctx.channel_chunk,
         )
         # The abs gradient is not a returned input grad; surface it by filling the
         # saved means2d.absgrad holder in place.
@@ -2165,6 +2174,7 @@ class RegisterRasterizeToPixelsSparse:
             None,  # pixel_map
             None,  # packed
             None,  # absgrad
+            None,  # channel_chunk
         )
 
 

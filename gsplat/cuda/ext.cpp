@@ -1099,16 +1099,16 @@ TORCH_LIBRARY(gsplat, m)
         "rasterize_to_pixels_sparse(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? "
         "backgrounds, Tensor? masks, Tensor image_ids, int image_width, int image_height, int tile_size, int "
         "tile_width, int tile_height, Tensor active_tiles, Tensor tile_offsets, Tensor flatten_ids, Tensor "
-        "tile_pixel_mask, Tensor tile_pixel_cumsum, Tensor pixel_map, bool packed, bool absgrad) -> (Tensor, Tensor, "
-        "Tensor, Tensor)"
+        "tile_pixel_mask, Tensor tile_pixel_cumsum, Tensor pixel_map, bool packed, bool absgrad, int channel_chunk) -> "
+        "(Tensor, Tensor, Tensor, Tensor)"
     );
     m.def(
         "rasterize_to_pixels_sparse_bwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? "
         "backgrounds, Tensor? masks, Tensor image_ids, Tensor active_tiles, Tensor tile_offsets, Tensor flatten_ids, "
         "Tensor tile_pixel_mask, Tensor tile_pixel_cumsum, Tensor pixel_map, Tensor render_alphas, Tensor last_ids, "
         "int image_width, int image_height, int tile_size, int tile_width, int tile_height, bool absgrad, Tensor "
-        "v_render_colors, Tensor v_render_alphas, bool compute_v_backgrounds) -> (Tensor?, Tensor, Tensor, Tensor, "
-        "Tensor, Tensor?)"
+        "v_render_colors, Tensor v_render_alphas, bool compute_v_backgrounds, int channel_chunk) -> (Tensor?, Tensor, "
+        "Tensor, Tensor, Tensor, Tensor?)"
     );
     m.def(
         "rasterize_to_indices_3dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor "
