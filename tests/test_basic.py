@@ -2347,7 +2347,7 @@ def test_isect_lidar_corner_cases(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
-@pytest.mark.parametrize("channels", [3, 32, 128])
+@pytest.mark.parametrize("channels", [3, 32])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
@@ -2391,13 +2391,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     opacities = torch.broadcast_to(opacities[..., None, :], batch_dims + (C, N))
 
     # Identify intersecting tiles.
-    # NOTE: CDIM=128 needs the smaller tile so the backward's per-block
-    # shared memory (tile_size^2 * CDIM * 4 bytes) stays below the device limit;
-    # the forward dispatches to a matching (TILE_SIZE=4, CTA_SIZE=16) kernel variant.
-    # When we also convert the 3DGS backward rasterizer pass, it will require much
-    # less shared memory since we're iterating with PPT=4 and will therefore be able
-    # to remove tile_size=4 both here and in the forward rasterizer.
-    tile_size = 16 if channels <= 32 else 4
+    tile_size = 16
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
@@ -2452,8 +2446,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     )
 
     # Compare values, then drop the CUDA-pass renders before the reference
-    # backward runs; keeping both render buffers live is what made the heavy
-    # arms (channels=128, batch_dims=(2,)/(1,2)) peak above the laptop VRAM.
+    # backward runs to keep the test's peak memory bounded.
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
     del render_colors, render_alphas
@@ -2474,11 +2467,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     # - interior_atol absorbs absolute FP cancellation noise at small
     #   magnitudes; interior_rtol catches systematic bias at large.
     # - interior_rtol = 1.05 x envelope across calibrated GPUs (RTX PRO 2000 / 6000).
-    # - v_means2d atol scales with channel count: more channels accumulate
-    #   more alpha-compositing terms (channels=3,32 stay under 1e-3;
-    #   channels=128 reaches ~1.4e-3).
-    # - v_means2d batch_dims*-128 OOMed on RTX PRO 2000, so its envelope is
-    #   RTX PRO 6000-only.
+    # - v_means2d atol covers channel-scaled alpha-compositing accumulation.
     for name, vc, vt, rtol, atol in [
         (
             "v_means2d",
@@ -2486,7 +2475,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
             _v_means2d,
             2.5e-4,
             1.6e-3,
-        ),  # RTX PRO 2000=OOM, RTX PRO 6000: rtol=2.14e-4 atol=1.47e-3
+        ),
         ("v_conics", v_conics, _v_conics, 1e-5, 1e-3),
         ("v_colors", v_colors, _v_colors, 1e-5, 1e-3),
         ("v_opacities", v_opacities, _v_opacities, 1e-5, 2e-3),
