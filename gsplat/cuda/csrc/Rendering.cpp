@@ -38,6 +38,79 @@
 
 namespace gsplat
 {
+#if GSPLAT_BUILD_2DGS || GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT
+namespace
+{
+    // These helpers are shared by the 3D and 2D rendering frontends. Keep them
+    // outside the module guards so a 2DGS-only build does not depend on either
+    // 3DGS or 3DGUT being enabled.
+    [[maybe_unused]] std::vector<int64_t> batch_shape_with(
+        const at::Tensor &means, std::initializer_list<int64_t> suffix
+    )
+    {
+        std::vector<int64_t> shape;
+        const int64_t batch_ndim = means.dim() - 2;
+        shape.reserve(batch_ndim + static_cast<int64_t>(suffix.size()));
+        for(int64_t dim = 0; dim < batch_ndim; ++dim)
+        {
+            shape.push_back(means.size(dim));
+        }
+        shape.insert(shape.end(), suffix.begin(), suffix.end());
+        return shape;
+    }
+
+    [[maybe_unused]] at::Tensor normalize_features_layout(
+        const at::Tensor &features,
+        const at::Tensor &means,
+        int64_t B,
+        int64_t C,
+        int64_t N,
+        const at::optional<at::Tensor> &batch_ids,
+        const at::optional<at::Tensor> &camera_ids,
+        const at::optional<at::Tensor> &gaussian_ids
+    )
+    {
+        const int64_t batch_ndim = means.dim() - 2;
+        const int64_t channels   = features.size(-1);
+
+        const bool per_view
+            = features.dim() == batch_ndim + 3 && features.size(batch_ndim) == C && features.size(batch_ndim + 1) == N;
+        if(per_view)
+        {
+            if(gaussian_ids.has_value())
+            {
+                return features.view({B, C, N, channels})
+                    .index({batch_ids.value(), camera_ids.value(), gaussian_ids.value()});
+            }
+            return features;
+        }
+
+        TORCH_CHECK(
+            features.dim() == batch_ndim + 2 && features.size(batch_ndim) == N,
+            "features must have shape [..., N, D] or [..., C, N, D], got ",
+            features.sizes()
+        );
+        if(gaussian_ids.has_value())
+        {
+            return features.view({B, N, channels}).index({batch_ids.value(), gaussian_ids.value()});
+        }
+
+        std::vector<int64_t> expanded_shape = batch_shape_with(means, {C, N, channels});
+        return features.unsqueeze(batch_ndim).expand(expanded_shape);
+    }
+
+    [[maybe_unused]] at::Tensor channel_chunk_or_contiguous(const at::Tensor &features, int64_t start, int64_t end)
+    {
+        const int64_t channels = features.size(-1);
+        if(start == 0 && end == channels)
+        {
+            return features.is_contiguous() ? features : features.contiguous();
+        }
+        return features.slice(-1, start, end).contiguous();
+    }
+} // namespace
+#endif // GSPLAT_BUILD_2DGS || GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT
+
 #if GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT
 
 struct Rasterization3DGSResult
@@ -561,19 +634,6 @@ namespace
         return rays.value().expand(expected_shape).contiguous();
     }
 
-    std::vector<int64_t> batch_shape_with(const at::Tensor &means, std::initializer_list<int64_t> suffix)
-    {
-        std::vector<int64_t> shape;
-        const int64_t batch_ndim = means.dim() - 2;
-        shape.reserve(batch_ndim + static_cast<int64_t>(suffix.size()));
-        for(int64_t dim = 0; dim < batch_ndim; ++dim)
-        {
-            shape.push_back(means.size(dim));
-        }
-        shape.insert(shape.end(), suffix.begin(), suffix.end());
-        return shape;
-    }
-
     at::Tensor viewmat_to_camera_position(const at::Tensor &viewmats)
     {
         at::Tensor R = viewmats.narrow(-2, 0, 3).narrow(-1, 0, 3);
@@ -654,46 +714,6 @@ namespace
         return dirs;
     }
 
-    at::Tensor normalize_features_layout_3dgs(
-        const at::Tensor &features,
-        const at::Tensor &means,
-        int64_t B,
-        int64_t C,
-        int64_t N,
-        const at::optional<at::Tensor> &batch_ids,
-        const at::optional<at::Tensor> &camera_ids,
-        const at::optional<at::Tensor> &gaussian_ids
-    )
-    {
-        const int64_t batch_ndim = means.dim() - 2;
-        const int64_t channels   = features.size(-1);
-
-        const bool per_view
-            = features.dim() == batch_ndim + 3 && features.size(batch_ndim) == C && features.size(batch_ndim + 1) == N;
-        if(per_view)
-        {
-            if(gaussian_ids.has_value())
-            {
-                return features.view({B, C, N, channels})
-                    .index({batch_ids.value(), camera_ids.value(), gaussian_ids.value()});
-            }
-            return features;
-        }
-
-        TORCH_CHECK(
-            features.dim() == batch_ndim + 2 && features.size(batch_ndim) == N,
-            "features must have shape [..., N, D] or [..., C, N, D], got ",
-            features.sizes()
-        );
-        if(gaussian_ids.has_value())
-        {
-            return features.view({B, N, channels}).index({batch_ids.value(), gaussian_ids.value()});
-        }
-
-        std::vector<int64_t> expanded_shape = batch_shape_with(means, {C, N, channels});
-        return features.unsqueeze(batch_ndim).expand(expanded_shape);
-    }
-
     at::Tensor maybe_evaluate_feature_sh(
         int64_t degree,
         const at::Tensor &coeffs,
@@ -737,16 +757,6 @@ namespace
 
         std::vector<int64_t> shape = batch_shape_with(means, {C, 1});
         return at::zeros(shape, backgrounds_tensor.options());
-    }
-
-    at::Tensor channel_chunk_or_contiguous(const at::Tensor &features, int64_t start, int64_t end)
-    {
-        const int64_t channels = features.size(-1);
-        if(start == 0 && end == channels)
-        {
-            return features.is_contiguous() ? features : features.contiguous();
-        }
-        return features.slice(-1, start, end).contiguous();
     }
 
     at::Tensor empty_like_indices(const at::Tensor &means)
@@ -1232,7 +1242,7 @@ Rasterization3DGSResult rasterization_3dgs(
                                        gaussian_ids_opt,
                                        true // clamp_after_bias
                                    )
-                                 : normalize_features_layout_3dgs(
+                                 : normalize_features_layout(
                                        colors.value(), means, B, C, N, batch_ids_opt, camera_ids_opt, gaussian_ids_opt
                                    );
             feature_list.push_back(projected_colors);
@@ -1252,7 +1262,7 @@ Rasterization3DGSResult rasterization_3dgs(
                           gaussian_ids_opt,
                           false // clamp_after_bias
                       )
-                    : normalize_features_layout_3dgs(
+                    : normalize_features_layout(
                           extra_signals.value(), means, B, C, N, batch_ids_opt, camera_ids_opt, gaussian_ids_opt
                       );
             feature_list.push_back(projected_extra);
