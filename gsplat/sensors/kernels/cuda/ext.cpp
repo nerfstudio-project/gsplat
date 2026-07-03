@@ -47,6 +47,7 @@
 
 #include <array>
 #include <tuple>
+#include <vector>
 
 TORCH_LIBRARY(gsplat_sensors, m)
 {
@@ -139,7 +140,9 @@ TORCH_LIBRARY(gsplat_sensors, m)
             },
             [](c10::IValue state) -> c10::intrusive_ptr<OpenCVPinholeProjection>
             {
-                auto elems = state.toTuple()->elements();
+                // Materialize the small-buffer tuple view before indexed access
+                // so the optimizer retains its dynamic extent.
+                std::vector<c10::IValue> elems = state.toTuple()->elements().vec();
                 TORCH_CHECK(
                     elems.size() == 8 && elems[0].toInt() == 1, "unsupported OpenCVPinholeProjection pickle state"
                 );
@@ -161,7 +164,7 @@ TORCH_LIBRARY(gsplat_sensors, m)
             { return c10::IValue(c10::ivalue::Tuple::create({c10::IValue(static_cast<int64_t>(1))})); },
             [](c10::IValue state) -> c10::intrusive_ptr<NoExternalDistortion>
             {
-                auto elems = state.toTuple()->elements();
+                std::vector<c10::IValue> elems = state.toTuple()->elements().vec();
                 TORCH_CHECK(
                     elems.size() == 1 && elems[0].toInt() == 1, "unsupported NoExternalDistortion pickle state"
                 );
@@ -209,7 +212,7 @@ TORCH_LIBRARY(gsplat_sensors, m)
             },
             [](c10::IValue state) -> c10::intrusive_ptr<BivariateWindshieldDistortion>
             {
-                auto elems = state.toTuple()->elements();
+                std::vector<c10::IValue> elems = state.toTuple()->elements().vec();
                 TORCH_CHECK(
                     elems.size() == 5 && elems[0].isInt() && elems[0].toInt() <= 1,
                     "unsupported BivariateWindshieldDistortion pickle state"
@@ -364,7 +367,7 @@ TORCH_LIBRARY(gsplat_sensors, m)
             },
             [](c10::IValue state) -> c10::intrusive_ptr<FThetaProjection>
             {
-                auto elems = state.toTuple()->elements();
+                std::vector<c10::IValue> elems = state.toTuple()->elements().vec();
                 TORCH_CHECK(!elems.empty() && elems[0].isInt(), "unsupported FThetaProjection pickle state");
                 int64_t version = elems[0].toInt();
                 c10::intrusive_ptr<FThetaProjection> ptr;
@@ -481,7 +484,7 @@ TORCH_LIBRARY(gsplat_sensors, m)
             },
             [](c10::IValue state) -> c10::intrusive_ptr<RowOffsetStructuredSpinningLidarProjection>
             {
-                auto elems = state.toTuple()->elements();
+                std::vector<c10::IValue> elems = state.toTuple()->elements().vec();
                 TORCH_CHECK(
                     elems.size() == 10 && elems[0].toInt() == 1,
                     "unsupported RowOffsetStructuredSpinningLidarProjection pickle state"
@@ -585,7 +588,7 @@ TORCH_LIBRARY(gsplat_sensors, m)
             },
             [](c10::IValue state) -> c10::intrusive_ptr<OpenCVFisheyeProjection>
             {
-                auto elems = state.toTuple()->elements();
+                std::vector<c10::IValue> elems = state.toTuple()->elements().vec();
                 TORCH_CHECK(!elems.empty() && elems[0].isInt(), "unsupported OpenCVFisheyeProjection pickle state");
                 int64_t version = elems[0].toInt();
                 TORCH_CHECK(version == 1 && elems.size() == 10, "unsupported OpenCVFisheyeProjection pickle state");
