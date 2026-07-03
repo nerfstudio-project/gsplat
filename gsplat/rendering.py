@@ -384,6 +384,8 @@ def rasterization(
         `meta["means2d"].absgrad`. This is an implementation of the paper
         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
         which is shown to be more effective for splitting Gaussians during training.
+        On the non-Eval3D path, this option raises ``RuntimeError`` when the total
+        rendered feature width requires multiple rasterization passes.
 
     .. note::
         **Camera Distortion and Rolling Shutter**: The function supports rendering with opencv
@@ -433,7 +435,9 @@ def rasterization(
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
-            `meta["means2d"].absgrad`. Default is False.
+            `meta["means2d"].absgrad`. On the non-Eval3D path, a total rendered
+            feature width that requires multiple rasterization passes raises
+            ``RuntimeError``. Default is False.
         rasterize_mode: The rasterization mode. Supported modes are "classic" and
             "antialiased". Default is "classic".
         channel_chunk: The number of channels to render in one go. Default is 32.
@@ -973,7 +977,7 @@ def _rasterization(
                     means=means,
                     quats=quats,
                     scales=scales,
-                    colors_chunk=colors_chunk,
+                    colors=colors_chunk,
                     opacities=opacities,
                     viewmats=viewmats,
                     camera_model=camera_model,

@@ -19,6 +19,7 @@
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/util/TypeCast.h>
 #include <torch/torch.h>
 #include <algorithm>
 #include <cmath>
@@ -27,6 +28,7 @@
 #include <vector>
 
 #include "Cameras.h"
+#include "ChannelChunks.h"
 #include "Common.h"
 #include "Config.h"
 #include "DistributedCollectives.h"
@@ -99,9 +101,9 @@ namespace
         return features.unsqueeze(batch_ndim).expand(expanded_shape);
     }
 
-    [[maybe_unused]] at::Tensor channel_chunk_or_contiguous(const at::Tensor &features, int64_t start, int64_t end)
+    [[maybe_unused]] at::Tensor channel_chunk_or_contiguous(const at::Tensor &features, int start, int end)
     {
-        const int64_t channels = features.size(-1);
+        const int channels = c10::checked_convert<int>(features.size(-1), "channels");
         if(start == 0 && end == channels)
         {
             return features.is_contiguous() ? features : features.contiguous();
@@ -195,7 +197,7 @@ namespace
         bool absgrad,
         bool calc_compensations,
         bool classic_rasterize_mode,
-        int64_t channel_chunk,
+        int channel_chunk,
         CameraModelType camera_model,
         const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
         const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
@@ -842,7 +844,7 @@ Rasterization3DGSResult rasterization_3dgs(
     bool rasterize_mode_is_classic,
     CameraModelType camera_model,
     bool segmented,
-    int64_t channel_chunk,
+    int channel_chunk,
     bool has_color,
     int64_t sh_degree,
     const at::optional<at::Tensor> &extra_signals,
@@ -1420,18 +1422,28 @@ Rasterization3DGSResult rasterization_3dgs(
     isect_offsets                            = isect_offsets.reshape(isect_offsets_shape);
 
     // --- Rasterize feature chunks ----------------------------------------
-    // Render at most channel_chunk feature channels per raster call, then
-    // concatenate the chunks.
+    // Use only channel widths for which kernels were compiled. The planner
+    // minimizes launches; channel_chunk is merely the largest width it may use.
     std::vector<at::Tensor> render_color_chunks;
     at::Tensor render_alphas;
     at::Tensor render_normals = at::empty({0}, means.options());
     at::Tensor absgrad_holder;
-    at::Tensor raster_isect_offsets = isect_offsets.contiguous();
-    at::Tensor raster_flatten_ids   = isects.flatten_ids.contiguous();
-    const int64_t channels          = projected_features.size(-1);
-    for(int64_t start = 0; start < channels; start += channel_chunk)
+    at::Tensor raster_isect_offsets     = isect_offsets.contiguous();
+    at::Tensor raster_flatten_ids       = isects.flatten_ids.contiguous();
+    const int channels                  = c10::checked_convert<int>(projected_features.size(-1), "channels");
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, channel_chunk, {GSPLAT_NUM_CHANNELS});
+    TORCH_CHECK(
+        with_eval3d || !absgrad || chunk_widths.size() == 1,
+        "rasterization_3dgs does not support absgrad with multiple channel "
+        "chunks because per-chunk absolute gradients cannot be combined exactly"
+    );
+
+    int start = 0;
+    for(size_t chunk_index = 0; chunk_index < chunk_widths.size(); ++chunk_index)
     {
-        const int64_t end         = std::min(start + channel_chunk, channels);
+        const int end             = start + chunk_widths[chunk_index];
+        const bool first_chunk    = chunk_index == 0;
+        const bool final_chunk    = chunk_index + 1 == chunk_widths.size();
         at::Tensor features_chunk = channel_chunk_or_contiguous(projected_features, start, end);
         at::optional<at::Tensor> backgrounds_chunk;
         if(render_backgrounds.has_value())
@@ -1469,8 +1481,8 @@ Rasterization3DGSResult rasterization_3dgs(
                 raster_isect_offsets,
                 raster_flatten_ids,
                 false, // return_sample_counts
-                use_hit_distance,
-                return_normals && start == 0,
+                use_hit_distance && final_chunk,
+                return_normals && first_chunk,
                 renderer_config,
                 false, // return_last_ids
                 false  // unsafe_masked_tile_outputs (safe default: masked tiles write defined outputs)
@@ -1480,7 +1492,7 @@ Rasterization3DGSResult rasterization_3dgs(
             {
                 render_alphas = raster.alphas;
             }
-            if(return_normals && start == 0 && raster.normals.has_value())
+            if(return_normals && first_chunk && raster.normals.has_value())
             {
                 render_normals = raster.normals.value();
             }
@@ -1508,8 +1520,6 @@ Rasterization3DGSResult rasterization_3dgs(
             {
                 render_alphas = raster.alphas;
             }
-            // The observable absgrad holder is the one from the final chunk's
-            // rasterize call.
             absgrad_holder = raster.means2d_absgrad;
         }
 #    else
@@ -1523,7 +1533,9 @@ Rasterization3DGSResult rasterization_3dgs(
             );
         }
 #    endif
+        start = end;
     }
+    TORCH_INTERNAL_ASSERT(start == channels);
 
     // --- Reassemble output channels --------------------------------------
     at::Tensor render_colors

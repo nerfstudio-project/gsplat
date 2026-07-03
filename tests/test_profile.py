@@ -531,8 +531,8 @@ def test_apply_channel_override_then_normalize_is_camera_shaped(load_profile):
 
 def test_apply_channel_override_collapses_sh_to_dc_band(load_profile):
     # SH input [N, K, D] collapses to its DC band [N, D] and clears sh_degree
-    # so the rasterizer templates on the post-activation channel count. K=4 is
-    # consistent with sh_degree=1 ((sh_degree+1)**2 == 4).
+    # so the override operates on the post-activation total feature width. K=4
+    # is consistent with sh_degree=1 ((sh_degree+1)**2 == 4).
     inputs = {"colors": torch.zeros(1, 5, 4, 3), "sh_degree": 1}
     load_profile._apply_channel_override(inputs, 3)
     assert inputs["sh_degree"] is None
@@ -541,7 +541,7 @@ def test_apply_channel_override_collapses_sh_to_dc_band(load_profile):
 
 def test_apply_channel_override_keeps_extra_signals_that_fit(load_profile):
     # A width that holds the captured colors and extra signals keeps both;
-    # the post-concat templated count equals --channels exactly.
+    # the post-concat total feature width equals --channels exactly.
     inputs = {
         "colors": torch.zeros(1, 5, 8),
         "extra_signals": torch.zeros(1, 5, 2),

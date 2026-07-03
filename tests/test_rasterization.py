@@ -427,9 +427,10 @@ def gaussians(
                 _EVAL3D_RENDERER_CASES,
             ),
             # 3DGUT hit-distance modes: exercises `use_hit_distance` with the
-            # extra-signals plumbing. Channel counts produced (e.g. 24 = 3 RGB
-            # + 20 extra + 1 depth) must be present in `GSPLAT_NUM_CHANNELS` —
-            # see `pytest.ini` `NUM_CHANNELS`.
+            # extra-signals plumbing. Keep the resulting widths 1, 4, 21, and
+            # 24 (e.g. 24 = 3 RGB + 20 extra + 1 depth) in `pytest.ini`
+            # `NUM_CHANNELS` for direct single-launch coverage. High-level
+            # rasterization can also compose a total from multiple widths.
             _append_renderer_execution(
                 product(
                     [False],  # per_view_color
