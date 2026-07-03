@@ -905,6 +905,34 @@ TEST(ToTorchOpTest, identity_path_does_not_copy)
 }
 
 // ---------------------------------------------------------------------------
+// flatten_one: direct torch values become one-element tuples without changing
+// their value category.
+// ---------------------------------------------------------------------------
+
+TEST(FlattenOneTest, preserves_temporary_disengaged_optional_tensor)
+{
+    auto flattened = gsplat::detail::flatten_one(at::optional<at::Tensor>{});
+
+    static_assert(std::is_same_v<decltype(flattened), std::tuple<at::optional<at::Tensor>>>);
+    EXPECT_FALSE(std::get<0>(flattened).has_value());
+}
+
+TEST(FlattenOneTest, moves_engaged_optional_tensor_rvalue_without_copy)
+{
+    at::Tensor tensor = at::ones({1});
+    at::optional<at::Tensor> optional(tensor);
+    const int64_t owners_before = static_cast<int64_t>(tensor.use_count());
+
+    auto flattened    = gsplat::detail::flatten_one(std::move(optional));
+    const auto &value = std::get<0>(flattened);
+
+    ASSERT_TRUE(value.has_value());
+    EXPECT_TRUE(value->is_same(tensor));
+    EXPECT_EQ(static_cast<int64_t>(tensor.use_count()), owners_before)
+        << "flatten_one copied the Tensor payload instead of moving it";
+}
+
+// ---------------------------------------------------------------------------
 // to_torch_args: recursive native->dispatch flattening (the result-boxing core).
 // ---------------------------------------------------------------------------
 
