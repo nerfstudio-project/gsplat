@@ -101,7 +101,7 @@ namespace
         return features.unsqueeze(batch_ndim).expand(expanded_shape);
     }
 
-    [[maybe_unused]] at::Tensor channel_chunk_or_contiguous(const at::Tensor &features, int start, int end)
+    [[maybe_unused]] at::Tensor channel_slice_or_contiguous(const at::Tensor &features, int start, int end)
     {
         const int channels = c10::checked_convert<int>(features.size(-1), "channels");
         if(start == 0 && end == channels)
@@ -197,7 +197,6 @@ namespace
         bool absgrad,
         bool calc_compensations,
         bool classic_rasterize_mode,
-        int channel_chunk,
         CameraModelType camera_model,
         const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
         const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
@@ -332,7 +331,6 @@ namespace
             "Lidar coefficients must be given if and only if camera model is lidar"
         );
         TORCH_CHECK(!is_lidar_camera || with_ut, "Lidar camera model requires with_ut=True");
-        TORCH_CHECK(channel_chunk > 0, "channel_chunk must be > 0");
         if(with_eval3d)
         {
             TORCH_CHECK(
@@ -844,7 +842,6 @@ Rasterization3DGSResult rasterization_3dgs(
     bool rasterize_mode_is_classic,
     CameraModelType camera_model,
     bool segmented,
-    int channel_chunk,
     bool has_color,
     int64_t sh_degree,
     const at::optional<at::Tensor> &extra_signals,
@@ -906,7 +903,6 @@ Rasterization3DGSResult rasterization_3dgs(
         absgrad,
         calc_compensations,
         rasterize_mode_is_classic,
-        channel_chunk,
         camera_model,
         lidar_coeffs,
         external_distortion_params,
@@ -1423,7 +1419,7 @@ Rasterization3DGSResult rasterization_3dgs(
 
     // --- Rasterize feature chunks ----------------------------------------
     // Use only channel widths for which kernels were compiled. The planner
-    // minimizes launches; channel_chunk is merely the largest width it may use.
+    // minimizes launches up to the largest compiled width.
     std::vector<at::Tensor> render_color_chunks;
     at::Tensor render_alphas;
     at::Tensor render_normals = at::empty({0}, means.options());
@@ -1431,7 +1427,7 @@ Rasterization3DGSResult rasterization_3dgs(
     at::Tensor raster_isect_offsets     = isect_offsets.contiguous();
     at::Tensor raster_flatten_ids       = isects.flatten_ids.contiguous();
     const int channels                  = c10::checked_convert<int>(projected_features.size(-1), "channels");
-    const std::vector<int> chunk_widths = plan_channel_chunks(channels, channel_chunk, {GSPLAT_NUM_CHANNELS});
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, {GSPLAT_NUM_CHANNELS});
     TORCH_CHECK(
         with_eval3d || !absgrad || chunk_widths.size() == 1,
         "rasterization_3dgs does not support absgrad with multiple channel "
@@ -1444,11 +1440,11 @@ Rasterization3DGSResult rasterization_3dgs(
         const int end             = start + chunk_widths[chunk_index];
         const bool first_chunk    = chunk_index == 0;
         const bool final_chunk    = chunk_index + 1 == chunk_widths.size();
-        at::Tensor features_chunk = channel_chunk_or_contiguous(projected_features, start, end);
+        at::Tensor features_chunk = channel_slice_or_contiguous(projected_features, start, end);
         at::optional<at::Tensor> backgrounds_chunk;
         if(render_backgrounds.has_value())
         {
-            backgrounds_chunk = channel_chunk_or_contiguous(render_backgrounds.value(), start, end);
+            backgrounds_chunk = channel_slice_or_contiguous(render_backgrounds.value(), start, end);
         }
 
         if(with_eval3d)
@@ -1836,8 +1832,7 @@ Rasterization2DGSResult rasterization_2dgs(
     bool distloss,
     at::optional<int64_t> sh_degree,
     const std::string &render_mode,
-    const std::string &depth_mode,
-    int channel_chunk
+    const std::string &depth_mode
 )
 {
     DEVICE_GUARD(means);
@@ -1991,7 +1986,7 @@ Rasterization2DGSResult rasterization_2dgs(
 
     // --- Rasterize compiled-width feature chunks -------------------------
     const int channels                  = c10::checked_convert<int>(feature.size(-1), "channels");
-    const std::vector<int> chunk_widths = plan_channel_chunks(channels, channel_chunk, {GSPLAT_NUM_CHANNELS});
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, {GSPLAT_NUM_CHANNELS});
     TORCH_CHECK(
         !absgrad || chunk_widths.size() == 1,
         "rasterization_2dgs does not support absgrad with multiple channel "
@@ -2014,11 +2009,11 @@ Rasterization2DGSResult rasterization_2dgs(
         const int end            = start + chunk_widths[chunk_index];
         const bool first_chunk   = chunk_index == 0;
         const bool final_chunk   = chunk_index + 1 == chunk_widths.size();
-        at::Tensor feature_chunk = channel_chunk_or_contiguous(feature, start, end);
+        at::Tensor feature_chunk = channel_slice_or_contiguous(feature, start, end);
         at::optional<at::Tensor> backgrounds_chunk;
         if(raster_backgrounds.has_value())
         {
-            backgrounds_chunk = channel_chunk_or_contiguous(raster_backgrounds.value(), start, end);
+            backgrounds_chunk = channel_slice_or_contiguous(raster_backgrounds.value(), start, end);
         }
 
         RasterizeToPixels2DGSResult raster = rasterize_to_pixels_2dgs(

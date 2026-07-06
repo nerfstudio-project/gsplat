@@ -596,12 +596,11 @@ def test_rasterization_2dgs_multichunk_forward_backward(packed: bool):
     actual_scene = _clone_2dgs_chunk_scene(source, requires_grad=True)
     reference_scene = _clone_2dgs_chunk_scene(source, requires_grad=True)
 
-    # 31 is deliberately not compiled. It is an upper bound, under which the
-    # minimum plan for 46 channels is 23+23.
+    # With the test build's compiled widths, the minimum plan for 46 channels
+    # uses two launches of width 23.
     actual = rasterization_2dgs(
         **actual_scene,
         packed=packed,
-        channel_chunk=31,
     )
     first = rasterization_2dgs(
         **{
@@ -610,7 +609,6 @@ def test_rasterization_2dgs_multichunk_forward_backward(packed: bool):
             "backgrounds": reference_scene["backgrounds"][..., :23],
         },
         packed=packed,
-        channel_chunk=23,
     )
     second = rasterization_2dgs(
         **{
@@ -619,7 +617,6 @@ def test_rasterization_2dgs_multichunk_forward_backward(packed: bool):
             "backgrounds": reference_scene["backgrounds"][..., 23:],
         },
         packed=packed,
-        channel_chunk=23,
     )
 
     expected_colors = torch.cat([first[0], second[0]], dim=-1)
@@ -693,7 +690,6 @@ def test_rasterization_2dgs_multichunk_depth_auxiliaries(packed: bool, depth_mod
         distloss=True,
         packed=packed,
         depth_mode=depth_mode,
-        channel_chunk=32,
     )
     first = rasterization_2dgs(
         **{
@@ -703,7 +699,6 @@ def test_rasterization_2dgs_multichunk_depth_auxiliaries(packed: bool, depth_mod
         },
         render_mode="RGB",
         packed=packed,
-        channel_chunk=32,
     )
     final = rasterization_2dgs(
         **{
@@ -715,7 +710,6 @@ def test_rasterization_2dgs_multichunk_depth_auxiliaries(packed: bool, depth_mod
         distloss=True,
         packed=packed,
         depth_mode=depth_mode,
-        channel_chunk=32,
     )
 
     assert not torch.allclose(first[5], final[5])
@@ -744,7 +738,6 @@ def test_rasterization_2dgs_multichunk_absgrad_policy():
             **scene,
             render_mode="RGB+ED",
             absgrad=True,
-            channel_chunk=32,
         )
 
 

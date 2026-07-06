@@ -5288,14 +5288,14 @@ def _make_cpp_classic_rasterization_scene(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
-    "batch_dims,packed,render_mode,rasterize_mode,channel_chunk,n_channels,use_color_sh,use_extra_signals,use_extra_sh",
+    "batch_dims,packed,render_mode,rasterize_mode,n_channels,use_color_sh,use_extra_signals,use_extra_sh",
     [
-        ((), True, "RGB", "classic", 3, 6, False, False, False),
-        ((2,), False, "RGB+D", "antialiased", 32, 3, False, False, False),
-        ((), True, "RGB", "classic", 32, 3, True, False, False),
-        ((), True, "RGB", "classic", 32, 3, False, True, True),
-        ((), True, "ED", "classic", 32, 3, False, False, False),
-        ((), True, "RGB+ED", "classic", 32, 3, False, True, False),
+        ((), True, "RGB", "classic", 46, False, False, False),
+        ((2,), False, "RGB+D", "antialiased", 3, False, False, False),
+        ((), True, "RGB", "classic", 3, True, False, False),
+        ((), True, "RGB", "classic", 3, False, True, True),
+        ((), True, "ED", "classic", 3, False, False, False),
+        ((), True, "RGB+ED", "classic", 3, False, True, False),
     ],
     ids=[
         "packed_chunked_rgb",
@@ -5311,7 +5311,6 @@ def test_rasterization_cpp_classic_matches_python_reference(
     packed: bool,
     render_mode: str,
     rasterize_mode: str,
-    channel_chunk: int,
     n_channels: int,
     use_color_sh: bool,
     use_extra_signals: bool,
@@ -5339,7 +5338,6 @@ def test_rasterization_cpp_classic_matches_python_reference(
         render_mode=render_mode,
         rasterize_mode=rasterize_mode,
         packed=packed,
-        channel_chunk=channel_chunk,
     )
     ref_colors, ref_alphas, ref_meta = _rasterization(
         **scene,
@@ -5348,7 +5346,6 @@ def test_rasterization_cpp_classic_matches_python_reference(
         tile_size=16,
         render_mode=render_mode,
         rasterize_mode=rasterize_mode,
-        channel_chunk=channel_chunk,
     )
 
     torch.testing.assert_close(cpp_colors, ref_colors, rtol=1e-4, atol=5e-5)
@@ -5396,7 +5393,6 @@ def test_rasterization_cpp_classic_absgrad_is_optional():
         render_mode="RGB",
         packed=True,
         absgrad=True,
-        channel_chunk=3,
     )
     assert hasattr(meta["means2d"], "absgrad")
     assert meta["means2d"].absgrad.shape == meta["means2d"].shape
@@ -5404,7 +5400,7 @@ def test_rasterization_cpp_classic_absgrad_is_optional():
     (colors.sum() + alphas.sum()).backward()
     assert meta["means2d"].absgrad.abs().sum() > 0
 
-    multichunk_scene = _make_cpp_classic_rasterization_scene(n_channels=6)
+    multichunk_scene = _make_cpp_classic_rasterization_scene(n_channels=46)
     with pytest.raises(RuntimeError, match="does not support absgrad with multiple"):
         gsplat.rasterization(
             **multichunk_scene,
@@ -5413,7 +5409,6 @@ def test_rasterization_cpp_classic_absgrad_is_optional():
             render_mode="RGB",
             packed=True,
             absgrad=True,
-            channel_chunk=3,
         )
 
 
@@ -5463,19 +5458,19 @@ def _classic_rasterization_loss_terms(colors: torch.Tensor, alphas: torch.Tensor
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
-    "packed,channel_chunk,backgrounds",
+    "packed,n_channels,backgrounds",
     [
-        pytest.param(True, 3, False, id="packed_chunked"),
-        pytest.param(False, 32, True, id="nonpacked_backgrounds"),
+        pytest.param(True, 46, False, id="packed_chunked"),
+        pytest.param(False, 6, True, id="nonpacked_backgrounds"),
     ],
 )
 def test_rasterization_cpp_classic_backward_matches_python_reference(
-    packed: bool, channel_chunk: int, backgrounds: bool
+    packed: bool, n_channels: int, backgrounds: bool
 ):
     from gsplat.rendering import _rasterization
 
     torch.manual_seed(17)
-    scene = _make_cpp_classic_rasterization_scene(n_channels=6)
+    scene = _make_cpp_classic_rasterization_scene(n_channels=n_channels)
     grad_names = ("means", "quats", "scales", "opacities", "colors", "viewmats")
     _set_rasterization_scene_requires_grad(scene, grad_names)
 
@@ -5497,7 +5492,6 @@ def test_rasterization_cpp_classic_backward_matches_python_reference(
         render_mode="RGB",
         rasterize_mode="classic",
         packed=packed,
-        channel_chunk=channel_chunk,
         backgrounds=background_tensor,
     )
     v_colors, v_alphas = _classic_rasterization_loss_terms(public_colors, public_alphas)
@@ -5514,7 +5508,6 @@ def test_rasterization_cpp_classic_backward_matches_python_reference(
         tile_size=16,
         render_mode="RGB",
         rasterize_mode="classic",
-        channel_chunk=channel_chunk,
         backgrounds=background_tensor,
     )
     ref_inputs = tuple(scene_with_backgrounds[name] for name in grad_names)
@@ -5549,7 +5542,6 @@ def test_rasterization_cpp_classic_sh_backward_matches_python_reference(packed: 
         render_mode="RGB",
         rasterize_mode="classic",
         packed=packed,
-        channel_chunk=3,
     )
     v_colors, v_alphas = _classic_rasterization_loss_terms(public_colors, public_alphas)
     public_inputs = tuple(scene[name] for name in grad_names)
@@ -5565,7 +5557,6 @@ def test_rasterization_cpp_classic_sh_backward_matches_python_reference(packed: 
         tile_size=16,
         render_mode="RGB",
         rasterize_mode="classic",
-        channel_chunk=3,
     )
     ref_inputs = tuple(scene[name] for name in grad_names)
     ref_grads = torch.autograd.grad(
@@ -5647,25 +5638,23 @@ def test_rasterization_cpp_classic_covars_input_path():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
-    "n_channels,render_mode,channel_chunk,use_extra_signals,return_normals,absgrad",
+    "n_channels,render_mode,use_extra_signals,return_normals,absgrad",
     [
-        pytest.param(6, "RGB", 3, False, False, False, id="rgb_chunked"),
+        pytest.param(46, "RGB", False, False, False, id="rgb_chunked"),
         pytest.param(
             3,
             "RGB-Ed",
-            32,
             True,
             True,
             False,
             id="hit_expected_extra_normals",
         ),
-        pytest.param(3, "RGB", 3, False, False, True, id="absgrad_ignored"),
+        pytest.param(3, "RGB", False, False, True, id="absgrad_ignored"),
     ],
 )
 def test_rasterization_cpp_eval3d_matches_python_reference(
     n_channels: int,
     render_mode: str,
-    channel_chunk: int,
     use_extra_signals: bool,
     return_normals: bool,
     absgrad: bool,
@@ -5683,7 +5672,6 @@ def test_rasterization_cpp_eval3d_matches_python_reference(
         tile_size=8,
         render_mode=render_mode,
         packed=False,
-        channel_chunk=channel_chunk,
         with_eval3d=True,
         return_normals=return_normals,
         absgrad=absgrad,
@@ -5695,7 +5683,6 @@ def test_rasterization_cpp_eval3d_matches_python_reference(
         tile_size=8,
         render_mode=render_mode,
         packed=False,
-        channel_chunk=channel_chunk,
         with_eval3d=True,
         return_normals=return_normals,
         # Eval3D ignores absgrad. Keep this second call on the public path to
@@ -5752,7 +5739,6 @@ def test_rasterization_cpp_eval3d_multichunk_hit_distance_is_final_only(
         backgrounds=backgrounds,
         render_mode="RGB",
         packed=False,
-        channel_chunk=32,
         with_eval3d=True,
         renderer_config=renderer_config,
     )
@@ -5764,7 +5750,6 @@ def test_rasterization_cpp_eval3d_multichunk_hit_distance_is_final_only(
         backgrounds=backgrounds,
         render_mode="RGB-d",
         packed=False,
-        channel_chunk=32,
         with_eval3d=True,
         renderer_config=renderer_config,
     )
@@ -5783,9 +5768,8 @@ def test_rasterization_cpp_eval3d_backward_matches_python_reference():
     from gsplat.rendering import _rasterization
 
     torch.manual_seed(31)
-    # channel_chunk=32 cannot be used directly for CDIM=46. The minimum
-    # compiled-width plan is 23+23; the Python reference uses that same exact
-    # pair explicitly via channel_chunk=23.
+    # With the test build's compiled widths, the minimum plan for 46 channels
+    # uses two launches of width 23.
     scene = _make_cpp_classic_rasterization_scene(n_channels=46)
     grad_names = ("means", "quats", "scales", "opacities", "colors")
     _set_rasterization_scene_requires_grad(scene, grad_names)
@@ -5797,7 +5781,6 @@ def test_rasterization_cpp_eval3d_backward_matches_python_reference():
         tile_size=8,
         render_mode="RGB",
         packed=False,
-        channel_chunk=32,
         with_eval3d=True,
     )
     v_colors, v_alphas = _classic_rasterization_loss_terms(public_colors, public_alphas)
@@ -5813,7 +5796,9 @@ def test_rasterization_cpp_eval3d_backward_matches_python_reference():
         height=40,
         tile_size=8,
         render_mode="RGB",
-        channel_chunk=23,
+        # The private Eval3D reference dispatches each uniform slice directly;
+        # use the same exact 23+23 decomposition selected by the C++ planner.
+        _max_channels_per_launch=23,
         with_eval3d=True,
     )
     ref_inputs = tuple(scene[name] for name in grad_names)
@@ -5895,7 +5880,6 @@ def test_rasterization_cpp_ut_projected_absgrad_matches_python_reference(
         render_mode="RGB+D",
         rasterize_mode="classic",
         packed=False,
-        channel_chunk=4,
         with_ut=True,
         absgrad=True,
     )
@@ -5965,20 +5949,19 @@ def test_rasterization_cpp_ut_projected_absgrad_matches_python_reference(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
-    "with_eval3d,render_mode,tile_size,channel_chunk",
+    "with_eval3d,render_mode,tile_size",
     [
         # RGB + two extra signals + projected depth has six rasterized channels.
-        # Keep this absgrad coverage on one exact CDIM=6 launch because absolute
-        # gradients cannot be combined exactly across independent chunks.
-        pytest.param(False, "RGB+D", 16, 6, id="projected_depth"),
-        pytest.param(True, "RGB-d", 8, 3, id="hit_distance"),
+        # The internal policy selects one exact CDIM=6 launch, keeping this
+        # absgrad coverage within a single chunk.
+        pytest.param(False, "RGB+D", 16, id="projected_depth"),
+        pytest.param(True, "RGB-d", 8, id="hit_distance"),
     ],
 )
 def test_rasterization_cpp_ut_lidar_absgrad_forward_neutral(
     with_eval3d: bool,
     render_mode: str,
     tile_size: int,
-    channel_chunk: int,
 ):
     from tests.test_cameras import parse_lidar_camera
 
@@ -6009,7 +5992,6 @@ def test_rasterization_cpp_ut_lidar_absgrad_forward_neutral(
         tile_size=tile_size,
         render_mode=render_mode,
         packed=False,
-        channel_chunk=channel_chunk,
         with_ut=True,
         with_eval3d=with_eval3d,
         camera_model="lidar",
@@ -6217,7 +6199,6 @@ def test_rasterization_eval3d_accepts_broadcastable_rays_shape():
         tile_size=8,
         render_mode="RGB",
         packed=False,
-        channel_chunk=3,
         with_eval3d=True,
     )
     broadcast_colors, broadcast_alphas, _ = gsplat.rasterization(

@@ -56,7 +56,6 @@ _INFERENCE_UNSUPPORTED_FEATURES = frozenset(
         "extra_signals",
         "extra_signals_sh_degree",
         "rasterize_mode",
-        "channel_chunk",
         "global_z_order",
         "ut_params",
         "colors",

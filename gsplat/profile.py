@@ -407,7 +407,6 @@ def _adapt_2dgs_scene_inputs(
             "with_ut",
             "with_eval3d",
             "rasterize_mode",
-            "channel_chunk",
             "distributed",
             "camera_model",
             "segmented",

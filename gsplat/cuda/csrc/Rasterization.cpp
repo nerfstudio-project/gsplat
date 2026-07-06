@@ -675,8 +675,7 @@ RasterizeToPixels3DGSFwdResult rasterize_to_pixels_sparse_fwd(
     const at::Tensor &tile_pixel_cumsum, // [AT]
     const at::Tensor &pixel_map,         // [P]
     bool packed,
-    bool absgrad,
-    int channel_chunk
+    bool absgrad
 )
 {
     TORCH_CHECK(
@@ -709,7 +708,7 @@ RasterizeToPixels3DGSFwdResult rasterize_to_pixels_sparse_fwd(
 
     const int64_t P                     = pixel_map.size(0);
     const int channels                  = c10::checked_convert<int>(colors.size(-1), "channels");
-    const std::vector<int> chunk_widths = plan_channel_chunks(channels, channel_chunk, {GSPLAT_NUM_CHANNELS});
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, {GSPLAT_NUM_CHANNELS});
     TORCH_CHECK(
         !absgrad || chunk_widths.size() == 1,
         "rasterize_to_pixels_sparse does not support absgrad with multiple "
@@ -804,8 +803,7 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
     int64_t tile_height,
     bool absgrad,
     const RasterizeToPixels3DGSGrad &grad,
-    bool compute_v_backgrounds,
-    int channel_chunk
+    bool compute_v_backgrounds
 )
 {
     DEVICE_GUARD(means2d);
@@ -837,7 +835,7 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
     }
 
     const int channels                  = c10::checked_convert<int>(colors.size(-1), "channels");
-    const std::vector<int> chunk_widths = plan_channel_chunks(channels, channel_chunk, {GSPLAT_NUM_CHANNELS});
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, {GSPLAT_NUM_CHANNELS});
     TORCH_CHECK(
         !absgrad || chunk_widths.size() == 1,
         "rasterize_to_pixels_sparse does not support absgrad with multiple "

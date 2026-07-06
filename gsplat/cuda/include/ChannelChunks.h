@@ -19,14 +19,14 @@ namespace gsplat
 /**
  * Decompose a feature width into the fewest available kernel channel widths.
  *
- * `channel_chunk` is an upper bound, not itself a required compiled width.
- * Among plans with the same number of launches, larger chunks are preferred so
- * the result is deterministic and normally starts with the requested limit.
+ * The largest compiled width sets the per-launch limit. Among plans with the
+ * same number of launches, larger chunks are preferred so the result is
+ * deterministic and normally starts with the largest usable compiled width.
  */
-inline std::vector<int> plan_channel_chunks(int channels, int channel_chunk, std::vector<int> candidates)
+inline std::vector<int> plan_channel_chunks(int channels, std::vector<int> candidates)
 {
     TORCH_CHECK(channels > 0, "channels must be > 0, got ", channels);
-    TORCH_CHECK(channel_chunk > 0, "channel_chunk must be > 0, got ", channel_chunk);
+    TORCH_CHECK(!candidates.empty(), "GSPLAT_NUM_CHANNELS must contain at least one entry");
 
     const auto invalid_width = std::ranges::find_if(candidates, [](int width) { return width <= 0; });
     if(invalid_width != candidates.end())
@@ -36,7 +36,8 @@ inline std::vector<int> plan_channel_chunks(int channels, int channel_chunk, std
 
     // The candidate list is owned by this function, so normalize it in place
     // instead of allocating a second container for the usable widths.
-    const int max_width = std::min(channels, channel_chunk);
+    const int max_channels_per_launch = *std::ranges::max_element(candidates);
+    const int max_width               = std::min(channels, max_channels_per_launch);
     std::erase_if(candidates, [max_width](int width) { return width > max_width; });
     std::ranges::sort(candidates, std::greater<>());
     const auto duplicates = std::ranges::unique(candidates);
@@ -46,8 +47,8 @@ inline std::vector<int> plan_channel_chunks(int channels, int channel_chunk, std
         !candidates.empty(),
         "No compiled channel width is usable for ",
         channels,
-        " channels with channel_chunk=",
-        channel_chunk
+        " channels with max channels per launch=",
+        max_channels_per_launch
     );
 
     // Exact unbounded coin change. Only the minimum launch count is retained;
@@ -88,8 +89,8 @@ inline std::vector<int> plan_channel_chunks(int channels, int channel_chunk, std
             false,
             "Cannot exactly decompose ",
             channels,
-            " channels with channel_chunk=",
-            channel_chunk,
+            " channels with max channels per launch=",
+            max_channels_per_launch,
             " and compiled widths {",
             widths.str(),
             "}"

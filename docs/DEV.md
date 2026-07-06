@@ -24,6 +24,20 @@ If you won't touch the underlying CUDA code, you can just install with compiling
 pip install -e .[dev]
 ```
 
+### Compiled feature widths
+
+Set `NUM_CHANNELS` to a comma-separated list of positive feature widths when
+building the CUDA extensions. Each entry is forwarded to
+`GSPLAT_NUM_CHANNELS`, creating corresponding CUDA kernel specializations and
+increasing build cost.
+
+High-level rasterizers choose the fewest compiled widths that exactly compose
+the total feature width. The largest compiled width limits one kernel launch,
+not the total input width. Direct low-level `rasterize_to_pixels`,
+`rasterize_to_pixels_2dgs`, and `rasterize_to_pixels_eval3d` calls still require
+one exact compiled width; `rasterize_to_pixels_sparse` plans compiled-width
+chunks internally.
+
 ## Protect Main Branch over Pull Request
 
 It is recommended to commit the code into the main branch as a PR over a hard push, as the PR would protect the main branch if the code break tests but a hard push won't. Also squash the commits before merging the PR so it won't span the git history.

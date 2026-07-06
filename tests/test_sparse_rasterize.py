@@ -129,7 +129,6 @@ def _sparse(
     backgrounds=None,
     masks=None,
     absgrad=False,
-    channel_chunk=32,
 ):
     from gsplat import (
         build_sparse_tile_layout,
@@ -170,7 +169,6 @@ def _sparse(
         backgrounds=backgrounds,
         masks=masks,
         absgrad=absgrad,
-        channel_chunk=channel_chunk,
     )
 
 
@@ -259,18 +257,17 @@ def test_forward_masks():
 
 
 @pytest.mark.parametrize(
-    "channels,channel_chunk,reference_chunk_widths,use_backgrounds,use_masks",
+    "channels,reference_chunk_widths,use_backgrounds,use_masks",
     [
-        pytest.param(3, 32, (3,), False, False, id="single_chunk"),
-        pytest.param(3, 32, (3,), True, False, id="single_chunk_backgrounds"),
-        # 31 need not be compiled. The minimum eligible plan for 46 channels
-        # is two launches using the compiled width 23.
-        pytest.param(46, 31, (23, 23), True, True, id="multichunk_23x2"),
+        pytest.param(3, (3,), False, False, id="single_chunk"),
+        pytest.param(3, (3,), True, False, id="single_chunk_backgrounds"),
+        # With the test build's compiled widths, the minimum plan for 46
+        # channels uses two launches of width 23.
+        pytest.param(46, (23, 23), True, True, id="multichunk_23x2"),
     ],
 )
 def test_backward_matches_dense(
     channels,
-    channel_chunk,
     reference_chunk_widths,
     use_backgrounds,
     use_masks,
@@ -310,7 +307,6 @@ def test_backward_matches_dense(
         ts,
         backgrounds=backgrounds,
         masks=masks,
-        channel_chunk=channel_chunk,
     )
     gen = torch.Generator(device=device).manual_seed(99)
     v_colors = torch.rand(oc.shape, device=device, generator=gen)
@@ -396,5 +392,4 @@ def test_multichunk_absgrad_is_rejected():
             H,
             ts,
             absgrad=True,
-            channel_chunk=31,
         )

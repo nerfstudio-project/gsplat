@@ -255,7 +255,6 @@ def rasterization(
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: RasterizeMode = "classic",
-    channel_chunk: int = 32,
     distributed: bool = False,
     camera_model: CameraModel = "pinhole",
     segmented: bool = False,
@@ -440,9 +439,6 @@ def rasterization(
             ``RuntimeError``. Default is False.
         rasterize_mode: The rasterization mode. Supported modes are "classic" and
             "antialiased". Default is "classic".
-        channel_chunk: The number of channels to render in one go. Default is 32.
-            If the required rendering channels are larger than this value, the rendering
-            will be done looply in chunks.
         distributed: Whether to use distributed rendering. Default is False. If True,
             The input Gaussians are expected to be a subset of scene in each rank, and
             the function will collaboratively render the images for all ranks.
@@ -620,7 +616,6 @@ def rasterization(
         rasterize_mode == "classic",
         camera_model_type,
         segmented,
-        channel_chunk,
         has_color,
         sh_degree_value,
         extra_signals.contiguous() if extra_signals is not None else None,
@@ -740,7 +735,7 @@ def _rasterization(
     backgrounds: Optional[Tensor] = None,
     render_mode: RenderMode = "RGB",
     rasterize_mode: RasterizeMode = "classic",
-    channel_chunk: int = 32,
+    _max_channels_per_launch: int = 32,
     batch_per_iter: int = 100,
     with_eval3d: bool = False,
     with_ut: bool = False,
@@ -959,14 +954,15 @@ def _rasterization(
         pass
 
     # Chunking logic for both eval3d and standard paths
-    if colors.shape[-1] > channel_chunk:
+    chunk_width = _max_channels_per_launch
+    if colors.shape[-1] > chunk_width:
         # slice into chunks
-        n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
+        n_chunks = (colors.shape[-1] + chunk_width - 1) // chunk_width
         render_colors, render_alphas = [], []
         for i in range(n_chunks):
-            colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
+            colors_chunk = colors[..., i * chunk_width : (i + 1) * chunk_width]
             backgrounds_chunk = (
-                backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
+                backgrounds[..., i * chunk_width : (i + 1) * chunk_width]
                 if backgrounds is not None
                 else None
             )
@@ -1378,7 +1374,6 @@ def rasterization_2dgs(
     absgrad: bool = False,
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
-    channel_chunk: int = 32,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
 
@@ -1427,10 +1422,6 @@ def rasterization_2dgs(
             passes. Default is False.
         distloss: If true, use distortion regularization to get better geometry detail.
         depth_mode: render depth mode. Choose from expected depth and median depth.
-        channel_chunk: Upper bound on the number of channels rendered by one
-            kernel launch. Each launch uses a channel width compiled through
-            ``GSPLAT_NUM_CHANNELS``. Default is 32.
-
     Returns:
         A tuple:
 
@@ -1532,7 +1523,6 @@ def rasterization_2dgs(
         sh_degree,
         render_mode,
         depth_mode,
-        channel_chunk,
     )
 
     if absgrad:
