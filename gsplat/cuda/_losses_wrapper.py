@@ -143,3 +143,210 @@ class _FusedGaussianLosses(torch.autograd.Function):
         # Gradients for: scales, densities, z_scales, positions, cuboid_dims,
         #                 z_scale_threshold, visibility
         return v_scales, v_densities, v_z_scales, v_positions, None, None, None
+
+
+class _FusedCameraLosses(torch.autograd.Function):
+    """Fused RGB L1 + background MSE with per-ray flag masking."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        flags: Tensor,  # [N] int32
+        rgb_pred: Tensor,  # [N, 3]
+        rgb_gt: Tensor,  # [N, 3]
+        bg_pred: Tensor,  # [N]
+        rgb_factor: float,
+        bg_factor: float,
+    ) -> Tuple[Tensor, Tensor]:
+        flags = flags.contiguous()
+        rgb_pred = rgb_pred.contiguous()
+        rgb_gt = rgb_gt.contiguous()
+        bg_pred = bg_pred.contiguous()
+
+        # Pre-allocate outputs in Python so lifetimes are explicit and the
+        # caching allocator can reuse buffers across training steps. rgb_loss
+        # is per-ray [N] (the RGB channels are reduced inside the kernel), so it
+        # is allocated from bg_pred's [N] shape rather than rgb_pred's [N, 3].
+        rgb_loss = torch.empty_like(bg_pred)
+        bg_loss = torch.empty_like(bg_pred)
+
+        _make_lazy_cuda_func("camera_losses_fwd")(
+            flags,
+            rgb_pred,
+            rgb_gt,
+            bg_pred,
+            rgb_factor,
+            bg_factor,
+            rgb_loss,
+            bg_loss,
+        )
+
+        ctx.save_for_backward(flags, rgb_pred, rgb_gt, bg_pred)
+        ctx.rgb_factor = rgb_factor
+        ctx.bg_factor = bg_factor
+
+        return rgb_loss, bg_loss
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_rgb_loss: Tensor,
+        v_bg_loss: Tensor,
+    ) -> Tuple[Optional[Tensor], ...]:
+        flags, rgb_pred, rgb_gt, bg_pred = ctx.saved_tensors
+
+        # Pre-allocate gradient buffers in Python (matches forward pattern).
+        v_rgb_pred = torch.empty_like(rgb_pred)
+        v_bg_pred = torch.empty_like(bg_pred)
+
+        _make_lazy_cuda_func("camera_losses_bwd")(
+            flags,
+            rgb_pred,
+            rgb_gt,
+            bg_pred,
+            ctx.rgb_factor,
+            ctx.bg_factor,
+            v_rgb_loss.contiguous(),
+            v_bg_loss.contiguous(),
+            v_rgb_pred,
+            v_bg_pred,
+        )
+
+        # Gradients for: flags, rgb_pred, rgb_gt, bg_pred, rgb_factor, bg_factor
+        return None, v_rgb_pred, None, v_bg_pred, None, None
+
+
+class _FusedLidarLosses(torch.autograd.Function):
+    """Fused distance L1 + intensity/raydrop/bg MSE with per-ray flag masking."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        flags: Tensor,  # [N] int32
+        distance_pred: Tensor,  # [N]
+        distance_gt: Tensor,  # [N]
+        intensity_pred: Tensor,  # [N]
+        intensity_gt: Tensor,  # [N]
+        raydrop_pred: Tensor,  # [N]
+        raydrop_gt: Tensor,  # [N]
+        bg_pred: Tensor,  # [N]
+        distance_factor: float,
+        intensity_factor: float,
+        raydrop_factor: float,
+        bg_factor: float,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        flags = flags.contiguous()
+        distance_pred = distance_pred.contiguous()
+        distance_gt = distance_gt.contiguous()
+        intensity_pred = intensity_pred.contiguous()
+        intensity_gt = intensity_gt.contiguous()
+        raydrop_pred = raydrop_pred.contiguous()
+        raydrop_gt = raydrop_gt.contiguous()
+        bg_pred = bg_pred.contiguous()
+
+        # Pre-allocate outputs in Python so lifetimes are explicit and the
+        # caching allocator can reuse buffers across training steps. Each loss
+        # is per-ray [N], matching its corresponding *_pred input.
+        distance_loss = torch.empty_like(distance_pred)
+        intensity_loss = torch.empty_like(intensity_pred)
+        raydrop_loss = torch.empty_like(raydrop_pred)
+        bg_loss = torch.empty_like(bg_pred)
+
+        _make_lazy_cuda_func("lidar_losses_fwd")(
+            flags,
+            distance_pred,
+            distance_gt,
+            intensity_pred,
+            intensity_gt,
+            raydrop_pred,
+            raydrop_gt,
+            bg_pred,
+            distance_factor,
+            intensity_factor,
+            raydrop_factor,
+            bg_factor,
+            distance_loss,
+            intensity_loss,
+            raydrop_loss,
+            bg_loss,
+        )
+
+        ctx.save_for_backward(
+            flags,
+            distance_pred,
+            distance_gt,
+            intensity_pred,
+            intensity_gt,
+            raydrop_pred,
+            raydrop_gt,
+            bg_pred,
+        )
+        ctx.factors = (distance_factor, intensity_factor, raydrop_factor, bg_factor)
+
+        return distance_loss, intensity_loss, raydrop_loss, bg_loss
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_distance_loss: Tensor,
+        v_intensity_loss: Tensor,
+        v_raydrop_loss: Tensor,
+        v_bg_loss: Tensor,
+    ) -> Tuple[Optional[Tensor], ...]:
+        (
+            flags,
+            distance_pred,
+            distance_gt,
+            intensity_pred,
+            intensity_gt,
+            raydrop_pred,
+            raydrop_gt,
+            bg_pred,
+        ) = ctx.saved_tensors
+        distance_factor, intensity_factor, raydrop_factor, bg_factor = ctx.factors
+
+        # Pre-allocate gradient buffers in Python (matches forward pattern).
+        v_distance_pred = torch.empty_like(distance_pred)
+        v_intensity_pred = torch.empty_like(intensity_pred)
+        v_raydrop_pred = torch.empty_like(raydrop_pred)
+        v_bg_pred = torch.empty_like(bg_pred)
+
+        _make_lazy_cuda_func("lidar_losses_bwd")(
+            flags,
+            distance_pred,
+            distance_gt,
+            intensity_pred,
+            intensity_gt,
+            raydrop_pred,
+            raydrop_gt,
+            bg_pred,
+            distance_factor,
+            intensity_factor,
+            raydrop_factor,
+            bg_factor,
+            v_distance_loss.contiguous(),
+            v_intensity_loss.contiguous(),
+            v_raydrop_loss.contiguous(),
+            v_bg_loss.contiguous(),
+            v_distance_pred,
+            v_intensity_pred,
+            v_raydrop_pred,
+            v_bg_pred,
+        )
+
+        # Gradients for: flags, distance_pred, distance_gt, intensity_pred,
+        #   intensity_gt, raydrop_pred, raydrop_gt, bg_pred, 4x factors
+        return (
+            None,
+            v_distance_pred,
+            None,
+            v_intensity_pred,
+            None,
+            v_raydrop_pred,
+            None,
+            v_bg_pred,
+            None,
+            None,
+            None,
+            None,
+        )
