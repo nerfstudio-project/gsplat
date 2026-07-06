@@ -6247,6 +6247,179 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("batch_dims", [(), (2,)])
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("D", [1, 3])
+def test_sh_split_invariant(
+    sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int
+):
+    """Split sh0/shN evaluation matches evaluating their concatenation."""
+    from gsplat.cuda._wrapper import (
+        spherical_harmonics,
+        spherical_harmonics_l0,
+        spherical_harmonics_l1_plus,
+    )
+
+    if packed and batch_dims != ():
+        pytest.skip("packed inputs are always rank-2 dirs; batch_dims is irrelevant")
+
+    torch.manual_seed(42)
+
+    N = 127
+    K = (4 + 1) ** 2
+    sh0_src = torch.randn(N, 1, D, device=device, requires_grad=True)
+    shN_src = torch.randn(N, K - 1, D, device=device, requires_grad=True)
+
+    if packed:
+        nnz = 311
+        gaussian_ids = torch.randint(0, N, (nnz,), device=device)
+        sh0 = sh0_src[gaussian_ids]
+        shN = shN_src[gaussian_ids]
+        dirs = torch.randn(nnz, 3, device=device, requires_grad=True)
+    else:
+        sh0 = sh0_src
+        shN = shN_src
+        dirs = torch.randn(*batch_dims, N, 3, device=device, requires_grad=True)
+
+    colors = spherical_harmonics(sh_degree, dirs, torch.cat([sh0, shN], dim=1))
+    l0 = spherical_harmonics_l0(sh0)
+    l1_plus = spherical_harmonics_l1_plus(sh_degree, dirs, shN)
+    split_colors = l0 + l1_plus
+
+    assert l0.shape == (sh0.shape[0], D)
+    assert l1_plus.shape == colors.shape
+    torch.testing.assert_close(colors, split_colors, rtol=1e-4, atol=1e-4)
+
+    v_colors = torch.randn_like(colors)
+    full_grads = torch.autograd.grad(
+        (colors * v_colors).sum(),
+        (sh0_src, shN_src, dirs),
+        retain_graph=True,
+    )
+    split_grads = torch.autograd.grad(
+        (split_colors * v_colors).sum(),
+        (sh0_src, shN_src, dirs),
+        retain_graph=True,
+    )
+
+    # The full coefficient gradient is reconstructed by concatenating the two
+    # split coefficient gradients in the same layout used by simple_trainer.py.
+    full_v_coeffs = torch.cat(full_grads[:2], dim=1)
+    split_v_coeffs = torch.cat(split_grads[:2], dim=1)
+    assert_grad_reference_close(
+        split_v_coeffs,
+        full_v_coeffs,
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="split v_coeffs",
+    )
+    assert_grad_reference_close(
+        split_grads[2],
+        full_grads[2],
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="split v_dirs",
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_split_invariant_trainer_layout_fp16():
+    """Trainer-layout FP16 split evaluation matches the K=16 RGB path."""
+    from gsplat.cuda._wrapper import (
+        spherical_harmonics,
+        spherical_harmonics_l0,
+        spherical_harmonics_l1_plus,
+    )
+
+    torch.manual_seed(42)
+
+    N, D, sh_degree = 257, 3, 3
+    sh0 = torch.randn(N, 1, D, device=device, dtype=torch.float16, requires_grad=True)
+    # Fifteen coefficients is the exact minimum for degree 3 after omitting sh0.
+    shN = torch.randn(N, 15, D, device=device, dtype=torch.float16, requires_grad=True)
+    dirs = torch.randn(2, N, 3, device=device, requires_grad=True)
+
+    coeffs = torch.cat([sh0, shN], dim=1)
+    assert coeffs.shape == (N, 16, D)
+    assert coeffs.data_ptr() % 16 == 0
+
+    colors = spherical_harmonics(sh_degree, dirs, coeffs)
+    l0 = spherical_harmonics_l0(sh0)
+    l1_plus = spherical_harmonics_l1_plus(sh_degree, dirs, shN)
+    split_colors = l0 + l1_plus
+
+    torch.testing.assert_close(split_colors, colors, rtol=1e-3, atol=2e-3)
+
+    v_colors = torch.randn_like(colors)
+    full_grads = torch.autograd.grad(
+        (colors * v_colors).sum(), (sh0, shN, dirs), retain_graph=True
+    )
+    split_grads = torch.autograd.grad(
+        (split_colors * v_colors).sum(), (sh0, shN, dirs), retain_graph=True
+    )
+
+    full_v_coeffs = torch.cat(full_grads[:2], dim=1).float()
+    split_v_coeffs = torch.cat(split_grads[:2], dim=1).float()
+    assert_grad_reference_close(
+        split_v_coeffs,
+        full_v_coeffs,
+        rtol=2e-3,
+        atol=5e-4,
+        max_rel_l2=5e-3,
+        max_rel_l1=5e-3,
+        min_cosine=0.99999,
+        max_signed_bias=5e-3,
+        msg="trainer FP16 split v_coeffs",
+    )
+    assert_grad_reference_close(
+        split_grads[2],
+        full_grads[2],
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="trainer FP16 split v_dirs",
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_sh_split_l0_accepts_empty_shn():
+    from gsplat.cuda._wrapper import (
+        spherical_harmonics,
+        spherical_harmonics_l0,
+        spherical_harmonics_l1_plus,
+    )
+
+    torch.manual_seed(42)
+    N, D = 32, 3
+    sh0 = torch.randn(N, 1, D, device=device, requires_grad=True)
+    shN = torch.empty(N, 0, D, device=device, requires_grad=True)
+    dirs = torch.randn(2, N, 3, device=device, requires_grad=True)
+
+    colors = spherical_harmonics(0, dirs, sh0)
+    l0 = spherical_harmonics_l0(sh0)
+    l1_plus = spherical_harmonics_l1_plus(0, dirs, shN)
+
+    torch.testing.assert_close(l1_plus, torch.zeros_like(l1_plus))
+    torch.testing.assert_close(colors, l0 + l1_plus)
+
+    v_shN, v_dirs = torch.autograd.grad(l1_plus.sum(), (shN, dirs), allow_unused=False)
+    torch.testing.assert_close(v_shN, torch.zeros_like(shN))
+    torch.testing.assert_close(v_dirs, torch.zeros_like(dirs))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_sh_backward_accepts_strided_output_grad():
     """SH backward should accept channel-slice gradients from downstream cats."""
     from gsplat.cuda._wrapper import spherical_harmonics
