@@ -524,7 +524,25 @@ namespace detail
         using T = std::decay_t<A>;
         if constexpr(IsTorch<T> && !IsTuple<T>)
         {
-            return std::make_tuple(std::forward<A>(a));
+            if constexpr(is_optional_tensor_v<T>)
+            {
+                // Moving a disengaged optional is valid, but GCC can lose track
+                // of its inactive Tensor payload after inlining and report it as
+                // maybe-uninitialized. Preserve forwarding while suppressing
+                // only that false positive.
+#if defined(__GNUC__) && !defined(__clang__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+                return std::make_tuple(std::forward<A>(a));
+#if defined(__GNUC__) && !defined(__clang__)
+#    pragma GCC diagnostic pop
+#endif
+            }
+            else
+            {
+                return std::make_tuple(std::forward<A>(a));
+            }
         }
         else
         {

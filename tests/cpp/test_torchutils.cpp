@@ -19,6 +19,17 @@
 #include <ATen/Functions.h>
 #include <c10/util/Exception.h>
 #include <c10/util/intrusive_ptr.h>
+#if defined(__GNUC__) && !defined(__clang__)
+// GCC PR110498 can diagnose std::vector<bool>::reserve inside
+// torch::autograd::Function::apply as either of these warnings.
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Warray-bounds"
+#    pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
+#include <torch/csrc/autograd/custom_function.h>
+#if defined(__GNUC__) && !defined(__clang__)
+#    pragma GCC diagnostic pop
+#endif
 #include <torch/torch.h>
 
 #include "TorchUtils.h"
@@ -891,6 +902,34 @@ TEST(ToTorchOpTest, identity_path_does_not_copy)
     int64_t before = static_cast<int64_t>(t.use_count());
     auto inside    = gsplat::to_torch_op<&read_tensor_use_count>(t);
     EXPECT_EQ(inside, before);
+}
+
+// ---------------------------------------------------------------------------
+// flatten_one: direct torch values become one-element tuples without changing
+// their value category.
+// ---------------------------------------------------------------------------
+
+TEST(FlattenOneTest, preserves_temporary_disengaged_optional_tensor)
+{
+    auto flattened = gsplat::detail::flatten_one(at::optional<at::Tensor>{});
+
+    static_assert(std::is_same_v<decltype(flattened), std::tuple<at::optional<at::Tensor>>>);
+    EXPECT_FALSE(std::get<0>(flattened).has_value());
+}
+
+TEST(FlattenOneTest, moves_engaged_optional_tensor_rvalue_without_copy)
+{
+    at::Tensor tensor = at::ones({1});
+    at::optional<at::Tensor> optional(tensor);
+    const int64_t owners_before = static_cast<int64_t>(tensor.use_count());
+
+    auto flattened    = gsplat::detail::flatten_one(std::move(optional));
+    const auto &value = std::get<0>(flattened);
+
+    ASSERT_TRUE(value.has_value());
+    EXPECT_TRUE(value->is_same(tensor));
+    EXPECT_EQ(static_cast<int64_t>(tensor.use_count()), owners_before)
+        << "flatten_one copied the Tensor payload instead of moving it";
 }
 
 // ---------------------------------------------------------------------------
