@@ -20,6 +20,10 @@
 
 #if GSPLAT_BUILD_3DGUT
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 #include <ATen/Dispatch.h>
 #include <ATen/Functions.h>
 #include <ATen/core/Tensor.h>
@@ -186,7 +190,15 @@ uint32_t ceil_log2_u64(uint64_t x) {
     if (x <= 1) {
         return 0;
     }
+
+#if defined(_MSC_VER)
+    unsigned long index;
+    _BitScanReverse64(&index, x - 1);
+    return static_cast<uint32_t>(index) + 1u;
+#else
     return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
+#endif
+
 }
 
 } // namespace
