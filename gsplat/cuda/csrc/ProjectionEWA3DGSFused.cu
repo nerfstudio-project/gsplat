@@ -25,6 +25,7 @@
 #    include <ATen/cuda/Atomic.cuh>
 #    include <c10/cuda/CUDAStream.h>
 #    include <cooperative_groups.h>
+#    include <vector>
 
 #    include "Common.h"
 #    include "Projection.h"
@@ -755,19 +756,119 @@ void launch_projection_ewa_3dgs_fused_bwd_kernels(
 {
     uint32_t N = means.size(-2);
     uint32_t C = viewmats.size(-3);
-    uint32_t B = means.numel() / (N * 3);
+    uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2));
 
     constexpr unsigned int threads = 256;
 
-    if(B == 0 || C == 0 || N == 0)
+    if(B == 0 || N == 0)
     {
         return;
+    }
+
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getStreamFromPool(false, device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+
+        int64_t gaussian_offset, gaussian_count;
+        std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
+
+        if(gaussian_count > 0)
+        {
+            std::vector<void *> prefetch_ptrs;
+            std::vector<size_t> prefetch_sizes;
+            auto append_prefetch_range
+                = [&prefetch_ptrs, &prefetch_sizes](const at::Tensor &tensor, int64_t row_offset, int64_t row_count)
+            {
+                const int64_t row_stride = tensor.stride(-2);
+                prefetch_ptrs.emplace_back(
+                    static_cast<char *>(tensor.data_ptr()) + row_offset * row_stride * tensor.element_size()
+                );
+                prefetch_sizes.emplace_back(row_count * row_stride * tensor.element_size());
+            };
+
+            for(const auto batch_id: c10::irange(B))
+            {
+                const int64_t row_offset = static_cast<int64_t>(batch_id) * N + gaussian_offset;
+                append_prefetch_range(v_means, row_offset, gaussian_count);
+                if(covars.has_value())
+                {
+                    append_prefetch_range(v_covars, row_offset, gaussian_count);
+                }
+                else
+                {
+                    append_prefetch_range(v_quats, row_offset, gaussian_count);
+                    append_prefetch_range(v_scales, row_offset, gaussian_count);
+                }
+            }
+
+#    if CUDART_VERSION < 13000
+            for(const auto range_id: c10::irange(prefetch_ptrs.size()))
+            {
+                C10_CUDA_CHECK(
+                    cudaMemPrefetchAsync(prefetch_ptrs[range_id], prefetch_sizes[range_id], device_id, stream)
+                );
+            }
+#    else
+            const cudaMemLocation location                  = {cudaMemLocationTypeDevice, device_id};
+            std::vector<cudaMemLocation> prefetch_locations = {location};
+            std::vector<size_t> prefetch_location_indices   = {0};
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(
+                prefetch_ptrs.data(),
+                prefetch_sizes.data(),
+                prefetch_ptrs.size(),
+                prefetch_locations.data(),
+                prefetch_location_indices.data(),
+                prefetch_locations.size(),
+                0,
+                stream
+            ));
+#    endif
+
+            auto memset_range = [stream](const at::Tensor &tensor, int64_t row_offset, int64_t row_count)
+            {
+                const int64_t row_stride = tensor.stride(-2);
+                C10_CUDA_CHECK(cudaMemsetAsync(
+                    static_cast<char *>(tensor.data_ptr()) + row_offset * row_stride * tensor.element_size(),
+                    0,
+                    row_count * row_stride * tensor.element_size(),
+                    stream
+                ));
+            };
+            for(const auto batch_id: c10::irange(B))
+            {
+                const int64_t row_offset = static_cast<int64_t>(batch_id) * N + gaussian_offset;
+                memset_range(v_means, row_offset, gaussian_count);
+                if(covars.has_value())
+                {
+                    memset_range(v_covars, row_offset, gaussian_count);
+                }
+                else
+                {
+                    memset_range(v_quats, row_offset, gaussian_count);
+                    memset_range(v_scales, row_offset, gaussian_count);
+                }
+            }
+        }
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
     }
 
     for(const auto device_id: c10::irange(c10::cuda::device_count()))
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[device_id]));
 
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);

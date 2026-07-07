@@ -27,6 +27,7 @@
 #    include <cooperative_groups.h>
 
 #    include "Common.h"
+#    include "Prefetch.h"
 #    include "Rasterization.h"
 #    include "RasterizeToPixels3DGSDevice.cuh"
 #    include "Utils.cuh"
@@ -484,6 +485,76 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernels(
         "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
     );
 
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
+    const int64_t tiles_per_image              = static_cast<int64_t>(tile_height) * tile_width;
+    const std::vector<at::Tensor> tile_tensors = {
+        v_render_colors.view({I, image_height, image_width, channels}),
+        v_render_alphas.view({I, image_height, image_width, 1}),
+    };
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getStreamFromPool(false, device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+
+        int64_t block_offset, block_count;
+        std::tie(block_offset, block_count) = chunk(n_tiles, device_id);
+        if(block_count > 0)
+        {
+            std::vector<void *> prefetch_ptrs;
+            std::vector<size_t> prefetch_sizes;
+            append_per_tile_prefetch_ranges(
+                prefetch_ptrs,
+                prefetch_sizes,
+                tile_tensors,
+                TilePrefetchRange{
+                    block_offset,
+                    block_count,
+                    tile_height,
+                    tile_width,
+                    image_height,
+                    image_width,
+                    tile_size,
+                }
+            );
+
+            if(!packed)
+            {
+                const int64_t image_offset = block_offset / tiles_per_image;
+                const int64_t image_count
+                    = (block_offset + block_count + tiles_per_image - 1) / tiles_per_image - image_offset;
+                std::vector<at::Tensor> output_tensors = {
+                    v_means2d.view({I, N, 2}),
+                    v_conics.view({I, N, 3}),
+                    v_colors.view({I, N, channels}),
+                    v_opacities.view({I, N}),
+                };
+                if(v_means2d_abs.has_value())
+                {
+                    output_tensors.emplace_back(v_means2d_abs.value().view({I, N, 2}));
+                }
+                append_per_camera_prefetch_ranges(
+                    prefetch_ptrs, prefetch_sizes, output_tensors, image_offset, image_count
+                );
+                mem_prefetch_batch_async(prefetch_ptrs, prefetch_sizes, device_id, stream);
+                per_camera_memset_async(output_tensors, image_offset, image_count, stream);
+            }
+            else
+            {
+                mem_prefetch_batch_async(prefetch_ptrs, prefetch_sizes, device_id, stream);
+            }
+        }
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
     auto launch_kernels = [&]<typename ChannelsT>()
     {
         constexpr uint32_t CDIM = ChannelsT::value;
@@ -494,6 +565,9 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernels(
         for(const auto device_id: c10::irange(c10::cuda::device_count()))
         {
             C10_CUDA_CHECK(cudaSetDevice(device_id));
+            auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+            C10_CUDA_CHECK(cudaEventDestroy(events[device_id]));
             if(cudaFuncSetAttribute(
                    rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>,
                    cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -507,8 +581,6 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernels(
                     " bytes), try lowering tile_size."
                 );
             }
-            auto stream = c10::cuda::getCurrentCUDAStream(device_id);
-
             int64_t block_offset, block_count;
             std::tie(block_offset, block_count) = chunk(n_tiles, device_id);
             if(block_count > 0)

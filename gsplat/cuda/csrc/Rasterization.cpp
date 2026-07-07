@@ -980,14 +980,15 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd_privateuseone(
         CHECK_INPUT(masks.value());
     }
 
-    at::Tensor v_means2d   = at::zeros_like(means2d);
-    at::Tensor v_conics    = at::zeros_like(conics);
-    at::Tensor v_colors    = at::zeros_like(colors);
-    at::Tensor v_opacities = at::zeros_like(opacities);
+    const bool initialize_per_image = means2d.dim() != 2 && flatten_ids.numel() > 0;
+    at::Tensor v_means2d            = initialize_per_image ? at::empty_like(means2d) : at::zeros_like(means2d);
+    at::Tensor v_conics             = initialize_per_image ? at::empty_like(conics) : at::zeros_like(conics);
+    at::Tensor v_colors             = initialize_per_image ? at::empty_like(colors) : at::zeros_like(colors);
+    at::Tensor v_opacities          = initialize_per_image ? at::empty_like(opacities) : at::zeros_like(opacities);
     at::Tensor v_means2d_abs;
     if(absgrad)
     {
-        v_means2d_abs = at::zeros_like(means2d);
+        v_means2d_abs = initialize_per_image ? at::empty_like(means2d) : at::zeros_like(means2d);
     }
 
     launch_rasterize_to_pixels_3dgs_bwd_kernels(

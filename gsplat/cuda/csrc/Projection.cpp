@@ -775,16 +775,16 @@ ProjectionEWA3DGSFusedBwdResult projection_ewa_3dgs_fused_bwd_privateuseone(
         compensation_grad = grad_compensations;
     }
 
-    at::Tensor v_means = at::zeros_like(means);
+    at::Tensor v_means = at::empty_like(means);
     at::Tensor v_covars, v_quats, v_scales;
     if(covars.has_value())
     {
-        v_covars = at::zeros_like(covars.value());
+        v_covars = at::empty_like(covars.value());
     }
     else
     {
-        v_quats  = at::zeros_like(quats.value());
-        v_scales = at::zeros_like(scales.value());
+        v_quats  = at::empty_like(quats.value());
+        v_scales = at::empty_like(scales.value());
     }
     at::Tensor v_viewmats;
     if(viewmats_requires_grad)

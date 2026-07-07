@@ -38,6 +38,14 @@ namespace gsplat
 {
 namespace cg = cooperative_groups;
 
+namespace
+{
+    [[maybe_unused]] __global__ void sleep_kernel()
+    {
+        __nanosleep(1'000'000u);
+    }
+} // namespace
+
 #define CUB_WRAPPER_ASYNC(stream, func, ...)                                         \
     do                                                                               \
     {                                                                                \
@@ -736,20 +744,18 @@ TileIntersectResult intersect_tile_kernels_privateuseone(
     assert(image_n_bits + tile_n_bits <= 32);
 
     constexpr unsigned int threads = 256;
-    const int device_count         = static_cast<int>(c10::cuda::device_count());
-    TORCH_CHECK(device_count > 0, "PrivateUse1 intersect_tile requires at least one CUDA device");
-    const int64_t total_tile_keys = static_cast<int64_t>(I) * n_tiles;
-    const unsigned int blocks     = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+    const int64_t total_tile_keys  = static_cast<int64_t>(I) * n_tiles;
+    const unsigned int blocks      = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
-    std::vector<int32_t *> device_counts(device_count, nullptr);
-    std::vector<int64_t *> device_cumsum(device_count, nullptr);
-    std::vector<int64_t> device_intersection_offsets(device_count, 0);
-    std::vector<int64_t> device_intersection_counts(device_count, 0);
+    std::vector<int32_t *> device_counts(c10::cuda::device_count(), nullptr);
+    std::vector<int64_t *> device_cumsum(c10::cuda::device_count(), nullptr);
+    std::vector<int64_t> device_intersection_offsets(c10::cuda::device_count(), 0);
+    std::vector<int64_t> device_intersection_counts(c10::cuda::device_count(), 0);
 
     int64_t *device_totals = nullptr;
-    C10_CUDA_CHECK(cudaMallocHost(&device_totals, device_count * sizeof(int64_t)));
+    C10_CUDA_CHECK(cudaMallocHost(&device_totals, c10::cuda::device_count() * sizeof(int64_t)));
 
-    for(const auto device_id: c10::irange(device_count))
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
@@ -817,7 +823,7 @@ TileIntersectResult intersect_tile_kernels_privateuseone(
     }
 
     int64_t n_isects = 0;
-    for(const auto device_id: c10::irange(device_count))
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
@@ -832,7 +838,7 @@ TileIntersectResult intersect_tile_kernels_privateuseone(
     flatten_ids = at::empty({n_isects}, opt.dtype(at::kInt));
     if(n_isects == 0)
     {
-        for(const auto device_id: c10::irange(device_count))
+        for(const auto device_id: c10::irange(c10::cuda::device_count()))
         {
             C10_CUDA_CHECK(cudaSetDevice(device_id));
             auto stream = c10::cuda::getCurrentCUDAStream(device_id);
@@ -847,10 +853,67 @@ TileIntersectResult intersect_tile_kernels_privateuseone(
         };
     }
 
-    for(const auto device_id: c10::irange(device_count))
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
+    // Place each device's disjoint output slice locally before emit and sort.
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getStreamFromPool(false, device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+
+        const int64_t isect_offset = device_intersection_offsets[device_id];
+        const int64_t isect_count  = device_intersection_counts[device_id];
+        if(isect_count > 0)
+        {
+            sleep_kernel<<<1, 1, 0, stream>>>();
+#if CUDART_VERSION < 13000
+            C10_CUDA_CHECK(cudaMemPrefetchAsync(
+                isect_ids.data_ptr<int64_t>() + isect_offset, isect_count * sizeof(int64_t), device_id, stream
+            ));
+            C10_CUDA_CHECK(cudaMemPrefetchAsync(
+                flatten_ids.data_ptr<int32_t>() + isect_offset, isect_count * sizeof(int32_t), device_id, stream
+            ));
+#else
+            std::vector<void *> prefetch_ptrs = {
+                isect_ids.data_ptr<int64_t>() + isect_offset,
+                flatten_ids.data_ptr<int32_t>() + isect_offset,
+            };
+            std::vector<size_t> prefetch_sizes = {
+                static_cast<size_t>(isect_count) * sizeof(int64_t),
+                static_cast<size_t>(isect_count) * sizeof(int32_t),
+            };
+            const cudaMemLocation location                  = {cudaMemLocationTypeDevice, device_id};
+            std::vector<cudaMemLocation> prefetch_locations = {location};
+            std::vector<size_t> prefetch_location_indices   = {0};
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(
+                prefetch_ptrs.data(),
+                prefetch_sizes.data(),
+                prefetch_ptrs.size(),
+                prefetch_locations.data(),
+                prefetch_location_indices.data(),
+                prefetch_locations.size(),
+                0,
+                stream
+            ));
+#endif
+        }
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[device_id]));
 
         size_t key_offset, key_count;
         std::tie(key_offset, key_count) = chunk(total_tile_keys, device_id);
@@ -907,7 +970,7 @@ TileIntersectResult intersect_tile_kernels_privateuseone(
 
     if(sort)
     {
-        for(const auto device_id: c10::irange(device_count))
+        for(const auto device_id: c10::irange(c10::cuda::device_count()))
         {
             C10_CUDA_CHECK(cudaSetDevice(device_id));
             auto stream = c10::cuda::getCurrentCUDAStream(device_id);
@@ -1060,10 +1123,59 @@ void launch_intersect_offset_kernels(
     const uint32_t n_tiles     = tile_width * tile_height;
     const uint32_t tile_n_bits = bits_for_count(n_tiles);
 
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for(const auto device_id: c10::irange(c10::cuda::device_count()))
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
+    // This op repartitions the sorted intersections independently from
+    // intersect_tile, so prefetch the exact slice read by each device.
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getStreamFromPool(false, device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+
+        int64_t offset, count;
+        std::tie(offset, count) = chunk(n_elements, device_id);
+        if(count > 0)
+        {
+            sleep_kernel<<<1, 1, 0, stream>>>();
+#if CUDART_VERSION < 13000
+            C10_CUDA_CHECK(
+                cudaMemPrefetchAsync(isect_ids.data_ptr<int64_t>() + offset, count * sizeof(int64_t), device_id, stream)
+            );
+#else
+            std::vector<void *> prefetch_ptrs               = {isect_ids.data_ptr<int64_t>() + offset};
+            std::vector<size_t> prefetch_sizes              = {static_cast<size_t>(count) * sizeof(int64_t)};
+            const cudaMemLocation location                  = {cudaMemLocationTypeDevice, device_id};
+            std::vector<cudaMemLocation> prefetch_locations = {location};
+            std::vector<size_t> prefetch_location_indices   = {0};
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(
+                prefetch_ptrs.data(),
+                prefetch_sizes.data(),
+                prefetch_ptrs.size(),
+                prefetch_locations.data(),
+                prefetch_location_indices.data(),
+                prefetch_locations.size(),
+                0,
+                stream
+            ));
+#endif
+        }
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[device_id]));
 
         int64_t offset, count;
         std::tie(offset, count) = chunk(n_elements, device_id);
