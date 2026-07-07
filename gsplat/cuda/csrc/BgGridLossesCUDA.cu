@@ -228,18 +228,21 @@ namespace
         return (acc / static_cast<float>(NCH)) * factor;
     }
 
-    // Fused grid drift + TV backward for a single (b, d, h, w) cell.
-    // Computes d(drift_loss)/d(grid) + d(tv_loss)/d(grid) for all 12 channels
-    // of that cell and writes to v_grid via atomicAdd (since each cell
-    // participates in multiple backward computations through its neighbours).
+    // Fused grid drift + TV backward for a single (b, d, h, w) cell, gather form.
+    // Each output cell computes its complete gradient and writes v_grid once per
+    // channel -- no atomics and no pre-zeroed output buffer. The TV gradient at a
+    // cell is the sum of (a) its own forward D/H/W diffs, weighted by this cell's
+    // TV cotangent, and (b) the backward diffs from the up-to-three source cells
+    // that list it as their forward neighbour, each weighted by that source
+    // cell's TV cotangent (read from v_tv_loss). Drift is purely per-cell. Writes
+    // are unconditional (zero when both factors are disabled) so every entry of a
+    // present grid is set, which is why the caller no longer pre-zeros v_grid.
     //
     // Optimizations:
     //   - Shared (b, d, h, w) decomposition done once, reused for both losses.
-    //   - Drift: cache 12 m_ij entries + 12 flat indices in registers, single
-    //     read, reuse for both `sum_sq` and per-entry atomicAdd.
-    //   - TV: per channel, read v once, sweep 3 neighbour dirs (d+1, h+1, w+1),
-    //     accumulate self-gradient in a register, write one atomicAdd per
-    //     channel instead of 3.
+    //   - Cache this cell's 12 channel values in registers (single read, reused
+    //     for the drift sum_sq and the TV self term).
+    //   - Per-cell TV weights (self + 3 backward-source cells) computed once.
     __device__ __forceinline__ void grid_drift_and_tv_bwd_cell(
         int ci,
         int /* B unused */,
@@ -250,7 +253,7 @@ namespace
         float tv_factor,
         const float *__restrict__ grid,
         float v_drift,
-        float v_tv,
+        const float *__restrict__ v_tv_loss,
         float *__restrict__ v_grid
     )
     {
@@ -267,78 +270,95 @@ namespace
         const int stride_c  = DHW;
         const int base      = b * NCH * DHW + d * (H * W) + h * W + w;
 
-        // -- Drift bwd: cache 12 entries + indices, compute once, scatter once.
+        // Cache this cell's 12 channel values once; accumulate the drift sum_sq.
+        const bool drift_on = !(drift_factor < 0.0f);
         float cached_m[NCH];
-        int cached_idx[NCH];
         float sum_sq = 0.0f;
-        if(!(drift_factor < 0.0f))
-        {
-#    pragma unroll
-            for(int c = 0; c < NCH; ++c)
-            {
-                const int idx      = base + c * stride_c;
-                const float v      = grid[idx];
-                cached_m[c]        = v;
-                cached_idx[c]      = idx;
-                const int r        = c / NCOLS;
-                const int col      = c - r * NCOLS;
-                const float ident  = (r == col) ? 1.0f : 0.0f;
-                const float diff   = v - ident;
-                sum_sq            += diff * diff;
-            }
-        }
-
-// -- TV bwd: per channel, accumulate self-grad in register.
 #    pragma unroll
         for(int c = 0; c < NCH; ++c)
         {
-            float grad_self    = 0.0f;
-            const int idx_self = (!(drift_factor < 0.0f)) ? cached_idx[c] : base + c * stride_c;
-            const float v      = (!(drift_factor < 0.0f)) ? cached_m[c] : grid[idx_self];
-
-            if(!(tv_factor < 0.0f))
+            const float v = grid[base + c * stride_c];
+            cached_m[c]   = v;
+            if(drift_on)
             {
-                const float grad_base = 2.0f * tv_factor / static_cast<float>(NCH) * v_tv;
-                if(d < D - 1)
+                const int r       = c / NCOLS;
+                const int col     = c - r * NCOLS;
+                const float diff  = v - ((r == col) ? 1.0f : 0.0f);
+                sum_sq           += diff * diff;
+            }
+        }
+        const bool drift_active = drift_on && sum_sq > 1e-12f;
+        const float drift_scale = drift_active ? (drift_factor * v_drift / sqrtf(sum_sq)) : 0.0f;
+
+        // Per-cell TV weights: self (forward diffs) + up-to-3 backward-source cells.
+        const bool tv_on = !(tv_factor < 0.0f);
+        float gb_self = 0.0f, gb_dm = 0.0f, gb_hm = 0.0f, gb_wm = 0.0f;
+        if(tv_on)
+        {
+            const float k = 2.0f * tv_factor / static_cast<float>(NCH);
+            gb_self       = k * v_tv_loss[ci];
+            if(d > 0)
+            {
+                gb_dm = k * v_tv_loss[ci - H * W];
+            }
+            if(h > 0)
+            {
+                gb_hm = k * v_tv_loss[ci - W];
+            }
+            if(w > 0)
+            {
+                gb_wm = k * v_tv_loss[ci - 1];
+            }
+        }
+        const bool has_df = d < D - 1, has_hf = h < H - 1, has_wf = w < W - 1;
+        const bool has_db = d > 0, has_hb = h > 0, has_wb = w > 0;
+
+#    pragma unroll
+        for(int c = 0; c < NCH; ++c)
+        {
+            const int idx = base + c * stride_c;
+            const float v = cached_m[c];
+            float grad    = 0.0f;
+
+            if(tv_on)
+            {
+                // Forward diffs: this cell is the source i in (v_i - v_{i+dir}).
+                if(has_df)
                 {
-                    const int idx_n   = idx_self + H * W;
-                    const float diff  = v - grid[idx_n];
-                    const float g     = diff * grad_base;
-                    grad_self        += g;
-                    atomicAdd(&v_grid[idx_n], -g);
+                    grad += (v - grid[idx + H * W]) * gb_self;
                 }
-                if(h < H - 1)
+                if(has_hf)
                 {
-                    const int idx_n   = idx_self + W;
-                    const float diff  = v - grid[idx_n];
-                    const float g     = diff * grad_base;
-                    grad_self        += g;
-                    atomicAdd(&v_grid[idx_n], -g);
+                    grad += (v - grid[idx + W]) * gb_self;
                 }
-                if(w < W - 1)
+                if(has_wf)
                 {
-                    const int idx_n   = idx_self + 1;
-                    const float diff  = v - grid[idx_n];
-                    const float g     = diff * grad_base;
-                    grad_self        += g;
-                    atomicAdd(&v_grid[idx_n], -g);
+                    grad += (v - grid[idx + 1]) * gb_self;
+                }
+                // Backward diffs: this cell is neighbour i+dir of source i = idx-dir.
+                if(has_db)
+                {
+                    grad += (v - grid[idx - H * W]) * gb_dm;
+                }
+                if(has_hb)
+                {
+                    grad += (v - grid[idx - W]) * gb_hm;
+                }
+                if(has_wb)
+                {
+                    grad += (v - grid[idx - 1]) * gb_wm;
                 }
             }
 
-            // Drift self-grad (scales with 1/sqrt(sum_sq))
-            if(!(drift_factor < 0.0f) && sum_sq > 1e-12f)
+            if(drift_active)
             {
-                const int r             = c / NCOLS;
-                const int col           = c - r * NCOLS;
-                const float ident       = (r == col) ? 1.0f : 0.0f;
-                const float grad_drift  = drift_factor * v_drift / sqrtf(sum_sq) * (v - ident);
-                grad_self              += grad_drift;
+                const int r        = c / NCOLS;
+                const int col      = c - r * NCOLS;
+                const float ident  = (r == col) ? 1.0f : 0.0f;
+                grad              += drift_scale * (v - ident);
             }
 
-            if(grad_self != 0.0f)
-            {
-                atomicAdd(&v_grid[idx_self], grad_self);
-            }
+            v_grid[idx] = grad;
         }
     }
 
@@ -436,8 +456,9 @@ namespace
     }
 
     // ---------------------------------------------------------------------------
-    // Backward kernel. v_bg_tex / v_grids_camera / v_grids_frame are assumed
-    // zero-initialised on the Python side (used with atomicAdd).
+    // Backward kernel. Gather form: each thread writes every channel of its own
+    // v_bg_tex / v_grids_camera / v_grids_frame entry exactly once (no atomics),
+    // so the Python side no longer has to pre-zero these grad buffers.
     // ---------------------------------------------------------------------------
     __global__ void bg_grid_losses_bwd_kernel(
         int B_tex,
@@ -475,21 +496,24 @@ namespace
     {
         const int ti = blockIdx.x * blockDim.x + threadIdx.x;
 
-        if(!(bg_tex_factor < 0.0f) && ti < numel_bg_tex)
+        if(ti < numel_bg_tex)
         {
-            // Note: sky_tv_bwd_element reads multiple v_bg_tex_loss positions;
-            // each element's gradient depends on the upstream gradient of both
-            // its own cell (when it's the source) and its neighbours' cells
-            // (when it's the target), so this handles all of those in one go
-            // without needing atomics on v_bg_tex.
+            // sky_tv_bwd_element gathers: each element's gradient depends on the
+            // upstream gradient of its own cell (as the source) and its
+            // neighbours' cells (as the target), so it writes v_bg_tex once
+            // without atomics. Write unconditionally -- a disabled bg-tex loss
+            // still zeros the grad buffer, so the caller need not pre-zero it.
             v_bg_tex[ti]
-                = sky_tv_bwd_element(ti, B_tex, D_tex, H_tex, W_tex, C_tex, bg_tex, v_bg_tex_loss, bg_tex_factor);
+                = (!(bg_tex_factor < 0.0f))
+                    ? sky_tv_bwd_element(ti, B_tex, D_tex, H_tex, W_tex, C_tex, bg_tex, v_bg_tex_loss, bg_tex_factor)
+                    : 0.0f;
         }
 
-        if((!(grid_drift_camera_factor < 0.0f) || !(grid_camera_tv_factor < 0.0f)) && ti < numel_gc_cells)
+        // Gather backward writes every cell of a present grid exactly once (zero
+        // when both factors are disabled), so the guard is just the bounds check.
+        if(ti < numel_gc_cells)
         {
             const float v_drift = (!(grid_drift_camera_factor < 0.0f)) ? v_grids_drift_loss[ti] : 0.0f;
-            const float v_tv    = (!(grid_camera_tv_factor < 0.0f)) ? v_grid_camera_tv_loss[ti] : 0.0f;
             grid_drift_and_tv_bwd_cell(
                 ti,
                 B_gc,
@@ -500,15 +524,14 @@ namespace
                 grid_camera_tv_factor,
                 grids_camera,
                 v_drift,
-                v_tv,
+                v_grid_camera_tv_loss,
                 v_grids_camera
             );
         }
 
-        if((!(grid_drift_frame_factor < 0.0f) || !(grid_frame_tv_factor < 0.0f)) && ti < numel_gf_cells)
+        if(ti < numel_gf_cells)
         {
             const float v_drift = (!(grid_drift_frame_factor < 0.0f)) ? v_grids_drift_loss[numel_gc_cells + ti] : 0.0f;
-            const float v_tv    = (!(grid_frame_tv_factor < 0.0f)) ? v_grid_frame_tv_loss[ti] : 0.0f;
             grid_drift_and_tv_bwd_cell(
                 ti,
                 B_gf,
@@ -519,7 +542,7 @@ namespace
                 grid_frame_tv_factor,
                 grids_frame,
                 v_drift,
-                v_tv,
+                v_grid_frame_tv_loss,
                 v_grids_frame
             );
         }
