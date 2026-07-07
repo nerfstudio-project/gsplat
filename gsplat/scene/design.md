@@ -32,7 +32,12 @@ class Scene(ABC):
     id: str
 
     @abstractmethod
-    def put(self, name: str, component: object) -> None: ...
+    def put(
+        self,
+        name: str,
+        component: object,
+        ctx: dict[str, torch.Tensor] | None = None,
+    ) -> None: ...
 
     @abstractmethod
     def get(self, component: str) -> object: ...
@@ -53,6 +58,9 @@ The base class establishes that scenes:
 - provide topology hooks (no-op by default) called by strategy ops
 
 Subclasses are free to store components however they want.
+The optional `ctx` argument carries transform context for implementations that
+support scene-level transforms. Implementations that do not consume transform
+context may reject non-empty `ctx`.
 
 This is deliberately narrower than a mapping-like interface:
 
@@ -198,7 +206,7 @@ Notably absent from the current implementation:
 - `items()`
 - a separate radiance API
 
-### `put(name, splats)`
+### `put(name, splats, ctx=None)`
 
 `put()` adds a named component backed by a `torch.nn.ParameterDict`.
 
@@ -208,6 +216,7 @@ Current behavior:
 - later `put()` calls append rows by concatenating the existing splat tensors with the new component tensors
 - appended rows get a new component id in `component_index`
 - existing `signal` tensors are zero-padded for the appended rows so signal stays aligned with `splats` (this is what makes `from_splats(..., signal=...)` composable with later `put()` calls)
+- optional `ctx` tensors are validated against the active transform graph and stored in `ctx_buffer`
 - `validate()` is called at the end of every `put()`
 
 Errors raised:
@@ -215,11 +224,12 @@ Errors raised:
 - `ValueError("component name must not be empty")` if `name` is empty
 - `ValueError("Component {name!r} already exists in scene")` if `name` is a duplicate
 - `ValueError("component splats must not be empty")` if the `ParameterDict` is empty or missing `"means"`
+- `ValueError` if non-empty `ctx` is provided before a transform graph is attached
 - the splat-key concatenation iterates over keys of the *existing* `splats`; new keys present in `component` but not in `self.splats` are silently dropped, and missing keys raise `KeyError` from the underlying `torch.cat`
 
 Current limitations:
 
-- `put()` only accepts splats; signal cannot be added per-component (callers seed it via `from_splats(..., signal=...)`)
+- `put()` accepts splats and optional transform context; signal cannot be added per-component (callers seed it via `from_splats(..., signal=...)`)
 - appended components must match the existing splat-key layout
 - `put()` is init-only: calling it after optimizers have been created on `scene.splats` will orphan the old `Parameter` objects (the docstring on the method warns about this)
 

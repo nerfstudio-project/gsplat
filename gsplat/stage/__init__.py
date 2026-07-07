@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .components.component_collection import ComponentCollection
 from .components.stage import Stage
 
-__all__ = ["Stage"]
+__all__ = ["ComponentCollection", "Stage"]

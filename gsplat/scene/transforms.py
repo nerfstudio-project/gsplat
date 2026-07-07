@@ -13,7 +13,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .component_collection import ComponentCollection
-from .stage import Stage
+"""Compatibility exports for scene transform APIs."""
 
-__all__ = ["ComponentCollection", "Stage"]
+from __future__ import annotations
+
+from .components.transforms import (
+    GaussianComponent,
+    HIDDEN_OPACITY_LOGIT,
+    IdentityOp,
+    RigidTransformOp,
+    TensorViews,
+    TransformCtxView,
+    TransformGraph,
+    TransformOp,
+)
+
+__all__ = [
+    "GaussianComponent",
+    "HIDDEN_OPACITY_LOGIT",
+    "IdentityOp",
+    "RigidTransformOp",
+    "TensorViews",
+    "TransformCtxView",
+    "TransformGraph",
+    "TransformOp",
+]

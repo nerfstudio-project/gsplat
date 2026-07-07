@@ -65,7 +65,16 @@ class GaussianInferenceScene(Scene):
         self.component_names = []
         self.component_index = torch.zeros(0, dtype=torch.long)
 
-    def put(self, name: str, component: dict) -> None:
+    def put(
+        self,
+        name: str,
+        component: dict,
+        ctx: dict[str, torch.Tensor] | None = None,
+    ) -> None:
+        if ctx is not None:
+            raise NotImplementedError(
+                "GaussianInferenceScene transform context is not supported"
+            )
         if not name:
             raise ValueError("component name must not be empty")
         scene_empty = self.is_empty()

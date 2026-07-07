@@ -13,7 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .component_collection import ComponentCollection
-from .stage import Stage
+"""Scene transform APIs."""
 
-__all__ = ["ComponentCollection", "Stage"]
+from .constants import HIDDEN_OPACITY_LOGIT
+from .gaussian_component import GaussianComponent
+from .identity_op import IdentityOp
+from .rigid_transform_op import RigidTransformOp
+from .tensor_views import TensorViews
+from .transform_ctx_view import TransformCtxView
+from .transform_graph import TransformGraph
+from .transform_op import TransformOp
+
+__all__ = [
+    "GaussianComponent",
+    "HIDDEN_OPACITY_LOGIT",
+    "IdentityOp",
+    "RigidTransformOp",
+    "TensorViews",
+    "TransformCtxView",
+    "TransformGraph",
+    "TransformOp",
+]

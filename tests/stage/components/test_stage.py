@@ -76,7 +76,9 @@ class TestRender:
         scene = _make_scene()
         stage.add_scene(scene, _mock_render_fn)
         splats_received, kwargs_received = stage.render("scene", foo="bar", baz=42)
-        assert splats_received is scene.splats
+        assert splats_received is not scene.splats
+        torch.testing.assert_close(splats_received["means"], scene.splats["means"])
+        assert splats_received["means"] is scene.splats["means"]
         assert kwargs_received == {"foo": "bar", "baz": 42}
 
     def test_splats_passed_as_kwarg(self):
@@ -93,8 +95,65 @@ class TestRender:
         result = stage.render("scene", camtoworlds="cam", Ks="ks")
         assert result == "ok"
         assert "splats" in call_log
-        assert call_log["splats"] is scene.splats
+        assert call_log["splats"] is not scene.splats
+        torch.testing.assert_close(call_log["splats"]["means"], scene.splats["means"])
+        assert call_log["splats"]["means"] is scene.splats["means"]
         assert call_log["camtoworlds"] == "cam"
+
+    def test_render_time_uses_scene_transform_output(self):
+        call_log = {}
+
+        def capture_fn(**kwargs):
+            call_log.update(kwargs)
+            return "ok"
+
+        stage = Stage()
+        scene = _make_scene()
+        sentinel = {key: value.detach().clone() for key, value in scene.splats.items()}
+        time_log = []
+
+        def apply_transforms(*, t=None, time_sec=0.0):
+            time_log.append(t if t is not None else time_sec)
+            return sentinel
+
+        scene.apply_transforms = apply_transforms
+        stage.add_scene(scene, capture_fn)
+
+        result = stage.render("scene", t=123, viewmat="vm")
+
+        assert result == "ok"
+        assert time_log == [123]
+        assert "t" not in call_log
+        assert call_log["viewmat"] == "vm"
+        assert call_log["splats"] is sentinel
+
+    def test_render_time_without_graph_consumes_time_and_returns_live_splats(self):
+        call_log = {}
+
+        def capture_fn(**kwargs):
+            call_log.update(kwargs)
+            return "ok"
+
+        stage = Stage()
+        scene = _make_scene()
+        stage.add_scene(scene, capture_fn)
+
+        result = stage.render("scene", t=123, viewmat="vm")
+
+        assert result == "ok"
+        assert "t" not in call_log
+        assert call_log["viewmat"] == "vm"
+        assert call_log["splats"] is not scene.splats
+        torch.testing.assert_close(call_log["splats"]["means"], scene.splats["means"])
+        assert call_log["splats"]["means"] is scene.splats["means"]
+
+    def test_render_rejects_duplicate_time_kwargs(self):
+        stage = Stage()
+        scene = _make_scene()
+        stage.add_scene(scene, _mock_render_fn)
+
+        with pytest.raises(ValueError, match="only one"):
+            stage.render("scene", t=1, time_sec=1)
 
     def test_renders_correct_scene_from_multi(self):
         stage = Stage()

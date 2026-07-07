@@ -46,8 +46,17 @@ class Scene(ABC):
         self._id = value
 
     @abstractmethod
-    def put(self, name: str, component: object) -> None:
-        """Add a named component to the scene."""
+    def put(
+        self,
+        name: str,
+        component: object,
+        ctx: dict[str, torch.Tensor] | None = None,
+    ) -> None:
+        """Add a named component to the scene.
+
+        ``ctx`` is optional transform context. Implementations that do not
+        support transform context may reject non-``None`` values.
+        """
 
     @abstractmethod
     def get(self, component: str) -> object:
