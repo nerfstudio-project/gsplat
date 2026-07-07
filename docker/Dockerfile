@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7.0
 
 # Fix the base image to avoid spurious rebuilds
-ARG BASE_IMAGE=nvidia/cuda:12.9.0-base-ubuntu24.04@sha256:48e21b10467354655f5073c05eebdeaac9818c6b40d70f334f7ad2df000463d8
+ARG BASE_IMAGE=nvidia/cuda:12.8.1-base-ubuntu24.04@sha256:133c78a0575303be34164d0b90137a042172bdf60696af01a3c424ab402d86e2
 
 # Bumped on every image release (mirrors IMAGE_TAG in config.yaml). Used to
 # bake the venv at /var/cache/venv-${IMAGE_VERSION} so a per-version cache
@@ -239,7 +239,6 @@ RUN --mount=type=tmpfs,target=/tmp \
     # New architectures
     # sm_90: Hopper/Tesla gh100
     # sm_120: Blackwell/GeForce gb20x
-    # sm_121: Blackwell/Tesla gb20x, gb21x
     fused_ssim="git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
 
     # Examples
@@ -272,7 +271,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         -- "${base_pkgs[@]}" "${dev_pkgs[@]}" "$fused_ssim" "${packages[@]}"
 
     # Build fused_ssim first (needs special env var)
-    CUDA_ARCHITECTURES='75;80;89;90;120;121' \
+    CUDA_ARCHITECTURES='75;80;89;90;120' \
         pip install --no-build-isolation "$fused_ssim"
 
     # Needs --no-build-isolation or else fused-ssim can't be installed as
