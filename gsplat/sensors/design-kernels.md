@@ -1,3 +1,20 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Sensors Kernel Layer Design
 
 ## Overview
@@ -26,7 +43,9 @@ gsplat.sensors.functional.<op>(...)
   -> gsplat_sensors::<op>_...(...)                  # C++ entry in camera_torch.cpp
   -> <op>_<...>_launch(...)                         # bridge prototype in camera_params.h
   -> <op>_<...>_kernel<<<...>>>(...)                # __global__ in camera_kernel.cu
-  -> device math in camera_kernel.cuh + math.cuh
+  -> projection_{forward,backward}_impl.cuh          # shared D1/D2/D3/D5/D6 body
+     or a projection-local D4 body
+  -> projection + external-distortion policy math
 ```
 
 ## Scope
@@ -46,10 +65,20 @@ projection at this revision:
   `image_points_to_world_rays_shutter_pose`,
   `pixel_grid_to_world_rays_shutter_pose` — plus the non-differentiable
   helper `generate_image_points` (pixel-centre coordinates).
-- A rolling-shutter Newton solver inside `project_world_points_shutter_pose`,
-  capped by `kMaxRollingShutterIterations = 12` in `camera_params.h`.
-- Hand-written backward CUDA kernels per `(op, projection, distortion)` pair,
-  exposed through one `torch.autograd.Function` per pair.
+
+The D1–D6 shorthand below follows the differentiable operation order above:
+D1 camera-ray projection, D2 camera-ray backprojection, D3 mean-pose
+projection, D4 shutter-pose projection, D5 static-pose world-ray
+backprojection, and D6 shutter-pose world-ray backprojection.
+
+- A rolling-shutter fixed-point iteration inside
+  `project_world_points_shutter_pose`, capped by
+  `kMaxRollingShutterIterations = 12` in `camera_params.h`.
+- Concrete backward CUDA launchers per `(op, projection, distortion)` pair,
+  exposed through one `torch.autograd.Function` per pair. FTheta, fisheye, and
+  pinhole use shared projection-policy bodies for D1/D2/D3/D5/D6. D4 remains
+  projection-local; pinhole has one D4 forward body and one backward body,
+  each templated on the external-distortion policy.
 - One LiDAR projection model: `RowOffsetStructuredSpinningLidarProjection`.
   It carries row elevations, column azimuths, optional row azimuth offsets,
   vertical and horizontal FOV scalars, `SpinningDirection`, and a
@@ -71,23 +100,21 @@ gsplat/sensors/kernels/
   __init__.py
   _backend.py                       # prebuilt-import then JIT fallback
   projective_sensor_ops.py          # cross-family Python dispatch tables
-  test_projective_sensor_ops.py     # dispatch-table conformance test
-  test_lidar_dispatch.py
-  test_backend.py
   cameras/
     __init__.py                     # curated re-exports for tests / models
+    _projection_validate.py         # shared camera projection validation
     ops.py                          # public wrappers + torch.autograd.Function glue
     types.py                        # torch.classes.* handles + ShutterType IntEnum
     windshield.py                   # from_components(...) factory for (42,) buffer
-    test_ops.py                     # per-pair forward + backward + gradcheck
   lidars/
     __init__.py
     dispatch.py                     # single-projection LiDAR dispatch tables
     ops.py                          # public wrappers + torch.autograd.Function glue
     types.py                        # projection handle + SpinningDirection IntEnum
-    test_ops.py                     # runtime-oracle forward/backward + gradcheck coverage
   common/
     pose.py                         # Pose / DynamicPose / Trajectory dataclasses
+    pose_interp.py                  # pose interpolation helpers
+    tensor_ops.py                   # shared tensor validation and movement
     utils.py                        # wxyz_to_xyzw, xyzw_to_wxyz, poses_to_matrix, ...
   cuda/
     __init__.py
@@ -98,6 +125,8 @@ gsplat/sensors/kernels/
       camera_kernel.cuh             # CUDA-only device math + per-thread structs
       camera_kernel.cu              # __global__ + _forward_launch definitions
       camera_kernel_backward.cu     # __global__ + _backward_launch definitions
+      projection_forward_impl.cuh   # shared D1/D2/D3/D5/D6 forward bodies
+      projection_backward_impl.cuh  # shared D1/D2/D3/D5/D6 backward bodies
       camera_torch.h                # Torch-only entry declarations
       camera_torch.cpp              # Torch-only entry definitions
       external_distortion_params.h  # bridge POD for distortion
@@ -107,6 +136,9 @@ gsplat/sensors/kernels/
       ftheta_kernel.cuh
       ftheta_kernel.cu
       ftheta_kernel_backward.cu
+      fisheye_kernel.cuh
+      fisheye_kernel.cu
+      fisheye_kernel_backward.cu
       lidar_params.h
       lidar_kernel.cuh
       lidar_kernel.cu
@@ -115,10 +147,40 @@ gsplat/sensors/kernels/
       lidar_torch.cpp
       shutter_type.h                # source of truth for shutter enum
       math.cuh                      # float3 helpers + normalize3 bwd
+
+tests/sensors/kernels/
+  test_backend.py                   # extension import + native ABI coverage
+  test_projective_sensor_ops.py     # camera dispatch-table conformance
+  test_lidar_dispatch.py            # LiDAR dispatch-table conformance
+  cameras/test_ops.py               # per-pair forward + backward + gradcheck
+  cameras/test_projection_validate.py
+  lidars/test_ops.py                # runtime-oracle forward/backward + gradcheck
+  lidars/test_projection_validate.py
 ```
 
-There is no `include/projective_sensor.h` trait header — the kernel layer does
-not use a C++ traits contract.
+There is no runtime projection-trait object. The CUDA-only
+`projection_forward_impl.cuh` and `projection_backward_impl.cuh` headers define
+the shared D1/D2/D3/D5/D6 bodies. A `ProjectionPolicy` owns model-specific
+projection, backprojection, validity, scratch serialization, and intrinsic
+gradient reduction; a `DistortionPolicy` owns optional external-distortion
+math. Host-safe `DistortionScratchTraits` specializations define each concrete
+tuple's scratch layout. FTheta and fisheye established this shared policy
+contract, and pinhole now uses it for the same five operation families.
+
+D4 stays out of the shared headers because its rolling-shutter iteration and
+last-successful-projection behavior are projection-specific. Pinhole still
+removes duplication here: one local forward body and one local backward body
+are each templated on `DistortionPolicy` and instantiated by the existing named
+launchers.
+
+OpenCV pinhole inverse projection privately selects one of two compile-time
+fixed-point schedules. The no-external launchers use an early-exit schedule of
+at most ten updates with the existing `1e-8` x/y stopping condition. The
+bivariate launchers run exactly ten unconditional updates to keep a uniform
+warp schedule. Strategy selection adds no runtime branch or public solver
+parameter; the early-exit strategy still branches on its convergence test.
+Each schedule saves its terminal state for backward, which continues to use
+the existing implicit analytic VJP.
 
 ## Native split: bridge / CUDA-only / Torch-only
 
@@ -130,16 +192,20 @@ pulling Torch templates through the compiler.
 
 | File extension | Compiler | Allowed includes | Role |
 | --- | --- | --- | --- |
-| `*_params.h` | both | `<cstdint>`, sibling `*_params.h`, the forward-declared `cudaStream_t` | Bridge: POD structs + `_launch` prototypes. No CUDA, no Torch. |
-| `*_kernel.cuh` | nvcc | `*_params.h`, other `*_kernel.cuh`, `<cuda_runtime.h>`, `gsplat/geometry` headers (`quaternion.cuh`, `pose.cuh`, `coordinate_conversions.cuh`) | CUDA-only device math, per-thread structs, `__device__` helpers. |
+| `*_params.h` | both | `<cstdint>`, sibling `*_params.h`, the forward-declared `cudaStream_t` | Bridge: POD structs, `_launch` prototypes, and host-safe enum, tag, and trait contracts. No CUDA device code, no Torch. |
+| `*_kernel.cuh` | nvcc | `*_params.h`, other `*_kernel.cuh`, `<cuda_runtime.h>`, `gsplat/geometry` headers (`quaternion.cuh`, `pose.cuh`, `coordinate_conversions.cuh`) | CUDA-only device math, projection policies, per-thread structs, `__device__` helpers. |
+| `projection_*_impl.cuh` | nvcc | projection, external-distortion, pose, and math CUDA headers | CUDA-only shared D1/D2/D3/D5/D6 device bodies parameterized by `ProjectionPolicy` and `DistortionPolicy`. |
 | `*_kernel.cu` / `*_kernel_backward.cu` | nvcc | matching `.cuh`, `<c10/cuda/CUDAException.h>` | `__global__` definitions, per-pair `_launch` definitions. |
 | `*_torch.h` / `.cpp` | host C++ | `*_params.h`, ATen / `torch::CustomClassHolder` | Host structs, validators, Torch entry functions. |
 | `ext.cpp` | host C++ | all `*_torch.h` | `TORCH_LIBRARY` + `PYBIND11_MODULE`. |
 
-The bridge seam is exactly two declarations: an opaque `CUstream_st`
-forward-declaration aliased as `cudaStream_t` in `camera_params.h`, plus the
-POD `KernelParameters` structs. Every other type leaks only on one side or
-the other.
+The bridge seam is deliberately host-safe rather than limited to two
+declarations. It includes the opaque `CUstream_st` forward-declaration aliased
+as `cudaStream_t`, POD `KernelParameters` structs and launch prototypes, plus
+plain enum, tag, and `constexpr` trait contracts such as `DistortionSensor`,
+`DistortionOpFamily`, `DistortionDirection`, the distortion policy tags, and
+`DistortionScratchTraits`. CUDA device types and Torch types remain on their
+respective sides of the seam.
 
 ## Three-tier C++ representation
 
@@ -154,15 +220,18 @@ table below states what each one is actually called.
 | OpenCV pinhole | `gsplat_sensors::OpenCVPinholeProjection` | `OpenCVPinholeProjection_KernelParameters` | `OpenCVPinholeParams` |
 | FTheta | `gsplat_sensors::FThetaProjection` | `FThetaProjection_KernelParameters` | `FThetaParams` |
 | OpenCV fisheye | `gsplat_sensors::OpenCVFisheyeProjection` | `OpenCVFisheyeProjection_KernelParameters` | `OpenCVFisheyeParams` |
-| No external distortion | `gsplat_sensors::NoExternalDistortion` | `NoExternalDistortion_KernelParameters` (empty) | `NoExternalDistortion_Parameters` (empty no-op tag) |
-| Bivariate windshield | `gsplat_sensors::BivariateWindshieldDistortion` | `BivariateWindshieldDistortion_KernelParameters` | `BivariateWindshieldParams` |
+| No external distortion | `gsplat_sensors::NoExternalDistortion` | `NoExternalDistortion_KernelParameters` (empty) | `NoExternalDistortionPolicy::Params` (empty identity policy state) |
+| Bivariate windshield | `gsplat_sensors::BivariateWindshieldDistortion` | `BivariateWindshieldDistortion_KernelParameters` | `BivariateWindshieldPolicy::Params` (`BivariateWindshieldParams`) |
 | Row-offset spinning LiDAR | `gsplat_sensors::RowOffsetStructuredSpinningLidarProjection` | `RowOffsetStructuredSpinningLidarProjection_KernelParameters` | raw table/POD access in `lidar_kernel.cuh` |
 
 The naming asymmetry is intentional and worth flagging: projection per-thread
 structs drop the `Projection` suffix (`OpenCVPinholeParams`, `FThetaParams`,
-`OpenCVFisheyeParams`), and the bivariate per-thread struct is
-`BivariateWindshieldParams`. Only the two empty / no-op slots follow the
-`_Parameters` suffix convention.
+`OpenCVFisheyeParams`). Each corresponding `ProjectionPolicy` supplies the
+shared bodies with model-specific state and math. Those bodies access external
+distortion through `NoExternalDistortionPolicy` or
+`BivariateWindshieldPolicy`; the latter's `Params` alias names the concrete
+`BivariateWindshieldParams` register struct. Projection-local D4 bodies do not
+participate in the shared projection-body contract.
 
 The Torch host structs store per-component `at::Tensor` members (no packed
 wire format) plus frozen scalars / arrays such as the
@@ -173,9 +242,14 @@ into the bridge POD. No tensor allocation or device transfer happens there.
 
 ## Polymorphism and Dispatch
 
-There is no C++ trait class, no `std::variant`, no runtime enum tag at the
-C++/CUDA boundary. Polymorphism is realised in three layers, all visible
-from Python:
+There is no runtime `std::variant`, projection enum, or distortion enum at the
+C++/CUDA boundary. Python still selects a concrete registered op. For
+D1/D2/D3/D5/D6, its named launcher instantiates a `ProjectionPolicy` and
+`DistortionPolicy` pair at compile time. D4 instead dispatches to
+projection-local implementations, including the single distortion-templated
+pinhole implementation.
+`DistortionScratchTraits` is a compile-time layout contract, not runtime
+polymorphism. The public dispatch remains visible in three layers:
 
 **Type definition (C++ via `torch::class_<>`).** `ext.cpp` registers the camera
 classes (`OpenCVPinholeProjection`, `FThetaProjection`,
@@ -205,13 +279,14 @@ TorchScript class name because every `torch.classes.*` instance reports
 `external_distortion=None` raises `TypeError`; callers must construct
 `NoExternalDistortion()` explicitly.
 
-`test_projective_sensor_ops.py::test_dispatch_table_keys_match_registered_pairs`
+`tests/sensors/kernels/test_projective_sensor_ops.py::test_dispatch_table_keys_match_registered_pairs`
 walks `_DISPATCH_TABLES` and asserts each table covers exactly
 `REGISTERED_CAMERA_PROJECTIONS × REGISTERED_DISTORTIONS` (currently 3 × 2 = 6
 entries per table). Adding a registered class without populating every table
 fails this conformance test. LiDAR shared ops use `kernels/lidars/dispatch.py`
-tables keyed only by the projection class; `kernels/test_lidar_dispatch.py`
-asserts the five LiDAR tables match `REGISTERED_LIDAR_PROJECTIONS`.
+tables keyed only by the projection class;
+`tests/sensors/kernels/test_lidar_dispatch.py` asserts the five LiDAR tables
+match `REGISTERED_LIDAR_PROJECTIONS`.
 
 ## Parameter-pack design
 
@@ -245,11 +320,12 @@ and constructs the `BivariateWindshieldDistortion` TorchScript class.
 
 Camera Torch entry forwards return a `scratch` tensor as the final element of
 their result tuple, shaped `(N, K)` with K chosen per kernel (e.g. `(N, 6)` for
-`camera_rays_to_image_points` no-external, `(N, 14)` for shutter pose). The
+OpenCV pinhole `camera_rays_to_image_points` with no external distortion, or
+`(N, 16)` for fisheye shutter-pose projection). The
 `torch.autograd.Function` wrapper in `kernels/cameras/ops.py` saves
 `(primary_input, scratch)` via `ctx.save_for_backward(...)`; the matching
 backward op consumes scratch instead of re-running OpenCV distortion math or
-the rolling-shutter Newton iteration.
+the rolling-shutter fixed-point iteration.
 
 LiDAR light ops save their direct tensor inputs. LiDAR table and rolling-pose
 ops thread the projection tables and control poses as positional
@@ -302,33 +378,34 @@ trajectory backward path where query time is differentiable.
 | --- | --- |
 | `kernels/_backend.py` | Prebuilt `gsplat_sensors_cuda` import, `GSPLAT_SENSORS_FORCE_JIT=1` override, JIT fallback wiring. |
 | `kernels/projective_sensor_ops.py` | Seven `(projection, distortion)`-keyed dispatch dicts + the public `_DISPATCH_TABLES` registry and `_lookup` helper. |
-| `kernels/test_projective_sensor_ops.py` | Dispatch-table conformance + a smoke test that the `None`-distortion path raises and the bivariate path returns a valid point. |
-| `kernels/test_lidar_dispatch.py` | Single-key LiDAR dispatch conformance for all five LiDAR ops. |
+| `tests/sensors/kernels/test_projective_sensor_ops.py` | Dispatch-table conformance + a smoke test that the `None`-distortion path raises and the bivariate path returns a valid point. |
+| `tests/sensors/kernels/test_lidar_dispatch.py` | Single-key LiDAR dispatch conformance for all five LiDAR ops. |
 | `kernels/cameras/ops.py` | Public Python op wrappers, projection-family `torch.autograd.Function` classes for each `(op, distortion)` pair, and the pose / device / contiguity helpers (`_check_pair`, `_to_dev`, `_projection_on_device_any`, `_external_distortion_on_device`, `_select_op`, `_unpack_static_pose`, `unpack_dynamic_pose_components`, `_unpack_trajectory`, `interpolate_dynamic_pose`, `relative_frame_times`). |
 | `kernels/cameras/types.py` | `torch.classes.gsplat_sensors.*` Python handles, `ShutterType` IntEnum (import-time verified against C++), `ReferencePolynomial`, `REGISTERED_CAMERA_PROJECTIONS`, `REGISTERED_DISTORTIONS`, `script_class_name`, and the `CameraProjection` / `ExternalDistortion` type aliases. |
 | `kernels/cameras/windshield.py` | `from_components(...)` factory + `MAX_H_POLYNOMIAL_TERMS` / `MAX_V_POLYNOMIAL_TERMS` constants. |
-| `kernels/cameras/test_ops.py` | Per-pair forward and backward correctness tests plus PyTorch `gradcheck` on small inputs. |
+| `tests/sensors/kernels/cameras/test_ops.py` | Per-pair forward and backward correctness tests plus PyTorch `gradcheck` on small inputs. |
 | `kernels/lidars/dispatch.py` | Five single-projection dispatch dicts + `_lookup` for `RowOffsetStructuredSpinningLidarProjection`. |
 | `kernels/lidars/ops.py` | Public LiDAR op wrappers, autograd Functions, projection device/dtype movement, and dynamic-pose unpacking. |
 | `kernels/lidars/types.py` | `RowOffsetStructuredSpinningLidarProjection`, `SpinningDirection` IntEnum (import-time verified against C++), `REGISTERED_LIDAR_PROJECTIONS`, and `script_class_name`. |
-| `kernels/lidars/test_ops.py` | LiDAR forward/backward tests against runtime oracles, analytic geometry checks, round-trip recovery, and fp64 gradcheck coverage. |
+| `tests/sensors/kernels/lidars/test_ops.py` | LiDAR forward/backward tests against runtime oracles, analytic geometry checks, round-trip recovery, and fp64 gradcheck coverage. |
 | `kernels/common/pose.py` | `Pose`, `DynamicPose`, `Trajectory` dataclasses and `DynamicPose.from_static_pose` / `to_trajectory` helpers. |
 | `kernels/common/utils.py` | `wxyz_to_xyzw`, `xyzw_to_wxyz`, `poses_to_matrix`, `valid_flags_to_indices`. |
 | `kernels/cuda/build.py` | `get_build_parameters()` + `build_and_load_sensors_cuda()` JIT entry; `DEBUG` / `NVCC_FLAGS` / `VERBOSE` env handling; stale ninja lock cleanup. |
 | `kernels/cuda/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
-| `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter and Newton-iteration bounds. Forward-declared `cudaStream_t`. |
-| `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters` (empty) + `BivariateWindshieldDistortion_KernelParameters`. |
-| `csrc/camera_kernel.cuh` | `OpenCVPinholeParams`, `ProjectionEval`, `DistortionResult`, `DistortionParamGrads`; OpenCV pinhole device math + rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/cuda/csrc/quaternion.cuh`. |
+| `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter iteration bounds. Forward-declared `cudaStream_t`. |
+| `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters`, `BivariateWindshieldDistortion_KernelParameters`, `DistortionSensor`, `DistortionOpFamily`, `DistortionDirection`, the policy tags, and host-safe `DistortionScratchTraits` specializations. |
+| `csrc/camera_kernel.cuh` | OpenCV pinhole parameter, policy-state, scratch-I/O, and gradient types; the two private fixed-point schedules; solver-independent pinhole projection/VJP/reduction math; rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/cuda/csrc/quaternion.cuh`. |
+| `csrc/projection_forward_impl.cuh` / `projection_backward_impl.cuh` | Shared CUDA-only D1/D2/D3/D5/D6 bodies and compile-time policy/scratch validation used by FTheta, fisheye, and pinhole. |
 | `csrc/ftheta_kernel.cuh` / `.cu` / `_backward.cu` | FTheta device math, forward kernels, and backward kernels. |
 | `csrc/fisheye_kernel.cuh` / `.cu` / `_backward.cu` | OpenCV fisheye device math, forward kernels, and backward kernels. |
-| `csrc/external_distortion_kernel.cuh` | `BivariateWindshieldParams` + `NoExternalDistortion_Parameters` no-op tag + header-only bivariate distortion math (no companion `.cu`). |
+| `csrc/external_distortion_kernel.cuh` | `NoExternalDistortionPolicy`, `BivariateWindshieldPolicy`, `BivariateWindshieldParams`, and header-only bivariate distortion math (no companion `.cu`). `apply_bivariate_distortion` normalizes its input internally. |
 | `csrc/math.cuh` | `safe_nonzero`, `add3 / sub3 / scale3 / dot3`, `normalize3` forward and backward. |
 | `gsplat/geometry/.../coordinate_conversions.cuh` | Geometry-owned header-only `sincos_t` and `spherical_to_cartesian` / `cartesian_to_spherical` ray<->angle conversions shared by the sensor kernels. |
 | `csrc/shutter_type.h` | `gsplat_sensors::ShutterType` enum class (source of truth; verified at Python import). |
 | `csrc/lidar_params.h` | `gsplat_sensors::SpinningDirection` enum class (source of truth; verified at Python import) + `RowOffsetStructuredSpinningLidarProjection_KernelParameters` POD + LiDAR forward/backward `_launch` prototypes. |
 | `csrc/lidar_kernel.cuh` | LiDAR device math for table lookup, rolling-shutter timing, FOV checks, and pose interpolation helpers; the spherical<->cartesian ray/angle conversions and `sincos_t` are owned by `gsplat/geometry/kernels/cuda/csrc/coordinate_conversions.cuh`. |
-| `csrc/camera_kernel.cu` | Thirteen forward `__global__` kernels + matching `_forward_launch` definitions. |
-| `csrc/camera_kernel_backward.cu` | Twelve backward `__global__` kernels + matching `_backward_launch` definitions; isolated TU so forward and backward can be compiled and reviewed independently. |
+| `csrc/camera_kernel.cu` | Named pinhole forward kernels and `_forward_launch` definitions; D1/D2/D3/D5/D6 delegate to shared bodies, D4 stays local and distortion-templated, and `generate_image_points` remains a utility kernel. |
+| `csrc/camera_kernel_backward.cu` | Named pinhole backward kernels and `_backward_launch` definitions; D1/D2/D3/D5/D6 delegate to shared bodies and D4 stays local and distortion-templated. Isolated from the forward TU for compilation and review. |
 | `csrc/camera_torch.h` / `.cpp` | Projection host structs + per-pair Torch entries + `generate_image_points` + the `check_*` validators called from `ext.cpp`. |
 | `csrc/external_distortion_torch.h` / `.cpp` | `NoExternalDistortion` and `BivariateWindshieldDistortion` host structs + `to_kernel_params()` + `check_bivariate_windshield_distortion`. |
 | `csrc/lidar_kernel.cu` / `lidar_kernel_backward.cu` | LiDAR forward and backward `__global__` kernels + typed launch definitions. |
@@ -400,27 +477,27 @@ the wheel path is the deployment workflow.
 
 ## Testing Structure
 
-- `kernels/cameras/test_ops.py` is the per-pair correctness suite. It runs
+- `tests/sensors/kernels/cameras/test_ops.py` is the per-pair correctness suite. It runs
   every forward op on small problems, asserts the returned shapes and dtype,
   exercises the corresponding backward through `torch.autograd.grad`, and
   runs PyTorch `gradcheck` against a finite-difference reference where the
   op is differentiable.
-- `kernels/test_projective_sensor_ops.py` is the dispatch-table conformance
+- `tests/sensors/kernels/test_projective_sensor_ops.py` is the dispatch-table conformance
   test: it walks `_DISPATCH_TABLES` and asserts every table covers exactly
   `REGISTERED_CAMERA_PROJECTIONS × REGISTERED_DISTORTIONS`.
-- `kernels/test_lidar_dispatch.py` is the LiDAR dispatch-table conformance
+- `tests/sensors/kernels/test_lidar_dispatch.py` is the LiDAR dispatch-table conformance
   test: it walks the five LiDAR tables and asserts each one covers exactly
   `REGISTERED_LIDAR_PROJECTIONS`.
-- `kernels/lidars/test_ops.py` is the LiDAR correctness suite. It verifies the
+- `tests/sensors/kernels/lidars/test_ops.py` is the LiDAR correctness suite. It verifies the
   five ops against oracles derived at runtime from the reference sensor JSONs
   (`generic`, with per-row offsets, and `waymo`, without) — analytic cases,
   table-gather reference, round-trip recovery, and fp64 gradcheck.
-- `kernels/test_backend.py` covers `gsplat_sensors_cuda` import behaviour
-  (prebuilt vs JIT, `GSPLAT_SENSORS_FORCE_JIT`).
+- `tests/sensors/kernels/test_backend.py` covers `gsplat_sensors_cuda` import behaviour
+  (prebuilt vs JIT, `GSPLAT_SENSORS_FORCE_JIT`) and snapshots native camera-op
+  schemas and registered custom classes.
 - Public-API-shape tests (return-type dataclasses, `Pose | DynamicPose`
-  handling, the `CameraModel` surface) live one layer up in
-  `gsplat/sensors/functional/` and `gsplat/sensors/models/` and are not
-  duplicated here.
+  handling, the `CameraModel` surface) live in `tests/sensors/functional/` and
+  `tests/sensors/models/` and are not duplicated here.
 
 ## Design Constraints
 
@@ -434,8 +511,12 @@ the wheel path is the deployment workflow.
 - `NoExternalDistortion` is explicit at the public API; `None` is rejected
   with a `TypeError`.
 - Cross-family polymorphism is realised through Python `dict` dispatch
-  tables in `projective_sensor_ops.py`. No `std::variant`, no runtime enum
-  tag, no C++ trait class at the kernel boundary.
+  tables in `projective_sensor_ops.py`. There is no `std::variant` or runtime
+  projection/distortion enum at the kernel boundary. D1/D2/D3/D5/D6 use
+  compile-time `ProjectionPolicy`, `DistortionPolicy`, and
+  `DistortionScratchTraits` contracts for FTheta, fisheye, and pinhole. D4
+  remains projection-local; pinhole uses one distortion-templated forward body
+  and one matching backward body.
 - Each `(op, projection, distortion[, _backward])` triple has its own
   `m.def` binding, its own `torch.autograd.Function`, and its own dispatch
   entry. Adding a registered class without populating every table fails the

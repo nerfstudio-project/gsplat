@@ -15,23 +15,10 @@
  * limitations under the License.
  */
 
-// Device-side helpers for the bivariate windshield external distortion model.
-//
-// The model maps a camera-space ray to a distorted unit direction by:
-//   1. Normalising the ray and computing horizontal angle phi  = asin(nx)
-//      and vertical angle theta = asin(ny).
-//   2. Evaluating two bivariate polynomials — h_poly(phi, theta) → adj_phi
-//      and v_poly(phi, theta) → adj_theta — that capture the windshield glass
-//      refraction as a function of angle-of-incidence.
-//   3. Reconstructing a unit direction from (sin(adj_phi), sin(adj_theta), z).
-//
-// The coefficient tensor is always packed as:
-//   [h_poly(6), v_poly(15), h_poly_inv(6), v_poly_inv(15)]  (42 floats total).
-// Which half is the "distort" polynomial and which is the "undistort" polynomial
-// depends on `reference_polynomial` (see bivariate_coeff_base).
-//
-// This header is included by the bivariate-windshield camera kernel TU only;
-// it must not be pulled into host-side translation units.
+// Device-only helpers for bivariate windshield distortion. The coefficients are
+// packed as [h(6), v(15), h_inv(6), v_inv(15)]; `reference_polynomial` decides
+// which 21-float half is the active distort or undistort map.
+// Keep this header out of host-only translation units.
 
 #pragma once
 
@@ -40,63 +27,211 @@
 
 #include <cuda_runtime.h>
 
-// No-op tag: constructed from a NoExternalDistortion_KernelParameters (which
-// carries no data) so the templated kernel body compiles for the no-distortion
-// path without special-casing.
-struct NoExternalDistortion_Parameters
-{
-    NoExternalDistortion_Parameters(const NoExternalDistortion_KernelParameters &, int) { }
-};
-
 // ===========================================================================
-// Compile-time sizes for the bivariate windshield polynomials
+// Polynomial capacities encoded by the coefficient tensor ABI.
 // ===========================================================================
 
-// Number of triangular-basis coefficients for a degree-2 bivariate poly
-// (terms: 1, x, x², y, xy, y²).
+// Degree-2 triangular basis: 1, x, x^2, y, xy, y^2.
 constexpr int BIVARIATE_H_POLY_TERMS    = 6;
-// Number of triangular-basis coefficients for a degree-4 bivariate poly
-// (terms for degrees 0–4, i.e. (4+1)(4+2)/2 = 15).
+// Degree-4 triangular basis: (4 + 1) * (4 + 2) / 2.
 constexpr int BIVARIATE_V_POLY_TERMS    = 15;
-// Total differentiable params for one direction pair (h + v).
+// One active direction pair contributes h + v coefficients.
 constexpr int BIVARIATE_NUM_DIFF_PARAMS = BIVARIATE_H_POLY_TERMS + BIVARIATE_V_POLY_TERMS;
 
-// Per-thread register copy of the active polynomial pair (forward or inverse),
-// loaded from the flat distortion_coeffs pointer by load_bivariate_windshield_params.
+// Register copy avoids repeatedly indexing the flat global coefficient buffer.
 struct BivariateWindshieldParams
 {
-    float h_poly[BIVARIATE_H_POLY_TERMS]; // horizontal: degree ≤ 2
-    float v_poly[BIVARIATE_V_POLY_TERMS]; // vertical:   degree ≤ 4
+    float h_poly[BIVARIATE_H_POLY_TERMS]; // horizontal: degree <= 2
+    float v_poly[BIVARIATE_V_POLY_TERMS]; // vertical:   degree <= 4
     uint32_t h_poly_degree;
     uint32_t v_poly_degree;
 };
 
-// Accumulator for coefficient gradients produced by apply_bivariate_distortion_bwd.
-// Laid out identically to BivariateWindshieldParams so the bwd helper can write
-// directly into the active poly slice before the caller scatters via atomicAdd.
+// Match BivariateWindshieldParams so callers can scatter the active slice with
+// the same indexing used by forward.
 struct BivariateParamGrads
 {
     float h_poly[BIVARIATE_H_POLY_TERMS];
     float v_poly[BIVARIATE_V_POLY_TERMS];
 };
 
+__device__ __forceinline__ BivariateWindshieldParams
+    load_bivariate_windshield_params(BivariateWindshieldDistortion_KernelParameters distortion, bool is_undistort);
+
+__device__ __forceinline__ float3 apply_bivariate_distortion(float3 camera_ray, const BivariateWindshieldParams &p);
+
+__device__ __forceinline__ void apply_bivariate_distortion_bwd(
+    float3 camera_ray, const BivariateWindshieldParams &p, float3 d_out, float3 &d_camera_ray, BivariateParamGrads &d_p
+);
+
+__device__ __forceinline__ uint32_t bivariate_coeff_base(int reference_polynomial, bool is_undistort);
+
+template<int BlockThreads>
+__device__ __forceinline__ void reduce_bivariate_param_grads(
+    const BivariateParamGrads &local,
+    BivariateWindshieldDistortion_KernelParameters distortion,
+    bool is_undistort,
+    float *__restrict__ grad_distortion_coeffs
+)
+{
+    static_assert(BlockThreads > 0 && BlockThreads <= 1024, "BlockThreads must be between 1 and 1024");
+    static_assert(BlockThreads % 32 == 0, "BlockThreads must be a multiple of warp size");
+    constexpr int kNumWarps = BlockThreads / 32;
+    constexpr int kSlots    = BIVARIATE_NUM_DIFF_PARAMS;
+    __shared__ float warp_sums[kNumWarps][kSlots];
+
+    float values[kSlots];
+#pragma unroll
+    for(int i = 0; i < BIVARIATE_H_POLY_TERMS; ++i)
+    {
+        values[i] = local.h_poly[i];
+    }
+#pragma unroll
+    for(int i = 0; i < BIVARIATE_V_POLY_TERMS; ++i)
+    {
+        values[BIVARIATE_H_POLY_TERMS + i] = local.v_poly[i];
+    }
+
+    unsigned int mask = 0xFFFFFFFFu;
+    int lane          = threadIdx.x & 31;
+    int warp          = threadIdx.x >> 5;
+#pragma unroll
+    for(int i = 0; i < kSlots; ++i)
+    {
+        float value = values[i];
+        for(int offset = 16; offset > 0; offset >>= 1)
+        {
+            value += __shfl_xor_sync(mask, value, offset);
+        }
+        if(lane == 0)
+        {
+            warp_sums[warp][i] = value;
+        }
+    }
+    __syncthreads();
+
+    if(warp == 0 && lane < kSlots)
+    {
+        float total = 0.0f;
+#pragma unroll
+        for(int w = 0; w < kNumWarps; ++w)
+        {
+            total += warp_sums[w][lane];
+        }
+        if(grad_distortion_coeffs != nullptr)
+        {
+            uint32_t base = bivariate_coeff_base(distortion.reference_polynomial, is_undistort);
+            atomicAdd(&grad_distortion_coeffs[base + lane], total);
+        }
+    }
+}
+
+struct NoExternalDistortionPolicy
+{
+    using Tag              = NoExternalDistortionPolicyTag;
+    using KernelParameters = NoExternalDistortion_KernelParameters;
+    using ParamGrads       = BivariateParamGrads;
+
+    struct Params
+    {
+    };
+
+    static constexpr bool kHasDistortion = false;
+
+    static __device__ Params load(KernelParameters, bool)
+    {
+        return {};
+    }
+
+    static __device__ float3 apply_fwd(float3 ray, const Params &)
+    {
+        return ray;
+    }
+
+    static __device__ float3 apply_inverse(float3 ray, const Params &, float *, int64_t)
+    {
+        return ray;
+    }
+
+    static __device__ float3 inverse_bwd_input(float3 fallback_primal, const float *, int64_t)
+    {
+        return fallback_primal;
+    }
+
+    static __device__ void apply_bwd(float3, const Params &, float3 d_out, float3 &d_in, ParamGrads &)
+    {
+        d_in.x += d_out.x;
+        d_in.y += d_out.y;
+        d_in.z += d_out.z;
+    }
+
+    template<int BlockThreads>
+    static __device__ void reduce_param_grads(const ParamGrads &, KernelParameters, bool, float *)
+    {
+    }
+};
+
+struct BivariateWindshieldPolicy
+{
+    using Tag              = BivariateWindshieldPolicyTag;
+    using KernelParameters = BivariateWindshieldDistortion_KernelParameters;
+    using Params           = BivariateWindshieldParams;
+    using ParamGrads       = BivariateParamGrads;
+
+    static constexpr bool kHasDistortion = true;
+
+    static __device__ Params load(KernelParameters distortion, bool is_undistort)
+    {
+        return load_bivariate_windshield_params(distortion, is_undistort);
+    }
+
+    static __device__ float3 apply_fwd(float3 ray, const Params &params)
+    {
+        return apply_bivariate_distortion(ray, params);
+    }
+
+    static __device__ float3 apply_inverse(float3 ray, const Params &params, float *scratch, int64_t stash_offset)
+    {
+        float3 unnorm_out = apply_bivariate_distortion(ray, params);
+        // Finish normalization before the inverse stash extends these values.
+        float3 camera_ray = normalize3(unnorm_out);
+        if(scratch != nullptr && stash_offset >= 0)
+        {
+            scratch[stash_offset + 0] = unnorm_out.x;
+            scratch[stash_offset + 1] = unnorm_out.y;
+            scratch[stash_offset + 2] = unnorm_out.z;
+        }
+        return camera_ray;
+    }
+
+    static __device__ float3 inverse_bwd_input(float3, const float *scratch, int64_t stash_offset)
+    {
+        return make_float3(scratch[stash_offset + 0], scratch[stash_offset + 1], scratch[stash_offset + 2]);
+    }
+
+    static __device__ void apply_bwd(float3 ray, const Params &params, float3 d_out, float3 &d_in, ParamGrads &d_params)
+    {
+        apply_bivariate_distortion_bwd(ray, params, d_out, d_in, d_params);
+    }
+
+    template<int BlockThreads>
+    static __device__ void reduce_param_grads(
+        const ParamGrads &local,
+        KernelParameters distortion,
+        bool is_undistort,
+        float *__restrict__ grad_distortion_coeffs
+    )
+    {
+        reduce_bivariate_param_grads<BlockThreads>(local, distortion, is_undistort, grad_distortion_coeffs);
+    }
+};
+
 // ===========================================================================
 // Coefficient-slice selection
 // ===========================================================================
 
-// Return the float-index offset into distortion_coeffs for the active
-// polynomial pair given the caller's direction.
-//
-// The flat buffer has layout:
-//   [fwd_h(6), fwd_v(15), inv_h(6), inv_v(15)]
-//
-// reference_polynomial == ReferencePolynomial.FORWARD (0):
-//   distort   → offset 0                     (fwd pair)
-//   undistort → offset BIVARIATE_NUM_DIFF_PARAMS (inv pair)
-//
-// reference_polynomial == ReferencePolynomial.BACKWARD (1):
-//   distort   → offset BIVARIATE_NUM_DIFF_PARAMS (inv pair treated as fwd)
-//   undistort → offset 0                          (fwd pair treated as inv)
+// Selects the 21-float half that acts as the caller's current map. A BACKWARD
+// reference polynomial swaps the semantic roles of the stored pairs.
 __device__ __forceinline__ uint32_t bivariate_coeff_base(int reference_polynomial, bool is_undistort)
 {
     if(is_undistort)
@@ -106,10 +241,8 @@ __device__ __forceinline__ uint32_t bivariate_coeff_base(int reference_polynomia
     return reference_polynomial == 0 ? 0u : BIVARIATE_NUM_DIFF_PARAMS;
 }
 
-// Unpack the active polynomial pair from the flat distortion_coeffs pointer
-// into a BivariateWindshieldParams register struct.
-// is_undistort — true when the caller is performing the inverse (undistort)
-//   pass; selects the complementary coefficient slice via bivariate_coeff_base.
+// Load the active map once per thread; callers pass is_undistort so the same
+// policy can serve project and backproject paths.
 __device__ __forceinline__ BivariateWindshieldParams
     load_bivariate_windshield_params(BivariateWindshieldDistortion_KernelParameters distortion, bool is_undistort)
 {
@@ -132,21 +265,9 @@ __device__ __forceinline__ BivariateWindshieldParams
 // Bivariate polynomial evaluation (forward)
 // ===========================================================================
 
-// Evaluate the bivariate polynomial P(x, y) = sum_{i+j <= order} c_{ij} x^i y^j
-// using Horner's scheme along the x-axis rows of the triangular expansion,
-// specialised for order in {0, 1, 2, 3, ≥4}.
-// c    — coefficient array in y-row-major triangular order, e.g. for order = 2:
-//        y^0 row: c[0]=1, c[1]=x, c[2]=x²
-//        y^1 row: c[3]=y, c[4]=xy
-//        y^2 row: c[5]=y²
-// order — polynomial degree; h_poly uses h_poly_degree, v_poly uses v_poly_degree.
-// The fallback branch (order ≥ 4) hard-codes degree-4 (15 terms = BIVARIATE_V_POLY_TERMS).
-//
-// Caller contract: there is no runtime guard against order overrunning the
-// caller-supplied buffer. h_poly buffers hold BIVARIATE_H_POLY_TERMS = 6
-// coefficients and MUST be passed with order ≤ 2; v_poly buffers hold
-// BIVARIATE_V_POLY_TERMS = 15 coefficients and MUST be passed with order ≤ 4.
-// Passing h_poly with order > 2 reads out-of-bounds memory.
+// Horner evaluation over y-degree rows of the triangular basis:
+// [1, x, x^2, ..., y, xy, ..., y^2, ...]. There is no runtime bounds guard:
+// h_poly requires order <= 2 and v_poly requires order <= 4.
 __device__ __forceinline__ float eval_poly_2d(float x, float y, const float *__restrict__ c, uint32_t order)
 {
     if(order == 0u)
@@ -182,9 +303,7 @@ __device__ __forceinline__ float eval_poly_2d(float x, float y, const float *__r
     return y_coeff0 + y * (y_coeff1 + y * (y_coeff2 + y * (y_coeff3 + y * y_coeff4)));
 }
 
-// Partial derivative dP/dx of the bivariate polynomial evaluated at (x, y).
-// Specialised for the same order branches as eval_poly_2d.
-// Used by eval_poly_2d_bwd to propagate gradients to x (phi or theta).
+// Partial derivative dP/dx; branches mirror eval_poly_2d's basis ordering.
 __device__ __forceinline__ float eval_poly_2d_dfdx(float x, float y, const float *__restrict__ c, uint32_t order)
 {
     if(order == 0u)
@@ -215,9 +334,7 @@ __device__ __forceinline__ float eval_poly_2d_dfdx(float x, float y, const float
     return dc0 + y * (dc1 + y * (dc2 + y * dc3));
 }
 
-// Partial derivative dP/dy of the bivariate polynomial evaluated at (x, y).
-// Specialised for the same order branches as eval_poly_2d.
-// Used by eval_poly_2d_bwd to propagate gradients to y (the other angle).
+// Partial derivative dP/dy; branches mirror eval_poly_2d's basis ordering.
 __device__ __forceinline__ float eval_poly_2d_dfdy(float x, float y, const float *__restrict__ c, uint32_t order)
 {
     if(order == 0u)
@@ -249,16 +366,7 @@ __device__ __forceinline__ float eval_poly_2d_dfdy(float x, float y, const float
 // Bivariate polynomial backward pass
 // ===========================================================================
 
-// Accumulate gradients through eval_poly_2d into d_x, d_y, and d_c[].
-//
-// d_result — upstream gradient of the scalar output P(x, y).
-// d_x, d_y — accumulated (+=) gradients w.r.t. x and y.
-// d_c      — accumulated (+=) gradients w.r.t. each coefficient c[i]; array
-//            must be at least (order+1)(order+2)/2 elements, clamped by MaxTerms.
-//
-// MaxTerms is either BIVARIATE_H_POLY_TERMS (6) or BIVARIATE_V_POLY_TERMS (15)
-// depending on which polynomial is being differentiated.  The template param
-// enforces a compile-time upper bound so the accumulation array fits in registers.
+// MaxTerms bounds the register accumulator for the active h or v polynomial.
 template<uint32_t MaxTerms>
 __device__ __forceinline__ void eval_poly_2d_bwd(
     float x,
@@ -339,17 +447,8 @@ __device__ __forceinline__ void eval_poly_2d_bwd(
 // Forward and backward distortion application
 // ===========================================================================
 
-// Apply the bivariate windshield distortion to a camera-space ray.
-//
-// camera_ray — unnormalised direction in camera space (x right, y down, z forward).
-// p          — active polynomial pair (loaded by load_bivariate_windshield_params).
-//
-// Returns a unit direction in the distorted camera space:
-//   phi      = asin(nx),  theta    = asin(ny)          (incident angles)
-//   adj_phi  = h_poly(phi, theta),  adj_theta = v_poly(phi, theta)
-//   out.x    = sin(adj_phi),        out.y     = sin(adj_theta)
-//   out.z    = sqrt(clamp(1 - out.x² - out.y², 0, 1)) * sign(nz)
-// The z sign from the normalised input ray is preserved to handle rear-facing rays.
+// The polynomial maps incident angles to a distorted unit direction. Preserve
+// the input z sign so rear-facing rays remain rear-facing after reconstruction.
 __device__ __forceinline__ float3 apply_bivariate_distortion(float3 camera_ray, const BivariateWindshieldParams &p)
 {
     float inv_len   = rsqrtf(camera_ray.x * camera_ray.x + camera_ray.y * camera_ray.y + camera_ray.z * camera_ray.z);
@@ -367,29 +466,14 @@ __device__ __forceinline__ float3 apply_bivariate_distortion(float3 camera_ray, 
     return make_float3(x, y, z);
 }
 
-// Backward pass of apply_bivariate_distortion.
-//
-// Inputs (must match the forward call exactly):
-//   camera_ray — original unnormalised input ray.
-//   p          — same BivariateWindshieldParams used in the forward pass.
-//   d_out      — upstream gradient of the distorted unit direction (float3).
-//
-// Outputs (accumulated with +=):
-//   d_camera_ray — gradient w.r.t. camera_ray; uses normalize3_bwd from math.cuh.
-//   d_p          — gradient w.r.t. h_poly[] and v_poly[] coefficients; caller
-//                  scatters these into grad_distortion_coeffs via atomicAdd.
-//
-// Degenerate rays (len_sq == 0 or non-finite) are silently skipped so a single
-// bad pixel cannot corrupt the global coefficient gradient accumulator.
-// The z output gradient is gated on `clamp_open` to handle the boundary of the
-// unit-sphere constraint gracefully.
+// Gradients accumulate locally first, then callers scatter with atomicAdd.
+// Degenerate rays are skipped so one bad pixel cannot poison global coeff grads.
 __device__ __forceinline__ void apply_bivariate_distortion_bwd(
     float3 camera_ray, const BivariateWindshieldParams &p, float3 d_out, float3 &d_camera_ray, BivariateParamGrads &d_p
 )
 {
     float len_sq = camera_ray.x * camera_ray.x + camera_ray.y * camera_ray.y + camera_ray.z * camera_ray.z;
-    // Degenerate / non-finite ray: zero-out the local coeff grads and skip,
-    // so a single bad row cannot poison atomicAdd into grad_distortion_coeffs.
+    // NaN len_sq is rejected here too because comparisons with NaN are false.
     if(!(len_sq > 0.0f))
     {
         return;

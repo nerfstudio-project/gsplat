@@ -15,28 +15,8 @@
  * limitations under the License.
  */
 
-// camera_torch.cpp — C++ wrapper layer between TORCH_LIBRARY (ext.cpp) and
-// the CUDA _launch helpers (camera_params.h / camera_kernel.cu).
-//
-// Responsibilities:
-//   1. Input validation — tensor dtype, contiguity, device, shape via TORCH_CHECK.
-//   2. Output allocation — image_points, valid_flags, timestamps, pose tensors,
-//      and the per-kernel scratch buffer that the autograd graph carries forward.
-//   3. Dispatch — calls the appropriate _forward_launch or _backward_launch
-//      function from camera_params.h.
-//
-// File layout:
-//   [anonymous namespace]  — shared validation helpers and struct helpers
-//   OpenCVPinholeProjection — constructor + to_kernel_params
-//   check_projection / check_bivariate_windshield helpers
-//   generate_image_points
-//   camera_rays_to_image_points family (forward + backward)
-//   image_points_to_camera_rays family (forward + backward)
-//   project_world_points_mean_pose family (forward + backward)
-//   project_world_points_shutter_pose family (forward + backward)
-//   image_points_to_world_rays_static_pose family (forward + backward)
-//   image_points_to_world_rays_shutter_pose family (forward + backward)
-//   [each family appears twice: once for no_external, once for bivariate_windshield]
+// Host wrappers validate tensors, allocate autograd scratch, and dispatch CUDA
+// launch helpers while keeping TORCH_LIBRARY bindings thin.
 
 #include "camera_torch.h"
 #include "shutter_type.h"
@@ -141,6 +121,24 @@ namespace
     at::Tensor scratch_shape(int64_t count, int64_t stride, const at::Tensor &reference)
     {
         return at::empty({count, stride}, reference.options());
+    }
+
+    template<DistortionSensor Sensor, DistortionOpFamily Op, typename PolicyTag>
+    at::Tensor scratch_shape_for_forward(int64_t count, const at::Tensor &reference)
+    {
+        constexpr int stride
+            = DistortionScratchTraits<Sensor, Op, DistortionDirection::Forward, PolicyTag>::kScratchStride;
+        return scratch_shape(count, stride, reference);
+    }
+
+    template<DistortionSensor Sensor, DistortionOpFamily Op, typename PolicyTag>
+    void check_backward_scratch(const at::Tensor &scratch, int64_t count, const char *op_name)
+    {
+        constexpr int scratch_elements_per_item
+            = DistortionScratchTraits<Sensor, Op, DistortionDirection::Backward, PolicyTag>::kScratchStride;
+        TORCH_CHECK(
+            scratch.numel() >= count * scratch_elements_per_item, "scratch too small for ", op_name, " backward"
+        );
     }
 
     bool needs_projection_grad(const c10::intrusive_ptr<OpenCVPinholeProjection> &projection)
@@ -346,7 +344,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_openc
     auto image_points       = at::empty({rays.size(0), 2}, rays.options());
     auto valid_flags        = at::empty({rays.size(0)}, rays.options().dtype(at::kBool));
     const bool save_scratch = rays.requires_grad() || needs_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(rays.size(0), 6, rays) : empty_scratch(rays.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::CameraRaysToImagePoints,
+                                                 NoExternalDistortionPolicyTag
+                                             >(rays.size(0), rays)
+                                           : empty_scratch(rays.options());
     camera_rays_to_image_points_forward_launch(
         rays.size(0),
         projection->to_kernel_params(),
@@ -379,7 +382,12 @@ std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_pinhole_no
 
     auto camera_rays        = at::empty({pts.size(0), 3}, pts.options());
     const bool save_scratch = pts.requires_grad() || needs_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 5, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::ImagePointsToCameraRays,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_camera_rays_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -439,7 +447,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                                 || start_rotation.requires_grad()
                                 || end_rotation.requires_grad()
                                 || needs_projection_grad(projection);
-    auto scratch                 = save_scratch ? scratch_shape(pts.size(0), 9, pts) : empty_scratch(pts.options());
+    auto scratch                 = save_scratch ? scratch_shape_for_forward<
+                                                      DistortionSensor::OpenCVPinhole,
+                                                      DistortionOpFamily::ProjectWorldPointsMeanPose,
+                                                      NoExternalDistortionPolicyTag
+                                                  >(pts.size(0), pts)
+                                                : empty_scratch(pts.options());
     const auto mean_timestamp_us = static_cast<int64_t>(
         static_cast<double>(start_timestamp_us) + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us)
     );
@@ -521,7 +534,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                            || start_rotation.requires_grad()
                            || end_rotation.requires_grad()
                            || needs_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 10, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::ProjectWorldPointsShutterPose,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     project_world_points_shutter_pose_forward_launch(
         pts.size(0),
         kernel_params_with_resolution(projection, width, height),
@@ -586,7 +604,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
     auto pose_r     = at::empty({pts.size(0), 4}, pts.options());
     const bool save_scratch
         = pts.requires_grad() || trans.requires_grad() || rots.requires_grad() || needs_projection_grad(projection);
-    auto scratch = save_scratch ? scratch_shape(pts.size(0), 5, pts) : empty_scratch(pts.options());
+    auto scratch = save_scratch ? scratch_shape_for_forward<
+                                      DistortionSensor::OpenCVPinhole,
+                                      DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+                                      NoExternalDistortionPolicyTag
+                                  >(pts.size(0), pts)
+                                : empty_scratch(pts.options());
     image_points_to_world_rays_static_pose_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -656,7 +679,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || start_rotation.requires_grad()
                            || end_rotation.requires_grad()
                            || needs_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 9, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_shutter_pose_forward_launch(
         pts.size(0),
         kernel_params_with_resolution(projection, width, height),
@@ -703,9 +731,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rays, "camera_rays");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch_contig, "scratch");
-    TORCH_CHECK(
-        scratch_contig.numel() >= rays.size(0) * 6, "scratch too small for camera_rays_to_image_points backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::CameraRaysToImagePoints,
+        NoExternalDistortionPolicyTag
+    >(scratch_contig, rays.size(0), "camera_rays_to_image_points_opencv_pinhole_no_external");
     check_projection_for_device(projection, rays.device());
     auto guard = c10::cuda::CUDAGuard(rays.device());
 
@@ -767,9 +797,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(grad, "grad_camera_rays");
     check_cuda_float_contiguous(scratch_contig, "scratch");
-    TORCH_CHECK(
-        scratch_contig.numel() >= pts.size(0) * 5, "scratch too small for image_points_to_camera_rays backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ImagePointsToCameraRays,
+        NoExternalDistortionPolicyTag
+    >(scratch_contig, pts.size(0), "image_points_to_camera_rays_opencv_pinhole_no_external");
     check_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -852,9 +884,11 @@ std::tuple<
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch_contig, "scratch");
-    TORCH_CHECK(
-        scratch_contig.numel() >= pts.size(0) * 9, "scratch too small for project_world_points_mean_pose backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ProjectWorldPointsMeanPose,
+        NoExternalDistortionPolicyTag
+    >(scratch_contig, pts.size(0), "project_world_points_mean_pose_opencv_pinhole_no_external");
     check_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -961,9 +995,11 @@ std::tuple<
     TORCH_CHECK(valid.is_contiguous(), "valid_flags must be contiguous");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch_contig, "scratch");
-    TORCH_CHECK(
-        scratch_contig.numel() >= pts.size(0) * 10, "scratch too small for project_world_points_shutter_pose backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ProjectWorldPointsShutterPose,
+        NoExternalDistortionPolicyTag
+    >(scratch_contig, pts.size(0), "project_world_points_shutter_pose_opencv_pinhole_no_external");
     check_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -1051,10 +1087,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rotation, "rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch_contig, "scratch");
-    TORCH_CHECK(
-        scratch_contig.numel() >= pts.size(0) * 5,
-        "scratch too small for image_points_to_world_rays_static_pose backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+        NoExternalDistortionPolicyTag
+    >(scratch_contig, pts.size(0), "image_points_to_world_rays_static_pose_opencv_pinhole_no_external");
     check_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -1146,10 +1183,11 @@ std::tuple<
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch_contig, "scratch");
-    TORCH_CHECK(
-        scratch_contig.numel() >= pts.size(0) * 9,
-        "scratch too small for image_points_to_world_rays_shutter_pose backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+        NoExternalDistortionPolicyTag
+    >(scratch_contig, pts.size(0), "image_points_to_world_rays_shutter_pose_opencv_pinhole_no_external");
     check_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -1219,7 +1257,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_openc
     const bool save_scratch = rays.requires_grad()
                            || needs_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(rays.size(0), 10, rays) : empty_scratch(rays.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::CameraRaysToImagePoints,
+                                                 BivariateWindshieldPolicyTag
+                                             >(rays.size(0), rays)
+                                           : empty_scratch(rays.options());
     camera_rays_to_image_points_opencv_pinhole_bivariate_windshield_forward_launch(
         rays.size(0),
         projection->to_kernel_params(),
@@ -1250,7 +1293,12 @@ std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_pinhole_bi
     const bool save_scratch = pts.requires_grad()
                            || needs_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 9, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::ImagePointsToCameraRays,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_camera_rays_opencv_pinhole_bivariate_windshield_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -1307,7 +1355,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                                 || end_rotation.requires_grad()
                                 || needs_projection_grad(projection)
                                 || needs_external_distortion_grad(external_distortion);
-    auto scratch                 = save_scratch ? scratch_shape(pts.size(0), 9, pts) : empty_scratch(pts.options());
+    auto scratch                 = save_scratch ? scratch_shape_for_forward<
+                                                      DistortionSensor::OpenCVPinhole,
+                                                      DistortionOpFamily::ProjectWorldPointsMeanPose,
+                                                      BivariateWindshieldPolicyTag
+                                                  >(pts.size(0), pts)
+                                                : empty_scratch(pts.options());
     const auto mean_timestamp_us = static_cast<int64_t>(
         static_cast<double>(start_timestamp_us) + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us)
     );
@@ -1386,7 +1439,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                            || end_rotation.requires_grad()
                            || needs_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 10, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::ProjectWorldPointsShutterPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield_forward_launch(
         pts.size(0),
         kernel_params_with_resolution(projection, width, height),
@@ -1450,7 +1508,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || rots.requires_grad()
                            || needs_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 9, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -1517,7 +1580,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || end_rotation.requires_grad()
                            || needs_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 12, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVPinhole,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield_forward_launch(
         pts.size(0),
         kernel_params_with_resolution(projection, width, height),
@@ -1564,9 +1632,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rays, "camera_rays");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= rays.size(0) * 10, "scratch too small for bivariate camera_rays_to_image_points backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::CameraRaysToImagePoints,
+        BivariateWindshieldPolicyTag
+    >(scratch, rays.size(0), "camera_rays_to_image_points_opencv_pinhole_bivariate_windshield");
     check_projection_for_device(projection, rays.device());
     check_bivariate_windshield_for_device(external_distortion, rays.device());
     auto guard = c10::cuda::CUDAGuard(rays.device());
@@ -1632,9 +1702,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(grad, "grad_camera_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 9, "scratch too small for bivariate image_points_to_camera_rays backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ImagePointsToCameraRays,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_camera_rays_opencv_pinhole_bivariate_windshield");
     check_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -1722,9 +1794,11 @@ std::tuple<
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 9, "scratch too small for bivariate project_world_points_mean_pose backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ProjectWorldPointsMeanPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "project_world_points_mean_pose_opencv_pinhole_bivariate_windshield");
     check_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -1836,10 +1910,11 @@ std::tuple<
     TORCH_CHECK(valid.is_contiguous(), "valid_flags must be contiguous");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 10,
-        "scratch too small for bivariate project_world_points_shutter_pose backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ProjectWorldPointsShutterPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield");
     check_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -1931,10 +2006,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rotation, "rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 9,
-        "scratch too small for bivariate image_points_to_world_rays_static_pose backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield");
     check_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -2031,10 +2107,11 @@ std::tuple<
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 12,
-        "scratch too small for bivariate image_points_to_world_rays_shutter_pose backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVPinhole,
+        DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield");
     check_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -2092,8 +2169,7 @@ std::tuple<
 }
 
 // =============================================================================
-// FThetaProjection — class definition, validators, and forward host wrappers
-//   each of the 6 op families is bound twice: no_external + bivariate_windshield
+// FThetaProjection host surface and validators.
 // =============================================================================
 
 FThetaProjection::FThetaProjection(
@@ -2125,10 +2201,8 @@ FThetaProjection::FThetaProjection(
 
 at::Tensor FThetaProjection::compute_ainv() const
 {
-    // Closed-form 2x2 inverse of row-major A = [[a, b], [c, d]]:
-    // Ainv = 1/det * [[d, -b], [-c, a]] with det = a*d - b*c. Computing this
-    // on the same device as A keeps the result usable as a kernel-side
-    // pointer without an extra host/device transfer.
+    // Compute on-device so kernel params can hold the result without a
+    // host/device round trip.
     TORCH_CHECK(A.numel() == 4, "FThetaProjection: A must be a flat 4-element tensor");
     auto flat = A.reshape({4});
     auto a    = flat.select(0, 0);
@@ -2179,41 +2253,28 @@ void check_ftheta_projection(const c10::intrusive_ptr<FThetaProjection> &project
         projection->bw_poly_degree >= 0 && projection->bw_poly_degree < kFThetaMaxPolynomialTerms,
         "bw_poly_degree must be in [0, kFThetaMaxPolynomialTerms)"
     );
-    // kFThetaMaxNewtonIterations lives next to kMaxRollingShutterIterations in
-    // camera_params.h so both iterative-solve caps sit together.
+    // Keep iterative caps centralized in camera_params.h.
     TORCH_CHECK(
         projection->newton_iterations >= 0 && projection->newton_iterations <= kFThetaMaxNewtonIterations,
         "newton_iterations must be in [0, ",
         kFThetaMaxNewtonIterations,
         "]"
     );
-    // max_angle in [0, pi]: theta = acos(...) is bounded by pi, so anything
-    // larger has no geometric meaning. NaN and -inf are rejected by the
-    // lower bound (NaN >= 0.0 is false in IEEE-754); +inf is rejected by the
-    // upper bound. The pair therefore implies finiteness without an extra
-    // isfinite check.
+    // theta is bounded by pi; the range check also rejects NaN and infinities.
     TORCH_CHECK(
         projection->max_angle >= 0.0 && projection->max_angle <= std::numbers::pi_v<double>,
         "max_angle must be in [0, pi]"
     );
-    // Strict positivity AND finiteness: the device path divides by
-    // xy_norm / rdist when xy_norm > min_2d_norm, so allowing min_2d_norm = 0
-    // means an exactly on-axis ray slips past the clamp into a 1/0. The
-    // separate isfinite is required because `+inf > 0.0` is true, so without
-    // it a serialized +inf would satisfy the positivity check while making
-    // `xy_norm <= min_2d_norm` hold for every ray, short-circuiting all
-    // projections to principal_point on device.
+    // Zero can expose an on-axis 1/0 on device; +inf would clamp every ray to
+    // the principal point, so positivity and finiteness are both required.
     TORCH_CHECK(projection->min_2d_norm > 0.0, "min_2d_norm must be strictly positive");
     TORCH_CHECK(std::isfinite(projection->min_2d_norm), "min_2d_norm must be finite");
-    // The polynomial constant-term invariant (fw_poly[0] == 0,
-    // bw_poly[0] == 0) and the requirement that A be non-singular require
-    // reading tensor entries, which would force a CUDA->host sync. Callers that
-    // need these checks can opt in through
-    // gsplat_sensors.kernels.cameras.validate_camera_projection.
+    // Entry-value checks would force a CUDA->host sync; callers can opt into
+    // them through gsplat_sensors.kernels.cameras.validate_camera_projection.
 }
 
 // =============================================================================
-// OpenCVFisheyeProjection — class definition, validators, and transform helper
+// OpenCVFisheyeProjection host surface and validators.
 // =============================================================================
 
 OpenCVFisheyeProjection::OpenCVFisheyeProjection(
@@ -2267,10 +2328,8 @@ c10::intrusive_ptr<OpenCVFisheyeProjection> OpenCVFisheyeProjection::transform(
 
     auto new_focal_length = focal_length * scale_t;
 
-    // approx_backward_factor is the Newton initial-guess factor derived from the
-    // intrinsics: ab = max_angle / max(width/(2*fx), height/(2*fy)). It is not an
-    // independent intrinsic, so recompute it from the new focal rather than
-    // scaling the stored value.
+    // approx_backward_factor is derived from intrinsics, not independent; after
+    // scaling focal length, recompute it instead of scaling the cached value.
     int64_t new_w = std::get<0>(new_resolution);
     int64_t new_h = std::get<1>(new_resolution);
     auto res_t    = at::tensor({static_cast<double>(new_w), static_cast<double>(new_h)}, at::kDouble).to(opts);
@@ -2298,10 +2357,8 @@ void check_opencv_fisheye_projection(const c10::intrusive_ptr<OpenCVFisheyeProje
     check_component_shape(projection->focal_length, {2}, "focal_length");
     check_component_shape(projection->forward_poly, {kFisheyeForwardPolyTerms}, "forward_poly");
     check_component_shape(projection->approx_backward_factor, {1}, "approx_backward_factor");
-    // The loader admits fp32-only intrinsics; reject any other dtype up front so
-    // a stray fp64 surface never reaches the kernel's const_data_ptr<float>().
-    // (The FTheta/pinhole validators instead let const_data_ptr<float>() throw;
-    // fisheye validates explicitly to surface the error at construction.)
+    // Reject non-fp32 intrinsics before a stray fp64 tensor reaches
+    // const_data_ptr<float>() in the kernel parameter path.
     TORCH_CHECK(projection->principal_point.scalar_type() == at::kFloat, "principal_point must be float32");
     TORCH_CHECK(projection->focal_length.scalar_type() == at::kFloat, "focal_length must be float32");
     TORCH_CHECK(projection->forward_poly.scalar_type() == at::kFloat, "forward_poly must be float32");
@@ -2315,21 +2372,16 @@ void check_opencv_fisheye_projection(const c10::intrusive_ptr<OpenCVFisheyeProje
         kFisheyeMaxNewtonIterations,
         "]"
     );
-    // max_angle in [0, pi]: theta = atan2(...) is bounded by pi, so anything
-    // larger has no geometric meaning. NaN and -inf are rejected by the lower
-    // bound (NaN >= 0.0 is false in IEEE-754); +inf is rejected by the upper
-    // bound, so the pair implies finiteness without an extra isfinite check.
+    // theta is bounded by pi; the range check also rejects NaN and infinities.
     TORCH_CHECK(
         projection->max_angle >= 0.0 && projection->max_angle <= std::numbers::pi_v<double>,
         "max_angle must be in [0, pi]"
     );
-    // Strict positivity AND finiteness: the device path compares
-    // delta < min_2d_norm, so a serialized +inf would short-circuit every ray.
+    // +inf would short-circuit every ray on device, so require finiteness too.
     TORCH_CHECK(projection->min_2d_norm > 0.0, "min_2d_norm must be strictly positive");
     TORCH_CHECK(std::isfinite(projection->min_2d_norm), "min_2d_norm must be finite");
-    // A nonzero-focal invariant would require reading tensor entries (a
-    // CUDA->host sync); the loader does not require it, so it is not enforced
-    // here.
+    // Avoid CUDA->host sync here; value-level focal checks belong in opt-in
+    // projection validation.
 }
 
 namespace
@@ -2385,9 +2437,7 @@ namespace
         bool need_Ainv_grad
     )
     {
-        // The kernel backward writes a separate grad_Ainv buffer; the Python
-        // autograd Function consolidates that contribution into grad_A via the
-        // inverse-matrix VJP. The buffer mirrors A's shape/options.
+        // Python folds grad_Ainv into grad_A with the inverse-matrix VJP.
         return {
             maybe_intrinsic_grad(need_principal_point_grad, {2}, projection->principal_point),
             maybe_intrinsic_grad(need_fw_poly_grad, {kFThetaMaxPolynomialTerms}, projection->fw_poly),
@@ -2398,9 +2448,8 @@ namespace
     }
 
     // ---------------------------------------------------------------------------
-    // OpenCV-fisheye host-wrapper helpers (mirror the ftheta helpers above). The
-    // differentiable surface is principal_point, focal_length and forward_poly;
-    // approx_backward_factor receives no gradient so it has no slot.
+    // OpenCV-fisheye wrapper helpers. approx_backward_factor is derived, so it has
+    // no gradient slot.
     // ---------------------------------------------------------------------------
 
     void check_opencv_fisheye_projection_for_device(
@@ -2475,7 +2524,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_fthet
     auto image_points       = at::empty({rays.size(0), 2}, rays.options());
     auto valid_flags        = at::empty({rays.size(0)}, rays.options().dtype(at::kBool));
     const bool save_scratch = rays.requires_grad() || needs_ftheta_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(rays.size(0), 8, rays) : empty_scratch(rays.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::CameraRaysToImagePoints,
+                                                 NoExternalDistortionPolicyTag
+                                             >(rays.size(0), rays)
+                                           : empty_scratch(rays.options());
     camera_rays_to_image_points_ftheta_no_external_forward_launch(
         rays.size(0),
         projection->to_kernel_params(),
@@ -2503,7 +2557,12 @@ std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_ftheta_no_externa
 
     auto camera_rays        = at::empty({pts.size(0), 3}, pts.options());
     const bool save_scratch = pts.requires_grad() || needs_ftheta_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 8, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::ImagePointsToCameraRays,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_camera_rays_ftheta_no_external_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -2533,7 +2592,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_fthet
     const bool save_scratch = rays.requires_grad()
                            || needs_ftheta_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(rays.size(0), 8, rays) : empty_scratch(rays.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::CameraRaysToImagePoints,
+                                                 BivariateWindshieldPolicyTag
+                                             >(rays.size(0), rays)
+                                           : empty_scratch(rays.options());
     camera_rays_to_image_points_ftheta_bivariate_windshield_forward_launch(
         rays.size(0),
         projection->to_kernel_params(),
@@ -2564,7 +2628,12 @@ std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_ftheta_bivariate_
     const bool save_scratch = pts.requires_grad()
                            || needs_ftheta_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 12, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::ImagePointsToCameraRays,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_camera_rays_ftheta_bivariate_windshield_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -2620,7 +2689,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                                 || start_rotation.requires_grad()
                                 || end_rotation.requires_grad()
                                 || needs_ftheta_projection_grad(projection);
-    auto scratch                 = save_scratch ? scratch_shape(pts.size(0), 10, pts) : empty_scratch(pts.options());
+    auto scratch                 = save_scratch ? scratch_shape_for_forward<
+                                                      DistortionSensor::FTheta,
+                                                      DistortionOpFamily::ProjectWorldPointsMeanPose,
+                                                      NoExternalDistortionPolicyTag
+                                                  >(pts.size(0), pts)
+                                                : empty_scratch(pts.options());
     const auto mean_timestamp_us = static_cast<int64_t>(
         static_cast<double>(start_timestamp_us) + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us)
     );
@@ -2688,7 +2762,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                                 || end_rotation.requires_grad()
                                 || needs_ftheta_projection_grad(projection)
                                 || needs_external_distortion_grad(external_distortion);
-    auto scratch                 = save_scratch ? scratch_shape(pts.size(0), 10, pts) : empty_scratch(pts.options());
+    auto scratch                 = save_scratch ? scratch_shape_for_forward<
+                                                      DistortionSensor::FTheta,
+                                                      DistortionOpFamily::ProjectWorldPointsMeanPose,
+                                                      BivariateWindshieldPolicyTag
+                                                  >(pts.size(0), pts)
+                                                : empty_scratch(pts.options());
     const auto mean_timestamp_us = static_cast<int64_t>(
         static_cast<double>(start_timestamp_us) + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us)
     );
@@ -2748,7 +2827,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || trans.requires_grad()
                            || rots.requires_grad()
                            || needs_ftheta_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 8, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_static_pose_ftheta_no_external_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -2802,7 +2886,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || rots.requires_grad()
                            || needs_ftheta_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 12, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -2874,7 +2963,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                            || start_rotation.requires_grad()
                            || end_rotation.requires_grad()
                            || needs_ftheta_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 11, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::ProjectWorldPointsShutterPose,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     project_world_points_shutter_pose_ftheta_no_external_forward_launch(
         pts.size(0),
         ftheta_kernel_params_with_resolution(projection, width, height),
@@ -2955,7 +3049,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                            || end_rotation.requires_grad()
                            || needs_ftheta_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 11, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::ProjectWorldPointsShutterPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     project_world_points_shutter_pose_ftheta_bivariate_windshield_forward_launch(
         pts.size(0),
         ftheta_kernel_params_with_resolution(projection, width, height),
@@ -3030,7 +3129,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || start_rotation.requires_grad()
                            || end_rotation.requires_grad()
                            || needs_ftheta_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 9, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_shutter_pose_ftheta_no_external_forward_launch(
         pts.size(0),
         ftheta_kernel_params_with_resolution(projection, width, height),
@@ -3100,7 +3204,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || end_rotation.requires_grad()
                            || needs_ftheta_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 12, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::FTheta,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_forward_launch(
         pts.size(0),
         ftheta_kernel_params_with_resolution(projection, width, height),
@@ -3157,10 +3266,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rays, "camera_rays");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= rays.size(0) * 8,
-        "scratch too small for camera_rays_to_image_points_ftheta_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::CameraRaysToImagePoints,
+        NoExternalDistortionPolicyTag
+    >(scratch, rays.size(0), "camera_rays_to_image_points_ftheta_no_external");
     check_ftheta_projection_for_device(projection, rays.device());
     auto guard = c10::cuda::CUDAGuard(rays.device());
 
@@ -3209,10 +3319,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(grad, "grad_camera_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 8,
-        "scratch too small for image_points_to_camera_rays_ftheta_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ImagePointsToCameraRays,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "image_points_to_camera_rays_ftheta_no_external");
     check_ftheta_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -3261,10 +3372,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rays, "camera_rays");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= rays.size(0) * 8,
-        "scratch too small for camera_rays_to_image_points_ftheta_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::CameraRaysToImagePoints,
+        BivariateWindshieldPolicyTag
+    >(scratch, rays.size(0), "camera_rays_to_image_points_ftheta_bivariate_windshield");
     check_ftheta_projection_for_device(projection, rays.device());
     check_bivariate_windshield_for_device(external_distortion, rays.device());
     auto guard = c10::cuda::CUDAGuard(rays.device());
@@ -3317,10 +3429,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(grad, "grad_camera_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 12,
-        "scratch too small for image_points_to_camera_rays_ftheta_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ImagePointsToCameraRays,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_camera_rays_ftheta_bivariate_windshield");
     check_ftheta_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -3394,10 +3507,11 @@ std::tuple<
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 10,
-        "scratch too small for project_world_points_mean_pose_ftheta_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ProjectWorldPointsMeanPose,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "project_world_points_mean_pose_ftheta_no_external");
     check_ftheta_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -3489,10 +3603,11 @@ std::tuple<
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 10,
-        "scratch too small for project_world_points_mean_pose_ftheta_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ProjectWorldPointsMeanPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "project_world_points_mean_pose_ftheta_bivariate_windshield");
     check_ftheta_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -3575,10 +3690,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rotation, "rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 8,
-        "scratch too small for image_points_to_world_rays_static_pose_ftheta_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_static_pose_ftheta_no_external");
     check_ftheta_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -3641,10 +3757,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rotation, "rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 12,
-        "scratch too small for image_points_to_world_rays_static_pose_ftheta_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_static_pose_ftheta_bivariate_windshield");
     check_ftheta_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -3736,10 +3853,11 @@ std::tuple<
     TORCH_CHECK(valid.is_contiguous(), "valid_flags must be contiguous");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 11,
-        "scratch too small for project_world_points_shutter_pose_ftheta_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ProjectWorldPointsShutterPose,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "project_world_points_shutter_pose_ftheta_no_external");
     check_ftheta_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -3845,10 +3963,11 @@ std::tuple<
     TORCH_CHECK(valid.is_contiguous(), "valid_flags must be contiguous");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 11,
-        "scratch too small for project_world_points_shutter_pose_ftheta_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ProjectWorldPointsShutterPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "project_world_points_shutter_pose_ftheta_bivariate_windshield");
     check_ftheta_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -3949,10 +4068,11 @@ std::tuple<
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 9,
-        "scratch too small for image_points_to_world_rays_shutter_pose_ftheta_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_shutter_pose_ftheta_no_external");
     check_ftheta_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -4046,10 +4166,11 @@ std::tuple<
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 12,
-        "scratch too small for image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::FTheta,
+        DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield");
     check_ftheta_projection_for_device(projection, pts.device());
     check_bivariate_windshield_for_device(external_distortion, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
@@ -4102,9 +4223,8 @@ std::tuple<
 }
 
 // ===========================================================================
-// OpenCV-fisheye no_external host wrappers (D1/D2/D3/D5). Outputs and scratch
-// are allocated fp32 at the per-op strides (D1=8, D2=8, D3=14, D5=8); the
-// backward TORCH_CHECKs the scratch size before reading it.
+// No-external D1/D2/D3/D5 wrappers use fixed scratch strides that backward
+// validates before reading.
 // ===========================================================================
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_opencv_fisheye_no_external(
@@ -4123,7 +4243,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_openc
     auto image_points       = at::empty({rays.size(0), 2}, rays.options());
     auto valid_flags        = at::empty({rays.size(0)}, rays.options().dtype(at::kBool));
     const bool save_scratch = rays.requires_grad() || needs_opencv_fisheye_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(rays.size(0), 8, rays) : empty_scratch(rays.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::CameraRaysToImagePoints,
+                                                 NoExternalDistortionPolicyTag
+                                             >(rays.size(0), rays)
+                                           : empty_scratch(rays.options());
     camera_rays_to_image_points_opencv_fisheye_no_external_forward_launch(
         rays.size(0),
         projection->to_kernel_params(),
@@ -4158,10 +4283,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
     check_cuda_float_contiguous(rays, "camera_rays");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= rays.size(0) * 8,
-        "scratch too small for camera_rays_to_image_points_opencv_fisheye_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::CameraRaysToImagePoints,
+        NoExternalDistortionPolicyTag
+    >(scratch, rays.size(0), "camera_rays_to_image_points_opencv_fisheye_no_external");
     check_tensor_device(grad, rays.device(), "grad_image_points");
     check_tensor_device(scratch, rays.device(), "scratch");
     check_opencv_fisheye_projection_for_device(projection, rays.device());
@@ -4201,7 +4327,12 @@ std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_fisheye_no
 
     auto camera_rays        = at::empty({pts.size(0), 3}, pts.options());
     const bool save_scratch = pts.requires_grad() || needs_opencv_fisheye_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 8, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::ImagePointsToCameraRays,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_camera_rays_opencv_fisheye_no_external_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -4235,10 +4366,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(grad, "grad_camera_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 8,
-        "scratch too small for image_points_to_camera_rays_opencv_fisheye_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ImagePointsToCameraRays,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "image_points_to_camera_rays_opencv_fisheye_no_external");
     check_tensor_device(grad, pts.device(), "grad_camera_rays");
     check_tensor_device(scratch, pts.device(), "scratch");
     check_opencv_fisheye_projection_for_device(projection, pts.device());
@@ -4306,7 +4438,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                                 || start_rotation.requires_grad()
                                 || end_rotation.requires_grad()
                                 || needs_opencv_fisheye_projection_grad(projection);
-    auto scratch                 = save_scratch ? scratch_shape(pts.size(0), 14, pts) : empty_scratch(pts.options());
+    auto scratch                 = save_scratch ? scratch_shape_for_forward<
+                                                      DistortionSensor::OpenCVFisheye,
+                                                      DistortionOpFamily::ProjectWorldPointsMeanPose,
+                                                      NoExternalDistortionPolicyTag
+                                                  >(pts.size(0), pts)
+                                                : empty_scratch(pts.options());
     const auto mean_timestamp_us = static_cast<int64_t>(
         static_cast<double>(start_timestamp_us) + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us)
     );
@@ -4362,10 +4499,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 14,
-        "scratch too small for project_world_points_mean_pose_opencv_fisheye_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ProjectWorldPointsMeanPose,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "project_world_points_mean_pose_opencv_fisheye_no_external");
     check_tensor_device(start_rotation, pts.device(), "start_rotation");
     check_tensor_device(end_rotation, pts.device(), "end_rotation");
     check_tensor_device(grad, pts.device(), "grad_image_points");
@@ -4446,7 +4584,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || trans.requires_grad()
                            || rots.requires_grad()
                            || needs_opencv_fisheye_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 8, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_static_pose_opencv_fisheye_no_external_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -4501,10 +4644,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_tensor_device(rots, pts.device(), "rotations");
     check_tensor_device(grad, pts.device(), "grad_world_rays");
     check_tensor_device(scratch, pts.device(), "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 8,
-        "scratch too small for image_points_to_world_rays_static_pose_opencv_fisheye_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_static_pose_opencv_fisheye_no_external");
     check_opencv_fisheye_projection_for_device(projection, pts.device());
     auto guard = c10::cuda::CUDAGuard(pts.device());
 
@@ -4534,9 +4678,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
 }
 
 // ===========================================================================
-// OpenCV-fisheye bivariate-windshield host wrappers (D1/D2/D3/D5). Scratch
-// strides are D1=8, D2=12, D3=14, D5=12. The backward adds a
-// grad_distortion_coeffs output for the 21 active bivariate-coeff slots.
+// Bivariate D1/D2/D3/D5 wrappers add coeff gradients and the larger inverse
+// scratch needed by backproject-style ops.
 // ===========================================================================
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_opencv_fisheye_bivariate_windshield(
@@ -4557,7 +4700,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_openc
     const bool save_scratch = rays.requires_grad()
                            || needs_opencv_fisheye_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(rays.size(0), 8, rays) : empty_scratch(rays.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::CameraRaysToImagePoints,
+                                                 BivariateWindshieldPolicyTag
+                                             >(rays.size(0), rays)
+                                           : empty_scratch(rays.options());
     camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_forward_launch(
         rays.size(0),
         projection->to_kernel_params(),
@@ -4593,10 +4741,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
     check_cuda_float_contiguous(rays, "camera_rays");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= rays.size(0) * 8,
-        "scratch too small for camera_rays_to_image_points_opencv_fisheye_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::CameraRaysToImagePoints,
+        BivariateWindshieldPolicyTag
+    >(scratch, rays.size(0), "camera_rays_to_image_points_opencv_fisheye_bivariate_windshield");
     check_tensor_device(grad, rays.device(), "grad_image_points");
     check_tensor_device(scratch, rays.device(), "scratch");
     check_opencv_fisheye_projection_for_device(projection, rays.device());
@@ -4642,7 +4791,12 @@ std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_fisheye_bi
     const bool save_scratch = pts.requires_grad()
                            || needs_opencv_fisheye_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 12, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::ImagePointsToCameraRays,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -4677,10 +4831,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
     check_cuda_float_contiguous(pts, "image_points");
     check_cuda_float_contiguous(grad, "grad_camera_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 12,
-        "scratch too small for image_points_to_camera_rays_opencv_fisheye_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ImagePointsToCameraRays,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_camera_rays_opencv_fisheye_bivariate_windshield");
     check_tensor_device(grad, pts.device(), "grad_camera_rays");
     check_tensor_device(scratch, pts.device(), "scratch");
     check_opencv_fisheye_projection_for_device(projection, pts.device());
@@ -4753,7 +4908,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                                 || end_rotation.requires_grad()
                                 || needs_opencv_fisheye_projection_grad(projection)
                                 || needs_external_distortion_grad(external_distortion);
-    auto scratch                 = save_scratch ? scratch_shape(pts.size(0), 14, pts) : empty_scratch(pts.options());
+    auto scratch                 = save_scratch ? scratch_shape_for_forward<
+                                                      DistortionSensor::OpenCVFisheye,
+                                                      DistortionOpFamily::ProjectWorldPointsMeanPose,
+                                                      BivariateWindshieldPolicyTag
+                                                  >(pts.size(0), pts)
+                                                : empty_scratch(pts.options());
     const auto mean_timestamp_us = static_cast<int64_t>(
         static_cast<double>(start_timestamp_us) + 0.5 * static_cast<double>(end_timestamp_us - start_timestamp_us)
     );
@@ -4810,10 +4970,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 14,
-        "scratch too small for project_world_points_mean_pose_opencv_fisheye_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ProjectWorldPointsMeanPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "project_world_points_mean_pose_opencv_fisheye_bivariate_windshield");
     check_tensor_device(start_rotation, pts.device(), "start_rotation");
     check_tensor_device(end_rotation, pts.device(), "end_rotation");
     check_tensor_device(grad, pts.device(), "grad_image_points");
@@ -4900,7 +5061,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || rots.requires_grad()
                            || needs_opencv_fisheye_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 12, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_forward_launch(
         pts.size(0),
         projection->to_kernel_params(),
@@ -4952,10 +5118,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(rots, "rotations");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 12,
-        "scratch too small for image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ImagePointsToWorldRaysStaticPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield");
     check_tensor_device(trans, pts.device(), "translations");
     check_tensor_device(rots, pts.device(), "rotations");
     check_tensor_device(grad, pts.device(), "grad_world_rays");
@@ -4995,14 +5162,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
 }
 
 // =============================================================================
-// OpenCV-fisheye shutter-pose host wrappers (D4/D6, both distortions).
-//   D4 projects world points under a rolling shutter (alpha-convergence loop in
-//   the forward, ONE differentiable step in the backward). D6 lifts a
-//   backprojected ray into world space at a single shutter alpha. Backward
-//   guards mirror the matching forward (shape/contiguity/device/scratch budget),
-//   re-validating shutter_type-independent inputs since autograd may substitute
-//   tensors. D4 scratch stride 16 (both distortions); D6 stride 12 (no_external)
-//   / 16 (bivariate).
+// Shutter wrappers keep D4/D6 separate because D4 has alpha convergence while
+// D6 uses one pixel-derived alpha. Backward revalidates substituted tensors and
+// scratch budgets before trusting saved state.
 // =============================================================================
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
@@ -5058,7 +5220,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                            || start_rotation.requires_grad()
                            || end_rotation.requires_grad()
                            || needs_opencv_fisheye_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 16, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::ProjectWorldPointsShutterPose,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     project_world_points_shutter_pose_opencv_fisheye_no_external_forward_launch(
         pts.size(0),
         opencv_fisheye_kernel_params_with_resolution(projection, width, height),
@@ -5112,10 +5279,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= grad.size(0) * 16,
-        "scratch too small for project_world_points_shutter_pose_opencv_fisheye_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ProjectWorldPointsShutterPose,
+        NoExternalDistortionPolicyTag
+    >(scratch, grad.size(0), "project_world_points_shutter_pose_opencv_fisheye_no_external");
     check_tensor_device(start_rotation, grad.device(), "start_rotation");
     check_tensor_device(end_rotation, grad.device(), "end_rotation");
     check_tensor_device(scratch, grad.device(), "scratch");
@@ -5214,7 +5382,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
                            || end_rotation.requires_grad()
                            || needs_opencv_fisheye_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 16, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::ProjectWorldPointsShutterPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_forward_launch(
         pts.size(0),
         opencv_fisheye_kernel_params_with_resolution(projection, width, height),
@@ -5269,10 +5442,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_image_points");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= grad.size(0) * 16,
-        "scratch too small for project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ProjectWorldPointsShutterPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, grad.size(0), "project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield");
     check_tensor_device(start_rotation, grad.device(), "start_rotation");
     check_tensor_device(end_rotation, grad.device(), "end_rotation");
     check_tensor_device(scratch, grad.device(), "scratch");
@@ -5369,7 +5543,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || start_rotation.requires_grad()
                            || end_rotation.requires_grad()
                            || needs_opencv_fisheye_projection_grad(projection);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 12, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+                                                 NoExternalDistortionPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_forward_launch(
         pts.size(0),
         opencv_fisheye_kernel_params_with_resolution(projection, width, height),
@@ -5423,10 +5602,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 12,
-        "scratch too small for image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+        NoExternalDistortionPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external");
     check_tensor_device(start_rotation, pts.device(), "start_rotation");
     check_tensor_device(end_rotation, pts.device(), "end_rotation");
     check_tensor_device(grad, pts.device(), "grad_world_rays");
@@ -5520,7 +5700,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
                            || end_rotation.requires_grad()
                            || needs_opencv_fisheye_projection_grad(projection)
                            || needs_external_distortion_grad(external_distortion);
-    auto scratch            = save_scratch ? scratch_shape(pts.size(0), 16, pts) : empty_scratch(pts.options());
+    auto scratch            = save_scratch ? scratch_shape_for_forward<
+                                                 DistortionSensor::OpenCVFisheye,
+                                                 DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+                                                 BivariateWindshieldPolicyTag
+                                             >(pts.size(0), pts)
+                                           : empty_scratch(pts.options());
     image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_forward_launch(
         pts.size(0),
         opencv_fisheye_kernel_params_with_resolution(projection, width, height),
@@ -5575,10 +5760,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     check_cuda_float_contiguous(end_rotation, "end_rotation");
     check_cuda_float_contiguous(grad, "grad_world_rays");
     check_cuda_float_contiguous(scratch, "scratch");
-    TORCH_CHECK(
-        scratch.numel() >= pts.size(0) * 16,
-        "scratch too small for image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield backward"
-    );
+    check_backward_scratch<
+        DistortionSensor::OpenCVFisheye,
+        DistortionOpFamily::ImagePointsToWorldRaysShutterPose,
+        BivariateWindshieldPolicyTag
+    >(scratch, pts.size(0), "image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield");
     check_tensor_device(start_rotation, pts.device(), "start_rotation");
     check_tensor_device(end_rotation, pts.device(), "end_rotation");
     check_tensor_device(grad, pts.device(), "grad_world_rays");
