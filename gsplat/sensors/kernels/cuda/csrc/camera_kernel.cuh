@@ -992,6 +992,7 @@ struct OpenCVPinholeProjectionPolicy
 
     static constexpr DistortionSensor kScratchSensor     = DistortionSensor::OpenCVPinhole;
     static constexpr bool kGatePosePointBeforeDistortion = true;
+    static constexpr bool kNormalizePoseProjectInput     = true;
 
     static_assert(
         IntrinsicUndistort::kId == OpenCVPinholeUndistortStrategyId::EarlyExit

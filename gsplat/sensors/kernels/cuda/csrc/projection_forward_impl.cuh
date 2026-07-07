@@ -231,7 +231,12 @@ __device__ __forceinline__ void project_world_points_mean_pose_forward_impl(
     }
     else
     {
-        const float3 projected_ray = DistortionPolicy::apply_fwd(camera_point, distortion_params);
+        float3 camera_ray = camera_point;
+        if constexpr(ProjectionPolicy::kNormalizePoseProjectInput)
+        {
+            camera_ray = normalize3(camera_point);
+        }
+        const float3 projected_ray = DistortionPolicy::apply_fwd(camera_ray, distortion_params);
         image_point                = ProjectionPolicy::project(projected_ray, params, state, projection_valid);
     }
 

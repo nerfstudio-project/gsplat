@@ -440,6 +440,7 @@ struct OpenCVFisheyeProjectionPolicy
 
     static constexpr DistortionSensor kScratchSensor     = DistortionSensor::OpenCVFisheye;
     static constexpr bool kGatePosePointBeforeDistortion = false;
+    static constexpr bool kNormalizePoseProjectInput     = false;
 
     static __device__ Params load(const KernelParameters &projection)
     {
@@ -646,6 +647,10 @@ struct OpenCVFisheyeProjectionPolicy::ScratchIO<DistortionOpFamily::ImagePointsT
     static __device__ void save_forward(float *scratch, int64_t off, const BackprojectState &state)
     {
         save_state<Scratch>(scratch, off, state);
+        if constexpr(Scratch::kInverseStashOffset >= 0)
+        {
+            scratch[off + Scratch::kScratchStride - 1] = 0.0f;
+        }
     }
 
     template<typename Scratch>
@@ -713,6 +718,10 @@ struct OpenCVFisheyeProjectionPolicy::ScratchIO<DistortionOpFamily::ImagePointsT
     static __device__ void save_forward(float *scratch, int64_t off, const BackprojectState &state)
     {
         save_state<Scratch>(scratch, off, state);
+        if constexpr(Scratch::kInverseStashOffset >= 0)
+        {
+            scratch[off + Scratch::kScratchStride - 1] = 0.0f;
+        }
     }
 
     template<typename Scratch>

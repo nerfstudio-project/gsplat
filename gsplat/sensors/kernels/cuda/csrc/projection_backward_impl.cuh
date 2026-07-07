@@ -273,15 +273,25 @@ __device__ __forceinline__ void project_world_points_mean_pose_backward_impl(
         if(ProjectionPolicy::pose_project_backward_enabled(state))
         {
             const float2 d_image_point = make_float2(grad_image_points[idx * 2 + 0], grad_image_points[idx * 2 + 1]);
-            const float3 projected_ray = DistortionPolicy::apply_fwd(camera_point, distortion_params);
+            float3 camera_ray          = camera_point;
+            if constexpr(ProjectionPolicy::kNormalizePoseProjectInput)
+            {
+                camera_ray = normalize3(camera_point);
+            }
+            const float3 projected_ray = DistortionPolicy::apply_fwd(camera_ray, distortion_params);
             typename ProjectionPolicy::ProjectState replayed_state = state;
             ProjectionPolicy::prepare_pose_project_state_for_backward(replayed_state, projected_ray);
             float3 d_projected_ray = make_float3(0.0f, 0.0f, 0.0f);
             ProjectionPolicy::project_bwd(
                 projected_ray, params, replayed_state, d_image_point, d_projected_ray, d_projection
             );
-            float3 d_camera_point = make_float3(0.0f, 0.0f, 0.0f);
-            DistortionPolicy::apply_bwd(camera_point, distortion_params, d_projected_ray, d_camera_point, d_distortion);
+            float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
+            DistortionPolicy::apply_bwd(camera_ray, distortion_params, d_projected_ray, d_camera_ray, d_distortion);
+            float3 d_camera_point = d_camera_ray;
+            if constexpr(ProjectionPolicy::kNormalizePoseProjectInput)
+            {
+                d_camera_point = normalize3_bwd(camera_point, d_camera_ray);
+            }
 
             const float4 start_rotation_xyzw = read_quat_xyzw_from_wxyz(start_rotation, 0);
             const float4 end_rotation_xyzw   = read_quat_xyzw_from_wxyz(end_rotation, 0);

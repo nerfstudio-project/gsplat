@@ -832,6 +832,7 @@ struct FThetaProjectionPolicy
 
     static constexpr DistortionSensor kScratchSensor     = DistortionSensor::FTheta;
     static constexpr bool kGatePosePointBeforeDistortion = true;
+    static constexpr bool kNormalizePoseProjectInput     = false;
 
     static __device__ Params load(const KernelParameters &projection)
     {

@@ -5907,6 +5907,41 @@ def test_projection_policy_d2_bivariate_inverse_stash(
     assert not torch.allclose(scratch[:, 8:11], camera_rays)
 
 
+@pytest.mark.parametrize("sensor", ["ftheta", "fisheye"])
+@pytest.mark.parametrize(
+    "operation",
+    ["image_points_to_camera_rays", "image_points_to_world_rays_static_pose"],
+)
+def test_projection_policy_bivariate_backproject_padding_is_zero(
+    sensor,
+    operation,
+    fisheye_projection,
+    ftheta_projection_forward_ref,
+    distorted_projection,
+    windshield_distortion,
+):
+    projection = _projection_policy_projection(
+        sensor,
+        fisheye_projection,
+        ftheta_projection_forward_ref,
+        distorted_projection,
+    )
+    primary_input = _projection_policy_primary_input(
+        operation, projection
+    ).requires_grad_(True)
+    *_, scratch = _projection_policy_raw_forward(
+        operation,
+        sensor,
+        "bivariate",
+        projection,
+        windshield_distortion,
+        primary_input,
+    )
+
+    assert scratch.shape == (primary_input.shape[0], 12)
+    assert torch.equal(scratch[:, 11], torch.zeros_like(scratch[:, 11]))
+
+
 @pytest.mark.parametrize("operation", _DISTORTION_POLICY_OPERATIONS)
 @pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
 def test_pinhole_projection_policy_scratch_contents(
@@ -6709,6 +6744,59 @@ def test_projection_policy_d3_matches_d1_at_midpoint_pose(
     assert torch.equal(actual_valid, expected_valid)
     for actual, expected in zip(actual_grads, expected_grads, strict=True):
         torch.testing.assert_close(actual, expected, atol=2e-3, rtol=5e-3)
+
+
+@pytest.mark.parametrize("distortion_policy", ["no_external", "bivariate"])
+def test_pinhole_mean_pose_matches_single_iteration_global_shutter_exactly(
+    distortion_policy,
+    distorted_projection,
+    no_external,
+    windshield_distortion,
+):
+    device = distorted_projection.focal_length.device
+    distortion = (
+        _build_distortion(
+            windshield_distortion,
+            ReferencePolynomial.FORWARD,
+            _nonidentity_distortion_coeffs(
+                windshield_distortion,
+                dtype=torch.float32,
+                requires_grad=False,
+            ),
+        )
+        if distortion_policy == "bivariate"
+        else no_external
+    )
+    world_points = torch.tensor([[0.171, -0.097, 1.83]], device=device)
+    translation = torch.tensor([0.01, -0.02, 0.03], device=device)
+    rotation = torch.nn.functional.normalize(
+        torch.tensor([1.0, 0.01, -0.015, 0.005], device=device), dim=0
+    )
+    pose_inputs = (translation, rotation, translation.clone(), rotation.clone())
+
+    mean_pose = _projection_policy_raw_forward(
+        "project_world_points_mean_pose",
+        "pinhole",
+        distortion_policy,
+        distorted_projection,
+        distortion,
+        world_points,
+        pose_inputs=pose_inputs,
+    )
+    shutter_pose = _projection_policy_raw_forward(
+        "project_world_points_shutter_pose",
+        "pinhole",
+        distortion_policy,
+        distorted_projection,
+        distortion,
+        world_points,
+        pose_inputs=pose_inputs,
+        max_iterations=1,
+        initial_relative_time=0.5,
+    )
+
+    assert torch.equal(mean_pose[0], shutter_pose[0])
+    assert torch.equal(mean_pose[1], shutter_pose[1])
 
 
 @pytest.mark.parametrize("sensor", ["ftheta", "fisheye", "pinhole"])
