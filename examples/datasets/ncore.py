@@ -86,6 +86,15 @@ def _normalize_track_class_id(class_id: Any) -> str:
     return str(class_id).strip().lower()
 
 
+def frame_midpoint_timestamp_us(start_us, end_us):
+    """Frame-midpoint render time for rigid dynamics (int or tensor, µs).
+
+    Used when per-ray timestamps are unavailable. Shared by training and
+    sample_inference so both render dynamic tracks at the same time.
+    """
+    return start_us + (end_us - start_us) // 2
+
+
 def _build_pinhole_K(
     model_params: ncore.data.OpenCVPinholeCameraModelParameters
     | ncore.data.OpenCVFisheyeCameraModelParameters,
@@ -172,6 +181,7 @@ class NCoreParser:
         lidar_color_generic_data_name: str = "rgb",
         normalize_world_space: bool = False,
         rigid_dynamic_track_class_ids: Optional[Collection[str]] = None,
+        keep_dynamic_points_in_static_scene: bool = True,
     ) -> None:
         self.test_every = test_every
         self.factor = factor
@@ -196,6 +206,7 @@ class NCoreParser:
         self.masks_component_group = masks_component_group
         self.open_consolidated = open_consolidated
         self.lidar_color_generic_data_name = lidar_color_generic_data_name
+        self.keep_dynamic_points_in_static_scene = keep_dynamic_points_in_static_scene
 
         self.sequence_meta_file_path: Path = Path(meta_json_path)
         sequence_loader = self._open_sequence_loader(self.sequence_meta_file_path)
@@ -230,8 +241,13 @@ class NCoreParser:
         self.bounds = np.array([0.01, 1.0])
         self.extconf = {"spiral_radius_scale": 1.0, "no_factor_suffix": False}
 
+        rigid_split_enabled = (
+            self.rigid_dynamic_track_class_ids is not None
+            and not self.keep_dynamic_points_in_static_scene
+        )
+        static_max_points = None if rigid_split_enabled else max_lidar_points
         self.points, self.points_rgb = self._load_point_clouds(
-            sequence_loader, max_lidar_points, lidar_step_frame
+            sequence_loader, static_max_points, lidar_step_frame
         )
 
         # Rigid dynamic objects: per-track local Gaussians + per-frame poses.
@@ -243,6 +259,8 @@ class NCoreParser:
             if self.rigid_dynamic_track_class_ids is not None
             else []
         )
+        if rigid_split_enabled:
+            self._sample_init_points(max_lidar_points)
 
         # Normalize the world space (orient, centre, and rescale).
         if self.normalize_world_space:
@@ -535,6 +553,7 @@ class NCoreParser:
         """Batch-load start/end poses for all frames; set camtoworlds and scene_scale."""
         self.frame_list: List[Tuple[str, int]] = []
         self.camera_idx_per_frame: List[int] = []
+        frame_timestamps: List[Tuple[int, int]] = []
         starts: List[np.ndarray] = []
         ends: List[np.ndarray] = []
 
@@ -568,14 +587,25 @@ class NCoreParser:
             if T_end.ndim == 2:
                 T_end = T_end[np.newaxis]
 
+            sensor_ts = sensor.frames_timestamps_us
             for local_idx, frame_idx in enumerate(frame_range):
                 self.frame_list.append((camera_id, frame_idx))
                 self.camera_idx_per_frame.append(cam_idx)
+                frame_timestamps.append(
+                    (
+                        int(sensor_ts[frame_idx, ncore.data.FrameTimepoint.START]),
+                        int(sensor_ts[frame_idx, ncore.data.FrameTimepoint.END]),
+                    )
+                )
                 starts.append(T_start[local_idx])
                 ends.append(T_end[local_idx])
 
         self.camtoworlds = np.stack(starts, axis=0)  # (N, 4, 4)
         self.camtoworlds_end = np.stack(ends, axis=0)  # (N, 4, 4)
+        # (N, 2) int64 START/END capture timestamps per frame_list entry, for
+        # callers that need a render time (rigid dynamics) without reopening
+        # the sequence loader.
+        self.frame_timestamps_us = np.asarray(frame_timestamps, dtype=np.int64)
 
     def _normalize_world_space(self) -> None:
         """Normalize world-space coordinates for poses and points.
@@ -670,7 +700,7 @@ class NCoreParser:
     def _load_point_clouds(
         self,
         sequence_loader: ncore.data.SequenceLoaderProtocol,
-        max_points: int,
+        max_points: int | None,
         step_frame: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Load and transform point clouds to scene frame for Gaussian initialization.
@@ -735,16 +765,14 @@ class NCoreParser:
 
                 # Dynamic-flag handling. By default NCore drops moving-object
                 # returns (dynamic_flag == 1) so they don't smear the static
-                # background. When rigid dynamic tracks are requested we keep
-                # those returns for now so the static trainer still sees the
-                # complete point cloud. The same points are also picked up
-                # independently by _load_rigid_dynamic_tracks and exposed on
-                # parser.rigid_dynamic_tracks.
+                # background. When rigid dynamic tracks are requested, callers
+                # can temporarily keep those returns for old static-only
+                # comparisons, or drop them for the split static/dynamic path.
                 point_filter = ...
                 if (
                     self.rigid_dynamic_track_class_ids is None
-                    and source.has_pc_generic_data(pc_idx, "dynamic_flag")
-                ):
+                    or not self.keep_dynamic_points_in_static_scene
+                ) and source.has_pc_generic_data(pc_idx, "dynamic_flag"):
                     point_filter = (
                         source.get_pc_generic_data(pc_idx, "dynamic_flag") != 1
                     )
@@ -771,7 +799,7 @@ class NCoreParser:
 
         points = np.vstack(all_points)
         points_rgb = np.vstack(all_colors)
-        if len(points) > max_points:
+        if max_points is not None and len(points) > max_points:
             idx = np.random.choice(len(points), max_points, replace=False)
             points = points[idx]
             points_rgb = points_rgb[idx]
@@ -781,6 +809,47 @@ class NCoreParser:
             f"[NCoreParser] Loaded {len(points)} point cloud points from {source_names}"
         )
         return points, points_rgb
+
+    def _sample_init_points(self, max_points: int) -> None:
+        """Randomly cap static + rigid-dynamic init points to one total budget."""
+        if max_points < 0:
+            raise ValueError("max_lidar_points must be non-negative")
+
+        static_count = len(self.points)
+        dynamic_counts = [
+            len(track.points_local) for track in self.rigid_dynamic_tracks
+        ]
+        total = static_count + sum(dynamic_counts)
+        if total <= max_points:
+            return
+
+        keep_global = np.zeros(total, dtype=bool)
+        keep_global[np.random.choice(total, max_points, replace=False)] = True
+
+        static_keep = keep_global[:static_count]
+        self.points = self.points[static_keep]
+        self.points_rgb = self.points_rgb[static_keep]
+
+        offset = static_count
+        kept_tracks: List[RigidDynamicTrack] = []
+        for track, count in zip(self.rigid_dynamic_tracks, dynamic_counts):
+            keep = keep_global[offset : offset + count]
+            offset += count
+            if not np.any(keep):
+                continue
+            track.points_local = track.points_local[keep]
+            track.points_rgb = track.points_rgb[keep]
+            kept_tracks.append(track)
+        self.rigid_dynamic_tracks = kept_tracks
+
+        dynamic_count = sum(
+            len(track.points_local) for track in self.rigid_dynamic_tracks
+        )
+        print(
+            f"[NCoreParser] NCore init points: downsampled {total} -> "
+            f"{len(self.points) + dynamic_count} total "
+            f"({len(self.points)} static + {dynamic_count} rigid dynamic)"
+        )
 
     @staticmethod
     def _get_pc_color(
@@ -1092,6 +1161,13 @@ class NCoreDataset(torch.utils.data.Dataset):
         if self.parser.factor != 1.0:
             image = cv2.resize(image, (width, height), interpolation=cv2.INTER_LINEAR)
 
+        timestamp_start_us = int(
+            sensor.frames_timestamps_us[frame_idx, ncore.data.FrameTimepoint.START]
+        )
+        timestamp_end_us = int(
+            sensor.frames_timestamps_us[frame_idx, ncore.data.FrameTimepoint.END]
+        )
+
         data: Dict[str, Any] = {
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(self.parser.camtoworlds[index]).float(),
@@ -1101,6 +1177,12 @@ class NCoreDataset(torch.utils.data.Dataset):
             "image": torch.from_numpy(image).float(),
             "image_id": item,
             "camera_idx": camera_idx,
+            # Keep timestamp_us as the historical frame-start timestamp. Rigid
+            # dynamic rendering uses the explicit start/end pair to choose the
+            # frame midpoint when per-ray timestamps are unavailable.
+            "timestamp_us": timestamp_start_us,
+            "timestamp_start_us": timestamp_start_us,
+            "timestamp_end_us": timestamp_end_us,
         }
 
         valid_mask: Optional[np.ndarray] = None

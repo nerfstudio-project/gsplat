@@ -61,8 +61,9 @@ python examples/av_trainer.py \
 | `--cameras` | all | Comma-separated camera IDs (NCore) |
 | `--duration` | full | Clip duration in seconds (NCore) |
 | `--downscale` | 1 | Image downscale factor (NCore) |
-| `--rigid-dynamic-track-class-ids` | unset | Comma-separated NCore cuboid class IDs to load as rigid dynamic tracks; moving-object returns remain in static init |
-| `--max-lidar` | 150000 | Max LiDAR init points |
+| `--rigid-dynamic-track-class-ids` | unset | Comma-separated NCore cuboid class IDs to load as rigid dynamic tracks in a dynamic scene |
+| `--rigid-dynamic-static-baseline` | off | Keep selected moving-object returns in the static scene instead of splitting them into rigid components |
+| `--max-lidar` | 150000 | Max initial LiDAR points; with rigid dynamics this is the total across static and dynamic scenes |
 | `--max-steps` | 15000 | Training iterations |
 | `--lr` | 0.005 | Base learning rate |
 | `--mcmc` | off | Enable MCMC densification |
@@ -72,6 +73,21 @@ python examples/av_trainer.py \
 | `--lidar-render` | off | Enable gsplat LiDAR renderer |
 | `--lidar-render-subsample` | 112 | Subsample LiDAR rays |
 | `--lidar-render-weight` | 0.0003 | LiDAR distance loss weight |
+
+## Outputs
+
+Unless `--no-save-model` is passed, training writes `model.pt` with the same
+schema as the training checkpoints — `{"scene_id", "splats"}` — so
+`sample_inference.py` can load it directly. Rigid dynamic runs additionally
+store `"render_scene_id"` and `"scenes"` (one `GaussianScene.state_dict()` per
+member scene, including pose context and the transform graph). All tensors in
+`model.pt` are CPU-native, so the export loads on machines without CUDA.
+
+`sample_inference.py` rebuilds the static + dynamic collection from the saved
+scenes and renders each NCore camera at its frame-midpoint timestamp. The
+checkpoint records the training-time camera set, clip duration, and downscale
+(the scene frame's origin depends on them), and `sample_inference.py` uses the
+recorded values by default; `--cameras`/`--duration`/`--downscale` override.
 
 ## Benchmark: NCore v4
 
