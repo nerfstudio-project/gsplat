@@ -54,8 +54,8 @@ inline __device__ float rsqrt_parse_safe(float x)
 template<typename T>
 constexpr __host__ __device__ bool is_near_zero(T x)
 {
-    static_assert(cuda::std::is_floating_point_v<T>, "is_near_zero requires a floating-point type");
-    return abs(x) < cuda::std::numeric_limits<T>::epsilon();
+    static_assert(::cuda::std::is_floating_point_v<T>, "is_near_zero requires a floating-point type");
+    return abs(x) < ::cuda::std::numeric_limits<T>::epsilon();
 }
 
 template<bool kUseProvided, typename ConstructedT, typename ProvidedT, typename... Args>

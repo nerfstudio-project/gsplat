@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+#include <cub/cub.cuh>
+
 #include <ATen/Dispatch.h>
 #include <ATen/Functions.h>
 #include <ATen/core/Tensor.h>
@@ -27,7 +29,6 @@
 
 // for CUB_WRAPPER
 #include <c10/cuda/CUDACachingAllocator.h>
-#include <cub/cub.cuh>
 
 #include "MathUtils.h"
 #include "Common.h"
@@ -41,6 +42,16 @@ namespace cg = cooperative_groups;
 
 namespace
 {
+    // Prefer ::cuda::std::less<int64_t>, but NVCC-generated MSVC host code
+    // treats ::cuda as ambiguous with c10::cuda when instantiating DeviceMergeSort.
+    struct Int64Less
+    {
+        constexpr __host__ __device__ bool operator()(const int64_t lhs, const int64_t rhs) const
+        {
+            return lhs < rhs;
+        }
+    };
+
     [[maybe_unused]] __global__ void sleep_kernel()
     {
         __nanosleep(1'000'000u);
@@ -931,7 +942,7 @@ TileIntersectResult intersect_tile_kernels_privateuseone(
                     isect_ids.data_ptr<int64_t>() + isect_offset,
                     flatten_ids.data_ptr<int32_t>() + isect_offset,
                     isect_count,
-                    ::cuda::std::less<int64_t>{}
+                    Int64Less{}
                 );
             }
         }
