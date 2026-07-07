@@ -39,7 +39,7 @@ pytestmark = pytest.mark.skipif(
 def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
     av_train_env,
 ) -> None:
-    """Verify train() wires GaussianScene.splats through to every subsystem."""
+    """Verify train() wires GaussianScene through optimizer/render/eval paths."""
     env = av_train_env
     the_splats = make_av_splats()
     seen: dict[str, object] = {}
@@ -54,6 +54,10 @@ def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
             assert splats is the_splats
             return cls()
 
+        def apply_transforms(self, *args, **kwargs):
+            del args, kwargs
+            return {key: value.clone() for key, value in self.splats.items()}
+
     def fake_init(loaded_scene, device="cuda", **_kwargs):
         del loaded_scene, device
         return the_splats
@@ -67,7 +71,8 @@ def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
         }
 
     def fake_render(*_args, splats=None, **kwargs):
-        assert splats is the_splats
+        assert splats is not the_splats
+        torch.testing.assert_close(splats["means"], the_splats["means"])
         seen["render"] = splats
         seen["render_count"] = seen.get("render_count", 0) + 1
         height = kwargs.get("H", 8)
@@ -101,7 +106,7 @@ def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
     assert checkpoints[0]["step"] == 1
     assert checkpoints[0]["checkpoint_path"].endswith("ckpt_00001.pt")
     assert seen["optimizer"] is the_splats
-    assert seen["render"] is the_splats
+    assert seen["render"] is not the_splats
     assert seen["render_count"] >= 1
 
 

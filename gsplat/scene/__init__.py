@@ -16,6 +16,16 @@
 from .components.base import Scene
 from .components.gaussian_scene import GaussianScene
 from .components.gaussian_inference_scene import GaussianInferenceScene
+from .components.transforms import (
+    GaussianComponent,
+    HIDDEN_OPACITY_LOGIT,
+    IdentityOp,
+    RigidTransformOp,
+    TensorViews,
+    TransformCtxView,
+    TransformGraph,
+    TransformOp,
+)
 from .sh_compression import SHCompressionMode
 
 __all__ = [
@@ -24,6 +34,14 @@ __all__ = [
     "GaussianScene",
     "GaussianInferenceScene",
     "SHCompressionMode",
+    "HIDDEN_OPACITY_LOGIT",
+    "GaussianComponent",
+    "IdentityOp",
+    "RigidTransformOp",
+    "TensorViews",
+    "TransformCtxView",
+    "TransformGraph",
+    "TransformOp",
 ]
 
 

@@ -99,7 +99,8 @@ class TestStage7TuplePassthrough:
         stage.add_scene(scene, mock_render)
         result = stage.render(scene.id, width=800, height=600)
 
-        assert received["splats"] is scene.splats
+        assert received["splats"] is not scene.splats
+        torch.testing.assert_close(received["splats"]["means"], scene.splats["means"])
         assert received["kwargs"] == {"width": 800, "height": 600}
         assert len(result) == 7
         assert result[6] == {"meta": True}

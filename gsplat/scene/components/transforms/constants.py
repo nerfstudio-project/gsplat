@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .component_collection import ComponentCollection
-from .stage import Stage
+"""Constants shared by scene transform components."""
 
-__all__ = ["ComponentCollection", "Stage"]
+HIDDEN_OPACITY_LOGIT = -1.0e4
+"""Finite opacity-logit sentinel for hidden transformed components."""

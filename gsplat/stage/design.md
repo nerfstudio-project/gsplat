@@ -11,11 +11,13 @@ Caller (trainer loop)
   |  stage.render("scene", viewmat=..., K=..., W=..., H=..., render_mode="RGB+ED")
   v
 Stage
-  |-- _scenes: {scene_id: (scene, render_fn), ...}
-  |
-  |  scene, fn = _scenes[scene_id]
-  |  fn(splats=scene.splats, **kwargs)
-  v
+|-- _scenes: {scene_id: (scene, render_fn), ...}
+|-- _collections: {collection_id: ComponentCollection, ...}
+|
+|  scene, fn = _scenes[scene_id]
+|  splats = scene.apply_transforms(t=...)
+|  fn(splats=splats, **kwargs)
+v
 Returns: render_fn output directly (e.g. (renders, alphas) or (renders, alphas, info))
 ```
 
@@ -36,7 +38,8 @@ Stage does not know *how* to render. It pairs each scene with a user-supplied
 ```
 stage.render(scene_id, **kwargs)
   -> scene, fn = self._scenes[scene_id]
-     fn(splats=scene.splats, **kwargs)
+     splats = scene.apply_transforms(t=...)
+     fn(splats=splats, **kwargs)
 ```
 
 Stage always passes `splats` as a **named keyword argument**, never positional.
@@ -79,11 +82,22 @@ Scenes are stored in a `dict[str, tuple[GaussianScene, Callable]]` keyed by
 class Stage:
     def __init__(self) -> None:
         self._scenes: dict[str, tuple[GaussianScene, Callable]] = {}
+        self._collections: dict[str, ComponentCollection] = {}
 
     def add_scene(self, scene: GaussianScene, render_fn: Callable) -> None:
         """Register a scene and its render function, keyed by scene.id.
 
         Raises ValueError if scene.id is already registered.
+        """
+
+    def add_collection(
+        self,
+        collection: ComponentCollection,
+        render_fn: Callable,
+    ) -> None:
+        """Register a component collection and its shared render function.
+
+        Raises ValueError if collection.id is already registered.
         """
 
     def scene_ids(self) -> list[str]:
@@ -98,7 +112,10 @@ class Stage:
     def render(self, scene_id: str, **kwargs) -> Any:
         """Render a scene by id.
 
-        The render_fn is called as: render_fn(splats=scene.splats, **kwargs)
+        The render_fn is called as:
+        render_fn(splats=scene.apply_transforms(t=...), **kwargs)
+        For collections, Stage delegates to ComponentCollection.render(), which
+        collects member scenes into one transient splat dict before dispatch.
         Returns whatever the render function returns — caller is responsible
         for matching the return arity (e.g. 3-tuple for 3DGS, 7-tuple for 2DGS).
 
@@ -189,7 +206,9 @@ def rasterize_splats(
 ```
 
 Existing call sites pass no `splats` kwarg and work unchanged.
-Stage passes `splats=scene.splats` via the kwargs dispatch.
+Stage passes a transient `splats=scene.apply_transforms(t=...)` result via the
+kwargs dispatch. Optimizers and strategy ops continue to operate on persistent
+`scene.splats`.
 
 ## Resolved Decisions
 
@@ -206,13 +225,22 @@ Stage passes `splats=scene.splats` via the kwargs dispatch.
    `rasterize_splats` returns `(renders, alphas, info)`. `simple_trainer_2dgs`'s
    `rasterize_splats` returns a 7-tuple. All work as-is.
 
-4. **No multi-scene composition** -- Stage dispatches per-scene renders independently.
-   Compositing (alpha-blend, depth-sort) is the caller's responsibility if needed.
+4. **`ComponentCollection`** -- Multi-pipeline frames use a
+   `ComponentCollection` (`gsplat/scene/design-transforms.md`, §"Stage and
+   ComponentCollection"): member scenes (e.g. static + rigid) each run
+   `apply_transforms()`, `collect()` concatenates world-space splats, and **one**
+   shared `render_fn` rasterizes the merged buffer via a no-op composite scene
+   handle. `Stage.add_collection(collection, render_fn)` / `Stage.render(collection_id)`.
+   Single-scene training stays on `add_scene` + `render(scene_id)`. Image-level
+   compositing of separate renders remains caller-owned. See
+   `gsplat/scene/design-transforms.md`.
 
 5. **render_fn contract: splats as named kwarg** -- Stage always calls
-   `fn(splats=scene.splats, **kwargs)`. Splats is passed as a **keyword**
-   argument, never positional, to avoid colliding with render functions whose
-   first positional arg is something else (e.g., `camtoworlds`).
+   `fn(splats=scene.apply_transforms(t=...), **kwargs)` for a single scene, or
+   delegates to `ComponentCollection.render()` for a collected scene group.
+   Splats is passed as a **keyword** argument, never positional, to avoid
+   colliding with render functions whose first positional arg is something else
+   (e.g., `camtoworlds`).
    Render functions must accept a `splats` kwarg. For `simple_trainer`, this
    means adding an optional `splats` parameter to `rasterize_splats` with
    fallback `splats = splats if splats is not None else self.splats`.
