@@ -41,11 +41,11 @@ from examples.av_trainer import (
     render_gaussians,
 )
 from datasets.colmap import Parser as ColmapParser
-from datasets.ncore import NCoreParser
+from datasets.ncore import NCoreParser, frame_midpoint_timestamp_us
 
 try:
     from gsplat.scene import GaussianScene
-    from gsplat.stage import Stage
+    from gsplat.stage import ComponentCollection, Stage
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
         f"{e.name} is not installed. The example trainers require the "
@@ -54,18 +54,47 @@ except ModuleNotFoundError as e:
     ) from e
 
 
-def load_stage(ckpt_path: str, device: torch.device) -> tuple[Stage, str, int | None]:
-    """Load a gsplat checkpoint into a Stage."""
+def load_stage(
+    ckpt_path: str, device: torch.device
+) -> tuple[Stage, str, int | None, dict | None]:
+    """Load a gsplat checkpoint into a Stage.
+
+    Also returns the checkpoint's recorded dataset selection (cameras,
+    duration, downscale) when present, so callers can extract cameras in the
+    same scene frame the model was trained in.
+    """
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
     if "scene_id" not in checkpoint:
         raise ValueError(f"Checkpoint {ckpt_path} missing 'scene_id'.")
     splats_state = checkpoint["splats"]
-    splats = torch.nn.ParameterDict(
-        {k: torch.nn.Parameter(v, requires_grad=False) for k, v in splats_state.items()}
-    )
-    scene = GaussianScene.from_splats(splats, id=checkpoint["scene_id"])
+
     stage = Stage()
-    stage.add_scene(scene, render_gaussians)
+    if "scenes" in checkpoint:
+        # Rigid dynamic payload: rebuild the static + dynamic member scenes
+        # (transform context/graph included in their state dicts) and render
+        # them through one collection. Cameras supply the render time ``t``.
+        collection = ComponentCollection(id=checkpoint["render_scene_id"])
+        for scene_state in checkpoint["scenes"]:
+            member = GaussianScene.from_state_dict(scene_state)
+            # from_state_dict restores training-time requires_grad; freeze for
+            # inference so rendering works outside torch.no_grad().
+            for param in member.splats.values():
+                param.requires_grad_(False)
+            collection.add_scene(member)
+        stage.add_collection(collection, render_gaussians)
+        render_id = collection.id
+        num_gaussians = sum(s.num_gaussians() for s in collection.members)
+    else:
+        splats = torch.nn.ParameterDict(
+            {
+                k: torch.nn.Parameter(v, requires_grad=False)
+                for k, v in splats_state.items()
+            }
+        )
+        scene = GaussianScene.from_splats(splats, id=checkpoint["scene_id"])
+        stage.add_scene(scene, render_gaussians)
+        render_id = scene.id
+        num_gaussians = scene.num_gaussians()
 
     sh_degree = None
     if "shN" in splats_state:
@@ -73,9 +102,9 @@ def load_stage(ckpt_path: str, device: torch.device) -> tuple[Stage, str, int | 
         sh_degree = int(math.isqrt(splats_state["shN"].shape[1] + 1)) - 1
     print(
         f"Loaded checkpoint (step {checkpoint.get('step', '?')}): "
-        f"{scene.num_gaussians()} Gaussians, sh_degree={sh_degree}"
+        f"{num_gaussians} Gaussians, sh_degree={sh_degree}"
     )
-    return stage, scene.id, sh_degree
+    return stage, render_id, sh_degree, checkpoint.get("dataset")
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +119,7 @@ def _cam_entry(
     H: int,
     label: str,
     render_kwargs: dict | None = None,
+    t: int | None = None,
 ) -> dict:
     return {
         "viewmat": torch.linalg.inv_ex(c2w).inverse.unsqueeze(0),
@@ -98,6 +128,9 @@ def _cam_entry(
         "H": H,
         "label": label,
         "render_kwargs": render_kwargs or {},
+        # Transform time (µs) for rigid dynamic scenes; None for static-only
+        # sources (PandaSet npz, COLMAP).
+        "t": t,
     }
 
 
@@ -128,14 +161,23 @@ def _extract_cameras_ncore(
     device: torch.device,
     camera_filter: list[str] | None,
     frame_filter: list[int] | None,
+    duration: float | None,
+    downscale: int,
 ) -> dict[str, dict]:
-    """Pull poses + FTheta params straight from NCoreParser (no image decode)."""
+    """Pull poses + FTheta params straight from NCoreParser (no image decode).
+
+    ``duration``/``downscale``/``camera_filter`` must match the values the
+    model was trained with: the parser derives the scene-frame origin from the
+    mean camera position over the selected time window, so a different window
+    or camera set shifts every pose relative to the trained splats. main()
+    defaults them to the selection recorded in the checkpoint.
+    """
     parser = NCoreParser(
         meta_json_path=json_path,
-        factor=0.25,
+        factor=1.0 / downscale if downscale > 1 else 1.0,
         test_every=8,
         camera_ids=camera_filter or None,
-        duration_sec=4.0,
+        duration_sec=duration,
     )
     n = len(parser.frame_list)
     indices = frame_filter if frame_filter is not None else [0, n // 2, n - 1]
@@ -149,6 +191,7 @@ def _extract_cameras_ncore(
         c2w = torch.from_numpy(parser.camtoworlds[fi]).float().to(device)
         K = torch.from_numpy(parser.Ks_dict[cam_id]).float().to(device)
         W, H = parser.imsize_dict[cam_id]
+        ts_start, ts_end = (int(v) for v in parser.frame_timestamps_us[fi])
         cameras[f"{cam_id}_f{fi}"] = _cam_entry(
             c2w,
             K,
@@ -156,6 +199,7 @@ def _extract_cameras_ncore(
             H,
             f"{cam_id} (frame {fi})",
             render_kwargs=get_render_params(cam_render_data, cam_idx, device),
+            t=frame_midpoint_timestamp_us(ts_start, ts_end),
         )
     return cameras
 
@@ -244,9 +288,13 @@ def extract_cameras(
     camera_filter: list[str] | None = None,
     frame_filter: list[int] | None = None,
     include_synthetic: bool = True,
+    duration: float | None = None,
+    downscale: int = 1,
 ) -> dict[str, dict]:
     if scene_path.endswith(".json"):
-        return _extract_cameras_ncore(scene_path, device, camera_filter, frame_filter)
+        return _extract_cameras_ncore(
+            scene_path, device, camera_filter, frame_filter, duration, downscale
+        )
     if os.path.isdir(scene_path):
         return _extract_cameras_colmap(scene_path, device, frame_filter)
     return _extract_cameras_pandaset(
@@ -263,12 +311,20 @@ def render_gallery(
     os.makedirs(output_dir, exist_ok=True)
     print(f"\nRendering {len(cameras)} viewpoints to {output_dir}/")
     for name, cam in cameras.items():
+        # int64 tensor: the scene coerces plain Python numbers to the float32
+        # splat dtype, which quantizes microsecond timestamps by milliseconds.
+        time_kwargs = (
+            {"t": torch.tensor(cam["t"], dtype=torch.int64)}
+            if cam.get("t") is not None
+            else {}
+        )
         renders, alphas, *_ = stage.render(
             scene_id,
             viewmat=cam["viewmat"],
             K=cam["K"],
             W=cam["W"],
             H=cam["H"],
+            **time_kwargs,
             **cam["render_kwargs"],
         )
         rgb_np = (renders[0, :, :, :3].clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
@@ -296,18 +352,63 @@ def main() -> None:
     parser.add_argument("--cameras", type=str, nargs="+", default=None)
     parser.add_argument("--frames", type=int, nargs="+", default=None)
     parser.add_argument("--no-synthetic", action="store_true")
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="NCore clip duration in seconds; defaults to the value recorded "
+        "in the checkpoint",
+    )
+    parser.add_argument(
+        "--downscale",
+        type=int,
+        default=None,
+        help="NCore image downscale factor; defaults to the value recorded "
+        "in the checkpoint",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     with torch.no_grad():
-        stage, scene_id, sh_degree = load_stage(args.ckpt, device)
+        stage, scene_id, sh_degree, trained_dataset = load_stage(args.ckpt, device)
+        # Default to the training-time dataset selection recorded in the
+        # checkpoint: the scene-frame origin depends on the camera set and
+        # time window, so mismatched values shift every pose relative to the
+        # trained splats. Explicit flags override.
+        trained_dataset = trained_dataset or {}
+        if (
+            args.scene.endswith(".json")
+            and not trained_dataset
+            and args.cameras is None
+            and args.duration is None
+            and args.downscale is None
+        ):
+            print(
+                "Warning: checkpoint predates dataset recording; defaulting to "
+                "the full clip and all cameras. If the model was trained with "
+                "--duration/--cameras/--downscale, pass the same values here so "
+                "the scene frame matches."
+            )
+        camera_filter = args.cameras or trained_dataset.get("cameras")
+        duration = (
+            args.duration
+            if args.duration is not None
+            else trained_dataset.get("duration_sec")
+        )
+        downscale = (
+            args.downscale
+            if args.downscale is not None
+            else trained_dataset.get("downscale") or 1
+        )
         cameras = extract_cameras(
             args.scene,
             device,
-            camera_filter=args.cameras,
+            camera_filter=camera_filter,
             frame_filter=args.frames,
             include_synthetic=not args.no_synthetic,
+            duration=duration,
+            downscale=downscale,
         )
         if sh_degree is not None:
             for cam in cameras.values():

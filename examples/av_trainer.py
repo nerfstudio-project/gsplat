@@ -46,8 +46,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 import gsplat
 
 try:
-    from gsplat.scene import GaussianScene
-    from gsplat.stage import Stage
+    from gsplat.scene import GaussianScene, RigidTransformOp, TransformGraph
+    from gsplat.stage import ComponentCollection, Stage
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
         f"{e.name} is not installed. The example trainers require the "
@@ -465,6 +465,67 @@ def create_optimizers(params, lr):
     }
 
 
+def build_rigid_dynamic_scene(
+    rigid_dynamic_tracks,
+    device: torch.device,
+    sh_degree: int,
+) -> GaussianScene:
+    """Build one dynamic GaussianScene with one rigid component per NCore track."""
+    from gsplat.geometry.functional import se3pose_from_matrix
+
+    dynamic_scene = GaussianScene("av_dynamic")
+    dynamic_scene.set_graph(TransformGraph([RigidTransformOp()]))
+
+    for track_idx, track in enumerate(rigid_dynamic_tracks):
+        points = torch.from_numpy(track.points_local).float().to(device)
+        colors = torch.from_numpy(track.points_rgb).float().to(device) / 255.0
+        splats = init_gaussians(points, colors, device, sh_degree)
+
+        pose_mats = torch.from_numpy(track.poses_local_to_scene).float().to(device)
+        pose_t, pose_q = se3pose_from_matrix(pose_mats)
+        poses = torch.cat([pose_t, pose_q], dim=-1)
+        pose_times = torch.from_numpy(track.frame_timestamps_us).to(
+            device=device, dtype=torch.long
+        )
+        dynamic_scene.put(
+            f"track_{track_idx}_{track.track_id}",
+            splats,
+            ctx={
+                "poses": poses,
+                "pose_times": pose_times,
+            },
+        )
+
+    return dynamic_scene
+
+
+def create_scene_optimizers(
+    scenes: list[GaussianScene],
+    lr: float,
+) -> list[dict[str, torch.optim.Optimizer]]:
+    """Create one optimizer dict per trainable GaussianScene."""
+    return [create_optimizers(scene.splats, lr) for scene in scenes]
+
+
+def iter_optimizers(
+    optimizer_groups: list[dict[str, torch.optim.Optimizer]],
+):
+    """Yield optimizers from every scene-specific optimizer group."""
+    for optimizers in optimizer_groups:
+        yield from optimizers.values()
+
+
+def num_scene_gaussians(scenes: list[GaussianScene]) -> int:
+    """Return total live Gaussians across train scenes."""
+    total = 0
+    for scene in scenes:
+        if hasattr(scene, "num_gaussians"):
+            total += scene.num_gaussians()
+        else:
+            total += len(scene.splats["means"])
+    return total
+
+
 def log_training_step(
     step: int, max_steps: int, total_loss: torch.Tensor, start_time: float
 ) -> None:
@@ -518,22 +579,64 @@ def gaussian_scene_from_checkpoint(checkpoint: dict) -> GaussianScene:
     return GaussianScene.from_splats(splats, id=checkpoint["scene_id"])
 
 
+def scene_state_payload(
+    gaussian_scene: GaussianScene,
+    member_scenes: list[GaussianScene] | None = None,
+    render_scene_id: str | None = None,
+    dataset: dict | None = None,
+) -> dict:
+    """Scene payload shared by checkpoints and model.pt so the two schemas
+    cannot drift: always ``{"scene_id", "splats"}``, plus per-scene state
+    dicts (pose context and transform graph included) for multi-scene rigid
+    runs. ``dataset`` records the training-time data selection (cameras,
+    duration, downscale) so inference can reproduce the same scene frame
+    without the caller re-specifying it."""
+    payload: dict = {
+        "scene_id": gaussian_scene.id,
+        "splats": gaussian_scene.splats.state_dict(),
+    }
+    if member_scenes is not None:
+        payload["render_scene_id"] = render_scene_id
+        payload["scenes"] = [scene.state_dict() for scene in member_scenes]
+    if dataset is not None:
+        payload["dataset"] = dataset
+    return payload
+
+
+def _payload_to_cpu(value, _memo: dict | None = None):
+    """Deep-copy a payload to CPU. Tensors sharing storage map to one CPU
+    tensor, so the static splats referenced both top-level and in scenes[0]
+    serialize once."""
+    if _memo is None:
+        _memo = {}
+    if isinstance(value, torch.Tensor):
+        key = (value.data_ptr(), value.dtype, tuple(value.shape))
+        if key not in _memo:
+            _memo[key] = value.detach().cpu()
+        return _memo[key]
+    if isinstance(value, dict):
+        return {k: _payload_to_cpu(v, _memo) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_payload_to_cpu(v, _memo) for v in value)
+    return value
+
+
 def save_checkpoint(
     gaussian_scene: GaussianScene,
     scene_path: str,
     ckpt_dir: str,
     step: int,
+    member_scenes: list[GaussianScene] | None = None,
+    render_scene_id: str | None = None,
+    dataset: dict | None = None,
 ) -> str:
     ckpt_path = os.path.join(ckpt_dir, checkpoint_name(step))
-    torch.save(
-        {
-            "step": step,
-            "scene_path": scene_path,
-            "scene_id": gaussian_scene.id,
-            "splats": gaussian_scene.splats.state_dict(),
-        },
-        ckpt_path,
-    )
+    checkpoint = {
+        "step": step,
+        "scene_path": scene_path,
+        **scene_state_payload(gaussian_scene, member_scenes, render_scene_id, dataset),
+    }
+    torch.save(checkpoint, ckpt_path)
     return ckpt_path
 
 
@@ -684,6 +787,7 @@ def train(
     max_lidar: int = 150_000,
     downscale: int = 1,
     rigid_dynamic_track_class_ids: list[str] | None = None,
+    rigid_dynamic_static_baseline: bool = False,
     # LiDAR rendering (addition over simple_trainer)
     lidar_render: bool = False,
     lidar_render_subsample: int = 112,
@@ -702,12 +806,25 @@ def train(
         or scene_path.endswith(".zarr.itar")
         or Path(scene_path).is_dir()
     )
+    if rigid_dynamic_static_baseline and rigid_dynamic_track_class_ids is None:
+        raise ValueError(
+            "--rigid-dynamic-static-baseline requires "
+            "--rigid-dynamic-track-class-ids"
+        )
+    rigid_tracks_requested = rigid_dynamic_track_class_ids is not None
+    rigid_dynamics_enabled = (
+        rigid_tracks_requested and not rigid_dynamic_static_baseline
+    )
 
     ncore_camera_data = None
     lidar_r = None
 
     if is_ncore:
-        from datasets.ncore import NCoreParser, NCoreDataset
+        from datasets.ncore import (
+            NCoreParser,
+            NCoreDataset,
+            frame_midpoint_timestamp_us,
+        )
 
         parser = NCoreParser(
             meta_json_path=scene_path,
@@ -717,15 +834,32 @@ def train(
             duration_sec=duration,
             max_lidar_points=max_lidar,
             rigid_dynamic_track_class_ids=rigid_dynamic_track_class_ids,
+            keep_dynamic_points_in_static_scene=not rigid_dynamics_enabled,
         )
-        if rigid_dynamic_track_class_ids is not None:
+        if rigid_tracks_requested:
             n_dyn_pts = sum(len(t.points_local) for t in parser.rigid_dynamic_tracks)
+            split_note = (
+                "Moving-object returns are split into a dynamic scene."
+                if rigid_dynamics_enabled
+                else "Moving-object returns are kept in the static scene."
+            )
             print(
                 f"  Rigid dynamic: {len(parser.rigid_dynamic_tracks)} tracks "
                 f"({n_dyn_pts} local points) for class IDs "
-                f"{sorted(rigid_dynamic_track_class_ids)}. Moving-object returns "
-                f"are kept in the static background."
+                f"{sorted(rigid_dynamic_track_class_ids)}. {split_note}"
             )
+        if rigid_tracks_requested:
+            if not parser.rigid_dynamic_tracks:
+                raise ValueError(
+                    "--rigid-dynamic-track-class-ids was provided, but NCoreParser "
+                    "loaded no rigid dynamic tracks"
+                )
+        if rigid_dynamics_enabled:
+            if lidar_render:
+                raise ValueError(
+                    "--rigid-dynamic-track-class-ids does not support "
+                    "--lidar-render yet"
+                )
         # Pre-stacking below requires every selected camera to share (W, H).
         # Mixed-resolution surround-view rigs (e.g. wide 120fov + tele 30fov)
         # would raise at torch.stack time; fail early with a clear message.
@@ -755,10 +889,21 @@ def train(
             ).inverse
             Ks = torch.stack([d["K"] for d in samples]).to(dev)
             cam_idx = [d["camera_idx"] for d in samples]
+            timestamp_starts_us = torch.tensor(
+                [int(d.get("timestamp_start_us", d["timestamp_us"])) for d in samples],
+                device=dev,
+                dtype=torch.long,
+            )
+            timestamp_ends_us = torch.tensor(
+                [int(d.get("timestamp_end_us", d["timestamp_us"])) for d in samples],
+                device=dev,
+                dtype=torch.long,
+            )
+            times = frame_midpoint_timestamp_us(timestamp_starts_us, timestamp_ends_us)
             masks = None
             if "mask" in samples[0]:
                 masks = torch.stack([d["mask"] for d in samples]).to(dev)
-            return images, viewmats, Ks, cam_idx, masks
+            return images, viewmats, Ks, cam_idx, masks, times
 
         (
             train_images,
@@ -766,10 +911,16 @@ def train(
             train_Ks,
             train_cam_idx,
             train_masks,
+            train_times_us,
         ) = _stack_to_gpu(train_raw, device)
-        val_images, val_viewmats, val_Ks, val_cam_idx, _val_masks = _stack_to_gpu(
-            val_raw, device
-        )
+        (
+            val_images,
+            val_viewmats,
+            val_Ks,
+            val_cam_idx,
+            _val_masks,
+            val_times_us,
+        ) = _stack_to_gpu(val_raw, device)
         # Pre-compute sky masks (deterministic function of GT images)
         train_sky_masks = torch.stack(
             [estimate_sky_mask(train_images[i]) for i in range(len(train_raw))]
@@ -825,13 +976,47 @@ def train(
             f"{len(scene.lidar_points)} init pts | {len(params['means'])} Gaussians"
         )
 
-    gaussian_scene = GaussianScene.from_splats(params, id="av_scene")
+    dataset_info = None
+    if is_ncore:
+        # Recorded into checkpoints/model.pt so inference can reproduce the
+        # same scene frame (its origin depends on the camera set and time
+        # window) without the caller re-specifying the training flags.
+        dataset_info = {
+            "cameras": list(parser.camera_ids),
+            "duration_sec": duration,
+            "downscale": downscale,
+        }
+
     stage = Stage()
-    stage.add_scene(gaussian_scene, render_gaussians)
+    collection: ComponentCollection | None = None
+    if is_ncore and rigid_dynamics_enabled:
+        static_scene = GaussianScene.from_splats(params, id="av_static")
+        dynamic_scene = build_rigid_dynamic_scene(
+            parser.rigid_dynamic_tracks,
+            device,
+            sh_degree,
+        )
+        collection = ComponentCollection(id="av_scene")
+        collection.add_scene(static_scene)
+        collection.add_scene(dynamic_scene)
+        stage.add_collection(collection, render_gaussians)
+        gaussian_scene = static_scene
+        train_scenes = [static_scene, dynamic_scene]
+        render_scene_id = collection.id
+        print(
+            f"  Dynamic scene split: static={static_scene.num_gaussians()} "
+            f"dynamic={dynamic_scene.num_gaussians()} "
+            f"components={len(dynamic_scene.component_names)}"
+        )
+    else:
+        gaussian_scene = GaussianScene.from_splats(params, id="av_scene")
+        stage.add_scene(gaussian_scene, render_gaussians)
+        train_scenes = [gaussian_scene]
+        render_scene_id = gaussian_scene.id
     splats = gaussian_scene.splats
 
-    N = len(splats["means"])
-    optimizers = create_optimizers(splats, lr)
+    N = num_scene_gaussians(train_scenes)
+    optimizer_groups = create_scene_optimizers(train_scenes, lr)
 
     # MCMC (same as simple_trainer)
     strategy = None
@@ -845,20 +1030,24 @@ def train(
             refine_every=100,
             verbose=True,
         )
-        strategy.check_sanity(splats, optimizers)
+        strategy.check_sanity(splats, optimizer_groups[0])
         strategy_state = strategy.initialize_state()
         print(f"MCMC: cap_max={cap_max}")
 
     # LR schedule (same as simple_trainer)
-    schedulers = [
-        torch.optim.lr_scheduler.ExponentialLR(
-            optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
-        ),
-    ] + [
-        torch.optim.lr_scheduler.CosineAnnealingLR(optimizers[name], T_max=max_steps)
-        for name in optimizers
-        if name != "means"
-    ]
+    schedulers = []
+    means_schedulers = []
+    for group in optimizer_groups:
+        means_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            group["means"], gamma=0.01 ** (1.0 / max_steps)
+        )
+        schedulers.append(means_scheduler)
+        means_schedulers.append(means_scheduler)
+        schedulers.extend(
+            torch.optim.lr_scheduler.CosineAnnealingLR(group[name], T_max=max_steps)
+            for name in group
+            if name != "means"
+        )
 
     losses_history = []
     checkpoints = []
@@ -874,6 +1063,7 @@ def train(
             K = train_Ks[idx].unsqueeze(0)
             mask = train_masks[idx] if train_masks is not None else None
             camera_idx = train_cam_idx[idx]
+            render_time_us = train_times_us[idx]
 
             # Per-camera distortion (same as simple_trainer.rasterize_splats)
             rp = get_render_params(ncore_camera_data, camera_idx, device)
@@ -889,6 +1079,7 @@ def train(
             mask = None
             cam_model = "pinhole"
             rp = {}
+            render_time_us = None
 
         height, width = pixels.shape[1], pixels.shape[2]
         sh_degree_to_use = (
@@ -898,8 +1089,11 @@ def train(
         # Forward (matches simple_trainer pattern). PandaSet gets an extra depth
         # channel ("RGB+ED") so sparse-LiDAR depth supervision below can sample it.
         render_mode = "RGB" if is_ncore else "RGB+ED"
+        render_kwargs = {}
+        if render_time_us is not None:
+            render_kwargs["t"] = render_time_us
         renders, alphas, info, act_scales, act_opacities = stage.render(
-            scene_id=gaussian_scene.id,
+            scene_id=render_scene_id,
             viewmat=viewmat,
             K=K,
             W=width,
@@ -907,6 +1101,7 @@ def train(
             render_mode=render_mode,
             sh_degree_to_use=sh_degree_to_use,
             camera_model=cam_model,
+            **render_kwargs,
             **rp,
         )
         colors_render = renders[..., :3]
@@ -1019,27 +1214,26 @@ def train(
                     )
 
         # Backward (same as simple_trainer)
-        for opt in optimizers.values():
+        for opt in iter_optimizers(optimizer_groups):
             opt.zero_grad()
         loss.backward()
-        for opt in optimizers.values():
+        for opt in iter_optimizers(optimizer_groups):
             opt.step()
         for sched in schedulers:
             sched.step()
         losses_history.append(loss.item())
 
-        # MCMC (same as simple_trainer)
         if strategy is not None:
             strategy.step_post_backward(
                 splats,
-                optimizers,
+                optimizer_groups[0],
                 strategy_state,
                 step,
-                info={},
-                lr=schedulers[0].get_last_lr()[0],
+                info=info,
+                lr=means_schedulers[0].get_last_lr()[0],
                 scene=gaussian_scene,
             )
-        N = len(splats["means"])
+        N = num_scene_gaussians(train_scenes)
 
         # Logging
         if step % log_every == 0:
@@ -1067,13 +1261,14 @@ def train(
                         ecm = erp.pop("camera_model")
                         val_h, val_w = gt.shape[1], gt.shape[2]
                         rd, _, _, _, _ = stage.render(
-                            scene_id=gaussian_scene.id,
+                            scene_id=render_scene_id,
                             viewmat=vm,
                             K=Kv,
                             W=val_w,
                             H=val_h,
                             sh_degree_to_use=sh_degree_to_use,
                             camera_model=ecm,
+                            t=val_times_us[vi],
                             **erp,
                         )
                         psnrs.append(compute_psnr(rd[0].clamp(0, 1), gt[0]))
@@ -1098,7 +1293,7 @@ def train(
                             vm = scene.viewmats[tfid, tci].unsqueeze(0)
                             Kv = scene.Ks[tci]
                             rd, _, _, _, _ = stage.render(
-                                scene_id=gaussian_scene.id,
+                                scene_id=render_scene_id,
                                 viewmat=vm,
                                 K=Kv,
                                 W=W,
@@ -1123,7 +1318,15 @@ def train(
             elapsed = time.time() - start_time
             mem_peak = torch.cuda.max_memory_allocated() / 1e6
             mean_psnr = float(np.mean(psnrs)) if psnrs else 0.0
-            ckpt_path = save_checkpoint(gaussian_scene, scene_path, ckpt_dir, step + 1)
+            ckpt_path = save_checkpoint(
+                gaussian_scene,
+                scene_path,
+                ckpt_dir,
+                step + 1,
+                member_scenes=train_scenes if collection is not None else None,
+                render_scene_id=render_scene_id,
+                dataset=dataset_info,
+            )
             ckpt = {
                 "step": step + 1,
                 "loss": loss.item(),
@@ -1146,13 +1349,26 @@ def train(
         "initial_loss": losses_history[0] if losses_history else None,
         "final_loss": losses_history[-1] if losses_history else None,
         "num_gaussians": N,
+        "scene_ids": [scene.id for scene in train_scenes],
+        "render_scene_id": render_scene_id,
         "checkpoints": checkpoints,
     }
     with open(os.path.join(result_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
     if save_model:
         model_path = os.path.join(result_dir, "model.pt")
-        torch.save({k: v.detach().cpu() for k, v in splats.items()}, model_path)
+        # Same schema as save_checkpoint (shared builder) so
+        # sample_inference.load_stage can consume model.pt directly; moved to
+        # CPU so the export loads on machines without CUDA.
+        model = _payload_to_cpu(
+            scene_state_payload(
+                gaussian_scene,
+                member_scenes=train_scenes if collection is not None else None,
+                render_scene_id=render_scene_id,
+                dataset=dataset_info,
+            )
+        )
+        torch.save(model, model_path)
         print(f"Model saved to {model_path} ({N} Gaussians)")
 
     print(f"\nDone: {max_steps} steps in {elapsed:.1f}s")
@@ -1194,7 +1410,16 @@ def main():
         default=None,
         help=(
             "comma-separated NCore cuboid class IDs to load as rigid dynamic "
-            "tracks; moving returns stay in static init"
+            "tracks into a dynamic scene"
+        ),
+    )
+    p.add_argument(
+        "--rigid-dynamic-static-baseline",
+        action="store_true",
+        help=(
+            "keep selected moving-object returns in the static scene instead "
+            "of splitting them into rigid components; intended for "
+            "static-vs-rigid comparisons"
         ),
     )
     p.add_argument("--max-lidar", type=int, default=150_000)
@@ -1262,6 +1487,7 @@ def main():
         max_lidar=args.max_lidar,
         downscale=args.downscale,
         rigid_dynamic_track_class_ids=rigid_dynamic_track_class_ids,
+        rigid_dynamic_static_baseline=args.rigid_dynamic_static_baseline,
         lidar_render=args.lidar_render,
         lidar_render_subsample=args.lidar_render_subsample,
         lidar_render_weight=args.lidar_render_weight,
