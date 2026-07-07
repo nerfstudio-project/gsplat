@@ -684,7 +684,7 @@ __global__ void add_counts_kernel(
     }
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_kernels_privateuseone(
+TileIntersectResult intersect_tile_kernels_privateuseone(
     // inputs
     const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
     const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
@@ -723,7 +723,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_kernels_privateuse
     {
         isect_ids   = at::empty({0}, opt.dtype(at::kLong));
         flatten_ids = at::empty({0}, opt.dtype(at::kInt));
-        return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+        return TileIntersectResult{
+            .tiles_per_gauss = tiles_per_gauss,
+            .isect_ids       = isect_ids,
+            .flatten_ids     = flatten_ids,
+        };
     }
 
     const uint32_t n_tiles      = tile_width * tile_height;
@@ -836,7 +840,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_kernels_privateuse
             C10_CUDA_CHECK(cudaFreeAsync(device_cumsum[device_id], stream));
         }
         merge_streams();
-        return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+        return TileIntersectResult{
+            .tiles_per_gauss = tiles_per_gauss,
+            .isect_ids       = isect_ids,
+            .flatten_ids     = flatten_ids,
+        };
     }
 
     for(const auto device_id: c10::irange(device_count))
@@ -920,7 +928,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_kernels_privateuse
         }
     }
     merge_streams();
-    return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+    return TileIntersectResult{
+        .tiles_per_gauss = tiles_per_gauss,
+        .isect_ids       = isect_ids,
+        .flatten_ids     = flatten_ids,
+    };
 }
 
 __global__ void intersect_offset_kernel(

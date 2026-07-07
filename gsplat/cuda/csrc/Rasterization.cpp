@@ -374,7 +374,7 @@ RasterizeToPixels3DGSFwdResult rasterize_to_pixels_3dgs_fwd(
     };
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd_privateuseone(
+RasterizeToPixels3DGSFwdResult rasterize_to_pixels_3dgs_fwd_privateuseone(
     // Gaussian parameters
     const at::Tensor &means2d,                   // [..., N, 2] or [nnz, 2]
     const at::Tensor &conics,                    // [..., N, 3] or [nnz, 3]
@@ -458,7 +458,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3
 
     at::Tensor absgrad_holder = absgrad ? at::zeros_like(means2d) : at::empty({0}, means2d.options());
 
-    return std::make_tuple(renders, alphas.to(at::kFloat), absgrad_holder, last_ids);
+    return RasterizeToPixels3DGSFwdResult{
+        .renders         = renders,
+        .alphas          = alphas,
+        .last_ids        = last_ids,
+        .means2d_absgrad = absgrad_holder,
+    };
 }
 
 // Gradients of the differentiable forward outputs.
@@ -865,31 +870,28 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_sparse_bwd(
     };
 }
 
-std::tuple<at::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
-    rasterize_to_pixels_3dgs_bwd_privateuseone(
-        // Gaussian parameters
-        const at::Tensor &means2d,                   // [..., N, 2] or [nnz, 2]
-        const at::Tensor &conics,                    // [..., N, 3] or [nnz, 3]
-        const at::Tensor &colors,                    // [..., N, channels] or [nnz, channels]
-        const at::Tensor &opacities,                 // [..., N] or [nnz]
-        const at::optional<at::Tensor> &backgrounds, // [..., channels]
-        const at::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]
-        // intersections
-        const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
-        const at::Tensor &flatten_ids,  // [n_isects]
-        // forward outputs
-        const at::Tensor &render_alphas, // [..., image_height, image_width, 1]
-        const at::Tensor &last_ids,      // [..., image_height, image_width]
-        // scalars
-        int64_t image_width,
-        int64_t image_height,
-        int64_t tile_size,
-        bool absgrad,
-        // gradients of outputs
-        const at::Tensor &v_render_colors, // [..., image_height, image_width, channels]
-        const at::Tensor &v_render_alphas, // [..., image_height, image_width, 1]
-        bool compute_v_backgrounds
-    )
+RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd_privateuseone(
+    // Gaussian parameters
+    const at::Tensor &means2d,                   // [..., N, 2] or [nnz, 2]
+    const at::Tensor &conics,                    // [..., N, 3] or [nnz, 3]
+    const at::Tensor &colors,                    // [..., N, channels] or [nnz, channels]
+    const at::Tensor &opacities,                 // [..., N] or [nnz]
+    const at::optional<at::Tensor> &backgrounds, // [..., channels]
+    const at::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]
+    // intersections
+    const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
+    const at::Tensor &flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor &render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor &last_ids,      // [..., image_height, image_width]
+    // scalars
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    bool absgrad,
+    const RasterizeToPixels3DGSGrad &grad,
+    bool compute_v_backgrounds
+)
 {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -900,6 +902,10 @@ std::tuple<at::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor, at::Ten
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
+    CHECK_DENSE(grad.renders);
+    CHECK_DENSE(grad.alphas);
+    at::Tensor v_render_colors = grad.renders.contiguous();
+    at::Tensor v_render_alphas = grad.alphas.contiguous();
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
     if(backgrounds.has_value())
@@ -956,9 +962,14 @@ std::tuple<at::optional<at::Tensor>, at::Tensor, at::Tensor, at::Tensor, at::Ten
         }
     }
 
-    return std::make_tuple(
-        as_optional_tensor(v_means2d_abs), v_means2d, v_conics, v_colors, v_opacities, as_optional_tensor(v_backgrounds)
-    );
+    return RasterizeToPixels3DGSBwdResult{
+        .v_means2d_abs = as_optional_tensor(v_means2d_abs),
+        .v_means2d     = v_means2d,
+        .v_conics      = v_conics,
+        .v_colors      = v_colors,
+        .v_opacities   = v_opacities,
+        .v_backgrounds = as_optional_tensor(v_backgrounds),
+    };
 }
 
 RasterizeToIndices3DGSResult rasterize_to_indices_3dgs(

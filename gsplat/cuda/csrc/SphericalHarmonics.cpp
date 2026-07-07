@@ -19,7 +19,6 @@
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
-#include <tuple>
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
@@ -255,7 +254,7 @@ SphericalHarmonicsFwdResult spherical_harmonics_l1_plus_fwd(
     };
 }
 
-at::Tensor spherical_harmonics_fwd_privateuseone(
+SphericalHarmonicsFwdResult spherical_harmonics_fwd_privateuseone(
     int64_t degrees_to_use,
     const at::Tensor &dirs,               // [..., N, 3]
     const at::Tensor &coeffs,             // [N, K, D]
@@ -270,10 +269,12 @@ at::Tensor spherical_harmonics_fwd_privateuseone(
     at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
 
     launch_spherical_harmonics_fwd_kernels(degrees_to_use, dirs, coeffs, masks, colors);
-    return colors; // [..., N, D]
+    return SphericalHarmonicsFwdResult{
+        .colors = colors,
+    };
 }
 
-at::Tensor spherical_harmonics_l1_plus_fwd_privateuseone(
+SphericalHarmonicsFwdResult spherical_harmonics_l1_plus_fwd_privateuseone(
     int64_t degrees_to_use,
     const at::Tensor &dirs,               // [..., N, 3]
     const at::Tensor &shN,                // [N, K - 1, D]
@@ -288,7 +289,9 @@ at::Tensor spherical_harmonics_l1_plus_fwd_privateuseone(
     at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
 
     launch_spherical_harmonics_l1_plus_fwd_kernels(degrees_to_use, dirs, shN, masks, colors);
-    return colors;
+    return SphericalHarmonicsFwdResult{
+        .colors = colors,
+    };
 }
 
 // Full backward for spherical_harmonics.
@@ -750,22 +753,25 @@ at::Tensor assemble_proj_features(
     );
 }
 
-std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_bwd_privateuseone(
+SphericalHarmonicsBwdResult spherical_harmonics_bwd_privateuseone(
     int64_t degrees_to_use,
     const at::Tensor &dirs,                // [..., N, 3]
     const at::Tensor &coeffs,              // [N, K, D]
     const at::optional<at::Tensor> &masks, // [..., N]
-    const at::Tensor &v_colors,            // [..., N, D]
+    const SphericalHarmonicsGrad &grad,
     bool compute_v_dirs
 )
 {
     DEVICE_GUARD(dirs);
     check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
-    CHECK_INPUT(v_colors);
+    TORCH_INTERNAL_ASSERT(grad.colors.defined());
+    CHECK_DENSE(grad.colors);
+    at::Tensor grad_colors = grad.colors.contiguous();
+    CHECK_INPUT(grad_colors);
     TORCH_CHECK(
-        v_colors.size(-1) == coeffs.size(-1),
+        grad_colors.size(-1) == coeffs.size(-1),
         "v_colors last dim (",
-        v_colors.size(-1),
+        grad_colors.size(-1),
         ") must match coeffs last dim (",
         coeffs.size(-1),
         ")"
@@ -779,36 +785,36 @@ std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_bwd_private
     }
 
     launch_spherical_harmonics_bwd_kernels(
-        degrees_to_use,
-        dirs,
-        coeffs,
-        masks,
-        v_colors,
-        v_coeffs_accum,
-        v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
+        degrees_to_use, dirs, coeffs, masks, grad_colors, v_coeffs_accum, as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_coeffs
         = (coeffs.scalar_type() == at::kFloat) ? v_coeffs_accum : v_coeffs_accum.to(coeffs.scalar_type());
-    return std::make_tuple(v_coeffs, as_optional_tensor(v_dirs));
+    return SphericalHarmonicsBwdResult{
+        .v_coeffs = v_coeffs,
+        .v_dirs   = as_optional_tensor(v_dirs),
+    };
 }
 
-std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_l1_plus_bwd_privateuseone(
+SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd_privateuseone(
     int64_t degrees_to_use,
     const at::Tensor &dirs,                // [..., N, 3]
     const at::Tensor &shN,                 // [N, K - 1, D]
     const at::optional<at::Tensor> &masks, // [..., N]
-    const at::Tensor &v_colors,            // [..., N, D]
+    const SphericalHarmonicsGrad &grad,
     bool compute_v_dirs
 )
 {
     DEVICE_GUARD(dirs);
     check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
-    CHECK_INPUT(v_colors);
+    TORCH_INTERNAL_ASSERT(grad.colors.defined());
+    CHECK_DENSE(grad.colors);
+    at::Tensor grad_colors = grad.colors.contiguous();
+    CHECK_INPUT(grad_colors);
     TORCH_CHECK(
-        v_colors.size(-1) == shN.size(-1),
+        grad_colors.size(-1) == shN.size(-1),
         "v_colors last dim (",
-        v_colors.size(-1),
+        grad_colors.size(-1),
         ") must match shN last dim (",
         shN.size(-1),
         ")"
@@ -822,17 +828,14 @@ std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_l1_plus_bwd
     }
 
     launch_spherical_harmonics_l1_plus_bwd_kernels(
-        degrees_to_use,
-        dirs,
-        shN,
-        masks,
-        v_colors,
-        v_shN_accum,
-        v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
+        degrees_to_use, dirs, shN, masks, grad_colors, v_shN_accum, as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_shN = (shN.scalar_type() == at::kFloat) ? v_shN_accum : v_shN_accum.to(shN.scalar_type());
-    return std::make_tuple(v_shN, as_optional_tensor(v_dirs));
+    return SphericalHarmonicsBwdResult{
+        .v_coeffs = v_shN,
+        .v_dirs   = as_optional_tensor(v_dirs),
+    };
 }
 
 void register_spherical_harmonics_cuda_impl(torch::Library &m)
