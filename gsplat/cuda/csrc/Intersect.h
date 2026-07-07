@@ -71,7 +71,7 @@ TileIntersectResult intersect_tile(
     const at::optional<at::Tensor> &opacities,
     const at::optional<at::Tensor> &image_ids,
     const at::optional<at::Tensor> &gaussian_ids,
-    std::optional<int64_t> n_images,
+    const std::optional<int64_t> &n_images,
     int64_t tile_size,
     int64_t tile_width,
     int64_t tile_height,
@@ -86,7 +86,7 @@ TileIntersectResult intersect_tile_lidar(
     const at::Tensor depths,
     const at::optional<at::Tensor> image_ids,
     const at::optional<at::Tensor> gaussian_ids,
-    std::optional<int64_t> n_images,
+    const std::optional<int64_t> &n_images,
     bool sort,
     bool segmented
 );
@@ -168,7 +168,7 @@ void launch_intersect_tile_kernels(
     at::optional<at::Tensor> flatten_ids      // [n_isects]
 );
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_kernels_privateuseone(
+TileIntersectResult intersect_tile_kernels_privateuseone(
     // inputs
     const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
     const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]

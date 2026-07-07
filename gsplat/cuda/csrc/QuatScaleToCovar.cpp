@@ -161,7 +161,7 @@ QuatScaleToCovarPreciFwdResult quat_scale_to_covar_preci_fwd(
     };
 }
 
-std::tuple<at::optional<at::Tensor>, at::optional<at::Tensor>> quat_scale_to_covar_preci_fwd_privateuseone(
+QuatScaleToCovarPreciFwdResult quat_scale_to_covar_preci_fwd_privateuseone(
     const at::Tensor &quats,  // [..., 4]
     const at::Tensor &scales, // [..., 3]
     bool compute_covar,
@@ -201,10 +201,10 @@ std::tuple<at::optional<at::Tensor>, at::optional<at::Tensor>> quat_scale_to_cov
         compute_preci ? at::optional<at::Tensor>(precis) : at::nullopt
     );
 
-    return std::make_tuple(
-        compute_covar ? at::optional<at::Tensor>(covars) : at::nullopt,
-        compute_preci ? at::optional<at::Tensor>(precis) : at::nullopt
-    );
+    return QuatScaleToCovarPreciFwdResult{
+        .covars = compute_covar ? at::optional<at::Tensor>(covars) : at::nullopt,
+        .precis = compute_preci ? at::optional<at::Tensor>(precis) : at::nullopt,
+    };
 }
 
 QuatScaleToCovarPreciBwdResult quat_scale_to_covar_preci_bwd(
@@ -250,32 +250,33 @@ QuatScaleToCovarPreciBwdResult quat_scale_to_covar_preci_bwd(
     };
 }
 
-std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd_privateuseone(
+QuatScaleToCovarPreciBwdResult quat_scale_to_covar_preci_bwd_privateuseone(
     const at::Tensor &quats,  // [..., 4]
     const at::Tensor &scales, // [..., 3]
     bool triu,
-    const at::optional<at::Tensor> &v_covars, // [..., 3, 3] or [..., 6]
-    const at::optional<at::Tensor> &v_precis  // [..., 3, 3] or [..., 6]
+    const QuatScaleToCovarPreciGrad &grad
 )
 {
     DEVICE_GUARD(quats);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    if(v_covars.has_value())
+    check_quat_scale_to_covar_preci_inputs(quats, scales);
+
+    if(grad.covars.has_value())
     {
-        CHECK_INPUT(v_covars.value());
+        CHECK_DENSE(grad.covars.value());
+        CHECK_INPUT(grad.covars.value());
     }
-    if(v_precis.has_value())
+    if(grad.precis.has_value())
     {
-        CHECK_INPUT(v_precis.value());
+        CHECK_DENSE(grad.precis.value());
+        CHECK_INPUT(grad.precis.value());
     }
 
     at::Tensor v_scales = at::empty_like(scales);
     at::Tensor v_quats  = at::empty_like(quats);
 
-    if(v_covars.has_value() || v_precis.has_value())
+    if(grad.covars.has_value() || grad.precis.has_value())
     {
-        launch_quat_scale_to_covar_preci_bwd_kernels(quats, scales, triu, v_covars, v_precis, v_quats, v_scales);
+        launch_quat_scale_to_covar_preci_bwd_kernels(quats, scales, triu, grad.covars, grad.precis, v_quats, v_scales);
     }
     else
     {
@@ -283,7 +284,10 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd_privateuseone(
         v_quats.zero_();
     }
 
-    return std::make_tuple(v_quats, v_scales);
+    return QuatScaleToCovarPreciBwdResult{
+        .v_quats  = v_quats,
+        .v_scales = v_scales,
+    };
 }
 
 void register_quat_scale_to_covar_cuda_impl(torch::Library &m)
