@@ -1471,13 +1471,17 @@ Projection2DGSFusedBwdResult projection_2dgs_fused_bwd(
     CHECK_INPUT(radii);
     CHECK_INPUT(ray_transforms);
     CHECK_DENSE(grad.means2d);
-    CHECK_INPUT(grad.means2d);
     CHECK_DENSE(grad.depths);
-    CHECK_INPUT(grad.depths);
     CHECK_DENSE(grad.normals);
-    CHECK_INPUT(grad.normals);
     CHECK_DENSE(grad.ray_transforms);
-    CHECK_INPUT(grad.ray_transforms);
+    at::Tensor grad_means2d        = grad.means2d.contiguous();
+    at::Tensor grad_depths         = grad.depths.contiguous();
+    at::Tensor grad_normals        = grad.normals.contiguous();
+    at::Tensor grad_ray_transforms = grad.ray_transforms.contiguous();
+    CHECK_INPUT(grad_means2d);
+    CHECK_INPUT(grad_depths);
+    CHECK_INPUT(grad_normals);
+    CHECK_INPUT(grad_ray_transforms);
 
     at::Tensor v_means  = at::zeros_like(means);
     at::Tensor v_quats  = at::zeros_like(quats);
@@ -1499,10 +1503,10 @@ Projection2DGSFusedBwdResult projection_2dgs_fused_bwd(
         image_height,
         radii,
         ray_transforms,
-        grad.means2d,
-        grad.depths,
-        grad.normals,
-        grad.ray_transforms,
+        grad_means2d,
+        grad_depths,
+        grad_normals,
+        grad_ray_transforms,
         viewmats_requires_grad,
         // outputs
         v_means,
@@ -1784,13 +1788,17 @@ Projection2DGSPackedBwdResult projection_2dgs_packed_bwd(
     DEVICE_GUARD(means);
     check_projection_2dgs_inputs(means, quats, scales, viewmats, Ks);
     CHECK_DENSE(grad.means2d);
-    CHECK_INPUT(grad.means2d);
     CHECK_DENSE(grad.depths);
-    CHECK_INPUT(grad.depths);
     CHECK_DENSE(grad.normals);
-    CHECK_INPUT(grad.normals);
     CHECK_DENSE(grad.ray_transforms);
-    CHECK_INPUT(grad.ray_transforms);
+    at::Tensor grad_means2d        = grad.means2d.contiguous();
+    at::Tensor grad_depths         = grad.depths.contiguous();
+    at::Tensor grad_normals        = grad.normals.contiguous();
+    at::Tensor grad_ray_transforms = grad.ray_transforms.contiguous();
+    CHECK_INPUT(grad_means2d);
+    CHECK_INPUT(grad_depths);
+    CHECK_INPUT(grad_normals);
+    CHECK_INPUT(grad_ray_transforms);
 
     auto opt     = means.options();
     uint32_t nnz = batch_ids.size(0);
@@ -1828,10 +1836,10 @@ Projection2DGSPackedBwdResult projection_2dgs_packed_bwd(
         gaussian_ids,
         ray_transforms,
         // grad outputs
-        grad.means2d,
-        grad.depths,
-        grad.ray_transforms,
-        grad.normals,
+        grad_means2d,
+        grad_depths,
+        grad_ray_transforms,
+        grad_normals,
         sparse_grad,
         // outputs
         v_means,

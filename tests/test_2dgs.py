@@ -681,8 +681,8 @@ def test_rasterization_2dgs_multichunk_depth_auxiliaries(packed: bool, depth_mod
     # The first chunk's final feature must not accidentally resemble the
     # positive projection depth appended to the final chunk.
     source["colors"][..., 31] = -10.0
-    actual_scene = _clone_2dgs_chunk_scene(source, requires_grad=False)
-    reference_scene = _clone_2dgs_chunk_scene(source, requires_grad=False)
+    actual_scene = _clone_2dgs_chunk_scene(source, requires_grad=True)
+    reference_scene = _clone_2dgs_chunk_scene(source, requires_grad=True)
 
     actual = rasterization_2dgs(
         **actual_scene,
@@ -724,6 +724,36 @@ def test_rasterization_2dgs_multichunk_depth_auxiliaries(packed: bool, depth_mod
     torch.testing.assert_close(actual[3], final[3], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(actual[4], final[4], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(actual[5], final[5], rtol=1e-4, atol=1e-4)
+
+    cotangents = (torch.randn_like(actual[4]), torch.randn_like(actual[5]))
+    actual_inputs = tuple(
+        actual_scene[name]
+        for name in ("means", "quats", "scales", "opacities", "colors", "backgrounds")
+    )
+    actual_loss = sum(
+        (tensor * cotangent).sum()
+        for tensor, cotangent in zip((actual[4], actual[5]), cotangents)
+    )
+    actual_grads = torch.autograd.grad(
+        actual_loss,
+        actual_inputs + (actual[6]["gradient_2dgs"],),
+    )
+
+    reference_inputs = tuple(
+        reference_scene[name]
+        for name in ("means", "quats", "scales", "opacities", "colors", "backgrounds")
+    )
+    reference_loss = sum(
+        (tensor * cotangent).sum()
+        for tensor, cotangent in zip((final[4], final[5]), cotangents)
+    )
+    reference_grads = torch.autograd.grad(
+        reference_loss,
+        reference_inputs + (final[6]["gradient_2dgs"],),
+    )
+
+    for actual_grad, expected_grad in zip(actual_grads, reference_grads):
+        torch.testing.assert_close(actual_grad, expected_grad, rtol=1e-3, atol=1e-3)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
