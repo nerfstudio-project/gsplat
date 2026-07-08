@@ -94,6 +94,7 @@ from .losses import (
     total_variation_loss,
 )
 from .losses_fused import (
+    FusedBgGridLosses,
     FusedCameraLosses,
     FusedGaussianLosses,
     FusedLidarLosses,
@@ -165,6 +166,7 @@ __all__ = [
     "has_camera_wrappers",
     "has_losses",
     "has_reloc",
+    "FusedBgGridLosses",
     "FusedCameraLosses",
     "FusedGaussianLosses",
     "FusedLidarLosses",

@@ -24,6 +24,7 @@ from torch import Tensor
 from gsplat.cuda._backend import _C
 from gsplat.cuda._wrapper import has_losses
 from gsplat.losses import (
+    bilateral_grid_drift_loss,
     gaussian_density_reg,
     gaussian_scale_reg,
     gaussian_z_scale_reg,
@@ -404,3 +405,268 @@ class FusedLidarLosses(torch.nn.Module):
             bg_loss = torch.where(valid_nd, (pred - target).pow(2) * bg_factor, zeros)
 
         return distance_loss, intensity_loss, raydrop_loss, bg_loss
+
+
+class FusedBgGridLosses(torch.nn.Module):
+    """Fused CUDA implementation of sky-envmap TV + bilateral-grid drift +
+    bilateral-grid spatial TV.
+
+    Computes up to five per-element/per-cell losses in a single kernel pair:
+
+    - Sky env-map TV on ``bg_tex`` (planar or cubemap)
+    - Grid drift (Frobenius from identity) on ``grids_camera``
+    - Grid spatial TV on ``grids_camera``
+    - Grid drift on ``grids_frame``
+    - Grid spatial TV on ``grids_frame``
+
+    Any of ``bg_tex`` / ``grids_camera`` / ``grids_frame`` can be ``None``
+    to skip its sub-losses entirely. Individual sub-losses can also be
+    disabled by passing a negative ``*_factor`` at forward time.
+
+    Falls back to an equivalent pure-PyTorch reference when CUDA isn't
+    available or inputs are on CPU.
+
+    .. note::
+        **float32 only.** The fused bg-grid CUDA op is single-precision (the
+        kernels read/write ``float``); passing ``fp64``/``fp16`` CUDA tensors
+        raises at the native op. Cast to ``float`` before calling.
+
+    Tensor shapes:
+
+    - ``bg_tex``: ``[B * bg_tex_depth, H, W, C]`` (flat). Set
+      ``bg_tex_depth = 1`` for a planar envmap or ``6`` for a cubemap; for a
+      cubemap the caller is expected to pre-flatten
+      ``[B, 6, H, W, C] → [B*6, H, W, C]`` before calling. The sky-envmap TV
+      uses **ordered face-neighbour** forward differences along the flattened
+      D axis (no wraparound): each face ``d`` is paired with face ``d + 1`` for
+      ``d < bg_tex_depth - 1``, in addition to the within-face H/W differences.
+    - ``grids_camera`` / ``grids_frame``: ``[B * 12, D, H, W]`` with the 12
+      channels representing the flattened ``3 × 4`` affine matrix. The per-
+      cell drift output has length ``B * D * H * W`` (NOT ``B * 12 * D * H * W``).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._cuda_available = has_losses()
+
+    def forward(
+        self,
+        bg_tex: Optional[Tensor] = None,
+        grids_camera: Optional[Tensor] = None,
+        grids_frame: Optional[Tensor] = None,
+        bg_tex_factor: float = 1.0,
+        grid_drift_camera_factor: float = 1.0,
+        grid_drift_frame_factor: float = 1.0,
+        grid_camera_tv_factor: float = 1.0,
+        grid_frame_tv_factor: float = 1.0,
+        bg_tex_depth: int = 1,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Compute the five fused losses.
+
+        Returns:
+            Tuple of ``(bg_tex_loss, grids_drift_loss, grid_camera_tv_loss,
+            grid_frame_tv_loss)``:
+
+            - ``bg_tex_loss``: ``[B * D * H * W * C]`` flat, per-element
+              squared-difference contributions (each element contributes its
+              own forward-difference cost to the sum; take ``.sum()`` to
+              reduce).
+            - ``grids_drift_loss``: ``[numel_gc_cells + numel_gf_cells]``
+              (camera cells first, frame cells second), one Frobenius-distance
+              scalar per ``(b, d, h, w)`` cell.
+            - ``grid_camera_tv_loss``: ``[numel_gc_cells]`` per-cell TV.
+            - ``grid_frame_tv_loss``: ``[numel_gf_cells]`` per-cell TV.
+
+            When a sub-loss is disabled (via ``*_factor < 0`` or missing
+            input tensor), the corresponding output is returned as a zero
+            tensor of the expected shape.
+        """
+        # Validate bg_tex_depth at the public boundary so the native and
+        # fallback paths reject invalid depths with one contract (the fallback
+        # otherwise reaches a reshape / divide on bad input).
+        if bg_tex is not None:
+            if bg_tex_depth < 1:
+                raise ValueError(
+                    "bg_tex_depth must be >= 1 (1 for planar, 6 for cubemap)."
+                )
+            if bg_tex.shape[0] % bg_tex_depth != 0:
+                raise ValueError(
+                    "bg_tex.shape[0] must be divisible by bg_tex_depth "
+                    f"(got {bg_tex.shape[0]} and {bg_tex_depth})."
+                )
+        # Device-uniformity check: if any provided input is on CPU, fall
+        # through to the pure-PyTorch path (same policy as FusedGaussianLosses).
+        provided = [t for t in (bg_tex, grids_camera, grids_frame) if t is not None]
+        all_cuda = bool(provided) and all(t.is_cuda for t in provided)
+
+        if self._cuda_available and all_cuda:
+            # All provided inputs must share one CUDA device before dispatch —
+            # the native op picks a single reference device and the kernel
+            # launches on the current stream, so mixed devices would corrupt.
+            devices = {t.device for t in provided}
+            if len(devices) != 1:
+                raise ValueError(
+                    "FusedBgGridLosses: all provided inputs must be on the same "
+                    f"CUDA device, got {sorted(map(str, devices))}"
+                )
+            from gsplat.cuda._losses_wrapper import _FusedBgGridLosses
+
+            return _FusedBgGridLosses.apply(
+                bg_tex,
+                bg_tex_depth,
+                grids_camera,
+                grids_frame,
+                bg_tex_factor,
+                grid_drift_camera_factor,
+                grid_drift_frame_factor,
+                grid_camera_tv_factor,
+                grid_frame_tv_factor,
+            )
+
+        # Pure-PyTorch fallback. Matches the kernel output shapes so
+        # callers can use either path interchangeably.
+        return _bg_grid_losses_pytorch(
+            bg_tex,
+            bg_tex_depth,
+            grids_camera,
+            grids_frame,
+            bg_tex_factor,
+            grid_drift_camera_factor,
+            grid_drift_frame_factor,
+            grid_camera_tv_factor,
+            grid_frame_tv_factor,
+        )
+
+
+def _bg_grid_losses_pytorch(
+    bg_tex: Optional[Tensor],
+    bg_tex_depth: int,
+    grids_camera: Optional[Tensor],
+    grids_frame: Optional[Tensor],
+    bg_tex_factor: float,
+    grid_drift_camera_factor: float,
+    grid_drift_frame_factor: float,
+    grid_camera_tv_factor: float,
+    grid_frame_tv_factor: float,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Pure-PyTorch reference for :class:`FusedBgGridLosses`.
+
+    Returns tensors in the same flat per-element / per-cell layout that the
+    CUDA path produces so tests can compare shape-for-shape.
+    """
+    # Reference device/dtype from the first provided tensor.
+    ref = (
+        bg_tex
+        if bg_tex is not None
+        else (grids_camera if grids_camera is not None else grids_frame)
+    )
+    if ref is None:
+        raise ValueError(
+            "At least one of bg_tex / grids_camera / grids_frame must be provided."
+        )
+    device, dtype = ref.device, ref.dtype
+
+    def _disabled_zero(numel: int, ref_in: Optional[Tensor]) -> Tensor:
+        # Zero output for a disabled (negative factor) or absent sub-loss. When
+        # the input tensor is present, keep the zero connected to its autograd
+        # graph so the fallback backward yields an exact-zero gradient to the
+        # input, matching the CUDA custom Function (which writes zeros without
+        # reading the disabled input). ``ref_in[:0].sum()`` is an empty-view sum:
+        # exactly 0 and differentiable, but it never reads the input's values, so
+        # a present-but-disabled input containing NaN or +/-Inf still yields a
+        # zero output (``0.0 * ref_in.sum()`` would be NaN); it also avoids the
+        # O(N) reduction. An absent input needs no such connection.
+        z = torch.zeros(numel, device=device, dtype=dtype)
+        return z if ref_in is None else z + ref_in[:0].sum()
+
+    def _bg_tex_loss() -> Tensor:
+        if bg_tex is None or bg_tex_factor < 0:
+            numel = bg_tex.numel() if bg_tex is not None else 0
+            return _disabled_zero(numel, bg_tex)
+        # bg_tex is [B*D, H, W, C]. Per-element squared forward differences
+        # along D (one-sided across faces), H, W. Each (ti) contributes the
+        # sum over its forward-neighbour diffs.
+        tex = bg_tex
+        BD, H, W, C = tex.shape
+        D = bg_tex_depth
+        B = BD // D
+        tex5d = tex.reshape(B, D, H, W, C)  # [B, D, H, W, C]
+        parts = torch.zeros_like(tex)
+        # Use the per-element layout: we fold contributions into a
+        # [BD, H, W, C] tensor where each element holds the sum of squared
+        # forward-diffs originating from itself.
+        parts5d = parts.view(B, D, H, W, C)
+        if D > 1:
+            diff = tex5d[:, :-1] - tex5d[:, 1:]  # [B, D-1, H, W, C]
+            parts5d[:, :-1] += diff * diff
+        if H > 1:
+            diff = tex5d[:, :, :-1] - tex5d[:, :, 1:]
+            parts5d[:, :, :-1] += diff * diff
+        if W > 1:
+            diff = tex5d[:, :, :, :-1] - tex5d[:, :, :, 1:]
+            parts5d[:, :, :, :-1] += diff * diff
+        return (parts5d.reshape(-1)) * bg_tex_factor
+
+    def _grid_drift_loss(grid: Optional[Tensor], factor: float) -> Tensor:
+        if grid is None or factor < 0:
+            numel = (
+                (grid.shape[0] // 12) * grid.shape[1] * grid.shape[2] * grid.shape[3]
+                if grid is not None
+                else 0
+            )
+            return _disabled_zero(numel, grid)
+        B12, D, H, W = grid.shape
+        B = B12 // 12
+        # Per-cell Frobenius distance from the 3x4 affine identity. Inlined
+        # (rather than calling identity_distance) to reproduce the CUDA kernel's
+        # backward dead-zone: the kernel guards ``sum_sq > 1e-12`` before the
+        # 1/sqrt(sum_sq) drift gradient, so a near-identity cell gets zero drift
+        # gradient. The forward value stays the exact ``sqrt(sum_sq)`` (the
+        # kernel does an unconditional sqrtf), so only the gradient is masked —
+        # via a straight-through that detaches the dead-zone branch
+        # (a plain ``torch.where(sqrt(...))`` would propagate a 0/0 NaN at
+        # exactly identity).
+        grid_mat = grid.reshape(B, 3, 4, D, H, W)
+        identity = torch.eye(3, 4, device=device, dtype=dtype).view(1, 3, 4, 1, 1, 1)
+        sum_sq = (grid_mat - identity).pow(2).sum(dim=(1, 2))  # [B,D,H,W] = ||·||_F^2
+        active = sum_sq > 1e-12
+        norm = torch.sqrt(sum_sq.clamp(min=1e-12))  # exact for active cells
+        per_cell = torch.where(active, norm, torch.sqrt(sum_sq).detach())
+        return per_cell.reshape(-1) * factor
+
+    def _grid_tv_loss(grid: Optional[Tensor], factor: float) -> Tensor:
+        if grid is None or factor < 0:
+            numel = (
+                (grid.shape[0] // 12) * grid.shape[1] * grid.shape[2] * grid.shape[3]
+                if grid is not None
+                else 0
+            )
+            return _disabled_zero(numel, grid)
+        B12, D, H, W = grid.shape
+        B = B12 // 12
+        # Per-cell TV: sum of forward-diff-squared across D, H, W over all 12
+        # channels, divided by 12 (matches the CUDA kernel).
+        grid5d = grid.reshape(B, 12, D, H, W)
+        acc = torch.zeros(B, D, H, W, device=device, dtype=dtype)
+        if D > 1:
+            sq_diff = (
+                (grid5d[:, :, :-1] - grid5d[:, :, 1:]).pow(2).sum(dim=1)
+            )  # [B, D-1, H, W]
+            acc[:, :-1] += sq_diff
+        if H > 1:
+            sq_diff = (grid5d[:, :, :, :-1] - grid5d[:, :, :, 1:]).pow(2).sum(dim=1)
+            acc[:, :, :-1] += sq_diff
+        if W > 1:
+            sq_diff = (
+                (grid5d[:, :, :, :, :-1] - grid5d[:, :, :, :, 1:]).pow(2).sum(dim=1)
+            )
+            acc[:, :, :, :-1] += sq_diff
+        return (acc.reshape(-1) / 12.0) * factor
+
+    bg_loss = _bg_tex_loss()
+    camera_drift = _grid_drift_loss(grids_camera, grid_drift_camera_factor)
+    frame_drift = _grid_drift_loss(grids_frame, grid_drift_frame_factor)
+    grids_drift_loss = torch.cat([camera_drift, frame_drift])
+    grid_camera_tv_loss = _grid_tv_loss(grids_camera, grid_camera_tv_factor)
+    grid_frame_tv_loss = _grid_tv_loss(grids_frame, grid_frame_tv_factor)
+    return bg_loss, grids_drift_loss, grid_camera_tv_loss, grid_frame_tv_loss

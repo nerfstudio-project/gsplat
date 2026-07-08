@@ -350,3 +350,206 @@ class _FusedLidarLosses(torch.autograd.Function):
             None,
             None,
         )
+
+
+class _FusedBgGridLosses(torch.autograd.Function):
+    """Fused forward+backward for sky-envmap TV + bilateral-grid drift + grid
+    spatial TV via a single pair of CUDA kernels.
+
+    Any of ``bg_tex`` / ``grids_camera`` / ``grids_frame`` can be ``None``
+    to skip its sub-losses entirely. Per-sub-loss enable/disable is also
+    available via a negative ``factor`` (loss output is written as zeros).
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        bg_tex: Optional[Tensor],  # [B*D, H, W, C] flat (D=1 planar, D=6 cubemap)
+        bg_tex_depth: int,
+        grids_camera: Optional[Tensor],  # [B*12, D, H, W]
+        grids_frame: Optional[Tensor],  # [B*12, D, H, W]
+        bg_tex_factor: float,
+        grid_drift_camera_factor: float,
+        grid_drift_frame_factor: float,
+        grid_camera_tv_factor: float,
+        grid_frame_tv_factor: float,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        # Unused outputs must reach backward as None rather than materialized zeros, so a
+        # NaN-weighted-but-unused sub-loss can't be fed to the native op and poison a finite
+        # sibling's shared-input gradient via NaN*0. backward() disables each None output.
+        ctx.set_materialize_grads(False)
+        bg_tex = bg_tex.contiguous() if bg_tex is not None else None
+        grids_camera = grids_camera.contiguous() if grids_camera is not None else None
+        grids_frame = grids_frame.contiguous() if grids_frame is not None else None
+
+        # Reference device for allocation (first non-None input).
+        ref = (
+            bg_tex
+            if bg_tex is not None
+            else (grids_camera if grids_camera is not None else grids_frame)
+        )
+        if ref is None:
+            raise ValueError(
+                "FusedBgGridLosses.forward needs at least one of "
+                "bg_tex / grids_camera / grids_frame to be non-None."
+            )
+        device, dtype = ref.device, ref.dtype
+
+        # Per-cell element counts (1 scalar per (b, d, h, w) cell for grids;
+        # 1 scalar per element for bg_tex).
+        def _cell_numel(g: Optional[Tensor]) -> int:
+            if g is None:
+                return 0
+            # g is [B*12, D, H, W]; cells = B * D * H * W. The 12 is the fixed
+            # 3x4 affine channel count (LOSSES_GRID_NUM_CHANNELS in Config.h,
+            # which is non-overrideable so this constant can't drift from it).
+            return (g.shape[0] // 12) * g.shape[1] * g.shape[2] * g.shape[3]
+
+        numel_bg = bg_tex.numel() if bg_tex is not None else 0
+        numel_gc = _cell_numel(grids_camera)
+        numel_gf = _cell_numel(grids_frame)
+
+        # Pre-allocate outputs on the Python side (keeps buffer lifetime
+        # explicit and lets torch's caching allocator reuse across steps).
+        bg_tex_loss = torch.empty(numel_bg, device=device, dtype=dtype)
+        grids_drift_loss = torch.empty(numel_gc + numel_gf, device=device, dtype=dtype)
+        grid_camera_tv_loss = torch.empty(numel_gc, device=device, dtype=dtype)
+        grid_frame_tv_loss = torch.empty(numel_gf, device=device, dtype=dtype)
+
+        _make_lazy_cuda_func("bg_grid_losses_fwd")(
+            bg_tex,
+            int(bg_tex_depth),
+            grids_camera,
+            grids_frame,
+            float(bg_tex_factor),
+            float(grid_drift_camera_factor),
+            float(grid_drift_frame_factor),
+            float(grid_camera_tv_factor),
+            float(grid_frame_tv_factor),
+            bg_tex_loss,
+            grids_drift_loss,
+            grid_camera_tv_loss,
+            grid_frame_tv_loss,
+        )
+
+        ctx.save_for_backward(
+            bg_tex
+            if bg_tex is not None
+            else torch.empty(0, device=device, dtype=dtype),
+            grids_camera
+            if grids_camera is not None
+            else torch.empty(0, device=device, dtype=dtype),
+            grids_frame
+            if grids_frame is not None
+            else torch.empty(0, device=device, dtype=dtype),
+        )
+        ctx.has_bg_tex = bg_tex is not None
+        ctx.has_grids_camera = grids_camera is not None
+        ctx.has_grids_frame = grids_frame is not None
+        ctx.bg_tex_depth = int(bg_tex_depth)
+        # Output element counts so backward can build shape-correct zero placeholders
+        # for any output whose cotangent arrives as None (unused).
+        ctx.numel_bg = numel_bg
+        ctx.numel_gc = numel_gc
+        ctx.numel_gf = numel_gf
+        ctx.factors = (
+            float(bg_tex_factor),
+            float(grid_drift_camera_factor),
+            float(grid_drift_frame_factor),
+            float(grid_camera_tv_factor),
+            float(grid_frame_tv_factor),
+        )
+
+        return bg_tex_loss, grids_drift_loss, grid_camera_tv_loss, grid_frame_tv_loss
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_bg_tex_loss: Optional[Tensor],
+        v_grids_drift_loss: Optional[Tensor],
+        v_grid_camera_tv_loss: Optional[Tensor],
+        v_grid_frame_tv_loss: Optional[Tensor],
+    ) -> Tuple[Optional[Tensor], ...]:
+        bg_tex, grids_camera, grids_frame = ctx.saved_tensors
+
+        bg_tex_arg = bg_tex if ctx.has_bg_tex else None
+        grids_camera_arg = grids_camera if ctx.has_grids_camera else None
+        grids_frame_arg = grids_frame if ctx.has_grids_frame else None
+
+        # set_materialize_grads(False) means an unused output arrives as None. Replace it
+        # with a shape-correct zero placeholder for the native op and disable that output's
+        # factor(s) (negative), so the native backward skips it — otherwise a NaN factor on
+        # an unused output would contaminate a finite sibling's shared-input gradient.
+        (bg_f, drift_c_f, drift_f_f, tv_c_f, tv_f_f) = ctx.factors
+        _ref = next(
+            t for t in (bg_tex_arg, grids_camera_arg, grids_frame_arg) if t is not None
+        )
+        _dev, _dt = _ref.device, _ref.dtype
+        if v_bg_tex_loss is None:
+            v_bg_tex_loss = torch.zeros(ctx.numel_bg, device=_dev, dtype=_dt)
+            bg_f = -1.0
+        if v_grids_drift_loss is None:
+            v_grids_drift_loss = torch.zeros(
+                ctx.numel_gc + ctx.numel_gf, device=_dev, dtype=_dt
+            )
+            # Combined camera+frame drift output -> disable both drift factors.
+            drift_c_f = -1.0
+            drift_f_f = -1.0
+        if v_grid_camera_tv_loss is None:
+            v_grid_camera_tv_loss = torch.zeros(ctx.numel_gc, device=_dev, dtype=_dt)
+            tv_c_f = -1.0
+        if v_grid_frame_tv_loss is None:
+            v_grid_frame_tv_loss = torch.zeros(ctx.numel_gf, device=_dev, dtype=_dt)
+            tv_f_f = -1.0
+
+        # Gradient buffers — zero-init because the bwd kernel uses atomicAdd.
+        v_bg_tex = (
+            torch.zeros_like(bg_tex)
+            if ctx.has_bg_tex
+            else torch.zeros(0, device=v_bg_tex_loss.device, dtype=v_bg_tex_loss.dtype)
+        )
+        v_grids_camera = (
+            torch.zeros_like(grids_camera)
+            if ctx.has_grids_camera
+            else torch.zeros(
+                0, device=v_grids_drift_loss.device, dtype=v_grids_drift_loss.dtype
+            )
+        )
+        v_grids_frame = (
+            torch.zeros_like(grids_frame)
+            if ctx.has_grids_frame
+            else torch.zeros(
+                0, device=v_grids_drift_loss.device, dtype=v_grids_drift_loss.dtype
+            )
+        )
+
+        _make_lazy_cuda_func("bg_grid_losses_bwd")(
+            bg_tex_arg,
+            ctx.bg_tex_depth,
+            grids_camera_arg,
+            grids_frame_arg,
+            bg_f,
+            drift_c_f,
+            drift_f_f,
+            tv_c_f,
+            tv_f_f,
+            v_bg_tex_loss.contiguous(),
+            v_grids_drift_loss.contiguous(),
+            v_grid_camera_tv_loss.contiguous(),
+            v_grid_frame_tv_loss.contiguous(),
+            v_bg_tex,
+            v_grids_camera,
+            v_grids_frame,
+        )
+
+        return (
+            v_bg_tex if ctx.has_bg_tex else None,
+            None,  # bg_tex_depth
+            v_grids_camera if ctx.has_grids_camera else None,
+            v_grids_frame if ctx.has_grids_frame else None,
+            None,
+            None,
+            None,
+            None,
+            None,  # 5 factors
+        )
