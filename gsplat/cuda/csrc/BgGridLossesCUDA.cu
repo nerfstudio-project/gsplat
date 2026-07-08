@@ -30,6 +30,15 @@ namespace gsplat
 {
 namespace
 {
+    // A sub-loss is disabled only by a strictly negative factor. Spelled
+    // `!(factor < 0)` rather than `factor >= 0` so a NaN factor stays enabled
+    // and propagates (matching the pure-PyTorch reference); `factor >= 0` would
+    // silently disable NaN. Centralized here so the policy is stated once.
+    __device__ __forceinline__ bool is_loss_enabled(float factor)
+    {
+        return !(factor < 0.0f);
+    }
+
     // ---------------------------------------------------------------------------
     // Sky env-map TV forward: for each input element at flat index ti of
     // [B*D, H, W, C] (with B*D rolled into the first dim), accumulate the sum of
@@ -271,7 +280,7 @@ namespace
         const int base      = b * NCH * DHW + d * (H * W) + h * W + w;
 
         // Cache this cell's 12 channel values once; accumulate the drift sum_sq.
-        const bool drift_on = !(drift_factor < 0.0f);
+        const bool drift_on = is_loss_enabled(drift_factor);
         float cached_m[NCH];
         float sum_sq = 0.0f;
 #    pragma unroll
@@ -291,7 +300,7 @@ namespace
         const float drift_scale = drift_active ? (drift_factor * v_drift / sqrtf(sum_sq)) : 0.0f;
 
         // Per-cell TV weights: self (forward diffs) + up-to-3 backward-source cells.
-        const bool tv_on = !(tv_factor < 0.0f);
+        const bool tv_on = is_loss_enabled(tv_factor);
         float gb_self = 0.0f, gb_dm = 0.0f, gb_hm = 0.0f, gb_wm = 0.0f;
         if(tv_on)
         {
@@ -399,7 +408,7 @@ namespace
         const int ti = blockIdx.x * blockDim.x + threadIdx.x;
 
         // Sky env-map TV
-        if(!(bg_tex_factor < 0.0f) && ti < numel_bg_tex)
+        if(is_loss_enabled(bg_tex_factor) && ti < numel_bg_tex)
         {
             bg_tex_loss[ti] = sky_tv_fwd_element(ti, B_tex, D_tex, H_tex, W_tex, C_tex, bg_tex, bg_tex_factor);
         }
@@ -411,7 +420,7 @@ namespace
         // Grid drift (camera) + grid TV (camera)
         if(ti < numel_gc_cells)
         {
-            if(!(grid_drift_camera_factor < 0.0f))
+            if(is_loss_enabled(grid_drift_camera_factor))
             {
                 grids_drift_loss[ti]
                     = grid_drift_fwd_cell(ti, B_gc, D_gc, H_gc, W_gc, grids_camera, grid_drift_camera_factor);
@@ -420,7 +429,7 @@ namespace
             {
                 grids_drift_loss[ti] = 0.0f;
             }
-            if(!(grid_camera_tv_factor < 0.0f))
+            if(is_loss_enabled(grid_camera_tv_factor))
             {
                 grid_camera_tv_loss[ti]
                     = grid_tv_fwd_cell(ti, B_gc, D_gc, H_gc, W_gc, grids_camera, grid_camera_tv_factor);
@@ -434,7 +443,7 @@ namespace
         // Grid drift (frame) + grid TV (frame)
         if(ti < numel_gf_cells)
         {
-            if(!(grid_drift_frame_factor < 0.0f))
+            if(is_loss_enabled(grid_drift_frame_factor))
             {
                 grids_drift_loss[numel_gc_cells + ti]
                     = grid_drift_fwd_cell(ti, B_gf, D_gf, H_gf, W_gf, grids_frame, grid_drift_frame_factor);
@@ -443,7 +452,7 @@ namespace
             {
                 grids_drift_loss[numel_gc_cells + ti] = 0.0f;
             }
-            if(!(grid_frame_tv_factor < 0.0f))
+            if(is_loss_enabled(grid_frame_tv_factor))
             {
                 grid_frame_tv_loss[ti]
                     = grid_tv_fwd_cell(ti, B_gf, D_gf, H_gf, W_gf, grids_frame, grid_frame_tv_factor);
@@ -504,7 +513,7 @@ namespace
             // without atomics. Write unconditionally -- a disabled bg-tex loss
             // still zeros the grad buffer, so the caller need not pre-zero it.
             v_bg_tex[ti]
-                = (!(bg_tex_factor < 0.0f))
+                = is_loss_enabled(bg_tex_factor)
                     ? sky_tv_bwd_element(ti, B_tex, D_tex, H_tex, W_tex, C_tex, bg_tex, v_bg_tex_loss, bg_tex_factor)
                     : 0.0f;
         }
@@ -513,7 +522,7 @@ namespace
         // when both factors are disabled), so the guard is just the bounds check.
         if(ti < numel_gc_cells)
         {
-            const float v_drift = (!(grid_drift_camera_factor < 0.0f)) ? v_grids_drift_loss[ti] : 0.0f;
+            const float v_drift = is_loss_enabled(grid_drift_camera_factor) ? v_grids_drift_loss[ti] : 0.0f;
             grid_drift_and_tv_bwd_cell(
                 ti,
                 B_gc,
@@ -531,7 +540,8 @@ namespace
 
         if(ti < numel_gf_cells)
         {
-            const float v_drift = (!(grid_drift_frame_factor < 0.0f)) ? v_grids_drift_loss[numel_gc_cells + ti] : 0.0f;
+            const float v_drift
+                = is_loss_enabled(grid_drift_frame_factor) ? v_grids_drift_loss[numel_gc_cells + ti] : 0.0f;
             grid_drift_and_tv_bwd_cell(
                 ti,
                 B_gf,
