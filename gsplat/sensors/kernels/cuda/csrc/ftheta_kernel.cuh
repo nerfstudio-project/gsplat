@@ -40,12 +40,6 @@ constexpr float kFThetaNewtonEpsilon = 1.0e-10f;
 // offsets under Adam.
 constexpr float kFThetaIftDfEpsilon = 1.0e-10f;
 
-// sin^2(theta) lower bound used by ftheta_project_ray_bwd to gate the
-// 1/sin(theta) factor in d_acos. Two orders tighter than the Newton/IFT
-// epsilons because sin_theta_sq is a squared quantity; outside this band
-// the gradient through ray_norm.z is set to zero (clamp boundary).
-constexpr float kFThetaSinThetaSqEpsilon = 1.0e-12f;
-
 // Reference-polynomial selector. Values must match the Python IntEnum.
 //   Forward  (0): r = fw_poly(theta) is the direct evaluation; backproject
 //                 must Newton-invert fw_poly.
@@ -322,8 +316,8 @@ __device__ __forceinline__ float2
     }
 
     state.ray_norm = normalize3(camera_ray);
-    const float cz = fminf(fmaxf(state.ray_norm.z, -1.0f), 1.0f);
-    state.theta    = acosf(cz);
+    state.xy_norm  = sqrtf(state.ray_norm.x * state.ray_norm.x + state.ray_norm.y * state.ray_norm.y);
+    state.theta    = atan2f(state.xy_norm, state.ray_norm.z);
     if(state.theta > p.max_angle)
     {
         state.angle_clamped = true;
@@ -345,7 +339,6 @@ __device__ __forceinline__ float2
         state.r             = r_star - (f_val - state.theta) / safe_df;
     }
 
-    state.xy_norm = sqrtf(state.ray_norm.x * state.ray_norm.x + state.ray_norm.y * state.ray_norm.y);
     // `<=` because min_2d_norm may be configured to 0; the bwd divides by
     // xy_norm, so xy_norm == 0 must take the clamp path.
     if(state.xy_norm <= p.min_2d_norm)
@@ -657,29 +650,13 @@ __device__ __forceinline__ void ftheta_project_ray_bwd(
         }
     }
 
-    // theta = acos(clamp(ray_norm.z, -1, 1)). d_acos(cz)/d_cz = -1/sqrt(1-cz^2).
-    // Gradient is conventionally zero at the |cz|=1 clamp boundary.
-    const float cz           = fminf(fmaxf(state.ray_norm.z, -1.0f), 1.0f);
-    const float sin_theta_sq = 1.0f - cz * cz;
-    if(sin_theta_sq > kFThetaSinThetaSqEpsilon)
-    {
-        const float sin_theta = sqrtf(sin_theta_sq);
-        const float d_cz      = -d_theta / sin_theta;
-        // Inside the open interval the clamp gradient is 1.
-        if(state.ray_norm.z > -1.0f && state.ray_norm.z < 1.0f)
-        {
-            float d_ray_norm_z  = d_cz;
-            float3 d_ray_norm   = make_float3(d_ray_norm_x, d_ray_norm_y, d_ray_norm_z);
-            float3 d_in         = normalize3_bwd(camera_ray, d_ray_norm);
-            d_camera_ray.x     += d_in.x;
-            d_camera_ray.y     += d_in.y;
-            d_camera_ray.z     += d_in.z;
-            return;
-        }
-    }
-    // Fallthrough: cz pinned to clamp boundary or theta = 0/pi -- d_theta path
-    // contributes 0 to d_ray_norm.z.
-    float3 d_ray_norm  = make_float3(d_ray_norm_x, d_ray_norm_y, 0.0f);
+    // ray_norm is unit length, so the atan2 denominator
+    // xy_norm^2 + ray_norm.z^2 is 1.
+    const float d_xy_norm_via_theta  = d_theta * state.ray_norm.z;
+    d_ray_norm_x                    += d_xy_norm_via_theta * state.ray_norm.x * inv_xy;
+    d_ray_norm_y                    += d_xy_norm_via_theta * state.ray_norm.y * inv_xy;
+
+    float3 d_ray_norm  = make_float3(d_ray_norm_x, d_ray_norm_y, -d_theta * state.xy_norm);
     float3 d_in        = normalize3_bwd(camera_ray, d_ray_norm);
     d_camera_ray.x    += d_in.x;
     d_camera_ray.y    += d_in.y;
