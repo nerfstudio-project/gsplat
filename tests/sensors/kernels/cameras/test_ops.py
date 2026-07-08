@@ -65,7 +65,7 @@ GRADCHECK_KWARGS = {"eps": 1e-3, "atol": 1e-2, "rtol": 1e-2}
 # at <0.01% relative error) but the cross-coupled near-zero off-diagonals are
 # below the finite-difference noise floor at atol=1e-2.
 GRADCHECK_KWARGS_DYNAMIC = {"eps": 1e-3, "atol": 5e-2, "rtol": 1e-2}
-# FTheta projection runs through acos/sin/cos in float32. The main diagonal
+# FTheta projection uses float32 arithmetic. The main diagonal
 # derivatives match tightly, but small cross terms sit close to the finite
 # difference noise floor under the public float32 CUDA dispatch.
 GRADCHECK_KWARGS_FTHETA_PROJECT = {"eps": 1e-3, "atol": 8e-2, "rtol": 1e-2}
@@ -159,7 +159,7 @@ def torch_ftheta_project(
     z = rays_unit[:, 2]
     xy = rays_unit[:, :2]
     xy_norm = torch.linalg.norm(xy, dim=-1)
-    theta = torch.acos(torch.clamp(z, -1.0, 1.0))
+    theta = torch.atan2(xy_norm, z)
 
     if reference_polynomial == 0:  # FORWARD-ref
         r = _ftheta_eval_poly(fw_poly, theta, fw_poly_degree)
@@ -2594,8 +2594,8 @@ def test_camera_rays_to_image_points_ftheta_saturated_branch_backward(
     assert valid.item()
     image_points[:, 0].sum().backward()
 
-    theta = torch.acos(
-        camera_rays.detach()[0, 2] / torch.linalg.norm(camera_rays.detach()[0])
+    theta = torch.atan2(
+        torch.linalg.norm(camera_rays.detach()[0, :2]), camera_rays.detach()[0, 2]
     )
     r_star = fw_poly.detach()[1] * theta
     expected_bw_grad = -(r_star ** torch.arange(6, device=device))
