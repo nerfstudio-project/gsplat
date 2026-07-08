@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import numpy as np
-from typing import TYPE_CHECKING, Callable, Dict, List, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 import torch
 import torch.nn.functional as F
@@ -259,6 +259,7 @@ def reset_opa(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     value: float,
+    mask: Optional[Tensor] = None,
 ):
     """Inplace reset the opacities to the given post-sigmoid value.
 
@@ -266,16 +267,24 @@ def reset_opa(
         params: A dictionary of parameters.
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         value: The value to reset the opacities
+        mask: Optional [N] boolean mask selecting which Gaussians are reset.
+          If None (default), all Gaussians are reset (previous behavior).
     """
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "opacities":
             opacities = torch.clamp(p, max=torch.logit(torch.tensor(value)).item())
+            if mask is not None:
+                opacities = torch.where(mask, opacities, p)
             return torch.nn.Parameter(opacities, requires_grad=p.requires_grad)
         else:
             raise ValueError(f"Unexpected parameter name: {name}")
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        if mask is not None:
+            v = v.clone()
+            v[mask] = 0.0
+            return v
         return torch.zeros_like(v)
 
     # update the parameters and the state in the optimizers
