@@ -25,10 +25,12 @@ from gsplat.cuda._backend import _C
 from gsplat.cuda._wrapper import has_losses
 from gsplat.losses import (
     bilateral_grid_drift_loss,
+    create_ssim_window,
     gaussian_density_reg,
     gaussian_scale_reg,
     gaussian_z_scale_reg,
     out_of_bound_loss,
+    torch_ssim_loss,
 )
 
 
@@ -62,6 +64,16 @@ def _cuda_lidar_losses_available() -> bool:
         return False
 
 
+def _cuda_ssim_losses_available() -> bool:
+    """Check if the fused CUDA SSIM loss op is compiled."""
+    try:
+        from gsplat.cuda._backend import _C  # noqa: F401
+
+        return hasattr(torch.ops.gsplat, "ssim_losses_fwd")
+    except Exception:
+        return False
+
+
 def _require_uniform_cuda(name, int_tensors, float_tensors) -> bool:
     """Return ``True`` iff every input tensor is on CUDA.
 
@@ -87,6 +99,25 @@ def _require_uniform_cuda(name, int_tensors, float_tensors) -> bool:
             f"got {sorted(map(str, dtypes))}"
         )
     return True
+
+
+def _exact_zero_like_ssim(pred: Tensor) -> Tensor:
+    shape = (*pred.shape[:3], 1)
+    return pred.new_zeros(shape) + pred[..., :0].sum()
+
+
+def _normalize_ssim_flags(flags: Tensor, pred: Tensor) -> Tensor:
+    if pred.dim() != 4:
+        raise ValueError(f"pred must be [B, H, W, C], got {tuple(pred.shape)}")
+    expected = pred.shape[:3]
+    if flags.shape == expected:
+        return flags
+    if flags.shape == (*expected, 1):
+        return flags.reshape(expected)
+    raise ValueError(
+        f"flags must be [B, H, W] or [B, H, W, 1], got {tuple(flags.shape)} "
+        f"for pred shape {tuple(pred.shape)}"
+    )
 
 
 class FusedGaussianLosses(torch.nn.Module):
@@ -198,6 +229,128 @@ else:
     LossFlag = None
     _FLAG_RGB_LABEL = _FLAG_SKY_SEMANTIC = _FLAG_DROPPED = None
     _FLAG_INVALID = _FLAG_DIFIXED = _FLAG_SYNTHETIC = None
+
+
+class FusedSSIMLosses(torch.nn.Module):
+    """Fused SSIM loss with invalid-pixel blending.
+
+    Inputs are channel-last image tensors ``[B, H, W, C]`` plus a per-pixel
+    int32 flag tensor. Pixels with :class:`LossFlag.INVALID` set are blended out
+    before SSIM is computed; valid pixels receive ``(1 - SSIM) * factor`` after
+    averaging channels. The output is a per-pixel map ``[B, H, W, 1]``.
+
+    Unlike :class:`FusedCameraLosses` / :class:`FusedLidarLosses`, which give
+    ``factor == 0`` and ``factor < 0`` distinct meanings, this module collapses
+    any ``factor <= 0`` to an exact (NaN-safe, differentiable) zero map and skips
+    both the CUDA and PyTorch SSIM paths.
+
+    Requires the compiled gsplat loss extension for the flag vocabulary. CUDA
+    inputs with ``window_size == 11`` use the fused kernel; CPU inputs and other
+    window sizes use an equivalent pure-PyTorch path.
+    """
+
+    def __init__(
+        self,
+        window_size: int = 11,
+        mask_mode: str = "target",
+        constant_mask_value: float = 0.0,
+    ):
+        super().__init__()
+        if _FLAG_INVALID is None:
+            raise RuntimeError(
+                "FusedSSIMLosses requires the compiled gsplat loss extension "
+                "(the per-pixel flag vocabulary is defined by the loss build). "
+                "Rebuild gsplat with loss support enabled."
+            )
+        if window_size <= 0 or window_size % 2 == 0:
+            raise ValueError(
+                f"window_size must be a positive odd integer, got {window_size}"
+            )
+        mode = mask_mode.lower()
+        if mode not in {"target", "gt", "constant"}:
+            raise ValueError("mask_mode must be 'target', 'gt', or 'constant'")
+        self.window_size = window_size
+        self.mask_mode_target = mode != "constant"
+        self.constant_mask_value = constant_mask_value
+        self._cuda_available = _cuda_ssim_losses_available()
+
+    def forward(
+        self,
+        flags: Tensor,  # [B, H, W] or [B, H, W, 1]
+        pred: Tensor,  # [B, H, W, C]
+        target: Tensor,  # [B, H, W, C]
+        factor: float = 1.0,
+    ) -> Tensor:
+        """Returns a per-pixel SSIM loss map ``[B, H, W, 1]``."""
+        flags = _normalize_ssim_flags(flags, pred)
+        if pred.shape != target.shape:
+            raise ValueError(
+                f"target shape {tuple(target.shape)} must match pred shape {tuple(pred.shape)}"
+            )
+        if flags.dtype != torch.int32:
+            raise ValueError(f"flags must be int32, got {flags.dtype}")
+        if pred.dtype != torch.float32 or target.dtype != torch.float32:
+            raise ValueError(
+                f"FusedSSIMLosses expects float32 inputs, got {pred.dtype} and {target.dtype}"
+            )
+        if target.requires_grad:
+            raise ValueError(
+                "FusedSSIMLosses does not support gradients w.r.t. target; "
+                "pass target with requires_grad=False."
+            )
+        if (
+            factor <= 0.0
+            or pred.shape[0] == 0
+            or pred.shape[1] == 0
+            or pred.shape[2] == 0
+        ):
+            return _exact_zero_like_ssim(pred)
+
+        if (
+            self.window_size == 11
+            and self._cuda_available
+            and _require_uniform_cuda("FusedSSIMLosses", (flags,), (pred, target))
+        ):
+            from gsplat.cuda._losses_wrapper import _FusedSSIMLosses
+
+            return _FusedSSIMLosses.apply(
+                flags,
+                pred,
+                target,
+                factor,
+                self.mask_mode_target,
+                self.constant_mask_value,
+            )
+
+        channel = pred.shape[3]
+        pred_bchw = pred.permute(0, 3, 1, 2).contiguous()
+        target_bchw = target.permute(0, 3, 1, 2).contiguous()
+        valid_bchw = ((flags & _FLAG_INVALID) == 0).unsqueeze(1)
+        mask_value = (
+            target_bchw
+            if self.mask_mode_target
+            else torch.full_like(target_bchw, self.constant_mask_value)
+        )
+        pred_blended = torch.where(valid_bchw, pred_bchw, mask_value)
+        target_blended = torch.where(valid_bchw, target_bchw, mask_value)
+        window = create_ssim_window(
+            self.window_size,
+            channel,
+            device=pred.device,
+        ).type_as(pred)
+        ssim_map = torch_ssim_loss(
+            pred_blended,
+            target_blended,
+            window,
+            window_size=self.window_size,
+            channel=channel,
+        )
+        loss = (
+            (1.0 - ssim_map).mean(dim=1, keepdim=True)
+            * valid_bchw.to(pred.dtype)
+            * factor
+        )
+        return loss.permute(0, 2, 3, 1).contiguous()
 
 
 class FusedCameraLosses(torch.nn.Module):

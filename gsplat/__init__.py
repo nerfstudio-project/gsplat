@@ -98,6 +98,7 @@ from .losses_fused import (
     FusedCameraLosses,
     FusedGaussianLosses,
     FusedLidarLosses,
+    FusedSSIMLosses,
     LossFlag,
 )
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
@@ -170,6 +171,7 @@ __all__ = [
     "FusedCameraLosses",
     "FusedGaussianLosses",
     "FusedLidarLosses",
+    "FusedSSIMLosses",
     "LossFlag",
     "gaussian_scale_reg",
     "gaussian_density_reg",
