@@ -331,7 +331,7 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
                     active_tiles.const_data_ptr<int32_t>(),
                     tile_offsets.const_data_ptr<int32_t>(),
                     flatten_ids.const_data_ptr<int32_t>(),
-                    reinterpret_cast<const uint64_t *>(tile_pixel_mask.const_data_ptr<int64_t>()),
+                    tile_pixel_mask.const_data_ptr<uint64_t>(),
                     tile_pixel_cumsum.const_data_ptr<int64_t>(),
                     pixel_map.const_data_ptr<int64_t>(),
                     words,

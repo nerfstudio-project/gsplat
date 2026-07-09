@@ -241,7 +241,10 @@ __global__ void
                             render_normals[pc[p].pix_id * 3 + k] = 0.0f;
                         }
                     }
-                    last_ids[pc[p].pix_id] = -1;
+                    if(last_ids != nullptr)
+                    {
+                        last_ids[pc[p].pix_id] = -1;
+                    }
                     if(sample_counts != nullptr)
                     {
                         sample_counts[pc[p].pix_id] = 0;
