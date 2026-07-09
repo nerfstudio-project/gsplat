@@ -27,6 +27,7 @@
 
 #    include "Common.h"
 #    include "Rasterization.h"
+#    include "RasterizeToPixels3DGSDevice.cuh"
 
 namespace gsplat
 {
@@ -154,18 +155,15 @@ __global__ void rasterize_to_indices_3dgs_kernel(
         uint32_t batch_size = min(block_size, isect_range_end - batch_start);
         for(uint32_t t = 0; (t < batch_size) && !done; ++t)
         {
-            const vec3 conic   = conic_batch[t];
-            const vec3 xy_opac = xy_opacity_batch[t];
-            const float opac   = xy_opac.z;
-            const vec2 delta   = {xy_opac.x - px, xy_opac.y - py};
-            const float sigma
-                = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-            float alpha = min(MAX_ALPHA, opac * __expf(-sigma));
-
-            if(sigma < 0.f || alpha < ALPHA_THRESHOLD)
+            const vec3 conic        = conic_batch[t];
+            const vec3 xy_opac      = xy_opacity_batch[t];
+            const float opac        = xy_opac.z;
+            const GaussianWeight gw = eval_gaussian_weight(conic, xy_opac.x - px, xy_opac.y - py, opac);
+            if(!gw.valid)
             {
                 continue;
             }
+            const float alpha = gw.alpha;
 
             next_trans = trans * (1.0f - alpha);
             if(next_trans <= TRANSMITTANCE_THRESHOLD)
