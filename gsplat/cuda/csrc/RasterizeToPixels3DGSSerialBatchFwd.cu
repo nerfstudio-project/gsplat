@@ -393,9 +393,14 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         // When we also convert the 3DGS backward rasterizer pass, it will require much
         // less shared memory since we're iterating with PPT=4 and will therefore be able
         // to remove tile_size=4 both here and in test_basic.py.
+        // One thread per pixel (CTA=256, PIXELS_PER_THREAD=1) at tile_size=16.
+        // CTA=64 (PPT=4) keeps a pix_out[PPT][CDIM] accumulator per thread, whose
+        // register footprint scales with 4*CDIM and spills to local memory at high
+        // channel counts (~10x slower forward at CDIM=128). PPT=1 makes register
+        // pressure scale with CDIM alone; it is parity at CDIM=3 (see issue #8).
         if(tile_size == 16)
         {
-            launch_variant.template operator()<16, 64>();
+            launch_variant.template operator()<16, 256>();
         }
         else if(tile_size == 4)
         {
@@ -512,9 +517,14 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
             }
         };
 
+        // One thread per pixel (CTA=256, PIXELS_PER_THREAD=1) at tile_size=16.
+        // CTA=64 (PPT=4) keeps a pix_out[PPT][CDIM] accumulator per thread, whose
+        // register footprint scales with 4*CDIM and spills to local memory at high
+        // channel counts (~10x slower forward at CDIM=128). PPT=1 makes register
+        // pressure scale with CDIM alone; it is parity at CDIM=3 (see issue #8).
         if(tile_size == 16)
         {
-            launch_variant.template operator()<16, 64>();
+            launch_variant.template operator()<16, 256>();
         }
         else if(tile_size == 4)
         {
