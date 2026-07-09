@@ -896,16 +896,36 @@ Rasterization3DGSResult rasterization_3dgs(
     // indices; the dense branch returns per-camera tensors and uses empty index
     // sentinels where the packed batch/camera/gaussian indices would go.
     if (with_ut) {
-        ProjectionUT3DGSFusedResult projection = projection_ut_3dgs_fused(
-            means, quats.value(), scales.value(), opacities,
-            viewmats, viewmats_rs, Ks,
-            image_width, image_height,
-            eps2d, near_plane, far_plane, radius_clip,
-            calc_compensations, camera_model, global_z_order,
-            ut_params, rolling_shutter,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-            ftheta_coeffs, lidar_coeffs, external_distortion_params
-        );
+        ProjectionUT3DGSFusedResult projection = [&]() {
+            at::AutoGradMode no_grad(false);
+            return call_torch_op<&projection_ut_3dgs_fused>(
+                "gsplat::projection_ut_3dgs_fused",
+                means,
+                quats.value(),
+                scales.value(),
+                opacities,
+                viewmats,
+                viewmats_rs,
+                Ks,
+                image_width,
+                image_height,
+                eps2d,
+                near_plane,
+                far_plane,
+                radius_clip,
+                calc_compensations,
+                camera_model,
+                global_z_order,
+                ut_params,
+                rolling_shutter,
+                radial_coeffs,
+                tangential_coeffs,
+                thin_prism_coeffs,
+                ftheta_coeffs,
+                lidar_coeffs,
+                external_distortion_params
+            );
+        }();
         radii = projection.radii;
         means2d = projection.means2d;
         depths = projection.depths;
@@ -1007,58 +1027,126 @@ Rasterization3DGSResult rasterization_3dgs(
     // Turn colors/extra signals into [..., C, N, D] or [nnz, D] so the
     // rasterization kernels can process a uniform feature tensor.
     at::Tensor projected_features;
-    const bool needs_dirs =
-        (has_color && sh_degree >= 0) ||
-        (extra_signals.has_value() && extra_signals_sh_degree >= 0);
-    at::Tensor dirs;
-    if (needs_dirs) {
-        dirs = compute_classic_viewdirs(
-            means, proj_viewmats, viewmats_rs,
-            batch_ids_opt, camera_ids_opt, gaussian_ids_opt, indptr_opt,
-            B, C, N
-        );
+
+    // --- Fused fast-path: assemble [SH colors | direct extra | depth] in one
+    // coalesced CUDA kernel (folds SH eval + the +0.5/relu color bias + extra
+    // read + depth write + the cat()s). Eligible for the unpacked, non-
+    // distributed, SH-color path with at most direct (non-SH) float32 extra
+    // signals; numerically identical to the per-step path below. When taken, it
+    // also writes the depth column, so the append-depth concat is skipped.
+    bool fused_assembled = false;
+    const bool fused_eligible =
+        !packed && !distributed && has_color && sh_degree >= 0 &&
+        colors.has_value() && colors.value().dim() == 3 &&
+        means.is_cuda() && means.scalar_type() == at::kFloat &&
+        means.dim() == batch_ndim + 2 && means.size(-1) == 3 &&
+        (!extra_signals.has_value() ||
+         (extra_signals_sh_degree < 0 &&
+          extra_signals.value().scalar_type() == at::kFloat));
+    if (fused_eligible) {
+        at::Tensor campos = viewmat_to_camera_position(proj_viewmats);
+        if (viewmats_rs.has_value()) {
+            campos =
+                0.5 * (campos + viewmat_to_camera_position(viewmats_rs.value()));
+        }
+        const int64_t Dc = colors.value().size(-1);
+        const int64_t E =
+            extra_signals.has_value() ? extra_signals.value().size(-1) : 0;
+
+        bool extra_ok = true;
+        bool extra_has_c = false;
+        at::optional<at::Tensor> extra_in;
+        if (extra_signals.has_value()) {
+            const at::Tensor &es = extra_signals.value();
+            if (es.dim() == batch_ndim + 2 && es.size(batch_ndim) == N &&
+                es.size(-1) == E) {
+                extra_has_c = false; // [*batch, N, E] broadcast over cameras
+            } else if (es.dim() == batch_ndim + 3 &&
+                       es.size(batch_ndim) == C &&
+                       es.size(batch_ndim + 1) == N && es.size(-1) == E) {
+                extra_has_c = true; // [*batch, C, N, E] per-view
+            } else {
+                extra_ok = false;
+            }
+            extra_in = es;
+        }
+
+        const bool has_depth = append_depth;
+        const bool depth_is_zero = use_hit_distance;
+        const bool depth_ok =
+            !has_depth || depth_is_zero || (depths.scalar_type() == at::kFloat);
+        at::optional<at::Tensor> depths_in =
+            (has_depth && !depth_is_zero) ? at::optional<at::Tensor>(depths)
+                                          : c10::nullopt;
+
+        if (extra_ok && depth_ok && campos.is_cuda() &&
+            campos.scalar_type() == at::kFloat) {
+            projected_features = assemble_proj_features(
+                sh_degree, B, C, N, Dc, E,
+                /*color_post=*/2, // shift_relu (matches clamp_after_bias colors)
+                /*extra_post=*/0, // none (direct extra is layout-only, no bias)
+                has_depth, depth_is_zero, extra_has_c,
+                means, campos, colors.value(), extra_in, depths_in,
+                valid_gaussians
+            );
+            fused_assembled = true;
+        }
     }
 
-    std::vector<at::Tensor> feature_list;
-    if (has_color) {
-        TORCH_CHECK(colors.has_value(), "colors must be provided for color render modes");
-        // Colors are post-activation values unless an SH degree is provided.
-        // SH color output is clamped after the +0.5 color bias.
-        at::Tensor projected_colors = sh_degree >= 0
-            ? maybe_evaluate_feature_sh(
-                  sh_degree,
-                  colors.value(), dirs, valid_gaussians,
-                  gaussian_ids_opt,
-                  true // clamp_after_bias
-              )
-            : normalize_features_layout_3dgs(
-                  colors.value(), means,
-                  B, C, N,
-                  batch_ids_opt, camera_ids_opt, gaussian_ids_opt);
-        feature_list.push_back(projected_colors);
-    }
+    if (!fused_assembled) {
+        const bool needs_dirs =
+            (has_color && sh_degree >= 0) ||
+            (extra_signals.has_value() && extra_signals_sh_degree >= 0);
+        at::Tensor dirs;
+        if (needs_dirs) {
+            dirs = compute_classic_viewdirs(
+                means, proj_viewmats, viewmats_rs,
+                batch_ids_opt, camera_ids_opt, gaussian_ids_opt, indptr_opt,
+                B, C, N
+            );
+        }
 
-    if (extra_signals.has_value()) {
-        // Extra signals follow the same feature layout rules as colors, but
-        // unlike RGB SH output they are not clamped after evaluation.
-        at::Tensor projected_extra = extra_signals_sh_degree >= 0
-            ? maybe_evaluate_feature_sh(
-                  extra_signals_sh_degree,
-                  extra_signals.value(), dirs, valid_gaussians,
-                  gaussian_ids_opt,
-                  false // clamp_after_bias
-              )
-            : normalize_features_layout_3dgs(
-                  extra_signals.value(), means,
-                  B, C, N,
-                  batch_ids_opt, camera_ids_opt, gaussian_ids_opt);
-        feature_list.push_back(projected_extra);
-    }
+        std::vector<at::Tensor> feature_list;
+        if (has_color) {
+            TORCH_CHECK(colors.has_value(), "colors must be provided for color render modes");
+            // Colors are post-activation values unless an SH degree is provided.
+            // SH color output is clamped after the +0.5 color bias.
+            at::Tensor projected_colors = sh_degree >= 0
+                ? maybe_evaluate_feature_sh(
+                      sh_degree,
+                      colors.value(), dirs, valid_gaussians,
+                      gaussian_ids_opt,
+                      true // clamp_after_bias
+                  )
+                : normalize_features_layout_3dgs(
+                      colors.value(), means,
+                      B, C, N,
+                      batch_ids_opt, camera_ids_opt, gaussian_ids_opt);
+            feature_list.push_back(projected_colors);
+        }
 
-    if (feature_list.size() == 1) {
-        projected_features = feature_list[0];
-    } else if (feature_list.size() > 1) {
-        projected_features = at::cat(feature_list, -1);
+        if (extra_signals.has_value()) {
+            // Extra signals follow the same feature layout rules as colors, but
+            // unlike RGB SH output they are not clamped after evaluation.
+            at::Tensor projected_extra = extra_signals_sh_degree >= 0
+                ? maybe_evaluate_feature_sh(
+                      extra_signals_sh_degree,
+                      extra_signals.value(), dirs, valid_gaussians,
+                      gaussian_ids_opt,
+                      false // clamp_after_bias
+                  )
+                : normalize_features_layout_3dgs(
+                      extra_signals.value(), means,
+                      B, C, N,
+                      batch_ids_opt, camera_ids_opt, gaussian_ids_opt);
+            feature_list.push_back(projected_extra);
+        }
+
+        if (feature_list.size() == 1) {
+            projected_features = feature_list[0];
+        } else if (feature_list.size() > 1) {
+            projected_features = at::cat(feature_list, -1);
+        }
     }
 
     // Record the returned metadata now: the pre-scatter, rank-local projection
@@ -1114,13 +1202,21 @@ Rasterization3DGSResult rasterization_3dgs(
     }
 
     // --- Append requested depth channel ----------------------------------
+    // The fused fast-path already wrote the depth column into projected_features,
+    // so only the background depth channel needs assembling in that case.
     at::optional<at::Tensor> render_backgrounds = backgrounds;
     if (append_depth) {
-        const bool had_features = projected_features.defined();
-        projected_features =
-            append_depth_channel(projected_features, depths, use_hit_distance);
-        render_backgrounds =
-            append_background_depth_channel(backgrounds, means, C, had_features);
+        if (fused_assembled) {
+            render_backgrounds = append_background_depth_channel(
+                backgrounds, means, C, /*had_features=*/true
+            );
+        } else {
+            const bool had_features = projected_features.defined();
+            projected_features =
+                append_depth_channel(projected_features, depths, use_hit_distance);
+            render_backgrounds =
+                append_background_depth_channel(backgrounds, means, C, had_features);
+        }
     }
     TORCH_CHECK(
         projected_features.defined(),
@@ -1158,23 +1254,27 @@ Rasterization3DGSResult rasterization_3dgs(
         as_optional_tensor(with_ut ? at::Tensor{} : kernel_opacities);
     TileIntersectResult isects =
         lidar_coeffs.has_value()
-        ? intersect_tile_lidar(
+        ? call_torch_op<&intersect_tile_lidar>(
+              "gsplat::intersect_tile_lidar",
               lidar_coeffs.value(),
               kernel_means2d, kernel_radii, kernel_depths,
               kernel_image_ids, kernel_gaussian_ids,
-              I,
+              std::optional<int64_t>(I),
               true, // sort
               segmented)
-        : intersect_tile(
+        : call_torch_op<&intersect_tile>(
+              "gsplat::intersect_tile",
               kernel_means2d, kernel_radii, kernel_depths,
               intersect_conics, intersect_opacities,
               kernel_image_ids, kernel_gaussian_ids,
-              I, tile_size, tile_width, tile_height,
+              std::optional<int64_t>(I), tile_size, tile_width, tile_height,
               true, // sort
               segmented);
 
-    at::Tensor isect_offsets =
-        intersect_offset(isects.isect_ids, I, tile_width, tile_height);
+    at::Tensor isect_offsets = call_torch_op<&intersect_offset>(
+        "gsplat::intersect_offset",
+        isects.isect_ids, I, tile_width, tile_height
+    );
     std::vector<int64_t> isect_offsets_shape =
         batch_shape_with(means, {C, tile_height, tile_width});
     isect_offsets = isect_offsets.reshape(isect_offsets_shape);
@@ -1201,10 +1301,11 @@ Rasterization3DGSResult rasterization_3dgs(
 
         if (with_eval3d) {
             RasterizeToPixelsFromWorld3DGSResult raster =
-                rasterize_to_pixels_from_world_3dgs(
+                call_torch_op<&rasterize_to_pixels_from_world_3dgs>(
+                "gsplat::rasterize_to_pixels_from_world_3dgs",
                 means, quats.value(), scales.value(),
                 features_chunk, kernel_opacities, backgrounds_chunk,
-                c10::nullopt,
+                at::optional<at::Tensor>(),
                 image_width, image_height, tile_size,
                 viewmats, viewmats_rs, Ks,
                 static_cast<int64_t>(camera_model), ut_params,
@@ -1598,16 +1699,19 @@ Rasterization2DGSResult rasterization_2dgs(
     const int64_t tile_height = static_cast<int64_t>(
         std::ceil(image_height / static_cast<double>(tile_size))
     );
-    TileIntersectResult isects = intersect_tile(
+    TileIntersectResult isects = call_torch_op<&intersect_tile>(
+        "gsplat::intersect_tile",
         means2d.contiguous(), radii.contiguous(), depths.contiguous(),
-        c10::nullopt, c10::nullopt,
+        at::optional<at::Tensor>(), at::optional<at::Tensor>(),
         contiguous_optional(image_ids), contiguous_optional(gaussian_ids_opt),
-        I, tile_size, tile_width, tile_height,
+        std::optional<int64_t>(I), tile_size, tile_width, tile_height,
         true, // sort
         false // segmented
     );
-    at::Tensor isect_offsets =
-        intersect_offset(isects.isect_ids, I, tile_width, tile_height);
+    at::Tensor isect_offsets = call_torch_op<&intersect_offset>(
+        "gsplat::intersect_offset",
+        isects.isect_ids, I, tile_width, tile_height
+    );
     isect_offsets = isect_offsets.reshape(
         batch_shape_with_2dgs(means, {C, tile_height, tile_width})
     );

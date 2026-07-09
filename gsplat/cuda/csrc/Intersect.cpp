@@ -33,13 +33,6 @@
 
 namespace gsplat {
 
-template <>
-struct TorchArgDef<TileIntersectResult> {
-    static auto to(const TileIntersectResult &r) {
-        return to_torch_args(r.tiles_per_gauss, r.isect_ids, r.flatten_ids);
-    }
-};
-
 namespace {
 
 // Validates intersect_tile inputs. Each checked assumption is a precondition

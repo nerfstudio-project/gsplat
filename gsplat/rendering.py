@@ -54,6 +54,11 @@ from .cuda._wrapper import (
 from .utils import depth_to_normal, get_projection_matrix
 
 
+# Fused post-transform codes for the proj_features assembler (SHPostOp in CUDA):
+# none -> identity, shift -> +0.5, shift_relu -> max(x + 0.5, 0).
+_POST_CODE = {"none": 0, "shift": 1, "shift_relu": 2}
+
+
 # Gaussian depth modes (D/ED): use projection depth (controlled by global_z_order)
 # Hit distance modes (d/Ed): compute along-ray distance in rasterization
 RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"]

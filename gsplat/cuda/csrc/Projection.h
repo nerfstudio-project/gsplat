@@ -28,6 +28,7 @@
 #include "Lidars.h"
 #include "ExternalDistortion.h"
 #include "Cameras.cuh"
+#include "TorchUtils.h"
 
 namespace at {
 class Tensor;
@@ -142,6 +143,23 @@ struct ProjectionUT3DGSFusedResult {
     at::Tensor depths;
     at::Tensor conics;
     at::optional<at::Tensor> compensations;
+};
+
+template <> struct TorchArgDef<ProjectionUT3DGSFusedResult> {
+    static auto to(const ProjectionUT3DGSFusedResult &r) { return to_torch_args(
+        r.radii, r.means2d, r.depths, r.conics, r.compensations
+    ); }
+
+    template <class TT>
+    static ProjectionUT3DGSFusedResult from(TT &&t) {
+        return {
+            .radii = std::get<0>(std::forward<TT>(t)),
+            .means2d = std::get<1>(std::forward<TT>(t)),
+            .depths = std::get<2>(std::forward<TT>(t)),
+            .conics = std::get<3>(std::forward<TT>(t)),
+            .compensations = std::get<4>(std::forward<TT>(t)),
+        };
+    }
 };
 
 ProjectionUT3DGSFusedResult
