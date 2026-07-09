@@ -41,6 +41,7 @@ import math
 import pytest
 import torch
 
+from gsplat._helper import expect_grad_reference_close, expect_group
 from gsplat.sensors.kernels.common import DynamicPose, Pose
 from gsplat.sensors.kernels.lidars.ops import (
     _GenerateSpinningLidarRays,
@@ -309,11 +310,33 @@ def test_elements_table_grad_accumulates_on_shared_index(lidar_projection_from_j
     angles.backward(torch.ones_like(angles))
     # elevation output is column 0 -> d(elevation)/d(row_elevations[0]) = 1 per
     # element reading row 0; n_share elements all read row 0.
-    assert re.grad[0].item() == pytest.approx(float(n_share))
-    assert re.grad[1:].abs().sum().item() == pytest.approx(0.0)
-    assert torch.allclose(
-        ca.grad[:n_share], torch.ones(n_share, device=ca.device), atol=1e-6
-    )
+    expected_re_grad = torch.zeros_like(re)
+    expected_re_grad[0] = float(n_share)
+    expected_ca_grad = torch.zeros_like(ca)
+    expected_ca_grad[:n_share] = 1.0
+    with expect_group("elements_to_sensor_angles table gradients"):
+        expect_grad_reference_close(
+            re.grad,
+            expected_re_grad,
+            rtol=0.0,
+            atol=0.0,
+            max_rel_l2=0.0,
+            max_rel_l1=0.0,
+            min_cosine=1.0 - 1e-15,
+            max_signed_bias=0.0,
+            msg="row_elevations shared-index gradient",
+        )
+        expect_grad_reference_close(
+            ca.grad,
+            expected_ca_grad,
+            rtol=0.0,
+            atol=1e-6,
+            max_rel_l2=1e-6,
+            max_rel_l1=1e-6,
+            min_cosine=1.0 - 1e-12,
+            max_signed_bias=1e-6,
+            msg="column_azimuths gathered gradient",
+        )
 
 
 def test_projection_bindings_readonly(lidar_projection_from_json):
@@ -670,9 +693,30 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
         0,
         100000,
     )
-    angles2.sum().backward()
-    for table_grad in (re_g.grad, ca_g.grad, ro_g.grad):
-        assert table_grad is None or table_grad.abs().max() == 0
+    table_grads = torch.autograd.grad(
+        angles2.sum(),
+        (re_g, ca_g, ro_g),
+        allow_unused=True,
+    )
+    for name, source, table_grad in (
+        ("row_elevations", re_g, table_grads[0]),
+        ("column_azimuths", ca_g, table_grads[1]),
+        ("row_offsets", ro_g, table_grads[2]),
+    ):
+        materialized_grad = (
+            torch.zeros_like(source) if table_grad is None else table_grad
+        )
+        expect_grad_reference_close(
+            materialized_grad,
+            torch.zeros_like(source),
+            rtol=0.0,
+            atol=0.0,
+            max_rel_l2=0.0,
+            max_rel_l1=0.0,
+            min_cosine=1.0,
+            max_signed_bias=0.0,
+            msg=f"inverse lidar {name} table grad",
+        )
 
     # retrieve the exact converged alpha (scratch) the CUDA forward saved.
     with torch.no_grad():
@@ -752,6 +796,20 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
     crr = cr.clone().requires_grad_(True)
     sa_ref = fn_ref(wpr, ctr, crr)
     sa_ref.backward(upstream)
-    assert (g_wp_cuda - wpr.grad).abs().max().item() < 1e-6
-    assert (g_ct_cuda - ctr.grad).abs().max().item() < 1e-6
-    assert (g_cr_cuda - crr.grad).abs().max().item() < 1e-6
+    with expect_group("inverse lidar frozen-alpha VJP gradients"):
+        for name, actual, expected in (
+            ("world_points", g_wp_cuda, wpr.grad),
+            ("control_translations", g_ct_cuda, ctr.grad),
+            ("control_rotations", g_cr_cuda, crr.grad),
+        ):
+            expect_grad_reference_close(
+                actual,
+                expected,
+                rtol=0.0,
+                atol=1e-6,
+                max_rel_l2=1e-6,
+                max_rel_l1=1e-6,
+                min_cosine=1.0 - 1e-12,
+                max_signed_bias=1e-6,
+                msg=f"inverse lidar {name} VJP",
+            )

@@ -22,6 +22,11 @@ forward values and backward gradients.
 import pytest
 import torch
 
+from gsplat._helper import (
+    assert_grad_reference_close,
+    expect_grad_reference_close,
+    expect_group,
+)
 from gsplat import has_losses
 from gsplat.losses import (
     gaussian_density_reg,
@@ -205,19 +210,25 @@ class TestFusedGaussianLossesCUDA:
         (ls.sum() + ld.sum() + lz.sum() + lo.sum()).backward()
 
         # Backward is pure element-wise fp32 (relu/sign masks times upstream
-        # times visibility). Expect bit-exact parity vs Tier 1.
-        assert torch.equal(
-            s2.grad, s1.grad
-        ), f"scales grad max diff: {(s2.grad - s1.grad).abs().max()}"
-        assert torch.equal(
-            d2.grad, d1.grad
-        ), f"densities grad max diff: {(d2.grad - d1.grad).abs().max()}"
-        assert torch.equal(
-            z2.grad, z1.grad
-        ), f"z_scales grad max diff: {(z2.grad - z1.grad).abs().max()}"
-        assert torch.equal(
-            p2.grad, p1.grad
-        ), f"positions grad max diff: {(p2.grad - p1.grad).abs().max()}"
+        # times visibility). Keep bit-exact parity vs Tier 1, but use the
+        # shared helper so failures report vector diagnostics too.
+        for name, actual, expected in (
+            ("scales", s2.grad, s1.grad),
+            ("densities", d2.grad, d1.grad),
+            ("z_scales", z2.grad, z1.grad),
+            ("positions", p2.grad, p1.grad),
+        ):
+            assert_grad_reference_close(
+                actual,
+                expected,
+                rtol=0.0,
+                atol=0.0,
+                max_rel_l2=0.0,
+                max_rel_l1=0.0,
+                min_cosine=1.0 - 1e-15,
+                max_signed_bias=0.0,
+                msg=f"{name} grad",
+            )
 
     def test_zero_threshold_z_scale(self):
         device = torch.device("cuda")
@@ -300,10 +311,24 @@ class TestFusedGaussianLossesCUDA:
         assert torch.equal(ld_none, ld_ones)
         assert torch.equal(lz_none, lz_ones)
         assert torch.equal(lo_none, lo_ones)
-        assert torch.equal(s1.grad, s2.grad)
-        assert torch.equal(d1.grad, d2.grad)
-        assert torch.equal(z1.grad, z2.grad)
-        assert torch.equal(p1.grad, p2.grad)
+        with expect_group("visibility=None vs all-ones gradients"):
+            for name, actual, expected in (
+                ("scales", s1.grad, s2.grad),
+                ("densities", d1.grad, d2.grad),
+                ("z_scales", z1.grad, z2.grad),
+                ("positions", p1.grad, p2.grad),
+            ):
+                expect_grad_reference_close(
+                    actual,
+                    expected,
+                    rtol=0.0,
+                    atol=0.0,
+                    max_rel_l2=0.0,
+                    max_rel_l1=0.0,
+                    min_cosine=1.0 - 1e-15,
+                    max_signed_bias=0.0,
+                    msg=f"{name} visibility gradient",
+                )
 
     def test_visibility_shape_N1(self):
         """Tier 1 accepts visibility as `[N]` or `[N, 1]`; the wrapper
