@@ -46,10 +46,20 @@ struct RasterizeToPixels3DGSFwdResult {
 };
 
 template <> struct TorchArgDef<RasterizeToPixels3DGSFwdResult> {
-    // last_ids is forward-internal state; alphas is exposed as float.
+    // alphas is exposed as float. last_ids is a forward output (the per-pixel
+    // last-contributor index) that the backward op needs as an input.
     static auto to(const RasterizeToPixels3DGSFwdResult &r) { return to_torch_args(
-        r.renders, r.alphas.to(at::kFloat), r.means2d_absgrad
+        r.renders, r.alphas.to(at::kFloat), r.means2d_absgrad, r.last_ids
     ); }
+    template <class TT>
+    static RasterizeToPixels3DGSFwdResult from(TT &&t) {
+        return {
+            .renders = std::get<0>(t),
+            .alphas = std::get<1>(t),
+            .last_ids = std::get<3>(t),
+            .means2d_absgrad = std::get<2>(t),
+        };
+    }
 };
 
 // RasterizeToPixels3DGSResult lives in Rasterization.h (cross-TU orchestration
@@ -240,7 +250,14 @@ struct RasterizeToPixels3DGSBwdResult {
     at::Tensor v_conics;
     at::Tensor v_colors;
     at::Tensor v_opacities;
-    at::Tensor v_backgrounds;
+    at::optional<at::Tensor> v_backgrounds;
+};
+template <> struct TorchArgDef<RasterizeToPixels3DGSBwdResult> {
+    static auto to(const RasterizeToPixels3DGSBwdResult &r) {
+        return to_torch_args(
+            r.v_means2d_abs, r.v_means2d, r.v_conics, r.v_colors, r.v_opacities, r.v_backgrounds
+        );
+    }
 };
 
 RasterizeToPixels3DGSFwdResult rasterize_to_pixels_3dgs_fwd(
@@ -323,8 +340,21 @@ struct RasterizeToPixels3DGSGrad {
     at::Tensor renders;
     at::Tensor alphas;
 };
+template <> struct TorchArgDef<RasterizeToPixels3DGSGrad> {
+    static auto to(const RasterizeToPixels3DGSGrad &g) { return to_torch_args(g.renders, g.alphas); }
+    template <class TT>
+    static RasterizeToPixels3DGSGrad from(TT &&t) {
+        return {
+            .renders = std::get<0>(t),
+            .alphas = std::get<1>(t),
+        };
+    }
+};
 
 // Full backward for rasterize_to_pixels_3dgs.
+// `compute_v_backgrounds` selects whether to form the backgrounds gradient. It
+// is an explicit argument rather than something inferred from a tensor's
+// requires_grad, so this functional op's behavior follows only from its inputs.
 RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     const at::Tensor &means2d,             // [..., N, 2] or [nnz, 2]
@@ -339,12 +369,11 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
     // forward outputs
     const at::Tensor &render_alphas, // [..., image_height, image_width, 1]
     const at::Tensor &last_ids,      // [..., image_height, image_width]
-    // AbsGrad holder (in-place destination for the published abs gradient)
-    at::Tensor absgrad_holder,
     // scalars
     int64_t image_width, int64_t image_height, int64_t tile_size,
     bool absgrad,
-    const RasterizeToPixels3DGSGrad &grad
+    const RasterizeToPixels3DGSGrad &grad,
+    bool compute_v_backgrounds
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -355,7 +384,9 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
+    CHECK_DENSE(grad.renders);
     CHECK_INPUT(grad.renders);
+    CHECK_DENSE(grad.alphas);
     CHECK_INPUT(grad.alphas);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
@@ -384,18 +415,11 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
         v_means2d, v_conics, v_colors, v_opacities
     );
 
-    // --- Publish optional AbsGrad output ------------------------------
-    // absgrad_holder was returned (mark_non_differentiable) from forward; the
-    // caller observes the abs gradient through this in-place write.
-    if (absgrad) {
-        absgrad_holder.copy_(v_means2d_abs);
-    }
-
     // --- Compute background gradient ----------------------------------
     // Background contribution is not produced by the CUDA backward kernel.
     // It is the incoming color gradient weighted by the unoccluded alpha.
     at::Tensor v_backgrounds;
-    if (tensor_requires_grad(backgrounds)) {
+    if (compute_v_backgrounds) {
         const at::Tensor one_minus_alpha =
             at::sub(at::ones_like(render_alphas).to(at::kFloat),
                     render_alphas.to(at::kFloat));
@@ -408,124 +432,9 @@ RasterizeToPixels3DGSBwdResult rasterize_to_pixels_3dgs_bwd(
         .v_conics = v_conics,
         .v_colors = v_colors,
         .v_opacities = v_opacities,
-        .v_backgrounds = v_backgrounds,
+        .v_backgrounds = as_optional_tensor(v_backgrounds),
     };
 }
-
-namespace {
-
-class RasterizeToPixels3DGSAutograd
-    : public torch::autograd::Function<RasterizeToPixels3DGSAutograd> {
-public:
-    // Forward-input positions; COUNT sizes the returned grad list.
-    struct FwdInput {
-        enum {
-            MEANS2D, CONICS, COLORS, OPACITIES,
-            BACKGROUNDS, MASKS,
-            IMAGE_WIDTH, IMAGE_HEIGHT, TILE_SIZE,
-            ISECT_OFFSETS, FLATTEN_IDS,
-            PACKED, ABSGRAD,
-            COUNT,
-        };
-    };
-
-    // Forward-output positions, in forward()'s return order.
-    struct FwdOutput {
-        enum { RENDERS, ALPHAS, ABSGRAD_HOLDER, COUNT };
-    };
-
-    static torch::autograd::variable_list forward(
-        torch::autograd::AutogradContext *ctx,
-        const at::Tensor &means2d, const at::Tensor &conics,
-        const at::Tensor &colors, const at::Tensor &opacities,
-        const at::optional<at::Tensor> &backgrounds,
-        const at::optional<at::Tensor> &masks,
-        int64_t image_width, int64_t image_height, int64_t tile_size,
-        const at::Tensor &isect_offsets, const at::Tensor &flatten_ids,
-        bool packed, bool absgrad
-    ) {
-        static_assert(
-            FwdInput::COUNT == fwd_input_count<&forward>(),
-            "FwdInput must have one enumerator per forward input"
-        );
-
-        // --- Run forward --------------------------------------------------
-        RasterizeToPixels3DGSFwdResult outputs =
-            rasterize_to_pixels_3dgs_fwd(
-                means2d, conics, colors, opacities,
-                backgrounds, masks,
-                image_width, image_height, tile_size,
-                isect_offsets, flatten_ids,
-                packed, absgrad
-            );
-
-        // --- Publish optional public outputs ------------------------------
-        at::Tensor absgrad_holder = outputs.means2d_absgrad;
-        ctx->mark_non_differentiable({absgrad_holder});
-
-        // --- Save state for backward --------------------------------------
-        ctx_save<&rasterize_to_pixels_3dgs_bwd>(
-            ctx,
-            means2d, conics, colors, opacities, backgrounds, masks,
-            isect_offsets, flatten_ids,
-            outputs.alphas, outputs.last_ids, absgrad_holder,
-            image_width, image_height, tile_size, absgrad
-        );
-
-        torch::autograd::variable_list out(FwdOutput::COUNT);
-        out[FwdOutput::RENDERS]        = outputs.renders;
-        out[FwdOutput::ALPHAS]         = outputs.alphas.to(at::kFloat);
-        out[FwdOutput::ABSGRAD_HOLDER] = absgrad_holder;
-        return out;
-    }
-
-    static torch::autograd::variable_list backward(
-        torch::autograd::AutogradContext *ctx,
-        torch::autograd::variable_list grad_outputs
-    ) {
-        RasterizeToPixels3DGSGrad grad{
-            .renders = grad_outputs[FwdOutput::RENDERS].contiguous(),
-            .alphas  = grad_outputs[FwdOutput::ALPHAS].contiguous(),
-        };
-        RasterizeToPixels3DGSBwdResult g = apply_bwd<&rasterize_to_pixels_3dgs_bwd>(ctx, grad);
-
-        torch::autograd::variable_list grads(FwdInput::COUNT);
-        grads[FwdInput::MEANS2D]     = g.v_means2d;
-        grads[FwdInput::CONICS]      = g.v_conics;
-        grads[FwdInput::COLORS]      = g.v_colors;
-        grads[FwdInput::OPACITIES]   = g.v_opacities;
-        grads[FwdInput::BACKGROUNDS] = g.v_backgrounds;
-        return grads;
-    }
-
-    // Forwards to apply() and packs the variable_list into the typed result.
-    // forward() already exposes alphas as float, so no cast is needed here.
-    static RasterizeToPixels3DGSResult call(
-        const at::Tensor &means2d, const at::Tensor &conics,
-        const at::Tensor &colors, const at::Tensor &opacities,
-        const at::optional<at::Tensor> &backgrounds,
-        const at::optional<at::Tensor> &masks,
-        int64_t image_width, int64_t image_height, int64_t tile_size,
-        const at::Tensor &isect_offsets, const at::Tensor &flatten_ids,
-        bool packed, bool absgrad
-    ) {
-        torch::autograd::variable_list outputs = apply(
-            means2d, conics,
-            colors, opacities,
-            backgrounds, masks,
-            image_width, image_height, tile_size,
-            isect_offsets, flatten_ids,
-            packed, absgrad
-        );
-        return {
-            .renders = outputs[FwdOutput::RENDERS],
-            .alphas = outputs[FwdOutput::ALPHAS],
-            .means2d_absgrad = outputs[FwdOutput::ABSGRAD_HOLDER],
-        };
-    }
-};
-
-} // namespace
 
 RasterizeToPixels3DGSResult rasterize_to_pixels_3dgs(
     const at::Tensor &means2d, const at::Tensor &conics,
@@ -536,35 +445,22 @@ RasterizeToPixels3DGSResult rasterize_to_pixels_3dgs(
     const at::Tensor &isect_offsets, const at::Tensor &flatten_ids,
     bool packed, bool absgrad
 ) {
-    const bool use_custom_autograd = needs_custom_autograd(
+    // Invoke the op through the dispatcher so its registered autograd is
+    // recorded and the result is differentiable. The op exposes
+    // the forward-internal last_ids as a 4th output; drop it from the public
+    // result.
+    RasterizeToPixels3DGSFwdResult fwd = call_torch_op<&rasterize_to_pixels_3dgs_fwd>(
+        "gsplat::rasterize_to_pixels_3dgs",
         means2d, conics, colors, opacities, backgrounds, masks,
-        isect_offsets, flatten_ids
-    );
-    if (!use_custom_autograd) {
-        RasterizeToPixels3DGSFwdResult fwd = rasterize_to_pixels_3dgs_fwd(
-            means2d, conics,
-            colors, opacities,
-            backgrounds, masks,
-            image_width, image_height, tile_size,
-            isect_offsets, flatten_ids,
-            packed, absgrad
-        );
-        // last_ids is forward-internal state; alphas is exposed as float.
-        return {
-            .renders = fwd.renders,
-            .alphas = fwd.alphas.to(at::kFloat),
-            .means2d_absgrad = fwd.means2d_absgrad,
-        };
-    }
-
-    return RasterizeToPixels3DGSAutograd::call(
-        means2d, conics,
-        colors, opacities,
-        backgrounds, masks,
         image_width, image_height, tile_size,
         isect_offsets, flatten_ids,
         packed, absgrad
     );
+    return {
+        .renders = fwd.renders,
+        .alphas = fwd.alphas,
+        .means2d_absgrad = fwd.means2d_absgrad,
+    };
 }
 
 RasterizeToIndices3DGSResult rasterize_to_indices_3dgs(
@@ -1243,12 +1139,26 @@ struct RasterizeToPixels2DGSFwdResult {
 };
 
 template <> struct TorchArgDef<RasterizeToPixels2DGSFwdResult> {
-    // last_ids / median_ids are forward-internal state; alphas is exposed
-    // as float.
+    // alphas is exposed as float. last_ids / median_ids are forward outputs
+    // (per-pixel last / median contributor indices) the backward op needs.
     static auto to(const RasterizeToPixels2DGSFwdResult &r) { return to_torch_args(
         r.renders, r.alphas.to(at::kFloat), r.render_normals,
-        r.render_distort, r.render_median, r.means2d_absgrad
+        r.render_distort, r.render_median, r.means2d_absgrad,
+        r.last_ids, r.median_ids
     ); }
+    template <class TT>
+    static RasterizeToPixels2DGSFwdResult from(TT &&t) {
+        return {
+            .renders = std::get<0>(t),
+            .alphas = std::get<1>(t),
+            .render_normals = std::get<2>(t),
+            .render_distort = std::get<3>(t),
+            .render_median = std::get<4>(t),
+            .last_ids = std::get<6>(t),
+            .median_ids = std::get<7>(t),
+            .means2d_absgrad = std::get<5>(t),
+        };
+    }
 };
 
 
@@ -1376,7 +1286,15 @@ struct RasterizeToPixels2DGSBwdResult {
     at::Tensor v_opacities;
     at::Tensor v_normals;
     at::Tensor v_densify;
-    at::Tensor v_backgrounds;
+    at::optional<at::Tensor> v_backgrounds;
+};
+template <> struct TorchArgDef<RasterizeToPixels2DGSBwdResult> {
+    static auto to(const RasterizeToPixels2DGSBwdResult &r) {
+        return to_torch_args(
+            r.v_means2d_abs, r.v_means2d, r.v_ray_transforms, r.v_colors,
+            r.v_opacities, r.v_normals, r.v_densify, r.v_backgrounds
+        );
+    }
 };
 
 // Gradients of the differentiable forward outputs.
@@ -1388,8 +1306,28 @@ struct RasterizeToPixels2DGSGrad {
     at::Tensor render_distort;
     at::Tensor render_median;
 };
+template <> struct TorchArgDef<RasterizeToPixels2DGSGrad> {
+    static auto to(const RasterizeToPixels2DGSGrad &g) {
+        return to_torch_args(
+            g.renders, g.alphas, g.render_normals, g.render_distort, g.render_median
+        );
+    }
+    template <class TT>
+    static RasterizeToPixels2DGSGrad from(TT &&t) {
+        return {
+            .renders = std::get<0>(t),
+            .alphas = std::get<1>(t),
+            .render_normals = std::get<2>(t),
+            .render_distort = std::get<3>(t),
+            .render_median = std::get<4>(t),
+        };
+    }
+};
 
 // Full backward for rasterize_to_pixels_2dgs.
+// `compute_v_backgrounds` selects whether to form the backgrounds gradient. It
+// is an explicit argument rather than something inferred from a tensor's
+// requires_grad, so this functional op's behavior follows only from its inputs.
 RasterizeToPixels2DGSBwdResult
 rasterize_to_pixels_2dgs_bwd(
     // Gaussian parameters
@@ -1401,10 +1339,6 @@ rasterize_to_pixels_2dgs_bwd(
     const at::Tensor &densify,
     const at::optional<at::Tensor> &backgrounds, // [..., channels]
     const at::optional<at::Tensor> &masks,       // [..., tile_height, tile_width]
-    // image size
-    int64_t image_width,
-    int64_t image_height,
-    int64_t tile_size,
     // ray_crossions
     const at::Tensor &tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor &flatten_ids,  // [n_isects]
@@ -1413,10 +1347,14 @@ rasterize_to_pixels_2dgs_bwd(
     const at::Tensor &render_alphas, // [..., image_height, image_width, 1]
     const at::Tensor &last_ids,      // [..., image_height, image_width]
     const at::Tensor &median_ids,    // [..., image_height, image_width]
-    at::Tensor absgrad_holder, // in-place destination for the published abs gradient
+    // image size
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
     bool absgrad,
     // gradients of outputs
-    const RasterizeToPixels2DGSGrad &grad
+    const RasterizeToPixels2DGSGrad &grad,
+    bool compute_v_backgrounds
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -1431,10 +1369,15 @@ rasterize_to_pixels_2dgs_bwd(
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
     CHECK_INPUT(median_ids);
+    CHECK_DENSE(grad.renders);
     CHECK_INPUT(grad.renders);
+    CHECK_DENSE(grad.alphas);
     CHECK_INPUT(grad.alphas);
+    CHECK_DENSE(grad.render_normals);
     CHECK_INPUT(grad.render_normals);
+    CHECK_DENSE(grad.render_distort);
     CHECK_INPUT(grad.render_distort);
+    CHECK_DENSE(grad.render_median);
     CHECK_INPUT(grad.render_median);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
@@ -1486,18 +1429,11 @@ rasterize_to_pixels_2dgs_bwd(
         v_densify
     );
 
-    // --- Publish optional AbsGrad output ------------------------------
-    // absgrad_holder was returned (mark_non_differentiable) from forward; the
-    // caller observes the abs gradient through this in-place write.
-    if (absgrad) {
-        absgrad_holder.copy_(v_means2d_abs);
-    }
-
     // --- Compute background gradient ----------------------------------
     // Background contribution is not produced by the CUDA backward kernel.
     // It is the incoming color gradient weighted by the unoccluded alpha.
     at::Tensor v_backgrounds;
-    if (tensor_requires_grad(backgrounds)) {
+    if (compute_v_backgrounds) {
         const at::Tensor one_minus_alpha =
             at::sub(at::ones_like(render_alphas).to(at::kFloat),
                     render_alphas.to(at::kFloat));
@@ -1512,7 +1448,7 @@ rasterize_to_pixels_2dgs_bwd(
         .v_opacities = v_opacities,
         .v_normals = v_normals,
         .v_densify = v_densify,
-        .v_backgrounds = v_backgrounds,
+        .v_backgrounds = as_optional_tensor(v_backgrounds),
     };
 }
 
@@ -1522,141 +1458,6 @@ template <> struct TorchArgDef<RasterizeToPixels2DGSResult> {
         r.render_median, r.means2d_absgrad
     ); }
 };
-
-namespace {
-
-class RasterizeToPixels2DGSAutograd
-    : public torch::autograd::Function<RasterizeToPixels2DGSAutograd> {
-public:
-    // Forward-input positions; COUNT sizes the returned grad list.
-    struct FwdInput {
-        enum {
-            MEANS2D, RAY_TRANSFORMS, COLORS, OPACITIES,
-            NORMALS, DENSIFY,
-            BACKGROUNDS, MASKS,
-            IMAGE_WIDTH, IMAGE_HEIGHT, TILE_SIZE,
-            TILE_OFFSETS, FLATTEN_IDS,
-            PACKED, ABSGRAD, DISTLOSS,
-            COUNT,
-        };
-    };
-
-    // Forward-output positions, in forward()'s return order.
-    struct FwdOutput {
-        enum {
-            RENDERS, ALPHAS, RENDER_NORMALS, RENDER_DISTORT, RENDER_MEDIAN,
-            ABSGRAD_HOLDER, COUNT,
-        };
-    };
-
-    static torch::autograd::variable_list forward(
-        torch::autograd::AutogradContext *ctx,
-        const at::Tensor &means2d, const at::Tensor &ray_transforms,
-        const at::Tensor &colors, const at::Tensor &opacities,
-        const at::Tensor &normals, const at::Tensor &densify,
-        const at::optional<at::Tensor> &backgrounds,
-        const at::optional<at::Tensor> &masks,
-        int64_t image_width, int64_t image_height, int64_t tile_size,
-        const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
-        bool packed, bool absgrad, bool distloss
-    ) {
-        static_assert(
-            FwdInput::COUNT == fwd_input_count<&forward>(),
-            "FwdInput must have one enumerator per forward input"
-        );
-
-        // --- Run forward --------------------------------------------------
-        RasterizeToPixels2DGSFwdResult outputs =
-            rasterize_to_pixels_2dgs_fwd(
-                means2d, ray_transforms,
-                colors, opacities,
-                normals, densify,
-                backgrounds, masks,
-                image_width, image_height, tile_size,
-                tile_offsets, flatten_ids,
-                packed, absgrad, distloss
-            );
-
-        // --- Publish optional public outputs ------------------------------
-        at::Tensor absgrad_holder = outputs.means2d_absgrad;
-        ctx->mark_non_differentiable({absgrad_holder});
-
-        // --- Save state for backward --------------------------------------
-        ctx_save<&rasterize_to_pixels_2dgs_bwd>(
-            ctx,
-            means2d, ray_transforms, colors, opacities, normals, densify,
-            backgrounds, masks, image_width, image_height, tile_size,
-            tile_offsets, flatten_ids,
-            outputs.renders, outputs.alphas, outputs.last_ids,
-            outputs.median_ids, absgrad_holder, absgrad
-        );
-
-        torch::autograd::variable_list out(FwdOutput::COUNT);
-        out[FwdOutput::RENDERS]        = outputs.renders;
-        out[FwdOutput::ALPHAS]         = outputs.alphas.to(at::kFloat);
-        out[FwdOutput::RENDER_NORMALS] = outputs.render_normals;
-        out[FwdOutput::RENDER_DISTORT] = outputs.render_distort;
-        out[FwdOutput::RENDER_MEDIAN]  = outputs.render_median;
-        out[FwdOutput::ABSGRAD_HOLDER] = absgrad_holder;
-        return out;
-    }
-
-    static torch::autograd::variable_list backward(
-        torch::autograd::AutogradContext *ctx,
-        torch::autograd::variable_list grad_outputs
-    ) {
-        RasterizeToPixels2DGSGrad grad{
-            .renders        = grad_outputs[FwdOutput::RENDERS].contiguous(),
-            .alphas         = grad_outputs[FwdOutput::ALPHAS].contiguous(),
-            .render_normals = grad_outputs[FwdOutput::RENDER_NORMALS].contiguous(),
-            .render_distort = grad_outputs[FwdOutput::RENDER_DISTORT].contiguous(),
-            .render_median  = grad_outputs[FwdOutput::RENDER_MEDIAN].contiguous(),
-        };
-        RasterizeToPixels2DGSBwdResult g = apply_bwd<&rasterize_to_pixels_2dgs_bwd>(ctx, grad);
-
-        torch::autograd::variable_list grads(FwdInput::COUNT);
-        grads[FwdInput::MEANS2D]        = g.v_means2d;
-        grads[FwdInput::RAY_TRANSFORMS] = g.v_ray_transforms;
-        grads[FwdInput::COLORS]         = g.v_colors;
-        grads[FwdInput::OPACITIES]      = g.v_opacities;
-        grads[FwdInput::NORMALS]        = g.v_normals;
-        grads[FwdInput::DENSIFY]        = g.v_densify;
-        grads[FwdInput::BACKGROUNDS]    = g.v_backgrounds;
-        return grads;
-    }
-
-    // Forwards to apply() and packs the variable_list into the typed result.
-    static RasterizeToPixels2DGSResult call(
-        const at::Tensor &means2d, const at::Tensor &ray_transforms,
-        const at::Tensor &colors, const at::Tensor &opacities,
-        const at::Tensor &normals, const at::Tensor &densify,
-        const at::optional<at::Tensor> &backgrounds,
-        const at::optional<at::Tensor> &masks,
-        int64_t image_width, int64_t image_height, int64_t tile_size,
-        const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
-        bool packed, bool absgrad, bool distloss
-    ) {
-        torch::autograd::variable_list outputs = apply(
-            means2d, ray_transforms,
-            colors, opacities,
-            normals, densify,
-            backgrounds, masks,
-            image_width, image_height, tile_size,
-            tile_offsets, flatten_ids,
-            packed, absgrad, distloss
-        );
-        return {
-            .renders         = outputs[FwdOutput::RENDERS],
-            .alphas          = outputs[FwdOutput::ALPHAS],
-            .render_normals  = outputs[FwdOutput::RENDER_NORMALS],
-            .render_distort  = outputs[FwdOutput::RENDER_DISTORT],
-            .render_median   = outputs[FwdOutput::RENDER_MEDIAN],
-            .means2d_absgrad = outputs[FwdOutput::ABSGRAD_HOLDER],
-        };
-    }
-};
-
-} // namespace
 
 RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
     const at::Tensor &means2d, const at::Tensor &ray_transforms,
@@ -1668,40 +1469,26 @@ RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
     const at::Tensor &tile_offsets, const at::Tensor &flatten_ids,
     bool packed, bool absgrad, bool distloss
 ) {
-    const bool use_custom_autograd = needs_custom_autograd(
+    // Invoke the op through the dispatcher so its registered autograd is
+    // recorded and the result is differentiable. The op exposes
+    // the forward-internal last_ids / median_ids as extra outputs; drop them
+    // from the public result.
+    RasterizeToPixels2DGSFwdResult fwd = call_torch_op<&rasterize_to_pixels_2dgs_fwd>(
+        "gsplat::rasterize_to_pixels_2dgs",
         means2d, ray_transforms, colors, opacities, normals, densify,
-        backgrounds, masks, tile_offsets, flatten_ids
-    );
-    if (!use_custom_autograd) {
-        RasterizeToPixels2DGSFwdResult fwd = rasterize_to_pixels_2dgs_fwd(
-            means2d, ray_transforms,
-            colors, opacities,
-            normals, densify,
-            backgrounds, masks,
-            image_width, image_height, tile_size,
-            tile_offsets, flatten_ids,
-            packed, absgrad, distloss
-        );
-        // alphas is exposed as float (matches the autograd path).
-        return {
-            .renders         = fwd.renders,
-            .alphas          = fwd.alphas.to(at::kFloat),
-            .render_normals  = fwd.render_normals,
-            .render_distort  = fwd.render_distort,
-            .render_median   = fwd.render_median,
-            .means2d_absgrad = fwd.means2d_absgrad,
-        };
-    }
-
-    return RasterizeToPixels2DGSAutograd::call(
-        means2d, ray_transforms,
-        colors, opacities,
-        normals, densify,
         backgrounds, masks,
         image_width, image_height, tile_size,
         tile_offsets, flatten_ids,
         packed, absgrad, distloss
     );
+    return {
+        .renders = fwd.renders,
+        .alphas = fwd.alphas,
+        .render_normals = fwd.render_normals,
+        .render_distort = fwd.render_distort,
+        .render_median = fwd.render_median,
+        .means2d_absgrad = fwd.means2d_absgrad,
+    };
 }
 
 struct RasterizeToIndices2DGSResult {
@@ -2854,6 +2641,7 @@ rasterize_to_pixels_from_world_3dgs(
 void register_rasterization_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_3DGS
     m.impl("rasterize_to_pixels_3dgs", to_torch_op<&rasterize_to_pixels_3dgs_fwd>);
+    m.impl("rasterize_to_pixels_3dgs_bwd", to_torch_op<&rasterize_to_pixels_3dgs_bwd>);
     m.impl("rasterize_to_indices_3dgs", to_torch_op<&rasterize_to_indices_3dgs>);
     m.impl("rasterize_num_contributing_gaussians", &rasterize_num_contributing_gaussians);
     m.impl("rasterize_contributing_gaussian_ids", &rasterize_contributing_gaussian_ids);
@@ -2862,6 +2650,7 @@ void register_rasterization_cuda_impl(torch::Library &m) {
 
 #if GSPLAT_BUILD_2DGS
     m.impl("rasterize_to_pixels_2dgs", to_torch_op<&rasterize_to_pixels_2dgs_fwd>);
+    m.impl("rasterize_to_pixels_2dgs_bwd", to_torch_op<&rasterize_to_pixels_2dgs_bwd>);
     m.impl("rasterize_to_indices_2dgs", to_torch_op<&rasterize_to_indices_2dgs>);
 #endif
 
@@ -2872,12 +2661,6 @@ void register_rasterization_cuda_impl(torch::Library &m) {
 }
 
 void register_rasterization_autograd_cuda_impl(torch::Library &m) {
-#if GSPLAT_BUILD_3DGS
-    m.impl("rasterize_to_pixels_3dgs", to_torch_op<&rasterize_to_pixels_3dgs>);
-#endif
-#if GSPLAT_BUILD_2DGS
-    m.impl("rasterize_to_pixels_2dgs", to_torch_op<&rasterize_to_pixels_2dgs>);
-#endif
     m.impl(
         "rasterize_to_pixels_from_world_3dgs",
         to_torch_op<&rasterize_to_pixels_from_world_3dgs>

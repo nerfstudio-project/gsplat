@@ -34,6 +34,9 @@ namespace gsplat {
 #define CHECK_INPUT(x)                                                         \
     CHECK_CUDA(x);                                                             \
     CHECK_CONTIGUOUS(x)
+// Kernels index raw dense storage; a strided (non-sparse) layout is required.
+#define CHECK_DENSE(x)                                                         \
+    TORCH_CHECK(x.layout() == c10::kStrided, #x " must be a dense tensor")
 #define DEVICE_GUARD(_ten)                                                     \
     const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 

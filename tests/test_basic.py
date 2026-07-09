@@ -5390,6 +5390,57 @@ def test_rasterization_cpp_classic_backward_matches_python_reference(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
+@pytest.mark.parametrize("packed", [True, False])
+def test_rasterization_cpp_classic_sh_backward_matches_python_reference(packed: bool):
+    from gsplat.rendering import _rasterization
+
+    torch.manual_seed(18)
+    scene = _make_cpp_classic_rasterization_scene(use_color_sh=True)
+    # The Python reference differentiates viewdirs through inverse(viewmats),
+    # while C++ uses the rigid-camera formula -R^T t. Compare means to exercise
+    # the SH direction-gradient path without using a non-equivalent viewmats VJP.
+    grad_names = ("means", "colors")
+    _set_rasterization_scene_requires_grad(scene, grad_names)
+
+    public_colors, public_alphas, _ = gsplat.rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        rasterize_mode="classic",
+        packed=packed,
+        channel_chunk=3,
+    )
+    v_colors, v_alphas = _classic_rasterization_loss_terms(public_colors, public_alphas)
+    public_inputs = tuple(scene[name] for name in grad_names)
+    public_grads = torch.autograd.grad(
+        (public_colors * v_colors).sum() + (public_alphas * v_alphas).sum(),
+        public_inputs,
+    )
+
+    ref_colors, ref_alphas, _ = _rasterization(
+        **scene,
+        width=48,
+        height=40,
+        tile_size=16,
+        render_mode="RGB",
+        rasterize_mode="classic",
+        channel_chunk=3,
+    )
+    ref_inputs = tuple(scene[name] for name in grad_names)
+    ref_grads = torch.autograd.grad(
+        (ref_colors * v_colors).sum() + (ref_alphas * v_alphas).sum(),
+        ref_inputs,
+    )
+
+    for name, actual, expected in zip(grad_names, public_grads, ref_grads):
+        assert expected.abs().sum() > 0, f"{name}: reference gradient is zero"
+        _assert_public_rasterization_grad_close(actual, expected, name=name)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_cpp_classic_sparse_grad_layout():
     torch.manual_seed(19)
     scene = _make_cpp_classic_rasterization_scene(n_cameras=1)
@@ -6859,9 +6910,10 @@ def test_backward_high_opacity_no_nan(tile_size):
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
     # A masked-out tile takes the forward rasterizer's early-return branch.
-    # The public op allocates its outputs with at::empty, so render_colors and
-    # render_alphas must still be explicitly initialized before returning. The
-    # internal last_ids buffer is intentionally not part of the public schema.
+    # The op allocates its outputs with at::empty, so render_colors and
+    # render_alphas must still be explicitly initialized before returning.
+    # last_ids is the op's 4th output (saved by the Python autograd's
+    # setup_context); the public rasterize_to_pixels_3dgs wrapper drops it.
 
     tile_size = 16
     width = height = tile_size  # single tile
@@ -6881,6 +6933,7 @@ def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized():
         render_colors,
         render_alphas,
         means2d_absgrad,
+        _last_ids,
     ) = torch.ops.gsplat.rasterize_to_pixels_3dgs(
         means2d,
         conics,

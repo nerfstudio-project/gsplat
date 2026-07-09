@@ -37,6 +37,13 @@ from gsplat.cuda._lidar import (
 ExternalDistortionModelMeta = Literal["bivariate-windshield"]
 CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar"]
 
+# Autograd for the migrated ops is attached in Python (torch.library.register_autograd)
+# rather than C++. The C++ module exports only each op's `<op>_fwd` and `<op>_bwd`; the
+# backward is wired to the forward op when this module is imported (the call at the end
+# of the file), so direct torch.ops.gsplat.* callers get autograd too, not only the
+# Python wrappers.
+_AUTOGRAD_REGISTRATIONS_DONE = False
+
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
@@ -48,9 +55,69 @@ def _make_lazy_cuda_func(name: str) -> Callable:
         # pylint: disable=import-outside-toplevel
         from ._backend import _C
 
+        if _C is not None:
+            _ensure_autograd_registrations()
         return getattr(torch.ops.gsplat, name)(*args, **kwargs)
 
     return call_cuda
+
+
+def _has_schema(op_name: str) -> bool:
+    """Whether `gsplat::<op_name>` is registered (it may be compiled out by build flags)."""
+    try:
+        torch._C._dispatch_find_schema_or_throw(f"gsplat::{op_name}", "")
+    except RuntimeError:
+        return False
+    return True
+
+
+def _dense_contiguous(t: Optional[Tensor]) -> Optional[Tensor]:
+    """Materialize an incoming output gradient as a dense, contiguous tensor.
+
+    Backward CUDA ops index raw dense storage and require contiguous inputs, so a
+    sparse gradient is densified and any gradient is made contiguous. ``None`` (a
+    disabled or non-differentiable output) passes through unchanged.
+    """
+    if t is None:
+        return None
+    return (t.to_dense() if t.is_sparse else t).contiguous()
+
+
+def _register_autograd(register: type) -> None:
+    """Attach a Python autograd backward to the C++ forward op ``gsplat::<base>``.
+
+    ``register`` is a per-op class grouping the op's hooks: its ``base`` op name and
+    static ``setup_context`` / ``backward`` methods. Registering autograd on the
+    forward op makes the op itself differentiable through the dispatcher, so its
+    backward is recorded whenever it runs under autograd; ``backward`` invokes
+    ``torch.ops.gsplat.<base>_bwd``. No-op if either op was compiled out.
+    """
+    base = register.base
+    if not (_has_schema(base) and _has_schema(f"{base}_bwd")):
+        return
+    torch.library.register_autograd(
+        f"gsplat::{base}", register.backward, setup_context=register.setup_context
+    )
+
+
+def _ensure_autograd_registrations() -> None:
+    """Install the Python autograd backends for the migrated ops, exactly once.
+
+    Populated one op at a time as each C++ autograd Function is ported to Python.
+    """
+    global _AUTOGRAD_REGISTRATIONS_DONE
+    if _AUTOGRAD_REGISTRATIONS_DONE:
+        return
+    _register_autograd(RegisterSphericalHarmonics)
+    _register_autograd(RegisterQuatScaleToCovarPreci)
+    _register_autograd(RegisterProjectionEWASimple)
+    _register_autograd(RegisterProjectionEWA3DGSFused)
+    _register_autograd(RegisterProjectionEWA3DGSPacked)
+    _register_autograd(RegisterProjection2DGSFused)
+    _register_autograd(RegisterProjection2DGSPacked)
+    _register_autograd(RegisterRasterizeToPixels3DGS)
+    _register_autograd(RegisterRasterizeToPixels2DGS)
+    _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
 def _make_lazy_cuda_cls(name: str) -> Any:
@@ -405,6 +472,39 @@ def spherical_harmonics(
     )
 
 
+class RegisterSphericalHarmonics:
+    """Python autograd hooks for the gsplat::spherical_harmonics op."""
+
+    base = "spherical_harmonics"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        degrees_to_use, dirs, coeffs, masks = inputs
+        ctx.degrees_to_use = degrees_to_use
+        # save_for_backward round-trips None as None, so the optional masks save directly.
+        ctx.save_for_backward(dirs, coeffs, masks)
+
+    @classmethod
+    def backward(cls, ctx, v_colors: Tensor):
+        dirs, coeffs, masks = ctx.saved_tensors
+        # dirs is forward input index 1; its gradient is wanted only when requested.
+        compute_v_dirs = ctx.needs_input_grad[1]
+        v_coeffs, v_dirs = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            ctx.degrees_to_use,
+            dirs,
+            coeffs,
+            masks,
+            _dense_contiguous(v_colors),
+            compute_v_dirs,
+        )
+        return (
+            None,  # degrees_to_use
+            v_dirs,
+            v_coeffs,
+            None,  # masks
+        )
+
+
 def quat_scale_to_covar_preci(
     quats: Tensor,  # [..., 4],
     scales: Tensor,  # [..., 3],
@@ -434,6 +534,37 @@ def quat_scale_to_covar_preci(
     return _make_lazy_cuda_func("quat_scale_to_covar_preci")(
         quats, scales, compute_covar, compute_preci, triu
     )
+
+
+class RegisterQuatScaleToCovarPreci:
+    """Python autograd hooks for the gsplat::quat_scale_to_covar_preci op."""
+
+    base = "quat_scale_to_covar_preci"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        quats, scales, _compute_covar, _compute_preci, triu = inputs
+        ctx.triu = triu
+        ctx.save_for_backward(quats, scales)
+
+    @classmethod
+    def backward(cls, ctx, v_covars, v_precis):
+        quats, scales = ctx.saved_tensors
+        # A disabled output has a None grad, which passes through unchanged.
+        v_quats, v_scales = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            quats,
+            scales,
+            ctx.triu,
+            _dense_contiguous(v_covars),
+            _dense_contiguous(v_precis),
+        )
+        return (
+            v_quats,
+            v_scales,
+            None,  # compute_covar
+            None,  # compute_preci
+            None,  # triu
+        )
 
 
 def persp_proj(
@@ -497,6 +628,42 @@ def proj(
     return _make_lazy_cuda_func("projection_ewa_simple")(
         means, covars, Ks, width, height, camera_model_type
     )
+
+
+class RegisterProjectionEWASimple:
+    """Python autograd hooks for the gsplat::projection_ewa_simple op."""
+
+    base = "projection_ewa_simple"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        means, covars, Ks, width, height, camera_model = inputs
+        ctx.width = width
+        ctx.height = height
+        ctx.camera_model = camera_model
+        ctx.save_for_backward(means, covars, Ks)
+
+    @classmethod
+    def backward(cls, ctx, v_means2d, v_covars2d):
+        means, covars, Ks = ctx.saved_tensors
+        v_means, v_covars = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            means,
+            covars,
+            Ks,
+            ctx.width,
+            ctx.height,
+            ctx.camera_model,
+            _dense_contiguous(v_means2d),
+            _dense_contiguous(v_covars2d),
+        )
+        return (
+            v_means,
+            v_covars,
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # camera_model
+        )
 
 
 @trace_function("project-fwd")
@@ -644,6 +811,234 @@ def fully_fused_projection(
             radius_clip,
             calc_compensations,
             camera_model_type,
+        )
+
+
+class RegisterProjectionEWA3DGSFused:
+    """Python autograd hooks for the gsplat::projection_ewa_3dgs_fused op."""
+
+    base = "projection_ewa_3dgs_fused"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means,
+            covars,
+            quats,
+            scales,
+            _opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            _near_plane,
+            _far_plane,
+            _radius_clip,
+            _calc_compensations,
+            camera_model,
+        ) = inputs
+        radii, _means2d, _depths, conics, compensations = output
+        ctx.width = width
+        ctx.height = height
+        ctx.eps2d = eps2d
+        ctx.camera_model = camera_model
+        # covars / quats / scales / compensations may be None; save_for_backward
+        # round-trips None as None.
+        ctx.save_for_backward(
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            conics,
+            compensations,
+        )
+
+    @classmethod
+    def backward(cls, ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+        (
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            conics,
+            compensations,
+        ) = ctx.saved_tensors
+        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            f"{cls.base}_bwd"
+        )(
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            ctx.width,
+            ctx.height,
+            ctx.eps2d,
+            ctx.camera_model,
+            radii,
+            conics,
+            compensations,
+            _dense_contiguous(v_means2d),
+            _dense_contiguous(v_depths),
+            _dense_contiguous(v_conics),
+            _dense_contiguous(v_compensations),
+            ctx.needs_input_grad[
+                5
+            ],  # viewmats_requires_grad (viewmats is input index 5)
+        )
+        return (
+            v_means,
+            v_covars,
+            v_quats,
+            v_scales,
+            None,  # opacities
+            v_viewmats,
+            None,  # Ks
+            None,  # image_width
+            None,  # image_height
+            None,  # eps2d
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # calc_compensations
+            None,  # camera_model
+        )
+
+
+class RegisterProjectionEWA3DGSPacked:
+    """Python autograd hooks for the gsplat::projection_ewa_3dgs_packed op."""
+
+    base = "projection_ewa_3dgs_packed"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means,
+            covars,
+            quats,
+            scales,
+            _opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            _near_plane,
+            _far_plane,
+            _radius_clip,
+            sparse_grad,
+            _calc_compensations,
+            camera_model,
+        ) = inputs
+        (
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            _indptr,
+            _radii,
+            _means2d,
+            _depths,
+            conics,
+            compensations,
+        ) = output
+        ctx.width = width
+        ctx.height = height
+        ctx.eps2d = eps2d
+        ctx.camera_model = camera_model
+        ctx.sparse_grad = sparse_grad
+        ctx.save_for_backward(
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            conics,
+            compensations,
+        )
+
+    @classmethod
+    def backward(
+        cls,
+        ctx,
+        v_batch_ids,
+        v_camera_ids,
+        v_gaussian_ids,
+        v_indptr,
+        v_radii,
+        v_means2d,
+        v_depths,
+        v_conics,
+        v_compensations,
+    ):
+        (
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            conics,
+            compensations,
+        ) = ctx.saved_tensors
+        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            f"{cls.base}_bwd"
+        )(
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            ctx.width,
+            ctx.height,
+            ctx.eps2d,
+            ctx.camera_model,
+            ctx.sparse_grad,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            conics,
+            compensations,
+            _dense_contiguous(v_means2d),
+            _dense_contiguous(v_depths),
+            _dense_contiguous(v_conics),
+            _dense_contiguous(v_compensations),
+            ctx.needs_input_grad[
+                5
+            ],  # viewmats_requires_grad (viewmats is input index 5)
+        )
+        return (
+            v_means,
+            v_covars,
+            v_quats,
+            v_scales,
+            None,  # opacities
+            v_viewmats,
+            None,  # Ks
+            None,  # image_width
+            None,  # image_height
+            None,  # eps2d
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # sparse_grad
+            None,  # calc_compensations
+            None,  # camera_model
         )
 
 
@@ -932,7 +1327,7 @@ def rasterize_to_pixels(
     if masks is not None:
         masks = masks.contiguous()
 
-    render_colors, render_alphas, means2d_absgrad = _make_lazy_cuda_func(
+    render_colors, render_alphas, means2d_absgrad, _last_ids = _make_lazy_cuda_func(
         "rasterize_to_pixels_3dgs"
     )(
         means2d.contiguous(),
@@ -1092,6 +1487,116 @@ def rasterize_top_contributing_gaussian_ids(
         tile_size,
         num_depth_samples,
     )
+
+
+class RegisterRasterizeToPixels3DGS:
+    """Python autograd hooks for the gsplat::rasterize_to_pixels_3dgs op."""
+
+    base = "rasterize_to_pixels_3dgs"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            _packed,
+            absgrad,
+        ) = inputs
+        _render_colors, render_alphas, means2d_absgrad, last_ids = output
+        # last_ids and the absgrad holder are forward-internal; the backward fills the
+        # holder in place (it must not be tracked by autograd).
+        ctx.mark_non_differentiable(last_ids, means2d_absgrad)
+        ctx.width = image_width
+        ctx.height = image_height
+        ctx.tile_size = tile_size
+        ctx.absgrad = absgrad
+        ctx.save_for_backward(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            means2d_absgrad,
+        )
+
+    @classmethod
+    def backward(
+        cls, ctx, v_render_colors, v_render_alphas, v_means2d_absgrad, v_last_ids
+    ):
+        (
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            means2d_absgrad,
+        ) = ctx.saved_tensors
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+        ) = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            ctx.width,
+            ctx.height,
+            ctx.tile_size,
+            ctx.absgrad,
+            _dense_contiguous(v_render_colors),
+            _dense_contiguous(v_render_alphas),
+            ctx.needs_input_grad[
+                4
+            ],  # compute_v_backgrounds (backgrounds is input index 4)
+        )
+        # The abs gradient is not a returned input grad; surface it by filling the
+        # saved means2d.absgrad holder in place.
+        if ctx.absgrad and v_means2d_abs is not None:
+            means2d_absgrad.copy_(v_means2d_abs)
+        return (
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            None,  # masks
+            None,  # image_width
+            None,  # image_height
+            None,  # tile_size
+            None,  # isect_offsets
+            None,  # flatten_ids
+            None,  # packed
+            None,  # absgrad
+        )
 
 
 def rasterize_to_pixels_eval3d(
@@ -1555,6 +2060,194 @@ def fully_fused_projection_2dgs(
         )
 
 
+class RegisterProjection2DGSFused:
+    """Python autograd hooks for the gsplat::projection_2dgs_fused op."""
+
+    base = "projection_2dgs_fused"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            _eps2d,
+            _near_plane,
+            _far_plane,
+            _radius_clip,
+        ) = inputs
+        radii, _means2d, _depths, ray_transforms, _normals = output
+        ctx.width = width
+        ctx.height = height
+        ctx.save_for_backward(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            ray_transforms,
+        )
+
+    @classmethod
+    def backward(cls, ctx, v_radii, v_means2d, v_depths, v_ray_transforms, v_normals):
+        (
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            ray_transforms,
+        ) = ctx.saved_tensors
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            f"{cls.base}_bwd"
+        )(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            ctx.width,
+            ctx.height,
+            radii,
+            ray_transforms,
+            _dense_contiguous(v_means2d),
+            _dense_contiguous(v_depths),
+            _dense_contiguous(v_ray_transforms),
+            _dense_contiguous(v_normals),
+            ctx.needs_input_grad[
+                3
+            ],  # viewmats_requires_grad (viewmats is input index 3)
+        )
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_viewmats,
+            None,  # Ks
+            None,  # image_width
+            None,  # image_height
+            None,  # eps2d
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+        )
+
+
+class RegisterProjection2DGSPacked:
+    """Python autograd hooks for the gsplat::projection_2dgs_packed op."""
+
+    base = "projection_2dgs_packed"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            _near_plane,
+            _far_plane,
+            _radius_clip,
+            sparse_grad,
+        ) = inputs
+        (
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            _indptr,
+            _radii,
+            _means2d,
+            _depths,
+            ray_transforms,
+            _normals,
+        ) = output
+        ctx.width = width
+        ctx.height = height
+        ctx.sparse_grad = sparse_grad
+        ctx.save_for_backward(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            ray_transforms,
+        )
+
+    @classmethod
+    def backward(
+        cls,
+        ctx,
+        v_batch_ids,
+        v_camera_ids,
+        v_gaussian_ids,
+        v_indptr,
+        v_radii,
+        v_means2d,
+        v_depths,
+        v_ray_transforms,
+        v_normals,
+    ):
+        (
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            ray_transforms,
+        ) = ctx.saved_tensors
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            f"{cls.base}_bwd"
+        )(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            ctx.width,
+            ctx.height,
+            ctx.sparse_grad,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            ray_transforms,
+            _dense_contiguous(v_means2d),
+            _dense_contiguous(v_depths),
+            _dense_contiguous(v_ray_transforms),
+            _dense_contiguous(v_normals),
+            ctx.needs_input_grad[
+                3
+            ],  # viewmats_requires_grad (viewmats is input index 3)
+        )
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_viewmats,
+            None,  # Ks
+            None,  # image_width
+            None,  # image_height
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # sparse_grad
+        )
+
+
 def rasterize_to_pixels_2dgs(
     means2d: Tensor,  # [..., N, 2]
     ray_transforms: Tensor,  # [..., N, 3, 3]
@@ -1615,6 +2308,8 @@ def rasterize_to_pixels_2dgs(
         render_distort,
         render_median,
         means2d_absgrad,
+        _last_ids,
+        _median_ids,
     ) = _make_lazy_cuda_func("rasterize_to_pixels_2dgs")(
         means2d.contiguous(),
         ray_transforms.contiguous(),
@@ -1637,6 +2332,155 @@ def rasterize_to_pixels_2dgs(
         means2d.absgrad = means2d_absgrad
 
     return render_colors, render_alphas, render_normals, render_distort, render_median
+
+
+class RegisterRasterizeToPixels2DGS:
+    """Python autograd hooks for the gsplat::rasterize_to_pixels_2dgs op."""
+
+    base = "rasterize_to_pixels_2dgs"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means2d,
+            ray_transforms,
+            colors,
+            opacities,
+            normals,
+            densify,
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            tile_offsets,
+            flatten_ids,
+            _packed,
+            absgrad,
+            _distloss,
+        ) = inputs
+        (
+            render_colors,
+            render_alphas,
+            _render_normals,
+            _render_distort,
+            _render_median,
+            means2d_absgrad,
+            last_ids,
+            median_ids,
+        ) = output
+        # last_ids / median_ids and the absgrad holder are forward-internal; the
+        # backward fills the holder in place (it must not be tracked by autograd).
+        ctx.mark_non_differentiable(last_ids, median_ids, means2d_absgrad)
+        ctx.width = image_width
+        ctx.height = image_height
+        ctx.tile_size = tile_size
+        ctx.absgrad = absgrad
+        ctx.save_for_backward(
+            means2d,
+            ray_transforms,
+            colors,
+            opacities,
+            normals,
+            densify,
+            backgrounds,
+            masks,
+            tile_offsets,
+            flatten_ids,
+            render_colors,
+            render_alphas,
+            last_ids,
+            median_ids,
+            means2d_absgrad,
+        )
+
+    @classmethod
+    def backward(
+        cls,
+        ctx,
+        v_render_colors,
+        v_render_alphas,
+        v_render_normals,
+        v_render_distort,
+        v_render_median,
+        v_means2d_absgrad,
+        v_last_ids,
+        v_median_ids,
+    ):
+        (
+            means2d,
+            ray_transforms,
+            colors,
+            opacities,
+            normals,
+            densify,
+            backgrounds,
+            masks,
+            tile_offsets,
+            flatten_ids,
+            render_colors,
+            render_alphas,
+            last_ids,
+            median_ids,
+            means2d_absgrad,
+        ) = ctx.saved_tensors
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_ray_transforms,
+            v_colors,
+            v_opacities,
+            v_normals,
+            v_densify,
+            v_backgrounds,
+        ) = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            means2d,
+            ray_transforms,
+            colors,
+            opacities,
+            normals,
+            densify,
+            backgrounds,
+            masks,
+            tile_offsets,
+            flatten_ids,
+            render_colors,
+            render_alphas,
+            last_ids,
+            median_ids,
+            ctx.width,
+            ctx.height,
+            ctx.tile_size,
+            ctx.absgrad,
+            _dense_contiguous(v_render_colors),
+            _dense_contiguous(v_render_alphas),
+            _dense_contiguous(v_render_normals),
+            _dense_contiguous(v_render_distort),
+            _dense_contiguous(v_render_median),
+            ctx.needs_input_grad[
+                6
+            ],  # compute_v_backgrounds (backgrounds is input index 6)
+        )
+        if ctx.absgrad and v_means2d_abs is not None:
+            means2d_absgrad.copy_(v_means2d_abs)
+        return (
+            v_means2d,
+            v_ray_transforms,
+            v_colors,
+            v_opacities,
+            v_normals,
+            v_densify,
+            v_backgrounds,
+            None,  # masks
+            None,  # image_width
+            None,  # image_height
+            None,  # tile_size
+            None,  # tile_offsets
+            None,  # flatten_ids
+            None,  # packed
+            None,  # absgrad
+            None,  # distloss
+        )
 
 
 @torch.no_grad()
@@ -1697,3 +2541,9 @@ def rasterize_to_indices_in_range_2dgs(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
     )
+
+
+# Wire the Python autograd backends now, at import time. The module-level handles above
+# already load the C extension, so by here the op schemas exist; _register_autograd is a
+# no-op for any op whose schema is absent, and the whole pass is idempotent.
+_ensure_autograd_registrations()
