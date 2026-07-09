@@ -381,18 +381,6 @@
     <span class="k">return</span> <span class="kc">True</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_dense_contiguous</span><span class="p">(</span><span class="n">t</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Materialize an incoming output gradient as a dense, contiguous tensor.</span>
-
-<span class="sd">    Backward CUDA ops index raw dense storage and require contiguous inputs, so a</span>
-<span class="sd">    sparse gradient is densified and any gradient is made contiguous. ``None`` (a</span>
-<span class="sd">    disabled or non-differentiable output) passes through unchanged.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">if</span> <span class="n">t</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="kc">None</span>
-    <span class="k">return</span> <span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">to_dense</span><span class="p">()</span> <span class="k">if</span> <span class="n">t</span><span class="o">.</span><span class="n">is_sparse</span> <span class="k">else</span> <span class="n">t</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-
-
 <span class="k">def</span><span class="w"> </span><span class="nf">_register_autograd</span><span class="p">(</span><span class="n">register</span><span class="p">:</span> <span class="nb">type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Attach a Python autograd backward to the C++ forward op ``gsplat::&lt;base&gt;``.</span>
 
@@ -811,7 +799,7 @@
             <span class="n">dirs</span><span class="p">,</span>
             <span class="n">coeffs</span><span class="p">,</span>
             <span class="n">masks</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_colors</span><span class="p">),</span>
+            <span class="n">v_colors</span><span class="p">,</span>
             <span class="n">compute_v_dirs</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="p">(</span>
@@ -875,8 +863,8 @@
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">triu</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_covars</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_precis</span><span class="p">),</span>
+            <span class="n">v_covars</span><span class="p">,</span>
+            <span class="n">v_precis</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="p">(</span>
             <span class="n">v_quats</span><span class="p">,</span>
@@ -976,8 +964,8 @@
             <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_covars2d</span><span class="p">),</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_covars2d</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="p">(</span>
             <span class="n">v_means</span><span class="p">,</span>
@@ -1212,10 +1200,10 @@
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">compensations</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_depths</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_conics</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_compensations</span><span class="p">),</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_depths</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_compensations</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
                 <span class="mi">5</span>
             <span class="p">],</span>  <span class="c1"># viewmats_requires_grad (viewmats is input index 5)</span>
@@ -1340,10 +1328,10 @@
             <span class="n">gaussian_ids</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">compensations</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_depths</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_conics</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_compensations</span><span class="p">),</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_depths</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_compensations</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
                 <span class="mi">5</span>
             <span class="p">],</span>  <span class="c1"># viewmats_requires_grad (viewmats is input index 5)</span>
@@ -2285,8 +2273,8 @@
             <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_colors</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_alphas</span><span class="p">),</span>
+            <span class="n">v_render_colors</span><span class="p">,</span>
+            <span class="n">v_render_alphas</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
                 <span class="mi">4</span>
             <span class="p">],</span>  <span class="c1"># compute_v_backgrounds (backgrounds is input index 4)</span>
@@ -2421,8 +2409,8 @@
             <span class="n">ctx</span><span class="o">.</span><span class="n">tile_width</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">tile_height</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_colors</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_alphas</span><span class="p">),</span>
+            <span class="n">v_render_colors</span><span class="p">,</span>
+            <span class="n">v_render_alphas</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
                 <span class="mi">4</span>
             <span class="p">],</span>  <span class="c1"># compute_v_backgrounds (backgrounds is input index 4)</span>
@@ -2978,10 +2966,10 @@
             <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">ray_transforms</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_depths</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_ray_transforms</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_normals</span><span class="p">),</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_depths</span><span class="p">,</span>
+            <span class="n">v_ray_transforms</span><span class="p">,</span>
+            <span class="n">v_normals</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
                 <span class="mi">3</span>
             <span class="p">],</span>  <span class="c1"># viewmats_requires_grad (viewmats is input index 3)</span>
@@ -3087,10 +3075,10 @@
             <span class="n">camera_ids</span><span class="p">,</span>
             <span class="n">gaussian_ids</span><span class="p">,</span>
             <span class="n">ray_transforms</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_depths</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_ray_transforms</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_normals</span><span class="p">),</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_depths</span><span class="p">,</span>
+            <span class="n">v_ray_transforms</span><span class="p">,</span>
+            <span class="n">v_normals</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
                 <span class="mi">3</span>
             <span class="p">],</span>  <span class="c1"># viewmats_requires_grad (viewmats is input index 3)</span>
@@ -3317,11 +3305,11 @@
             <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span><span class="p">,</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_colors</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_alphas</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_normals</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_distort</span><span class="p">),</span>
-            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_median</span><span class="p">),</span>
+            <span class="n">v_render_colors</span><span class="p">,</span>
+            <span class="n">v_render_alphas</span><span class="p">,</span>
+            <span class="n">v_render_normals</span><span class="p">,</span>
+            <span class="n">v_render_distort</span><span class="p">,</span>
+            <span class="n">v_render_median</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
                 <span class="mi">6</span>
             <span class="p">],</span>  <span class="c1"># compute_v_backgrounds (backgrounds is input index 6)</span>
