@@ -250,37 +250,7 @@ __forceinline__ __device__ void quat_slerp_pair_fwd_f(
     float *ow
 )
 {
-    const float dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
-    const float s   = dot < 0.0f ? -1.0f : 1.0f;
-    const float sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
-    const float c_raw    = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
-    const float c        = quat_slerp_clamp_dot<float>(c_raw);
-    const float small_th = quat_slerp_small_angle_dot_threshold<float>();
-
-    if(c > small_th)
-    {
-        const float om      = 1.0f - ti;
-        const float rx      = om * x1 + ti * sx;
-        const float ry      = om * y1 + ti * sy;
-        const float rz      = om * z1 + ti * sz;
-        const float rw      = om * w1 + ti * sw;
-        const float norm_sq = rx * rx + ry * ry + rz * rz + rw * rw;
-        const float inv_n   = 1.0f / sqrtf(norm_sq);
-        *ox                 = rx * inv_n;
-        *oy                 = ry * inv_n;
-        *oz                 = rz * inv_n;
-        *ow                 = rw * inv_n;
-        return;
-    }
-
-    const float theta     = acosf(c);
-    const float sin_theta = sinf(theta);
-    const float w1s       = sinf((1.0f - ti) * theta) / sin_theta;
-    const float w2s       = sinf(ti * theta) / sin_theta;
-    *ox                   = w1s * x1 + w2s * sx;
-    *oy                   = w1s * y1 + w2s * sy;
-    *oz                   = w1s * z1 + w2s * sz;
-    *ow                   = w1s * w1 + w2s * sw;
+    quat_slerp_pair_fwd<float>(x1, y1, z1, w1, x2, y2, z2, w2, ti, ox, oy, oz, ow);
 }
 
 // VJP for quat_slerp_pair_fwd_f: forward outputs (rx,ry,rz,rw) and upstream (gx..gw) → *gq1*, *gq2*, *grad_t.
@@ -313,72 +283,34 @@ __forceinline__ __device__ void quat_slerp_pair_bwd_f(
     float *grad_t
 )
 {
-    const float dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
-    const float s   = dot < 0.0f ? -1.0f : 1.0f;
-    const float sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
-    const float c_raw     = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
-    const float c         = quat_slerp_clamp_dot<float>(c_raw);
-    const bool interior_c = (c_raw > -1.0f) && (c_raw < 1.0f);
-    const float c_mask    = interior_c ? 1.0f : 0.0f;
-    const float small_th  = quat_slerp_small_angle_dot_threshold<float>();
-
-    if(c > small_th)
-    {
-        const float om      = 1.0f - ti;
-        const float rrx     = om * x1 + ti * sx;
-        const float rry     = om * y1 + ti * sy;
-        const float rrz     = om * z1 + ti * sz;
-        const float rrw     = om * w1 + ti * sw;
-        const float norm_sq = rrx * rrx + rry * rry + rrz * rrz + rrw * rrw;
-        const float r_norm  = sqrtf(norm_sq);
-        const float yx = rx, yy = ry, yz = rz, yw = rw;
-        const float ydotg     = yx * gx + yy * gy + yz * gz + yw * gw;
-        const float scale     = 1.0f / r_norm;
-        const float grx       = (gx - yx * ydotg) * scale;
-        const float gry       = (gy - yy * ydotg) * scale;
-        const float grz       = (gz - yz * ydotg) * scale;
-        const float grw       = (gw - yw * ydotg) * scale;
-        *gq1x                 = om * grx;
-        *gq1y                 = om * gry;
-        *gq1z                 = om * grz;
-        *gq1w                 = om * grw;
-        *gq2x                 = s * ti * grx;
-        *gq2y                 = s * ti * gry;
-        *gq2z                 = s * ti * grz;
-        *gq2w                 = s * ti * grw;
-        const float dq2m_dq1x = sx - x1, dq2m_dq1y = sy - y1, dq2m_dq1z = sz - z1, dq2m_dq1w = sw - w1;
-        *grad_t = grx * dq2m_dq1x + gry * dq2m_dq1y + grz * dq2m_dq1z + grw * dq2m_dq1w;
-        return;
-    }
-
-    const float theta     = acosf(c);
-    const float sin_theta = sinf(theta);
-    const float w1s       = sinf((1.0f - ti) * theta) / sin_theta;
-    const float w2s       = sinf(ti * theta) / sin_theta;
-    const float G1        = gx * x1 + gy * y1 + gz * z1 + gw * w1;
-    const float G2        = gx * sx + gy * sy + gz * sz + gw * sw;
-    const float den       = sin_theta * sin_theta;
-    const float dw1_dtheta
-        = ((1.0f - ti) * cosf((1.0f - ti) * theta) * sin_theta - sinf((1.0f - ti) * theta) * c) / den;
-    const float dw2_dtheta = (ti * cosf(ti * theta) * sin_theta - sinf(ti * theta) * c) / den;
-    const float dw1_dc     = sin_theta > 1e-20f ? (-dw1_dtheta / sin_theta) * c_mask : 0.0f;
-    const float dw2_dc     = sin_theta > 1e-20f ? (-dw2_dtheta / sin_theta) * c_mask : 0.0f;
-    const float K          = G1 * dw1_dc + G2 * dw2_dc;
-    *gq1x                  = w1s * gx + K * sx;
-    *gq1y                  = w1s * gy + K * sy;
-    *gq1z                  = w1s * gz + K * sz;
-    *gq1w                  = w1s * gw + K * sw;
-    const float gq2ex      = w2s * gx + K * x1;
-    const float gq2ey      = w2s * gy + K * y1;
-    const float gq2ez      = w2s * gz + K * z1;
-    const float gq2ew      = w2s * gw + K * w1;
-    *gq2x                  = s * gq2ex;
-    *gq2y                  = s * gq2ey;
-    *gq2z                  = s * gq2ez;
-    *gq2w                  = s * gq2ew;
-    const float dw1_dt     = -theta * cosf((1.0f - ti) * theta) / sin_theta;
-    const float dw2_dt     = theta * cosf(ti * theta) / sin_theta;
-    *grad_t                = G1 * dw1_dt + G2 * dw2_dt;
+    quat_slerp_pair_bwd<float>(
+        x1,
+        y1,
+        z1,
+        w1,
+        x2,
+        y2,
+        z2,
+        w2,
+        ti,
+        rx,
+        ry,
+        rz,
+        rw,
+        gx,
+        gy,
+        gz,
+        gw,
+        gq1x,
+        gq1y,
+        gq1z,
+        gq1w,
+        gq2x,
+        gq2y,
+        gq2z,
+        gq2w,
+        grad_t
+    );
 }
 
 // Time-interpolation chain rule: grad_alpha = ∂L/∂α with α=(qt-t_min)/(t_max-t_min), d=t_max-t_min.
@@ -946,6 +878,154 @@ __forceinline__ __device__ void frame_transform_poses_tquat_fwd_device(
 }
 } // namespace trajectory_cuda
 
+namespace packed_track_cuda
+{
+template<typename scalar_t>
+__forceinline__ __device__ void atomic_add(scalar_t *__restrict__ address, scalar_t value)
+{
+    atomicAdd(address, value);
+}
+
+template<typename time_t>
+__forceinline__ __device__ time_t clamp_time(time_t value, time_t first, time_t last)
+{
+    return value < first ? first : (value > last ? last : value);
+}
+
+template<typename time_t>
+__forceinline__ __device__ int64_t
+    lower_bound_local(const time_t *__restrict__ times, int64_t start, int64_t count, time_t query)
+{
+    int64_t lo = 0;
+    int64_t hi = count;
+    while(lo < hi)
+    {
+        const int64_t mid = lo + ((hi - lo) >> 1);
+        if(times[start + mid] < query)
+        {
+            lo = mid + 1;
+        }
+        else
+        {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+template<typename scalar_t, typename time_t>
+__forceinline__ __device__ scalar_t interpolation_alpha(time_t left, time_t right, time_t query, bool valid)
+{
+    if(!valid)
+    {
+        return scalar_t(0);
+    }
+    return static_cast<scalar_t>((query - left) / (right - left));
+}
+
+template<typename scalar_t>
+__forceinline__ __device__ scalar_t interpolation_alpha(int64_t left, int64_t right, int64_t query, bool valid)
+{
+    if(!valid)
+    {
+        return scalar_t(0);
+    }
+    const bool numerator_fits   = !((left > 0 && query < INT64_MIN + left) || (left < 0 && query > INT64_MAX + left));
+    const bool denominator_fits = !((left > 0 && right < INT64_MIN + left) || (left < 0 && right > INT64_MAX + left));
+    const double numerator
+        = numerator_fits ? static_cast<double>(query - left) : static_cast<double>(query) - static_cast<double>(left);
+    const double denominator
+        = denominator_fits ? static_cast<double>(right - left) : static_cast<double>(right) - static_cast<double>(left);
+    return denominator != 0.0 ? static_cast<scalar_t>(numerator / denominator) : scalar_t(0);
+}
+
+__forceinline__ __device__ bool valid_track_range(int64_t start, int64_t count, int64_t n_poses)
+{
+    return start >= 0 && count > 0 && start <= n_poses && count <= n_poses - start;
+}
+
+template<typename scalar_t, typename time_t>
+__forceinline__ __device__ void accumulate_interpolation_time_grads(
+    time_t left_time,
+    time_t right_time,
+    time_t clamped_query,
+    bool valid,
+    int64_t left,
+    int64_t right,
+    int64_t track,
+    scalar_t grad_alpha,
+    time_t *__restrict__ grad_pose_times,
+    time_t *__restrict__ grad_query_times
+)
+{
+    const time_t d = right_time - left_time;
+    if(valid && d != time_t(0))
+    {
+        const time_t grad_alpha_t = static_cast<time_t>(grad_alpha);
+        const time_t d2           = d * d;
+        atomic_add(grad_pose_times + left, grad_alpha_t * (clamped_query - right_time) / d2);
+        atomic_add(grad_pose_times + right, -grad_alpha_t * (clamped_query - left_time) / d2);
+        grad_query_times[track] = grad_alpha_t / d;
+    }
+}
+
+template<typename scalar_t>
+__forceinline__ __device__ void accumulate_interpolation_time_grads(
+    int64_t, int64_t, int64_t, bool, int64_t, int64_t, int64_t, scalar_t, int64_t *__restrict__, int64_t *__restrict__
+)
+{
+}
+
+template<typename time_t>
+__forceinline__ __device__ void track_interval(
+    const time_t *__restrict__ times,
+    int64_t start,
+    int64_t count,
+    time_t query,
+    int64_t *left_index,
+    int64_t *right_index,
+    bool *same_pose,
+    bool *valid_interval,
+    time_t *clamped_query,
+    time_t *left_time,
+    time_t *right_time
+)
+{
+    const time_t first_time  = times[start];
+    const time_t last_time   = times[start + count - 1];
+    const time_t clamped     = clamp_time(query, first_time, last_time);
+    int64_t right_local      = lower_bound_local(times, start, count, clamped);
+    const int64_t last_local = count - 1;
+    if(query <= first_time)
+    {
+        right_local = 0;
+    }
+    else if(query > last_time)
+    {
+        right_local = last_local;
+    }
+    else if(right_local > last_local)
+    {
+        right_local = last_local;
+    }
+
+    const int64_t right       = start + right_local;
+    const time_t rt           = times[right];
+    const bool exact_or_first = right_local == 0 || rt == clamped;
+    const int64_t left_local  = exact_or_first ? right_local : right_local - 1;
+    const int64_t left        = start + left_local;
+    const time_t lt           = times[left];
+    const bool same           = left == right;
+    *left_index               = left;
+    *right_index              = right;
+    *same_pose                = same;
+    *valid_interval           = !same && rt != lt;
+    *clamped_query            = clamped;
+    *left_time                = lt;
+    *right_time               = rt;
+}
+} // namespace packed_track_cuda
+
 // Batch row i: out = R(q_i) p_i + t_i. translation/point (N,3), rotation (N,4) xyzw, contiguous row-major.
 template<typename scalar_t>
 __device__ void se3pose_transform_point_fwd_device(
@@ -967,6 +1047,143 @@ __device__ void se3pose_transform_point_fwd_device(
     out[ot + 0] = rx + tx;
     out[ot + 1] = ry + ty;
     out[ot + 2] = rz + tz;
+}
+
+// Batch row i: out = parent * child for SE(3) poses. Translation is
+// R(parent_q) child_t + parent_t; rotation is parent_q ⊗ child_q.
+template<typename scalar_t>
+__device__ void se3pose_compose_fwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ parent_translation,
+    const scalar_t *__restrict__ parent_rotation,
+    const scalar_t *__restrict__ child_translation,
+    const scalar_t *__restrict__ child_rotation,
+    scalar_t *__restrict__ out_translation,
+    scalar_t *__restrict__ out_rotation
+)
+{
+    const int64_t ot = i * 3;
+    const int64_t oq = i * 4;
+
+    const scalar_t pqx = parent_rotation[oq + 0];
+    const scalar_t pqy = parent_rotation[oq + 1];
+    const scalar_t pqz = parent_rotation[oq + 2];
+    const scalar_t pqw = parent_rotation[oq + 3];
+    const scalar_t ctx = child_translation[ot + 0];
+    const scalar_t cty = child_translation[ot + 1];
+    const scalar_t ctz = child_translation[ot + 2];
+
+    scalar_t rtx = 0, rty = 0, rtz = 0;
+    quat_rotate_vector_fwd_impl(pqx, pqy, pqz, pqw, ctx, cty, ctz, &rtx, &rty, &rtz);
+    out_translation[ot + 0] = rtx + parent_translation[ot + 0];
+    out_translation[ot + 1] = rty + parent_translation[ot + 1];
+    out_translation[ot + 2] = rtz + parent_translation[ot + 2];
+
+    quat_multiply_impl(
+        pqx,
+        pqy,
+        pqz,
+        pqw,
+        child_rotation[oq + 0],
+        child_rotation[oq + 1],
+        child_rotation[oq + 2],
+        child_rotation[oq + 3],
+        out_rotation + oq + 0,
+        out_rotation + oq + 1,
+        out_rotation + oq + 2,
+        out_rotation + oq + 3
+    );
+}
+
+// VJP for se3pose_compose_fwd_device.
+template<typename scalar_t>
+__device__ void se3pose_compose_bwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ parent_translation,
+    const scalar_t *__restrict__ parent_rotation,
+    const scalar_t *__restrict__ child_translation,
+    const scalar_t *__restrict__ child_rotation,
+    const scalar_t *__restrict__ grad_out_translation,
+    const scalar_t *__restrict__ grad_out_rotation,
+    scalar_t *__restrict__ grad_parent_translation,
+    scalar_t *__restrict__ grad_parent_rotation,
+    scalar_t *__restrict__ grad_child_translation,
+    scalar_t *__restrict__ grad_child_rotation
+)
+{
+    const int64_t ot = i * 3;
+    const int64_t oq = i * 4;
+
+    const scalar_t pqx = parent_rotation[oq + 0];
+    const scalar_t pqy = parent_rotation[oq + 1];
+    const scalar_t pqz = parent_rotation[oq + 2];
+    const scalar_t pqw = parent_rotation[oq + 3];
+    const scalar_t ctx = child_translation[ot + 0];
+    const scalar_t cty = child_translation[ot + 1];
+    const scalar_t ctz = child_translation[ot + 2];
+    const scalar_t gtx = grad_out_translation[ot + 0];
+    const scalar_t gty = grad_out_translation[ot + 1];
+    const scalar_t gtz = grad_out_translation[ot + 2];
+
+    scalar_t g_parent_q_tx = 0, g_parent_q_ty = 0, g_parent_q_tz = 0, g_parent_q_tw = 0;
+    scalar_t g_child_tx = 0, g_child_ty = 0, g_child_tz = 0;
+    quat_rotate_vector_bwd_impl(
+        pqx,
+        pqy,
+        pqz,
+        pqw,
+        ctx,
+        cty,
+        ctz,
+        gtx,
+        gty,
+        gtz,
+        &g_parent_q_tx,
+        &g_parent_q_ty,
+        &g_parent_q_tz,
+        &g_parent_q_tw,
+        &g_child_tx,
+        &g_child_ty,
+        &g_child_tz
+    );
+
+    grad_parent_translation[ot + 0] = gtx;
+    grad_parent_translation[ot + 1] = gty;
+    grad_parent_translation[ot + 2] = gtz;
+    grad_child_translation[ot + 0]  = g_child_tx;
+    grad_child_translation[ot + 1]  = g_child_ty;
+    grad_child_translation[ot + 2]  = g_child_tz;
+
+    scalar_t g_parent_q_rx = 0, g_parent_q_ry = 0, g_parent_q_rz = 0, g_parent_q_rw = 0;
+    quat_multiply_bwd_impl(
+        pqx,
+        pqy,
+        pqz,
+        pqw,
+        child_rotation[oq + 0],
+        child_rotation[oq + 1],
+        child_rotation[oq + 2],
+        child_rotation[oq + 3],
+        grad_out_rotation[oq + 0],
+        grad_out_rotation[oq + 1],
+        grad_out_rotation[oq + 2],
+        grad_out_rotation[oq + 3],
+        &g_parent_q_rx,
+        &g_parent_q_ry,
+        &g_parent_q_rz,
+        &g_parent_q_rw,
+        grad_child_rotation + oq + 0,
+        grad_child_rotation + oq + 1,
+        grad_child_rotation + oq + 2,
+        grad_child_rotation + oq + 3
+    );
+
+    grad_parent_rotation[oq + 0] = g_parent_q_tx + g_parent_q_rx;
+    grad_parent_rotation[oq + 1] = g_parent_q_ty + g_parent_q_ry;
+    grad_parent_rotation[oq + 2] = g_parent_q_tz + g_parent_q_rz;
+    grad_parent_rotation[oq + 3] = g_parent_q_tw + g_parent_q_rw;
 }
 
 // Batch row i: out = R(q_i) d_i (3-vector); rotation xyzw (N,4), direction/out (N,3).

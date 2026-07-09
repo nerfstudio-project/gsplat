@@ -20,6 +20,8 @@
 
 #if GSPLAT_BUILD_RELOC
 
+#    include <cfloat>
+
 #    include <ATen/Dispatch.h>
 #    include <ATen/core/Tensor.h>
 #    include <c10/cuda/CUDAStream.h>
@@ -38,6 +40,7 @@ __global__ void relocation_kernel(
     const int *ratios,
     const scalar_t *binoms,
     int n_max,
+    float min_opacity,
     scalar_t *new_opacities,
     scalar_t *new_scales
 )
@@ -51,8 +54,12 @@ __global__ void relocation_kernel(
     int n_idx       = ratios[idx];
     float denom_sum = 0.0f;
 
-    // compute new opacity
-    new_opacities[idx] = 1.0f - powf(1.0f - opacities[idx], 1.0f / n_idx);
+    // Clamp before the scale computation; intentionally deviates from the Eq. 9
+    // transparency invariant for near-zero-opacity Gaussians for numerical
+    // stability purposes.
+    float new_opacity  = 1.0f - powf(1.0f - opacities[idx], 1.0f / n_idx);
+    new_opacity        = fminf(fmaxf(new_opacity, min_opacity), 1.0f - FLT_EPSILON);
+    new_opacities[idx] = new_opacity;
 
     // compute new scale
     for(int i = 1; i <= n_idx; ++i)
@@ -60,7 +67,7 @@ __global__ void relocation_kernel(
         for(int k = 0; k <= (i - 1); ++k)
         {
             float bin_coeff  = binoms[(i - 1) * n_max + k];
-            float term       = (pow(-1.0f, k) / sqrt(static_cast<float>(k + 1))) * pow(new_opacities[idx], k + 1);
+            float term       = (pow(-1.0f, k) / sqrt(static_cast<float>(k + 1))) * pow(new_opacity, k + 1);
             denom_sum       += (bin_coeff * term);
         }
     }
@@ -78,6 +85,7 @@ void launch_relocation_kernel(
     at::Tensor ratios,    // [N]
     at::Tensor binoms,    // [n_max, n_max]
     const int n_max,
+    float min_opacity,
     // outputs
     at::Tensor new_opacities, // [N]
     at::Tensor new_scales     // [N, 3]
@@ -108,6 +116,7 @@ void launch_relocation_kernel(
                 ratios.const_data_ptr<int>(),
                 binoms.const_data_ptr<scalar_t>(),
                 n_max,
+                min_opacity,
                 new_opacities.data_ptr<scalar_t>(),
                 new_scales.data_ptr<scalar_t>()
             );

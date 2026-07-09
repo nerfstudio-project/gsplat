@@ -92,6 +92,26 @@ void se3pose_transform_point_cuda(
     const at::Tensor &translation, const at::Tensor &rotation, const at::Tensor &point, at::Tensor &out
 );
 void se3pose_transform_direction_cuda(const at::Tensor &rotation, const at::Tensor &direction, at::Tensor &out);
+void se3pose_compose_cuda(
+    const at::Tensor &parent_translation,
+    const at::Tensor &parent_rotation,
+    const at::Tensor &child_translation,
+    const at::Tensor &child_rotation,
+    at::Tensor &out_translation,
+    at::Tensor &out_rotation
+);
+void se3pose_compose_bwd_cuda(
+    const at::Tensor &parent_translation,
+    const at::Tensor &parent_rotation,
+    const at::Tensor &child_translation,
+    const at::Tensor &child_rotation,
+    const at::Tensor &grad_out_translation,
+    const at::Tensor &grad_out_rotation,
+    at::Tensor &grad_parent_translation,
+    at::Tensor &grad_parent_rotation,
+    at::Tensor &grad_child_translation,
+    at::Tensor &grad_child_rotation
+);
 void se3pose_inverse_transform_point_cuda(
     const at::Tensor &translation, const at::Tensor &rotation, const at::Tensor &point, at::Tensor &out
 );
@@ -195,6 +215,35 @@ void trajectory_transform_point_1pose_bwd_cuda(
     at::Tensor &grad_time,
     at::Tensor &grad_point,
     at::Tensor &grad_query_time
+);
+
+// Packed SE(3) pose-track interpolation. Rotations are Hamilton quaternions
+// stored as xyzw rows in pose_rotations/out_rotations.
+void se3_interpolate_tracks_cuda(
+    const at::Tensor &pose_translations,
+    const at::Tensor &pose_rotations,
+    const at::Tensor &pose_times,
+    const at::Tensor &pose_offsets,
+    const at::Tensor &pose_counts,
+    const at::Tensor &query_times,
+    at::Tensor &out_translations,
+    at::Tensor &out_rotations
+);
+
+void se3_interpolate_tracks_bwd_cuda(
+    const at::Tensor &pose_translations,
+    const at::Tensor &pose_rotations,
+    const at::Tensor &pose_times,
+    const at::Tensor &pose_offsets,
+    const at::Tensor &pose_counts,
+    const at::Tensor &query_times,
+    const at::Tensor &out_rotations,
+    const at::Tensor &grad_out_translations,
+    const at::Tensor &grad_out_rotations,
+    at::Tensor &grad_pose_translations,
+    at::Tensor &grad_pose_rotations,
+    at::Tensor &grad_pose_times,
+    at::Tensor &grad_query_times
 );
 
 void frame_transform_poses_tquat_cuda(
@@ -678,6 +727,121 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> se3pose_transform_direct
     return std::make_tuple(grad_translation, grad_rotation, grad_direction);
 }
 
+static void check_se3_pose_compose_inputs(
+    const at::Tensor &parent_translation,
+    const at::Tensor &parent_rotation,
+    const at::Tensor &child_translation,
+    const at::Tensor &child_rotation
+)
+{
+    CHECK_CUDA_TENSOR(parent_translation);
+    CHECK_CUDA_TENSOR(parent_rotation);
+    CHECK_CUDA_TENSOR(child_translation);
+    CHECK_CUDA_TENSOR(child_rotation);
+    CHECK_CONTIGUOUS(parent_translation);
+    CHECK_CONTIGUOUS(parent_rotation);
+    CHECK_CONTIGUOUS(child_translation);
+    CHECK_CONTIGUOUS(child_rotation);
+    CHECK_FLOATING(parent_translation);
+    TORCH_CHECK(
+        parent_rotation.dtype() == parent_translation.dtype()
+            && child_translation.dtype() == parent_translation.dtype()
+            && child_rotation.dtype() == parent_translation.dtype(),
+        "all pose compose inputs must have the same dtype"
+    );
+    TORCH_CHECK(
+        parent_rotation.device() == parent_translation.device()
+            && child_translation.device() == parent_translation.device()
+            && child_rotation.device() == parent_translation.device(),
+        "all pose compose inputs must be on the same CUDA device"
+    );
+    TORCH_CHECK(parent_translation.dim() == 2 && parent_translation.size(1) == 3, "parent_translation must be (N, 3)");
+    TORCH_CHECK(parent_rotation.dim() == 2 && parent_rotation.size(1) == 4, "parent_rotation must be (N, 4) xyzw");
+    TORCH_CHECK(child_translation.dim() == 2 && child_translation.size(1) == 3, "child_translation must be (N, 3)");
+    TORCH_CHECK(child_rotation.dim() == 2 && child_rotation.size(1) == 4, "child_rotation must be (N, 4) xyzw");
+    TORCH_CHECK(
+        parent_rotation.size(0) == parent_translation.size(0)
+            && child_translation.size(0) == parent_translation.size(0)
+            && child_rotation.size(0) == parent_translation.size(0),
+        "all pose compose inputs must share the same batch size N"
+    );
+}
+
+static void check_se3_pose_compose_grad_out(
+    const at::Tensor &parent_translation,
+    const at::Tensor &parent_rotation,
+    const at::Tensor &grad_t,
+    const at::Tensor &grad_q
+)
+{
+    CHECK_CUDA_TENSOR(grad_t);
+    CHECK_CUDA_TENSOR(grad_q);
+    CHECK_CONTIGUOUS(grad_t);
+    CHECK_CONTIGUOUS(grad_q);
+    TORCH_CHECK(
+        grad_t.device() == parent_translation.device(), "grad_out_translation must be on the same device as inputs"
+    );
+    TORCH_CHECK(
+        grad_q.device() == parent_translation.device(), "grad_out_rotation must be on the same device as inputs"
+    );
+    TORCH_CHECK(grad_t.dtype() == parent_translation.dtype(), "grad_out_translation dtype must match inputs");
+    TORCH_CHECK(grad_q.dtype() == parent_translation.dtype(), "grad_out_rotation dtype must match inputs");
+    TORCH_CHECK(grad_t.sizes() == parent_translation.sizes(), "grad_out_translation shape must match translations");
+    TORCH_CHECK(grad_q.sizes() == parent_rotation.sizes(), "grad_out_rotation shape must match rotations");
+}
+
+std::tuple<torch::Tensor, torch::Tensor> se3pose_compose(
+    const torch::Tensor &parent_translation,
+    const torch::Tensor &parent_rotation,
+    const torch::Tensor &child_translation,
+    const torch::Tensor &child_rotation
+)
+{
+    check_se3_pose_compose_inputs(parent_translation, parent_rotation, child_translation, child_rotation);
+    auto out_translation = torch::empty_like(parent_translation);
+    auto out_rotation    = torch::empty_like(parent_rotation);
+    if(parent_translation.size(0) > 0)
+    {
+        se3pose_compose_cuda(
+            parent_translation, parent_rotation, child_translation, child_rotation, out_translation, out_rotation
+        );
+    }
+    return std::make_tuple(out_translation, out_rotation);
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> se3pose_compose_bwd(
+    const torch::Tensor &parent_translation,
+    const torch::Tensor &parent_rotation,
+    const torch::Tensor &child_translation,
+    const torch::Tensor &child_rotation,
+    const torch::Tensor &grad_out_translation,
+    const torch::Tensor &grad_out_rotation
+)
+{
+    check_se3_pose_compose_inputs(parent_translation, parent_rotation, child_translation, child_rotation);
+    check_se3_pose_compose_grad_out(parent_translation, parent_rotation, grad_out_translation, grad_out_rotation);
+    auto grad_parent_translation = torch::empty_like(parent_translation);
+    auto grad_parent_rotation    = torch::empty_like(parent_rotation);
+    auto grad_child_translation  = torch::empty_like(child_translation);
+    auto grad_child_rotation     = torch::empty_like(child_rotation);
+    if(parent_translation.size(0) > 0)
+    {
+        se3pose_compose_bwd_cuda(
+            parent_translation,
+            parent_rotation,
+            child_translation,
+            child_rotation,
+            grad_out_translation,
+            grad_out_rotation,
+            grad_parent_translation,
+            grad_parent_rotation,
+            grad_child_translation,
+            grad_child_rotation
+        );
+    }
+    return std::make_tuple(grad_parent_translation, grad_parent_rotation, grad_child_translation, grad_child_rotation);
+}
+
 torch::Tensor se3pose_inverse_transform_point(
     const torch::Tensor &translation, const torch::Tensor &rotation, const torch::Tensor &point
 )
@@ -965,6 +1129,184 @@ torch::Tensor se3pose_from_matrix_bwd(
         se3pose_from_matrix_bwd_cuda(matrix, grad_translation, grad_rotation, grad_matrix);
     }
     return grad_matrix;
+}
+
+// -----------------------------------------------------------------------------
+// Packed SE3 pose-track interpolation.
+// -----------------------------------------------------------------------------
+
+static bool is_pose_track_time_dtype(const at::Tensor &t)
+{
+    return t.dtype() == torch::kFloat32 || t.dtype() == torch::kFloat64 || t.dtype() == torch::kInt64;
+}
+
+static void check_se3_interpolate_tracks_inputs(
+    const at::Tensor &pose_translations,
+    const at::Tensor &pose_rotations,
+    const at::Tensor &pose_times,
+    const at::Tensor &pose_offsets,
+    const at::Tensor &pose_counts,
+    const at::Tensor &query_times
+)
+{
+    CHECK_CUDA_TENSOR(pose_translations);
+    CHECK_CUDA_TENSOR(pose_rotations);
+    CHECK_CUDA_TENSOR(pose_times);
+    CHECK_CUDA_TENSOR(pose_offsets);
+    CHECK_CUDA_TENSOR(pose_counts);
+    CHECK_CUDA_TENSOR(query_times);
+    CHECK_CONTIGUOUS(pose_translations);
+    CHECK_CONTIGUOUS(pose_rotations);
+    CHECK_CONTIGUOUS(pose_times);
+    CHECK_CONTIGUOUS(pose_offsets);
+    CHECK_CONTIGUOUS(pose_counts);
+    CHECK_CONTIGUOUS(query_times);
+    CHECK_FLOATING(pose_translations);
+    TORCH_CHECK(pose_rotations.dtype() == pose_translations.dtype(), "pose rotations dtype must match translations");
+    TORCH_CHECK(is_pose_track_time_dtype(pose_times), "pose_times must be float32, float64, or int64");
+    TORCH_CHECK(query_times.dtype() == pose_times.dtype(), "query_times dtype must match pose_times");
+    TORCH_CHECK(pose_offsets.dtype() == torch::kInt64, "pose_offsets must be int64");
+    TORCH_CHECK(pose_counts.dtype() == torch::kInt64, "pose_counts must be int64");
+    TORCH_CHECK(
+        pose_translations.device() == pose_rotations.device()
+            && pose_translations.device() == pose_times.device()
+            && pose_translations.device() == pose_offsets.device()
+            && pose_translations.device() == pose_counts.device()
+            && pose_translations.device() == query_times.device(),
+        "packed pose-track tensors must share one CUDA device"
+    );
+    const int64_t n_poses  = pose_translations.size(0);
+    const int64_t n_tracks = pose_offsets.size(0);
+    TORCH_CHECK(pose_translations.dim() == 2 && pose_translations.size(1) == 3, "pose_translations must be (M, 3)");
+    TORCH_CHECK(
+        pose_rotations.dim() == 2 && pose_rotations.size(0) == n_poses && pose_rotations.size(1) == 4,
+        "pose_rotations must be (M, 4)"
+    );
+    TORCH_CHECK(pose_times.dim() == 1 && pose_times.size(0) == n_poses, "pose_times must be flattened (M,)");
+    TORCH_CHECK(pose_offsets.dim() == 1, "pose_offsets must be flattened (C,)");
+    TORCH_CHECK(pose_counts.dim() == 1 && pose_counts.size(0) == n_tracks, "pose_counts must be flattened (C,)");
+    TORCH_CHECK(query_times.dim() == 1 && query_times.size(0) == n_tracks, "query_times must be flattened (C,)");
+}
+
+static void check_se3_interpolate_tracks_grad_outputs(
+    const at::Tensor &pose_translations,
+    const at::Tensor &pose_rotations,
+    const at::Tensor &query_times,
+    const at::Tensor &out_rotations,
+    const at::Tensor &grad_out_translations,
+    const at::Tensor &grad_out_rotations
+)
+{
+    CHECK_CUDA_TENSOR(out_rotations);
+    CHECK_CUDA_TENSOR(grad_out_translations);
+    CHECK_CUDA_TENSOR(grad_out_rotations);
+    CHECK_CONTIGUOUS(out_rotations);
+    CHECK_CONTIGUOUS(grad_out_translations);
+    CHECK_CONTIGUOUS(grad_out_rotations);
+    TORCH_CHECK(out_rotations.device() == pose_translations.device(), "out_rotations device must match inputs");
+    TORCH_CHECK(
+        grad_out_translations.device() == pose_translations.device(), "grad_out_translations device must match inputs"
+    );
+    TORCH_CHECK(
+        grad_out_rotations.device() == pose_translations.device(), "grad_out_rotations device must match inputs"
+    );
+    TORCH_CHECK(out_rotations.dtype() == pose_rotations.dtype(), "out_rotations dtype must match pose_rotations");
+    TORCH_CHECK(
+        grad_out_translations.dtype() == pose_translations.dtype(),
+        "grad_out_translations dtype must match pose_translations"
+    );
+    TORCH_CHECK(
+        grad_out_rotations.dtype() == pose_rotations.dtype(), "grad_out_rotations dtype must match pose_rotations"
+    );
+    const int64_t n_tracks = query_times.size(0);
+    TORCH_CHECK(
+        out_rotations.dim() == 2 && out_rotations.size(0) == n_tracks && out_rotations.size(1) == 4,
+        "out_rotations must be (C, 4)"
+    );
+    TORCH_CHECK(
+        grad_out_translations.dim() == 2
+            && grad_out_translations.size(0) == n_tracks
+            && grad_out_translations.size(1) == 3,
+        "grad_out_translations must be (C, 3)"
+    );
+    TORCH_CHECK(
+        grad_out_rotations.dim() == 2 && grad_out_rotations.size(0) == n_tracks && grad_out_rotations.size(1) == 4,
+        "grad_out_rotations must be (C, 4)"
+    );
+}
+
+std::tuple<torch::Tensor, torch::Tensor> se3_interpolate_tracks(
+    const torch::Tensor &pose_translations,
+    const torch::Tensor &pose_rotations,
+    const torch::Tensor &pose_times,
+    const torch::Tensor &pose_offsets,
+    const torch::Tensor &pose_counts,
+    const torch::Tensor &query_times
+)
+{
+    check_se3_interpolate_tracks_inputs(
+        pose_translations, pose_rotations, pose_times, pose_offsets, pose_counts, query_times
+    );
+    const int64_t n_tracks = pose_offsets.size(0);
+    auto out_translations  = torch::empty({n_tracks, 3}, pose_translations.options());
+    auto out_rotations     = torch::empty({n_tracks, 4}, pose_rotations.options());
+    if(n_tracks > 0)
+    {
+        se3_interpolate_tracks_cuda(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+            out_translations,
+            out_rotations
+        );
+    }
+    return std::make_tuple(out_translations, out_rotations);
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> se3_interpolate_tracks_bwd(
+    const torch::Tensor &pose_translations,
+    const torch::Tensor &pose_rotations,
+    const torch::Tensor &pose_times,
+    const torch::Tensor &pose_offsets,
+    const torch::Tensor &pose_counts,
+    const torch::Tensor &query_times,
+    const torch::Tensor &out_rotations,
+    const torch::Tensor &grad_out_translations,
+    const torch::Tensor &grad_out_rotations
+)
+{
+    check_se3_interpolate_tracks_inputs(
+        pose_translations, pose_rotations, pose_times, pose_offsets, pose_counts, query_times
+    );
+    check_se3_interpolate_tracks_grad_outputs(
+        pose_translations, pose_rotations, query_times, out_rotations, grad_out_translations, grad_out_rotations
+    );
+    auto grad_pose_translations = torch::zeros_like(pose_translations);
+    auto grad_pose_rotations    = torch::zeros_like(pose_rotations);
+    auto grad_pose_times        = torch::zeros_like(pose_times);
+    auto grad_query_times       = torch::zeros_like(query_times);
+    if(pose_offsets.size(0) > 0)
+    {
+        se3_interpolate_tracks_bwd_cuda(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+            out_rotations,
+            grad_out_translations,
+            grad_out_rotations,
+            grad_pose_translations,
+            grad_pose_rotations,
+            grad_pose_times,
+            grad_query_times
+        );
+    }
+    return std::make_tuple(grad_pose_translations, grad_pose_rotations, grad_pose_times, grad_query_times);
 }
 
 // -----------------------------------------------------------------------------
@@ -1462,6 +1804,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         &se3pose_transform_direction_bwd,
         "Backward for se3pose_transform_direction -> (grad_translation, grad_rotation, grad_direction), CUDA"
     );
+    m.def("se3pose_compose", &se3pose_compose, "Compose SE3 poses row-wise: parent * child, rotations xyzw, CUDA");
+    m.def(
+        "se3pose_compose_bwd",
+        &se3pose_compose_bwd,
+        "Backward for se3pose_compose -> (grad_parent_translation, grad_parent_rotation, grad_child_translation, "
+        "grad_child_rotation), CUDA"
+    );
     m.def(
         "se3pose_inverse_transform_point",
         &se3pose_inverse_transform_point,
@@ -1507,6 +1856,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         "se3pose_from_matrix_bwd",
         &se3pose_from_matrix_bwd,
         "Backward for se3pose_from_matrix -> grad_matrix (N,16), CUDA"
+    );
+    m.def(
+        "se3_interpolate_tracks", &se3_interpolate_tracks, "Packed SE3 pose-track interpolation, rotations xyzw, CUDA"
+    );
+    m.def(
+        "se3_interpolate_tracks_bwd",
+        &se3_interpolate_tracks_bwd,
+        "Backward for packed SE3 pose-track interpolation, CUDA"
     );
     m.def(
         "trajectory_transform_point_2poses",

@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <ATen/DeviceGuard.h>
 #include <algorithm>
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
@@ -28,14 +29,14 @@ namespace gsplat
 //
 // Some Macros.
 //
-#define CHECK_CUDA(x)       TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_DEVICE(x)     TORCH_CHECK(x.is_cuda() || x.is_privateuseone(), #x " must be a CUDA or PrivateUse1 tensor")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) \
-    CHECK_CUDA(x);     \
+    CHECK_DEVICE(x);   \
     CHECK_CONTIGUOUS(x)
 // Kernels index raw dense storage; a strided (non-sparse) layout is required.
 #define CHECK_DENSE(x)     TORCH_CHECK(x.layout() == c10::kStrided, #x " must be a dense tensor")
-#define DEVICE_GUARD(_ten) const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
+#define DEVICE_GUARD(_ten) const at::OptionalDeviceGuard device_guard(device_of(_ten));
 
 // Host/device qualifier for helpers shared between host (tests, host-side
 // setup) and device code. Expands to nothing under a non-CUDA compiler.

@@ -19,15 +19,35 @@
 #pragma once
 
 #include "Common.h"
+#include "Utils.h"
 
-#include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAStream.h>
+#include <c10/util/irange.h>
+#ifdef __CUDACC__
+#    include <cooperative_groups.h>
+#    include <cooperative_groups/reduce.h>
+#endif
 #include <cuda/std/limits>
 #include <cuda/std/type_traits>
+#include <cmath>
+#include <tuple>
+#include <type_traits>
 
 namespace gsplat
 {
+#ifdef __CUDACC__
 namespace cg = cooperative_groups;
+#endif
+
+inline __device__ float rsqrt_parse_safe(float x)
+{
+#ifdef __CUDA_ARCH__
+    return rsqrt(x);
+#else
+    return 1.f / std::sqrt(x);
+#endif
+}
 
 // Check whether a floating-point value is effectively zero, using the
 // machine epsilon for the given type.
@@ -36,6 +56,20 @@ constexpr __host__ __device__ bool is_near_zero(T x)
 {
     static_assert(cuda::std::is_floating_point_v<T>, "is_near_zero requires a floating-point type");
     return abs(x) < cuda::std::numeric_limits<T>::epsilon();
+}
+
+template<bool kUseProvided, typename ConstructedT, typename ProvidedT, typename... Args>
+inline __device__ auto select_provided_or_construct(const ProvidedT &provided, Args &&...args)
+    -> std::conditional_t<kUseProvided, const ProvidedT &, ConstructedT>
+{
+    if constexpr(kUseProvided)
+    {
+        return provided;
+    }
+    else
+    {
+        return ConstructedT(args...);
+    }
 }
 
 ///////////////////////////////
@@ -115,10 +149,11 @@ inline __device__ void covarW2C_VJP(
 // Reduce
 ///////////////////////////////
 
+#ifdef __CUDACC__
 template<uint32_t DIM, class WarpT>
 inline __device__ void warpSum(float *val, WarpT &warp)
 {
-#pragma unroll
+#    pragma unroll
     for(uint32_t i = 0; i < DIM; i++)
     {
         val[i] = cg::reduce(warp, val[i], cg::plus<float>());
@@ -184,6 +219,7 @@ inline __device__ void warpMax(float &val, WarpT &warp)
 {
     val = cg::reduce(warp, val, cg::greater<float>());
 }
+#endif
 
 ///////////////////////////////
 // Quaternion
@@ -193,7 +229,7 @@ inline __device__ mat3 quat_to_rotmat(const vec4 quat)
 {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     // normalize
-    float inv_norm  = rsqrt(x * x + y * y + z * z + w * w);
+    float inv_norm  = rsqrt_parse_safe(x * x + y * y + z * z + w * w);
     x              *= inv_norm;
     y              *= inv_norm;
     z              *= inv_norm;
@@ -218,7 +254,7 @@ inline __device__ void quat_to_rotmat_vjp(const vec4 quat, const mat3 v_R, vec4 
 {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     // normalize
-    float inv_norm  = rsqrt(x * x + y * y + z * z + w * w);
+    float inv_norm  = rsqrt_parse_safe(x * x + y * y + z * z + w * w);
     x              *= inv_norm;
     y              *= inv_norm;
     z              *= inv_norm;
@@ -287,7 +323,6 @@ inline __device__ void quat_scale_to_covar_vjp(
     vec3 &v_scale
 )
 {
-    float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     float sx = scale[0], sy = scale[1], sz = scale[2];
 
     // M = R * S
@@ -327,7 +362,6 @@ inline __device__ void quat_scale_to_preci_vjp(
     // Scale must be non-zero; the projection kernel culls degenerate
     // Gaussians (scale < epsilon) so they never reach this path.
     assert(scale[0] != 0.f && scale[1] != 0.f && scale[2] != 0.f);
-    float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     float sx = 1.0f / scale[0], sy = 1.0f / scale[1], sz = 1.0f / scale[2];
 
     // M = R * S
@@ -393,7 +427,6 @@ inline __device__ void quat_scale_to_preci_half_vjp(
     // Scale must be non-zero; the projection kernel culls degenerate
     // Gaussians (scale < epsilon) so they never reach this path.
     assert(scale[0] != 0.f && scale[1] != 0.f && scale[2] != 0.f);
-    float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     float sx = 1.0f / scale[0], sy = 1.0f / scale[1], sz = 1.0f / scale[2];
 
     // M = R * S
@@ -425,7 +458,7 @@ inline __device__ float add_blur(const float eps2d, mat2 &covar, float &compensa
     covar[0][0]    += eps2d;
     covar[1][1]    += eps2d;
     float det_blur  = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
-    compensation    = sqrt(max(MIN_COMPENSATION * MIN_COMPENSATION, det_orig / det_blur));
+    compensation    = sqrtf(glm::max(MIN_COMPENSATION * MIN_COMPENSATION, det_orig / det_blur));
     return det_blur;
 }
 
@@ -477,7 +510,7 @@ inline __device__ void ortho_proj(
     vec2 &mean2d
 )
 {
-    float x = mean3d[0], y = mean3d[1], z = mean3d[2];
+    float x = mean3d[0], y = mean3d[1];
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2 J = mat3x2(
@@ -510,8 +543,6 @@ inline __device__ void ortho_proj_vjp(
     mat3 &v_cov3d
 )
 {
-    float x = mean3d[0], y = mean3d[1], z = mean3d[2];
-
     // mat3x2 is 3 columns x 2 rows.
     mat3x2 J = mat3x2(
         fx,
@@ -559,8 +590,8 @@ inline __device__ void persp_proj(
 
     float rz  = 1.f / z;
     float rz2 = rz * rz;
-    float tx  = z * min(lim_x_pos, max(-lim_x_neg, x * rz));
-    float ty  = z * min(lim_y_pos, max(-lim_y_neg, y * rz));
+    float tx  = z * glm::min(lim_x_pos, glm::max(-lim_x_neg, x * rz));
+    float ty  = z * glm::min(lim_y_pos, glm::max(-lim_y_neg, y * rz));
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2 J = mat3x2(
@@ -604,8 +635,8 @@ inline __device__ void persp_proj_vjp(
 
     float rz  = 1.f / z;
     float rz2 = rz * rz;
-    float tx  = z * min(lim_x_pos, max(-lim_x_neg, x * rz));
-    float ty  = z * min(lim_y_pos, max(-lim_y_neg, y * rz));
+    float tx  = z * glm::min(lim_x_pos, glm::max(-lim_x_neg, x * rz));
+    float ty  = z * glm::min(lim_y_pos, glm::max(-lim_y_neg, y * rz));
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2 J = mat3x2(
@@ -825,6 +856,7 @@ inline __device__ void fisheye_proj_vjp(
 // FFMA + MUFU.RSQ + FMUL sequence regardless of context.
 inline __device__ vec3 safe_normalize(vec3 v)
 {
+#ifdef __CUDA_ARCH__
     float l = __fmul_rn(v.x, v.x);
     l       = __fmaf_rn(v.y, v.y, l);
     l       = __fmaf_rn(v.z, v.z, l);
@@ -834,6 +866,15 @@ inline __device__ vec3 safe_normalize(vec3 v)
         return vec3(__fmul_rn(v.x, inv), __fmul_rn(v.y, inv), __fmul_rn(v.z, inv));
     }
     return v;
+#else
+    const float l = v.x * v.x + v.y * v.y + v.z * v.z;
+    if(l > 0.0f)
+    {
+        const float inv = 1.0f / std::sqrt(l);
+        return vec3(v.x * inv, v.y * inv, v.z * inv);
+    }
+    return v;
+#endif
 }
 
 inline __device__ vec3 safe_normalize_bw(const vec3 &v, const vec3 &d_out)
@@ -841,7 +882,11 @@ inline __device__ vec3 safe_normalize_bw(const vec3 &v, const vec3 &d_out)
     const float l = v.x * v.x + v.y * v.y + v.z * v.z;
     if(l > 0.0f)
     {
-        const float il  = rsqrtf(l);
+#ifdef __CUDA_ARCH__
+        const float il = rsqrtf(l);
+#else
+        const float il = 1.0f / std::sqrt(l);
+#endif
         const float il3 = (il * il * il);
         return il * d_out - il3 * glm::dot(d_out, v) * v;
     }
