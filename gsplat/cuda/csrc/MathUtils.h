@@ -8,8 +8,8 @@
 #include <bit>
 #include <cstdint>
 
-namespace gsplat {
-
+namespace gsplat
+{
 /** Bits needed to index `count` items as 0..count-1 (0 when count <= 1).
  *
  * This is the field width used to pack the image id and tile id into the high
@@ -20,13 +20,15 @@ namespace gsplat {
  *
  * Requires C++20 (`std::bit_width`); the extension is built as C++20.
  */
-inline uint32_t bits_for_count(int64_t count) {
-    if (count <= 1) {
+inline uint32_t bits_for_count(int64_t count)
+{
+    if(count <= 1)
+    {
         return 0u;
-    } else {
-        return static_cast<uint32_t>(
-            std::bit_width(static_cast<uint64_t>(count) - 1u));
+    }
+    else
+    {
+        return static_cast<uint32_t>(std::bit_width(static_cast<uint64_t>(count) - 1u));
     }
 }
-
 } // namespace gsplat

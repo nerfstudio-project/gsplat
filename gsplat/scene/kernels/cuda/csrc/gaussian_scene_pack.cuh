@@ -20,14 +20,16 @@
 #include <cstdint>
 #include <tuple>
 
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-namespace scene {
-
-/**
+namespace gsplat
+{
+namespace scene
+{
+    /**
  * Pack activated Gaussian splat tensors into the inference viewer-internal layout.
  *
  * Inputs (all float32 CUDA, N gaussians):
@@ -47,15 +49,14 @@ namespace scene {
  *                        [N, 16, 3] fp16 for SH3 mode 0;
  *                        [N, 48] fp16 for SH3 modes 1 and 2
  */
-std::tuple<at::Tensor, at::Tensor, at::Tensor> pack_gaussian_inference_scene_cuda(
-    const at::Tensor &means,
-    const at::Tensor &quats,
-    const at::Tensor &scales,
-    const at::Tensor &opacities,
-    const at::Tensor &colors,
-    int64_t sh_degree,
-    int64_t sh_compression_mode
-);
-
+    std::tuple<at::Tensor, at::Tensor, at::Tensor> pack_gaussian_inference_scene_cuda(
+        const at::Tensor &means,
+        const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &opacities,
+        const at::Tensor &colors,
+        int64_t sh_degree,
+        int64_t sh_compression_mode
+    );
 } // namespace scene
 } // namespace gsplat

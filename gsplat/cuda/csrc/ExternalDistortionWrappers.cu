@@ -26,35 +26,37 @@
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
 
-#include "ExternalDistortionWrappers.h"
-#include "ExternalDistortion.cuh"
-#include <c10/cuda/CUDAStream.h>
-#include <torch/library.h>
+#    include "ExternalDistortionWrappers.h"
+#    include "ExternalDistortion.cuh"
+#    include <c10/cuda/CUDAStream.h>
+#    include <torch/library.h>
 
-namespace gsplat::extdist {
-
+namespace gsplat::extdist
+{
 // ---------------------------------------------------------------------------
 // eval_bivariate_poly kernel
 // ---------------------------------------------------------------------------
 
 __global__ void eval_bivariate_poly_kernel(
-    const float* __restrict__ x,
-    const float* __restrict__ y,
+    const float *__restrict__ x,
+    const float *__restrict__ y,
     std::array<float, BivariateWindshieldModelParameters::MAX_COEFFS> poly_coeffs,
-    float* __restrict__ result,
-    int64_t N)
+    float *__restrict__ result,
+    int64_t N
+)
 {
     int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N) return;
+    if(idx >= N)
+    {
+        return;
+    }
 
     result[idx] = gsplat::extdist::eval_bivariate_poly(poly_coeffs.data(), x[idx], y[idx]);
 }
 
 torch::Tensor eval_bivariate_poly_wrapper(
-    const torch::Tensor& x,
-    const torch::Tensor& y,
-    const torch::Tensor& poly_coeffs,
-    int64_t order)
+    const torch::Tensor &x, const torch::Tensor &y, const torch::Tensor &poly_coeffs, int64_t order
+)
 {
     TORCH_CHECK(x.is_cuda(), "x must be a CUDA tensor");
     TORCH_CHECK(y.is_cuda(), "y must be a CUDA tensor");
@@ -65,25 +67,25 @@ torch::Tensor eval_bivariate_poly_wrapper(
     TORCH_CHECK(x.is_contiguous(), "x must be contiguous");
     TORCH_CHECK(y.is_contiguous(), "y must be contiguous");
 
-    int64_t N = x.numel();
+    int64_t N   = x.numel();
     auto result = torch::empty_like(x);
 
-    if (N == 0) return result;
+    if(N == 0)
+    {
+        return result;
+    }
 
     // Pad coefficients to MAX_ORDER layout and pass by value as kernel arg (constant memory)
     auto padded = pad_tensor_coefficients(poly_coeffs);
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(x.device().index());
 
-    int threads = 256;
+    int threads    = 256;
     int64_t blocks = (N + threads - 1) / threads;
 
     eval_bivariate_poly_kernel<<<blocks, threads, 0, stream>>>(
-        x.data_ptr<float>(),
-        y.data_ptr<float>(),
-        padded,
-        result.data_ptr<float>(),
-        N);
+        x.data_ptr<float>(), y.data_ptr<float>(), padded, result.data_ptr<float>(), N
+    );
 
     // Check for kernel launch errors
     cudaError_t err = cudaGetLastError();
@@ -97,22 +99,27 @@ torch::Tensor eval_bivariate_poly_wrapper(
 // ---------------------------------------------------------------------------
 
 __global__ void distort_camera_rays_kernel(
-    const float* __restrict__ rays,        // [N, 3]
+    const float *__restrict__ rays, // [N, 3]
     BivariateWindshieldModelDeviceParams params,
-    float* __restrict__ result,            // [N, 3]
+    float *__restrict__ result, // [N, 3]
     bool inverse,
-    int64_t N)
+    int64_t N
+)
 {
     int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N) return;
+    if(idx >= N)
+    {
+        return;
+    }
 
     glm::fvec3 ray(rays[idx * 3 + 0], rays[idx * 3 + 1], rays[idx * 3 + 2]);
 
-    glm::fvec3 distorted = inverse
-        ? BivariateWindshieldModel::distort_camera_ray(
-            ray, params.horizontal_poly_inverse.data(), params.vertical_poly_inverse.data())
-        : BivariateWindshieldModel::distort_camera_ray(
-            ray, params.horizontal_poly.data(), params.vertical_poly.data());
+    glm::fvec3 distorted = inverse ? BivariateWindshieldModel::distort_camera_ray(
+                                         ray, params.horizontal_poly_inverse.data(), params.vertical_poly_inverse.data()
+                                     )
+                                   : BivariateWindshieldModel::distort_camera_ray(
+                                         ray, params.horizontal_poly.data(), params.vertical_poly.data()
+                                     );
 
     result[idx * 3 + 0] = distorted.x;
     result[idx * 3 + 1] = distorted.y;
@@ -120,51 +127,49 @@ __global__ void distort_camera_rays_kernel(
 }
 
 torch::Tensor distort_camera_rays(
-    const torch::Tensor& rays,
-    const BivariateWindshieldModelParameters& params,
-    bool inverse)
+    const torch::Tensor &rays, const BivariateWindshieldModelParameters &params, bool inverse
+)
 {
     TORCH_CHECK(rays.is_cuda(), "rays must be a CUDA tensor");
     TORCH_CHECK(rays.dtype() == torch::kFloat32, "rays must be float32");
     TORCH_CHECK(rays.dim() >= 1 && rays.size(-1) == 3, "rays must have shape [..., 3]");
 
     auto rays_contig = rays.contiguous();
-    int64_t N = rays_contig.numel() / 3;
+    int64_t N        = rays_contig.numel() / 3;
 
     auto result = torch::empty_like(rays_contig);
 
-    if (N == 0) return result;
+    if(N == 0)
+    {
+        return result;
+    }
 
     // Construct device params — pads and copies tensor data into std::array members
     BivariateWindshieldModelDeviceParams device_params(params);
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(rays.device().index());
 
-    int threads = 256;
+    int threads    = 256;
     int64_t blocks = (N + threads - 1) / threads;
 
     distort_camera_rays_kernel<<<blocks, threads, 0, stream>>>(
-        rays_contig.data_ptr<float>(),
-        device_params,
-        result.data_ptr<float>(),
-        inverse,
-        N);
+        rays_contig.data_ptr<float>(), device_params, result.data_ptr<float>(), inverse, N
+    );
 
     cudaError_t err = cudaGetLastError();
     TORCH_CHECK(err == cudaSuccess, "distort_camera_rays_kernel failed: ", cudaGetErrorString(err));
 
     return result;
 }
-
 } // namespace gsplat::extdist
 
-namespace gsplat {
-
-void register_external_distortion_wrappers_cuda_impl(torch::Library &m) {
+namespace gsplat
+{
+void register_external_distortion_wrappers_cuda_impl(torch::Library &m)
+{
     m.impl("distort_camera_rays", to_torch_op<&extdist::distort_camera_rays>);
     m.impl("eval_bivariate_poly", to_torch_op<&extdist::eval_bivariate_poly_wrapper>);
 }
-
 } // namespace gsplat
 
 #endif // GSPLAT_BUILD_CAMERA_WRAPPERS

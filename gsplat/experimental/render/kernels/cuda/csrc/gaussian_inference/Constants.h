@@ -19,9 +19,8 @@
 
 #include "Common.h" // ALPHA_THRESHOLD
 
-namespace higs {
-
+namespace higs
+{
 static constexpr float MAX_EXTEND          = 3.33f;
 static constexpr float INV_ALPHA_THRESHOLD = 1.0f / ALPHA_THRESHOLD;
-
 } // namespace higs

@@ -26,17 +26,20 @@
 #include <cstdint>
 
 // Empty sentinel — no distortion, no data needed.
-struct NoExternalDistortion_KernelParameters {};
+struct NoExternalDistortion_KernelParameters
+{
+};
 
 // Kernel-visible view of BivariateWindshieldDistortion.
 // All pointer members are __restrict__ — the coefficient buffer must not alias
 // any other tensor in the same kernel invocation.
-struct BivariateWindshieldDistortion_KernelParameters {
+struct BivariateWindshieldDistortion_KernelParameters
+{
     // Pointer into the (42,) flat coefficient tensor.
     // Packed layout: [h_poly(6), v_poly(15), h_poly_inv(6), v_poly_inv(15)].
     // Which 21-element slice is "distort" vs "undistort" is determined at
     // runtime by bivariate_coeff_base() using reference_polynomial.
-    const float* __restrict__ distortion_coeffs;
+    const float *__restrict__ distortion_coeffs;
     // 0 = ReferencePolynomial.FORWARD  — h_poly/v_poly are the forward map,
     //                                     h_poly_inv/v_poly_inv are the inverse.
     // 1 = ReferencePolynomial.BACKWARD — roles are swapped.

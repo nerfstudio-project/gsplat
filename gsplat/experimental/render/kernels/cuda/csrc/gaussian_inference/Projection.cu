@@ -28,8 +28,8 @@
 #include "Projection.h"
 #include "Utils.h"
 
-namespace higs {
-
+namespace higs
+{
 static constexpr int CTA_SIZE         = 256;
 static constexpr int PROJ_MIN_BLOCKS  = 6;
 static constexpr int FUSED_MIN_BLOCKS = 4;
@@ -42,35 +42,45 @@ using gsplat::vec3;
 using gsplat::vec4;
 
 template<bool FUSE_SH, SHInputMode SH_MODE = SHInputMode::RAW_HALF>
-__global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MIN_BLOCKS)
-    projection_fwd_kernel(const uint32_t B, const uint32_t C, const uint32_t N,
-                          const float *__restrict__ means,    // [B, 3, N]
-                          const float *__restrict__ covars,   // [B, N, 6] optional
-                          const __half *__restrict__ inference,     // [B, N, 8] half — packed {quat(4), scale(3), opacity(1)}
-                          const float *__restrict__ viewmats, // [B, C, 4, 4]
-                          const float *__restrict__ Ks,       // [B, C, 3, 3]
-                          const uint32_t image_width, const uint32_t image_height, const float eps2d,
-                          const float near_plane, const float far_plane, const float radius_clip,
-                          const CameraModelType camera_model,
-                          // outputs
-                          uint32_t *__restrict__ visible,    // [(B*C*N+31)/32] packed bitfield
-                          float *__restrict__ means2d,       // [B, C, N, 2]
-                          float *__restrict__ depths,        // [B, C, N]
-                          __half *__restrict__ conics,       // [B, C, N, 4] half {l0,l1,l2,opacity}
-                          float *__restrict__ compensations, // [B, C, N] optional
-                          // SH parameters (used only when FUSE_SH=true; dead-code-eliminated otherwise)
-                          const int32_t degrees_to_use, const void *__restrict__ sh_input, const float sh_bias,
-                          const float sh_min_value, const SHDecodeParams sh_decode_params,
-                          __half *__restrict__ colors // [N, 4] half {R,G,B,0}
-    )
+__global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MIN_BLOCKS) projection_fwd_kernel(
+    const uint32_t B,
+    const uint32_t C,
+    const uint32_t N,
+    const float *__restrict__ means,      // [B, 3, N]
+    const float *__restrict__ covars,     // [B, N, 6] optional
+    const __half *__restrict__ inference, // [B, N, 8] half — packed {quat(4), scale(3), opacity(1)}
+    const float *__restrict__ viewmats,   // [B, C, 4, 4]
+    const float *__restrict__ Ks,         // [B, C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const CameraModelType camera_model,
+    // outputs
+    uint32_t *__restrict__ visible,    // [(B*C*N+31)/32] packed bitfield
+    float *__restrict__ means2d,       // [B, C, N, 2]
+    float *__restrict__ depths,        // [B, C, N]
+    __half *__restrict__ conics,       // [B, C, N, 4] half {l0,l1,l2,opacity}
+    float *__restrict__ compensations, // [B, C, N] optional
+    // SH parameters (used only when FUSE_SH=true; dead-code-eliminated otherwise)
+    const int32_t degrees_to_use,
+    const void *__restrict__ sh_input,
+    const float sh_bias,
+    const float sh_min_value,
+    const SHDecodeParams sh_decode_params,
+    __half *__restrict__ colors // [N, 4] half {R,G,B,0}
+)
 {
     // parallelize over B * C * N.
     // OOB threads must not early-return — they participate in __ballot_sync.
     const int32_t idx  = blockIdx.x * blockDim.x + threadIdx.x;
     const int32_t lane = threadIdx.x & 31u;
 
-    auto processGaussian = [&]() -> bool {
-        if (idx >= B * C * N)
+    auto processGaussian = [&]() -> bool
+    {
+        if(idx >= B * C * N)
         {
             return false;
         }
@@ -87,19 +97,23 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
         const vec3 mean_w = vec3(means_b[gid], means_b[N + gid], means_b[2 * N + gid]);
 
         // glm is column-major but input is row-major
-        const mat3 R = mat3(viewmats_b[0], viewmats_b[4],
-                            viewmats_b[8], // 1st column
-                            viewmats_b[1], viewmats_b[5],
-                            viewmats_b[9], // 2nd column
-                            viewmats_b[2], viewmats_b[6],
-                            viewmats_b[10] // 3rd column
+        const mat3 R = mat3(
+            viewmats_b[0],
+            viewmats_b[4],
+            viewmats_b[8], // 1st column
+            viewmats_b[1],
+            viewmats_b[5],
+            viewmats_b[9], // 2nd column
+            viewmats_b[2],
+            viewmats_b[6],
+            viewmats_b[10] // 3rd column
         );
         const vec3 t = vec3(viewmats_b[3], viewmats_b[7], viewmats_b[11]);
 
         // transform Gaussian center to camera space
         vec3 mean_c;
         gsplat::posW2C(R, t, mean_w, mean_c);
-        if (mean_c.z < near_plane || mean_c.z > far_plane)
+        if(mean_c.z < near_plane || mean_c.z > far_plane)
         {
             return false;
         }
@@ -108,23 +122,33 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
         __half inference_local[8];
         AssignAs<uint4>(inference_local[0], inference[(bid * N + gid) * 8]);
 
-        const vec4 quat  = vec4(__half2float(inference_local[0]), __half2float(inference_local[1]), __half2float(inference_local[2]),
-                                __half2float(inference_local[3]));
-        const vec3 scale = vec3(__half2float(inference_local[4]), __half2float(inference_local[5]), __half2float(inference_local[6]));
-        float opacity    = __half2float(inference_local[7]);
+        const vec4 quat = vec4(
+            __half2float(inference_local[0]),
+            __half2float(inference_local[1]),
+            __half2float(inference_local[2]),
+            __half2float(inference_local[3])
+        );
+        const vec3 scale = vec3(
+            __half2float(inference_local[4]), __half2float(inference_local[5]), __half2float(inference_local[6])
+        );
+        float opacity = __half2float(inference_local[7]);
 
         // transform Gaussian covariance to camera space
         mat3 covar;
-        if (covars != nullptr)
+        if(covars != nullptr)
         {
             const float *covars_g = covars + bid * N * 6 + gid * 6;
 
-            covar = mat3(covars_g[0], covars_g[1],
-                         covars_g[2], // 1st column
-                         covars_g[1], covars_g[3],
-                         covars_g[4], // 2nd column
-                         covars_g[2], covars_g[4],
-                         covars_g[5] // 3rd column
+            covar = mat3(
+                covars_g[0],
+                covars_g[1],
+                covars_g[2], // 1st column
+                covars_g[1],
+                covars_g[3],
+                covars_g[4], // 2nd column
+                covars_g[2],
+                covars_g[4],
+                covars_g[5] // 3rd column
             );
         }
         else
@@ -139,25 +163,28 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
         mat2 covar2d;
         vec2 mean2d;
 
-        switch (camera_model)
+        switch(camera_model)
         {
         case CameraModelType::PINHOLE:
-            gsplat::persp_proj(mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height, covar2d,
-                               mean2d);
+            gsplat::persp_proj(
+                mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height, covar2d, mean2d
+            );
             break;
         case CameraModelType::ORTHO:
-            gsplat::ortho_proj(mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height, covar2d,
-                               mean2d);
+            gsplat::ortho_proj(
+                mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height, covar2d, mean2d
+            );
             break;
         case CameraModelType::FISHEYE:
-            gsplat::fisheye_proj(mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height,
-                                 covar2d, mean2d);
+            gsplat::fisheye_proj(
+                mean_c, covar_c, Ks_b[0], Ks_b[4], Ks_b[2], Ks_b[5], image_width, image_height, covar2d, mean2d
+            );
             break;
         }
 
         float compensation;
         const float det = gsplat::add_blur(eps2d, covar2d, compensation);
-        if (det <= 0.f)
+        if(det <= 0.f)
         {
             return false;
         }
@@ -166,11 +193,11 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
         const mat2 covar2d_inv = glm::inverse(covar2d);
 
         float extend = MAX_EXTEND;
-        if (compensations != nullptr)
+        if(compensations != nullptr)
         {
             opacity *= compensation;
         }
-        if (opacity < ALPHA_THRESHOLD)
+        if(opacity < ALPHA_THRESHOLD)
         {
             return false;
         }
@@ -181,7 +208,7 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
         float radius_y = extend * sqrtf(covar2d[1][1]);
 
         // let's do the radius clip test prior ceil for finer fidelity of clipping
-        if (radius_x <= radius_clip && radius_y <= radius_clip)
+        if(radius_x <= radius_clip && radius_y <= radius_clip)
         {
             return false;
         }
@@ -190,15 +217,17 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
         radius_y = ceilf(radius_y);
 
         // mask out gaussians outside the image region
-        if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width || mean2d.y + radius_y <= 0 ||
-            mean2d.y - radius_y >= image_height)
+        if(mean2d.x + radius_x <= 0
+           || mean2d.x - radius_x >= image_width
+           || mean2d.y + radius_y <= 0
+           || mean2d.y - radius_y >= image_height)
         {
             return false;
         }
 
         // write to outputs
         AssignAs<float2>(means2d[idx * 2], mean2d);
-        depths[idx] = mean_c.z;
+        depths[idx]       = mean_c.z;
         // Store Cholesky factor L of the inverse covariance: Sigma^{-1} = L*L^T,
         // L = [[l0, 0], [l1, l2]].  Consumers reconstruct A=l0², B=l0*l1,
         // C=l1²+l2² when needed.  This lets the rasterizer use the factors
@@ -215,13 +244,13 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
         conics_opac[1] = __floats2half2_rn(l2, opacity);
         AssignAs<uint2>(conics[idx * 4], conics_opac);
 
-        if (compensations != nullptr)
+        if(compensations != nullptr)
         {
             compensations[idx] = compensation;
         }
 
         // Fused SH evaluation: mean_w, R, t are still in scope from the projection load above.
-        if constexpr (FUSE_SH)
+        if constexpr(FUSE_SH)
         {
             // Camera world position: cam_pos = -R^T * t (R is column-major glm mat3)
             const vec3 cam_w   = -glm::transpose(R) * t;
@@ -230,8 +259,9 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
             const float dz     = mean_w.z - cam_w.z;
             const float inorm  = rsqrtf(dx * dx + dy * dy + dz * dz);
             const float3 dir_n = make_float3(dx * inorm, dy * inorm, dz * inorm);
-            EvalSHForGaussian<SH_MODE>(dir_n, gid, N, degrees_to_use, sh_input, sh_bias, sh_min_value, sh_decode_params,
-                                       colors);
+            EvalSHForGaussian<SH_MODE>(
+                dir_n, gid, N, degrees_to_use, sh_input, sh_bias, sh_min_value, sh_decode_params, colors
+            );
         }
 
         return true;
@@ -241,7 +271,7 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
     const uint32_t ballot   = __ballot_sync(~0u, is_visible);
     const int32_t word_idx  = idx >> 5;
     const int32_t num_words = (B * C * N + 31) >> 5;
-    if (lane == 0 && word_idx < num_words)
+    if(lane == 0 && word_idx < num_words)
     {
         visible[word_idx] = ballot;
     }
@@ -253,12 +283,25 @@ __global__ void __launch_bounds__(CTA_SIZE, FUSE_SH ? FUSED_MIN_BLOCKS : PROJ_MI
 
 void launch_projection_fwd_kernel(
     // inputs
-    const at::Tensor means, const at::optional<at::Tensor> covars, const at::Tensor inference, const at::Tensor viewmats,
-    const at::Tensor Ks, const uint32_t image_width, const uint32_t image_height, const float eps2d,
-    const float near_plane, const float far_plane, const float radius_clip, const gsplat::CameraModelType camera_model,
+    const at::Tensor means,
+    const at::optional<at::Tensor> covars,
+    const at::Tensor inference,
+    const at::Tensor viewmats,
+    const at::Tensor Ks,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const gsplat::CameraModelType camera_model,
     // outputs
-    at::Tensor visible, at::Tensor means2d, at::Tensor depths, at::Tensor conics,
-    at::optional<at::Tensor> compensations)
+    at::Tensor visible,
+    at::Tensor means2d,
+    at::Tensor depths,
+    at::Tensor conics,
+    at::optional<at::Tensor> compensations
+)
 {
     uint32_t N = means.size(-1);
     uint32_t C = viewmats.size(-3);
@@ -268,42 +311,82 @@ void launch_projection_fwd_kernel(
     dim3 threads(CTA_SIZE);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
 
-    if (n_elements == 0)
+    if(n_elements == 0)
     {
         return;
     }
 
     const float *covars_ptr = nullptr;
-    if (covars.has_value())
+    if(covars.has_value())
     {
         covars_ptr = covars.value().data_ptr<float>();
     }
     float *comp_ptr = nullptr;
-    if (compensations.has_value())
+    if(compensations.has_value())
     {
         comp_ptr = compensations.value().data_ptr<float>();
     }
 
     projection_fwd_kernel<false><<<grid, threads, 0, at::cuda::getCurrentCUDAStream()>>>(
-        B, C, N, means.data_ptr<float>(), covars_ptr, reinterpret_cast<const __half *>(inference.data_ptr<at::Half>()),
-        viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height, eps2d, near_plane, far_plane,
-        radius_clip, camera_model, reinterpret_cast<uint32_t *>(visible.data_ptr<int32_t>()), means2d.data_ptr<float>(),
-        depths.data_ptr<float>(), reinterpret_cast<__half *>(conics.data_ptr<at::Half>()), comp_ptr,
+        B,
+        C,
+        N,
+        means.data_ptr<float>(),
+        covars_ptr,
+        reinterpret_cast<const __half *>(inference.data_ptr<at::Half>()),
+        viewmats.data_ptr<float>(),
+        Ks.data_ptr<float>(),
+        image_width,
+        image_height,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        camera_model,
+        reinterpret_cast<uint32_t *>(visible.data_ptr<int32_t>()),
+        means2d.data_ptr<float>(),
+        depths.data_ptr<float>(),
+        reinterpret_cast<__half *>(conics.data_ptr<at::Half>()),
+        comp_ptr,
         // SH params (unused, dead-code-eliminated)
-        0, nullptr, 0.f, 0.f, SHDecodeParams{}, nullptr);
+        0,
+        nullptr,
+        0.f,
+        0.f,
+        SHDecodeParams{},
+        nullptr
+    );
 }
 
 void launch_projection_sh_fused_kernel(
     // inputs
-    const at::Tensor means, const at::optional<at::Tensor> covars, const at::Tensor inference, const at::Tensor viewmats,
-    const at::Tensor Ks, const uint32_t image_width, const uint32_t image_height, const float eps2d,
-    const float near_plane, const float far_plane, const float radius_clip, const gsplat::CameraModelType camera_model,
+    const at::Tensor means,
+    const at::optional<at::Tensor> covars,
+    const at::Tensor inference,
+    const at::Tensor viewmats,
+    const at::Tensor Ks,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const gsplat::CameraModelType camera_model,
     // SH inputs
-    const int32_t degrees_to_use, const at::Tensor sh_input, const float bias, const float min_value,
-    const SHCompressionMode mode, const SHDecodeParams *decode_params,
+    const int32_t degrees_to_use,
+    const at::Tensor sh_input,
+    const float bias,
+    const float min_value,
+    const SHCompressionMode mode,
+    const SHDecodeParams *decode_params,
     // outputs
-    at::Tensor visible, at::Tensor means2d, at::Tensor depths, at::Tensor conics, at::Tensor colors,
-    at::optional<at::Tensor> compensations)
+    at::Tensor visible,
+    at::Tensor means2d,
+    at::Tensor depths,
+    at::Tensor conics,
+    at::Tensor colors,
+    at::optional<at::Tensor> compensations
+)
 {
     uint32_t N = means.size(-1);
     uint32_t C = viewmats.size(-3);
@@ -313,18 +396,18 @@ void launch_projection_sh_fused_kernel(
     dim3 threads(CTA_SIZE);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
 
-    if (n_elements == 0)
+    if(n_elements == 0)
     {
         return;
     }
 
     const float *covars_ptr = nullptr;
-    if (covars.has_value())
+    if(covars.has_value())
     {
         covars_ptr = covars.value().data_ptr<float>();
     }
     float *comp_ptr = nullptr;
-    if (compensations.has_value())
+    if(compensations.has_value())
     {
         comp_ptr = compensations.value().data_ptr<float>();
     }
@@ -337,36 +420,66 @@ void launch_projection_sh_fused_kernel(
     auto *conics_ptr        = reinterpret_cast<__half *>(conics.data_ptr<at::Half>());
     auto *colors_ptr        = reinterpret_cast<__half *>(colors.data_ptr<at::Half>());
 
-    auto launch = [&](auto mode_tag, const void *sh_data_ptr) {
+    auto launch = [&](auto mode_tag, const void *sh_data_ptr)
+    {
         constexpr SHInputMode MODE = decltype(mode_tag)::value;
         projection_fwd_kernel<true, MODE><<<grid, threads, 0, stream>>>(
-            B, C, N, means.data_ptr<float>(), covars_ptr, reinterpret_cast<const __half *>(inference.data_ptr<at::Half>()),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height, eps2d, near_plane, far_plane,
-            radius_clip, camera_model, vis_ptr, means2d_ptr, depths_ptr, conics_ptr, comp_ptr, degrees_to_use,
+            B,
+            C,
+            N,
+            means.data_ptr<float>(),
+            covars_ptr,
+            reinterpret_cast<const __half *>(inference.data_ptr<at::Half>()),
+            viewmats.data_ptr<float>(),
+            Ks.data_ptr<float>(),
+            image_width,
+            image_height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            camera_model,
+            vis_ptr,
+            means2d_ptr,
+            depths_ptr,
+            conics_ptr,
+            comp_ptr,
+            degrees_to_use,
             sh_data_ptr,
-            bias, min_value, dp, colors_ptr);
+            bias,
+            min_value,
+            dp,
+            colors_ptr
+        );
     };
 
-    if (mode == SHCompressionMode::COMPRESS_32B)
+    if(mode == SHCompressionMode::COMPRESS_32B)
     {
-        launch(std::integral_constant<SHInputMode, SHInputMode::COMPRESS_32B>{},
-               static_cast<const void *>(sh_input.data_ptr<int32_t>()));
+        launch(
+            std::integral_constant<SHInputMode, SHInputMode::COMPRESS_32B>{},
+            static_cast<const void *>(sh_input.data_ptr<int32_t>())
+        );
     }
-    else if (mode == SHCompressionMode::COMPRESS_16B)
+    else if(mode == SHCompressionMode::COMPRESS_16B)
     {
-        launch(std::integral_constant<SHInputMode, SHInputMode::COMPRESS_16B>{},
-               static_cast<const void *>(sh_input.data_ptr<int32_t>()));
+        launch(
+            std::integral_constant<SHInputMode, SHInputMode::COMPRESS_16B>{},
+            static_cast<const void *>(sh_input.data_ptr<int32_t>())
+        );
     }
-    else if (sh_input.scalar_type() == at::kFloat)
+    else if(sh_input.scalar_type() == at::kFloat)
     {
-        launch(std::integral_constant<SHInputMode, SHInputMode::RAW_FLOAT>{},
-               static_cast<const void *>(sh_input.data_ptr<float>()));
+        launch(
+            std::integral_constant<SHInputMode, SHInputMode::RAW_FLOAT>{},
+            static_cast<const void *>(sh_input.data_ptr<float>())
+        );
     }
     else
     {
-        launch(std::integral_constant<SHInputMode, SHInputMode::RAW_HALF>{},
-               static_cast<const void *>(sh_input.data_ptr<at::Half>()));
+        launch(
+            std::integral_constant<SHInputMode, SHInputMode::RAW_HALF>{},
+            static_cast<const void *>(sh_input.data_ptr<at::Half>())
+        );
     }
 }
-
 } // namespace higs

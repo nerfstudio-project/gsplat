@@ -29,10 +29,11 @@
 // projection, and the projected Gaussians are all-to-all scattered to the
 // camera-owning ranks before tiling. These two seam hooks own all of that; the
 // orchestrator just calls them when a process group name is supplied.
-namespace gsplat {
-
+namespace gsplat
+{
 // Cameras and per-rank sizes produced at the gather seam (before projection).
-struct DistributedCameraGather {
+struct DistributedCameraGather
+{
     at::Tensor viewmats;          // [global_C, 4, 4] cameras from all ranks
     at::Tensor Ks;                // [global_C, 3, 3]
     std::vector<int64_t> N_world; // per-rank Gaussian counts
@@ -42,7 +43,8 @@ struct DistributedCameraGather {
 
 // Projected per-Gaussian tensors exchanged at the scatter seam. In packed mode
 // the index tensors are carried too; dense mode leaves them undefined.
-struct DistributedProjection {
+struct DistributedProjection
+{
     at::Tensor radii;
     at::Tensor means2d;
     at::Tensor depths;
@@ -81,5 +83,4 @@ DistributedProjection scatter_projection_for_distributed(
     int64_t world_size,
     const std::string &process_group_name
 );
-
 } // namespace gsplat

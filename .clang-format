@@ -1,5 +1,133 @@
-BasedOnStyle: LLVM
+BasedOnStyle: Microsoft
+Language: Cpp
+AccessModifierOffset: -4
 AlignAfterOpenBracket: BlockIndent
+AlignArrayOfStructures: Right
+AlignConsecutiveAssignments:
+  Enabled: true
+  AlignCompound: true
+  AcrossComments: true
+AlignConsecutiveBitFields:
+  Enabled: true
+  AcrossComments: true
+AlignConsecutiveMacros:
+  Enabled: true
+  AcrossComments: true
+AlignConsecutiveShortCaseStatements:
+  Enabled: true
+  AcrossComments: true
+AlignEscapedNewlines: Left
+AlignOperands: AlignAfterOperator
+AllowShortEnumsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortLambdasOnASingleLine: Inline
+AllowShortLoopsOnASingleLine: true
+AlwaysBreakBeforeMultilineStrings: true
+AllowBreakBeforeNoexceptSpecifier: OnlyWithParen
+AllowShortCaseLabelsOnASingleLine: true
+AlwaysBreakTemplateDeclarations: Yes
 BinPackArguments: false
-BinPackParameters: false
+BinPackParameters: OnePerLine
+BinPackLongBracedList: true
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterUnion: true
+  BeforeLambdaBody: true
+BreakConstructorInitializers: BeforeComma
+BreakBeforeBinaryOperators: All
+BreakAfterOpenBracketBracedList: true
+BreakAfterOpenBracketFunction: true
+BreakAfterOpenBracketIf: true
+BreakAfterOpenBracketLoop: true
+BreakAfterOpenBracketSwitch: true
+BreakAfterAttributes: Never
+BreakInheritanceList: BeforeComma
+BreakAfterReturnType: Automatic
+BreakBeforeCloseBracketBracedList: true
+BreakBeforeCloseBracketFunction: true
+BreakBeforeCloseBracketIf: true
+BreakBeforeCloseBracketLoop: true
+BreakBeforeCloseBracketSwitch: true
+BreakBeforeTemplateCloser: true
+BreakBinaryOperations: RespectPrecedence
+BreakTemplateDeclarations: Yes
+ColumnLimit:     120
+CompactNamespaces: true
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^".*Fwd\.hpp"'
+    Priority: 9
+  - Regex: '^<.*Fwd\.hpp>'
+    Priority: 11
+  - Regex: '^".*\.hpp"'
+    Priority: 1
+  - Regex: '^".*\.h"'
+    Priority: 2
+  - Regex: '^".*\.cuh"'
+    Priority: 3
+  - Regex: '^".*'
+    Priority: 4
+  - Regex: '^<.*\.hpp>'
+    Priority: 5
+  - Regex: '^<.*\.h>'
+    Priority: 6
+  - Regex: '^<.*\.cuh>'
+    Priority: 7
+  - Regex: '^<.*'
+    Priority: 8
+  - Regex: '[^.]+'
+    Priority: 11
+  - Regex: '.*'
+    Priority: 12
+IncludeIsMainRegex: '([-_](test|unittest))?$'
+IndentPPDirectives: AfterHash
+IndentGotoLabels: false
 IndentWidth: 4
+IndentWrappedFunctionNames: true
+InsertBraces: true
+InsertNewlineAtEOF: true
+IntegerLiteralSeparator:
+  Binary:          4
+  BinaryMinDigits: 9
+  Decimal:         3
+  DecimalMinDigits: 7
+  Hex:             4
+  HexMinDigits:    9
+LineEnding: LF
+PenaltyBreakBeforeFirstCallParameter: 1
+PenaltyReturnTypeOnItsOwnLine: 200
+RemoveEmptyLinesInUnwrappedLines: true
+NamespaceIndentation: Inner
+NumericLiteralCase:
+  ExponentLetter: Lower
+  HexDigit: Upper
+  Prefix: Lower
+  Suffix: Lower
+QualifierAlignment: Custom
+QualifierOrder: [ 'friend', 'static', 'inline', 'constexpr', 'restrict', 'const', 'volatile', 'type' ]
+ReflowComments: false
+RemoveParentheses: Leave # Other than 'Leave' might lead to incorrect code
+RemoveSemicolon: false # true might lead to incorrect code
+SpaceAfterTemplateKeyword: false
+SpaceBeforeParens: Custom
+SeparateDefinitionBlocks: Always
+SpaceBeforeParensOptions:
+  AfterControlStatements: false
+  AfterForeachMacros: false
+  AfterFunctionDefinitionName: false
+  AfterFunctionDeclarationName: false
+  AfterIfMacros:   false
+  AfterOverloadedOperator: false
+  AfterPlacementOperator: false
+  AfterRequiresInClause: false
+  AfterRequiresInExpression: false
+  BeforeNonEmptyParentheses: false
+SpaceBeforeRangeBasedForLoopColon: false
+SpacesInContainerLiterals: false
+SpaceInEmptyBraces: Block
+SortIncludes:
+  Enabled: false
+  IgnoreExtension: true
+Standard: c++20
+WrapNamespaceBodyWithEmptyLines: Never
+TabWidth: 8

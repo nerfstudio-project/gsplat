@@ -28,14 +28,14 @@
 #include "Common.h" // where all the macros are defined
 #include "Null.h"   // where the launch function is declared
 
-namespace gsplat {
-
-at::Tensor null(const at::Tensor input) {
+namespace gsplat
+{
+at::Tensor null(const at::Tensor input)
+{
     DEVICE_GUARD(input);
     CHECK_INPUT(input);
     at::Tensor output = at::empty_like(input);
     launch_null_kernel(input, output);
     return output;
 }
-
 } // namespace gsplat

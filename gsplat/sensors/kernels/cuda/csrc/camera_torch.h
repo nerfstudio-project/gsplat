@@ -45,8 +45,8 @@
 #include <tuple>
 #include <vector>
 
-namespace gsplat_sensors {
-
+namespace gsplat_sensors
+{
 // TorchScript custom class carrying the OpenCV pinhole camera intrinsics as
 // per-component float32 tensors.  Shape contract:
 //   focal_length       (2,) — [fx, fy]
@@ -55,7 +55,8 @@ namespace gsplat_sensors {
 //   tangential_coeffs  (2,) — [p1, p2]
 //   thin_prism_coeffs  (4,) — [s1..s4]
 //   resolution         [width, height]
-struct OpenCVPinholeProjection : public torch::CustomClassHolder {
+struct OpenCVPinholeProjection : public torch::CustomClassHolder
+{
     at::Tensor focal_length;
     at::Tensor principal_point;
     at::Tensor radial_coeffs;
@@ -69,13 +70,14 @@ struct OpenCVPinholeProjection : public torch::CustomClassHolder {
         at::Tensor radial_coeffs,
         at::Tensor tangential_coeffs,
         at::Tensor thin_prism_coeffs,
-        std::array<int64_t, 2> resolution);
+        std::array<int64_t, 2> resolution
+    );
 
     OpenCVPinholeProjection_KernelParameters to_kernel_params() const;
 };
 
 // Validates projection shape and non-null; throws TORCH_CHECK on failure.
-void check_projection(const c10::intrusive_ptr<OpenCVPinholeProjection>& projection);
+void check_projection(const c10::intrusive_ptr<OpenCVPinholeProjection> &projection);
 
 // TorchScript custom class carrying the FTheta camera intrinsics as
 // per-component float32 tensors.  Shape contract:
@@ -87,7 +89,8 @@ void check_projection(const c10::intrusive_ptr<OpenCVPinholeProjection>& project
 //
 // Ainv is computed on demand from A (closed-form 2x2 inverse); only A is a
 // stored intrinsic.
-struct FThetaProjection : public torch::CustomClassHolder {
+struct FThetaProjection : public torch::CustomClassHolder
+{
     at::Tensor principal_point;
     at::Tensor fw_poly;
     at::Tensor bw_poly;
@@ -114,7 +117,8 @@ struct FThetaProjection : public torch::CustomClassHolder {
         int64_t bw_poly_degree,
         int64_t newton_iterations,
         double max_angle,
-        double min_2d_norm);
+        double min_2d_norm
+    );
 
     FThetaProjection_KernelParameters to_kernel_params() const;
 
@@ -124,7 +128,7 @@ struct FThetaProjection : public torch::CustomClassHolder {
 };
 
 // Validates projection shape and non-null; throws TORCH_CHECK on failure.
-void check_ftheta_projection(const c10::intrusive_ptr<FThetaProjection>& projection);
+void check_ftheta_projection(const c10::intrusive_ptr<FThetaProjection> &projection);
 
 // TorchScript custom class carrying the OpenCV equidistant fisheye camera
 // intrinsics as per-component float32 tensors.  Shape contract:
@@ -136,7 +140,8 @@ void check_ftheta_projection(const c10::intrusive_ptr<FThetaProjection>& project
 //
 // This is a reduced FThetaProjection: there is no A/Ainv affine, no backward
 // polynomial, and no reference-polynomial selector.
-struct OpenCVFisheyeProjection : public torch::CustomClassHolder {
+struct OpenCVFisheyeProjection : public torch::CustomClassHolder
+{
     at::Tensor principal_point;
     at::Tensor focal_length;
     at::Tensor forward_poly;
@@ -154,7 +159,8 @@ struct OpenCVFisheyeProjection : public torch::CustomClassHolder {
         std::array<int64_t, 2> resolution,
         int64_t newton_iterations,
         double max_angle,
-        double min_2d_norm);
+        double min_2d_norm
+    );
 
     OpenCVFisheyeProjection_KernelParameters to_kernel_params() const;
 
@@ -163,14 +169,12 @@ struct OpenCVFisheyeProjection : public torch::CustomClassHolder {
     // focal (it is a derived initial-guess factor, not an independent
     // intrinsic). The three config scalars are preserved unscaled.
     c10::intrusive_ptr<OpenCVFisheyeProjection> transform(
-        std::tuple<double, double> scale,
-        std::tuple<double, double> offset,
-        std::tuple<int64_t, int64_t> new_resolution) const;
+        std::tuple<double, double> scale, std::tuple<double, double> offset, std::tuple<int64_t, int64_t> new_resolution
+    ) const;
 };
 
 // Validates projection shape and non-null; throws TORCH_CHECK on failure.
-void check_opencv_fisheye_projection(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection);
+void check_opencv_fisheye_projection(const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection);
 
 // Returns (H, W, 2) float32 CUDA tensor of pixel-centre (x, y) coordinates.
 at::Tensor generate_image_points(int64_t width, int64_t height, c10::Device device);
@@ -180,18 +184,20 @@ at::Tensor generate_image_points(int64_t width, int64_t height, c10::Device devi
 // ===========================================================================
 // forward: returns (image_points (N,2), valid_flags (N,) bool, scratch (N,6))
 std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_opencv_pinhole_no_external(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& camera_rays);
+    const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+    const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+    const at::Tensor &camera_rays
+);
 
 // ===========================================================================
 // Kernel 3 — image_points_to_camera_rays (no external distortion)
 // ===========================================================================
 // forward: returns (camera_rays (N,3), scratch (N,5))
 std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_pinhole_no_external(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points);
+    const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+    const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+    const at::Tensor &image_points
+);
 
 // ===========================================================================
 // Kernel 4 — project_world_points_mean_pose (no external distortion)
@@ -199,39 +205,41 @@ std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_pinhole_no
 // forward: returns (image_points (N,2), valid_flags (N,), timestamps (N,) int64,
 //                   pose_t (N,3), pose_r (N,4), scratch (N,9))
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_opencv_pinhole_no_external(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    project_world_points_mean_pose_opencv_pinhole_no_external(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
 // ===========================================================================
 // Kernel 5 — project_world_points_shutter_pose (no external distortion)
 // ===========================================================================
 // forward: same 6-tuple as Kernel 4; scratch is (N,10)
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_opencv_pinhole_no_external(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us,
-    int64_t max_iterations,
-    double stop_mean_error_px,
-    double stop_delta_mean_error_px,
-    double initial_relative_time);
+    project_world_points_shutter_pose_opencv_pinhole_no_external(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us,
+        int64_t max_iterations,
+        double stop_mean_error_px,
+        double stop_delta_mean_error_px,
+        double initial_relative_time
+    );
 
 // ===========================================================================
 // Kernel 6 — image_points_to_world_rays_static_pose (no external distortion)
@@ -240,32 +248,34 @@ project_world_points_shutter_pose_opencv_pinhole_no_external(
 //                   pose_t (N,3), pose_r (N,4), scratch (N,5))
 // translations (M,3) and rotations (M,4) must each have M >= 1; first row used.
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_opencv_pinhole_no_external(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translations,
-    const at::Tensor& rotations,
-    int64_t timestamp_us);
+    image_points_to_world_rays_static_pose_opencv_pinhole_no_external(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translations,
+        const at::Tensor &rotations,
+        int64_t timestamp_us
+    );
 
 // ===========================================================================
 // Kernel 7 — image_points_to_world_rays_shutter_pose (no external distortion)
 // ===========================================================================
 // forward: same 5-tuple as Kernel 6; scratch is (N,9)
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_opencv_pinhole_no_external(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    image_points_to_world_rays_shutter_pose_opencv_pinhole_no_external(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
 // ===========================================================================
 // Kernels 2b–7b — backward passes (no external distortion)
@@ -277,32 +287,34 @@ image_points_to_world_rays_shutter_pose_opencv_pinhole_no_external(
 // declaration's tuple arity for the per-kernel layout.
 // Grad tensors for flags=false slots are empty (0,) scratch.
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_opencv_pinhole_no_external_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& camera_rays,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_camera_ray_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad);
+    camera_rays_to_image_points_opencv_pinhole_no_external_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &camera_rays,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_camera_ray_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_camera_rays_opencv_pinhole_no_external_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& grad_camera_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad);
+    image_points_to_camera_rays_opencv_pinhole_no_external_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &grad_camera_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad
+    );
 
 std::tuple<
     at::Tensor,
@@ -314,25 +326,27 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
-    at::Tensor>
-project_world_points_mean_pose_opencv_pinhole_no_external_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad);
+    at::Tensor
+>
+    project_world_points_mean_pose_opencv_pinhole_no_external_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad
+    );
 
 std::tuple<
     at::Tensor,
@@ -344,47 +358,50 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
-    at::Tensor>
-project_world_points_shutter_pose_opencv_pinhole_no_external_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    int64_t shutter_type,
-    int64_t max_iterations,
-    double initial_relative_time,
-    const at::Tensor& valid_flags,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad);
+    at::Tensor
+>
+    project_world_points_shutter_pose_opencv_pinhole_no_external_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        int64_t shutter_type,
+        int64_t max_iterations,
+        double initial_relative_time,
+        const at::Tensor &valid_flags,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_opencv_pinhole_no_external_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translation,
-    const at::Tensor& rotation,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_translation_grad,
-    bool need_rotation_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad);
+    image_points_to_world_rays_static_pose_opencv_pinhole_no_external_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translation,
+        const at::Tensor &rotation,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_translation_grad,
+        bool need_rotation_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad
+    );
 
 std::tuple<
     at::Tensor,
@@ -396,26 +413,28 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
-    at::Tensor>
-image_points_to_world_rays_shutter_pose_opencv_pinhole_no_external_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    int64_t shutter_type,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad);
+    at::Tensor
+>
+    image_points_to_world_rays_shutter_pose_opencv_pinhole_no_external_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        int64_t shutter_type,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad
+    );
 
 // ===========================================================================
 // Kernels 8–13 — bivariate_windshield distortion variants (forward)
@@ -426,71 +445,77 @@ image_points_to_world_rays_shutter_pose_opencv_pinhole_no_external_backward(
 // Kernel 8 — camera_rays_to_image_points (bivariate windshield, forward)
 // Returns (image_points (N,2), valid_flags (N,) bool, scratch (N,10))
 std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_opencv_pinhole_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& camera_rays);
+    const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+    const at::Tensor &camera_rays
+);
 
 // Kernel 9 — image_points_to_camera_rays (bivariate windshield, forward)
 // Returns (camera_rays (N,3), scratch (N,9))
 std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_pinhole_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points);
+    const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+    const at::Tensor &image_points
+);
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_opencv_pinhole_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    project_world_points_mean_pose_opencv_pinhole_bivariate_windshield(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us,
-    int64_t max_iterations,
-    double stop_mean_error_px,
-    double stop_delta_mean_error_px,
-    double initial_relative_time);
+    project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us,
+        int64_t max_iterations,
+        double stop_mean_error_px,
+        double stop_delta_mean_error_px,
+        double initial_relative_time
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translations,
-    const at::Tensor& rotations,
-    int64_t timestamp_us);
+    image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translations,
+        const at::Tensor &rotations,
+        int64_t timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
 // ===========================================================================
 // Kernels 8b–13b — backward passes (bivariate windshield)
@@ -498,34 +523,36 @@ image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield(
 // Returns the same tuple as the no_external backward plus
 // grad_distortion_coeffs (42,) as the final element.
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_opencv_pinhole_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& camera_rays,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_camera_ray_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad,
-    bool need_distortion_coeffs_grad);
+    camera_rays_to_image_points_opencv_pinhole_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &camera_rays,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_camera_ray_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_camera_rays_opencv_pinhole_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& grad_camera_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad,
-    bool need_distortion_coeffs_grad);
+    image_points_to_camera_rays_opencv_pinhole_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &grad_camera_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<
     at::Tensor,
@@ -538,26 +565,28 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
-    at::Tensor>
-project_world_points_mean_pose_opencv_pinhole_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad,
-    bool need_distortion_coeffs_grad);
+    at::Tensor
+>
+    project_world_points_mean_pose_opencv_pinhole_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<
     at::Tensor,
@@ -570,49 +599,52 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
-    at::Tensor>
-project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    int64_t shutter_type,
-    int64_t max_iterations,
-    double initial_relative_time,
-    const at::Tensor& valid_flags,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad,
-    bool need_distortion_coeffs_grad);
+    at::Tensor
+>
+    project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        int64_t shutter_type,
+        int64_t max_iterations,
+        double initial_relative_time,
+        const at::Tensor &valid_flags,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translation,
-    const at::Tensor& rotation,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_translation_grad,
-    bool need_rotation_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad,
-    bool need_distortion_coeffs_grad);
+    image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translation,
+        const at::Tensor &rotation,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_translation_grad,
+        bool need_rotation_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<
     at::Tensor,
@@ -625,27 +657,29 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
-    at::Tensor>
-image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVPinholeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    int64_t shutter_type,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_focal_length_grad,
-    bool need_principal_point_grad,
-    bool need_radial_coeffs_grad,
-    bool need_tangential_coeffs_grad,
-    bool need_thin_prism_coeffs_grad,
-    bool need_distortion_coeffs_grad);
+    at::Tensor
+>
+    image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVPinholeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        int64_t shutter_type,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_focal_length_grad,
+        bool need_principal_point_grad,
+        bool need_radial_coeffs_grad,
+        bool need_tangential_coeffs_grad,
+        bool need_thin_prism_coeffs_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 // ===========================================================================
 // FTheta forward passes (no_external and bivariate_windshield variants)
@@ -654,142 +688,150 @@ image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield_back
 // (see camera_params.h Kernel N comments for per-kernel scratch sizes).
 
 // forward: returns (image_points (N,2), valid_flags (N,) bool, scratch (N,8))
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_ftheta_no_external(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& camera_rays);
+std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection> &projection,
+    const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+    const at::Tensor &camera_rays
+);
 
 // forward: returns (camera_rays (N,3), scratch (N,8))
-std::tuple<at::Tensor, at::Tensor>
-image_points_to_camera_rays_ftheta_no_external(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points);
+std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_ftheta_no_external(
+    const c10::intrusive_ptr<FThetaProjection> &projection,
+    const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+    const at::Tensor &image_points
+);
 
 // Returns (image_points (N,2), valid_flags (N,) bool, scratch (N,8))
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_ftheta_bivariate_windshield(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& camera_rays);
+std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection> &projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+    const at::Tensor &camera_rays
+);
 
 // Returns (camera_rays (N,3), scratch (N,12))
-std::tuple<at::Tensor, at::Tensor>
-image_points_to_camera_rays_ftheta_bivariate_windshield(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points);
+std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_ftheta_bivariate_windshield(
+    const c10::intrusive_ptr<FThetaProjection> &projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+    const at::Tensor &image_points
+);
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_ftheta_no_external(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    project_world_points_mean_pose_ftheta_no_external(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_ftheta_bivariate_windshield(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    project_world_points_mean_pose_ftheta_bivariate_windshield(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_ftheta_no_external(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translations,
-    const at::Tensor& rotations,
-    int64_t timestamp_us);
+    image_points_to_world_rays_static_pose_ftheta_no_external(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translations,
+        const at::Tensor &rotations,
+        int64_t timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_ftheta_bivariate_windshield(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translations,
-    const at::Tensor& rotations,
-    int64_t timestamp_us);
+    image_points_to_world_rays_static_pose_ftheta_bivariate_windshield(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translations,
+        const at::Tensor &rotations,
+        int64_t timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_ftheta_no_external(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us,
-    int64_t max_iterations,
-    double stop_mean_error_px,
-    double stop_delta_mean_error_px,
-    double initial_relative_time);
+    project_world_points_shutter_pose_ftheta_no_external(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us,
+        int64_t max_iterations,
+        double stop_mean_error_px,
+        double stop_delta_mean_error_px,
+        double initial_relative_time
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_ftheta_bivariate_windshield(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us,
-    int64_t max_iterations,
-    double stop_mean_error_px,
-    double stop_delta_mean_error_px,
-    double initial_relative_time);
+    project_world_points_shutter_pose_ftheta_bivariate_windshield(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us,
+        int64_t max_iterations,
+        double stop_mean_error_px,
+        double stop_delta_mean_error_px,
+        double initial_relative_time
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_ftheta_no_external(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    image_points_to_world_rays_shutter_pose_ftheta_no_external(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
 // ===========================================================================
 // FTheta backward passes (no_external and bivariate_windshield variants)
@@ -801,244 +843,313 @@ image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield(
 // bivariate_windshield variants append grad_distortion_coeffs (42,).
 // Grad tensors for flags=false slots are empty (0,) scratch.
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_ftheta_no_external_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& camera_rays,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_camera_ray_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad);
+    camera_rays_to_image_points_ftheta_no_external_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &camera_rays,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_camera_ray_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_camera_rays_ftheta_no_external_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& grad_camera_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad);
+    image_points_to_camera_rays_ftheta_no_external_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &grad_camera_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_ftheta_bivariate_windshield_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& camera_rays,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_camera_ray_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad,
-    bool need_distortion_coeffs_grad);
+    camera_rays_to_image_points_ftheta_bivariate_windshield_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &camera_rays,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_camera_ray_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_camera_rays_ftheta_bivariate_windshield_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& grad_camera_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad,
-    bool need_distortion_coeffs_grad);
+    image_points_to_camera_rays_ftheta_bivariate_windshield_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &grad_camera_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_ftheta_no_external_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad);
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor
+>
+    project_world_points_mean_pose_ftheta_no_external_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad
+    );
 
 std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_ftheta_bivariate_windshield_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad,
-    bool need_distortion_coeffs_grad);
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor
+>
+    project_world_points_mean_pose_ftheta_bivariate_windshield_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_ftheta_no_external_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translation,
-    const at::Tensor& rotation,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_translation_grad,
-    bool need_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad);
+    image_points_to_world_rays_static_pose_ftheta_no_external_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translation,
+        const at::Tensor &rotation,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_translation_grad,
+        bool need_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translation,
-    const at::Tensor& rotation,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_translation_grad,
-    bool need_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad,
-    bool need_distortion_coeffs_grad);
+    image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translation,
+        const at::Tensor &rotation,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_translation_grad,
+        bool need_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_ftheta_no_external_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    int64_t shutter_type,
-    int64_t max_iterations,
-    double initial_relative_time,
-    const at::Tensor& valid_flags,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad);
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor
+>
+    project_world_points_shutter_pose_ftheta_no_external_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        int64_t shutter_type,
+        int64_t max_iterations,
+        double initial_relative_time,
+        const at::Tensor &valid_flags,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad
+    );
 
 std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_ftheta_bivariate_windshield_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    int64_t shutter_type,
-    int64_t max_iterations,
-    double initial_relative_time,
-    const at::Tensor& valid_flags,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad,
-    bool need_distortion_coeffs_grad);
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor
+>
+    project_world_points_shutter_pose_ftheta_bivariate_windshield_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        int64_t shutter_type,
+        int64_t max_iterations,
+        double initial_relative_time,
+        const at::Tensor &valid_flags,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_ftheta_no_external_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    int64_t shutter_type,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad);
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor
+>
+    image_points_to_world_rays_shutter_pose_ftheta_no_external_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        int64_t shutter_type,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad
+    );
 
 std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward(
-    const c10::intrusive_ptr<FThetaProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    int64_t shutter_type,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_fw_poly_grad,
-    bool need_bw_poly_grad,
-    bool need_A_grad,
-    bool need_Ainv_grad,
-    bool need_distortion_coeffs_grad);
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor
+>
+    image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward(
+        const c10::intrusive_ptr<FThetaProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        int64_t shutter_type,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_fw_poly_grad,
+        bool need_bw_poly_grad,
+        bool need_A_grad,
+        bool need_Ainv_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 // ===========================================================================
 // OpenCV-fisheye no_external ops (D1/D2/D3/D5). Intrinsic grad outputs are
@@ -1047,103 +1158,107 @@ image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward(
 // ===========================================================================
 
 // D1 forward: returns (image_points (N,2), valid_flags (N,) bool, scratch (N,8)).
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_opencv_fisheye_no_external(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& camera_rays);
+std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_opencv_fisheye_no_external(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+    const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+    const at::Tensor &camera_rays
+);
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_opencv_fisheye_no_external_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& camera_rays,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_camera_ray_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad);
+    camera_rays_to_image_points_opencv_fisheye_no_external_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &camera_rays,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_camera_ray_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad
+    );
 
 // D2 forward: returns (camera_rays (N,3), scratch (N,8)).
-std::tuple<at::Tensor, at::Tensor>
-image_points_to_camera_rays_opencv_fisheye_no_external(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points);
+std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_fisheye_no_external(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+    const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+    const at::Tensor &image_points
+);
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_camera_rays_opencv_fisheye_no_external_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& grad_camera_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad);
+    image_points_to_camera_rays_opencv_fisheye_no_external_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &grad_camera_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad
+    );
 
 // D3 forward: returns (image_points (N,2), valid_flags (N,), timestamps (N,)
 // int64, pose_t (N,3), pose_r (N,4), scratch (N,14)).
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_opencv_fisheye_no_external(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    project_world_points_mean_pose_opencv_fisheye_no_external(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
-std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_opencv_fisheye_no_external_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad);
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+    project_world_points_mean_pose_opencv_fisheye_no_external_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad
+    );
 
 // D5 forward: returns (world_rays (N,6), timestamps (N,) int64, pose_t (N,3),
 // pose_r (N,4), scratch (N,8)).
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_opencv_fisheye_no_external(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translations,
-    const at::Tensor& rotations,
-    int64_t timestamp_us);
+    image_points_to_world_rays_static_pose_opencv_fisheye_no_external(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translations,
+        const at::Tensor &rotations,
+        int64_t timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translations,
-    const at::Tensor& rotations,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_translation_grad,
-    bool need_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad);
+    image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translations,
+        const at::Tensor &rotations,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_translation_grad,
+        bool need_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad
+    );
 
 // ===========================================================================
 // OpenCV-fisheye bivariate-windshield ops (D1/D2/D3/D5). Same intrinsic grad
@@ -1151,102 +1266,106 @@ image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward(
 // active bivariate-coeff slice. Scratch strides: D1=8, D2=12, D3=14, D5=12.
 // ===========================================================================
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_opencv_fisheye_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& camera_rays);
+std::tuple<at::Tensor, at::Tensor, at::Tensor> camera_rays_to_image_points_opencv_fisheye_bivariate_windshield(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+    const at::Tensor &camera_rays
+);
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& camera_rays,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_camera_ray_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad,
-    bool need_distortion_coeffs_grad);
+    camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &camera_rays,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_camera_ray_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad,
+        bool need_distortion_coeffs_grad
+    );
 
-std::tuple<at::Tensor, at::Tensor>
-image_points_to_camera_rays_opencv_fisheye_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points);
+std::tuple<at::Tensor, at::Tensor> image_points_to_camera_rays_opencv_fisheye_bivariate_windshield(
+    const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+    const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+    const at::Tensor &image_points
+);
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& grad_camera_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad,
-    bool need_distortion_coeffs_grad);
+    image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &grad_camera_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_opencv_fisheye_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    project_world_points_mean_pose_opencv_fisheye_bivariate_windshield(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
-std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad,
-    bool need_distortion_coeffs_grad);
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+    project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translations,
-    const at::Tensor& rotations,
-    int64_t timestamp_us);
+    image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translations,
+        const at::Tensor &rotations,
+        int64_t timestamp_us
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& translations,
-    const at::Tensor& rotations,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_translation_grad,
-    bool need_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad,
-    bool need_distortion_coeffs_grad);
+    image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &translations,
+        const at::Tensor &rotations,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_translation_grad,
+        bool need_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 // ===========================================================================
 // OpenCV-fisheye shutter-pose ops (D4/D6). Same intrinsic grad outputs as the
@@ -1258,158 +1377,157 @@ image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backw
 // D4 forward: returns (image_points (N,2), valid_flags (N,) bool,
 // timestamps (N,) int64, pose_t (N,3), pose_r (N,4), scratch (N,16)).
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_opencv_fisheye_no_external(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us,
-    int64_t max_iterations,
-    double stop_mean_error_px,
-    double stop_delta_mean_error_px,
-    double initial_relative_time);
+    project_world_points_shutter_pose_opencv_fisheye_no_external(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us,
+        int64_t max_iterations,
+        double stop_mean_error_px,
+        double stop_delta_mean_error_px,
+        double initial_relative_time
+    );
 
 // Unlike the FTheta/pinhole shutter-pose backward, this takes neither
 // world_points/shutter_type/max_iterations nor valid_flags: the converged pose
 // Jacobian and the per-point convergence mask (NaN-sentinel alpha, see above)
 // are read back from scratch, so the backward needs only the endpoint rotations,
 // the upstream grad, and scratch.
-std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_opencv_fisheye_no_external_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad);
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+    project_world_points_shutter_pose_opencv_fisheye_no_external_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& world_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us,
-    int64_t max_iterations,
-    double stop_mean_error_px,
-    double stop_delta_mean_error_px,
-    double initial_relative_time);
+    project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &world_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us,
+        int64_t max_iterations,
+        double stop_mean_error_px,
+        double stop_delta_mean_error_px,
+        double initial_relative_time
+    );
 
-std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_image_points,
-    const at::Tensor& scratch,
-    bool need_world_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad,
-    bool need_distortion_coeffs_grad);
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+    project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_image_points,
+        const at::Tensor &scratch,
+        bool need_world_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad,
+        bool need_distortion_coeffs_grad
+    );
 
 // D6 forward: returns (world_rays (N,6), timestamps (N,) int64, pose_t (N,3),
 // pose_r (N,4), scratch (N,12) no_external / (N,16) bivariate).
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
-std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<NoExternalDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad);
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<NoExternalDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad
+    );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_translation,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_translation,
-    const at::Tensor& end_rotation,
-    int64_t width,
-    int64_t height,
-    int64_t shutter_type,
-    int64_t start_timestamp_us,
-    int64_t end_timestamp_us);
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_translation,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_translation,
+        const at::Tensor &end_rotation,
+        int64_t width,
+        int64_t height,
+        int64_t shutter_type,
+        int64_t start_timestamp_us,
+        int64_t end_timestamp_us
+    );
 
-std::tuple<
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
-    at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward(
-    const c10::intrusive_ptr<OpenCVFisheyeProjection>& projection,
-    const c10::intrusive_ptr<BivariateWindshieldDistortion>& external_distortion,
-    const at::Tensor& image_points,
-    const at::Tensor& start_rotation,
-    const at::Tensor& end_rotation,
-    const at::Tensor& grad_world_rays,
-    const at::Tensor& scratch,
-    bool need_image_point_grad,
-    bool need_start_translation_grad,
-    bool need_end_translation_grad,
-    bool need_start_rotation_grad,
-    bool need_end_rotation_grad,
-    bool need_principal_point_grad,
-    bool need_focal_length_grad,
-    bool need_forward_poly_grad,
-    bool need_distortion_coeffs_grad);
-
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+    image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward(
+        const c10::intrusive_ptr<OpenCVFisheyeProjection> &projection,
+        const c10::intrusive_ptr<BivariateWindshieldDistortion> &external_distortion,
+        const at::Tensor &image_points,
+        const at::Tensor &start_rotation,
+        const at::Tensor &end_rotation,
+        const at::Tensor &grad_world_rays,
+        const at::Tensor &scratch,
+        bool need_image_point_grad,
+        bool need_start_translation_grad,
+        bool need_end_translation_grad,
+        bool need_start_rotation_grad,
+        bool need_end_rotation_grad,
+        bool need_principal_point_grad,
+        bool need_focal_length_grad,
+        bool need_forward_poly_grad,
+        bool need_distortion_coeffs_grad
+    );
 } // namespace gsplat_sensors

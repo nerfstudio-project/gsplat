@@ -23,8 +23,8 @@
 #include <cuda_fp16.h>
 #include <cstdint>
 
-namespace higs {
-
+namespace higs
+{
 // Per-basis inverse scales for the encoder (fp32, indexed per basis).
 // Index 0 = DC, set to 1.0 (unused by encoder's DC path but keeps struct well-defined).
 // Shared by both 32B and 16B modes. For 16B mode, co[]/cg[] HO slots are set to 0.
@@ -55,5 +55,4 @@ at::Tensor launch_sh_encode(const at::Tensor &coeffs, const SHEncodeParams &enco
 // below the internal threshold are excluded from percentile scale computation so their
 // SH outliers don't inflate the quantization range for visible gaussians.
 SHCompressed launch_sh_compress(const at::Tensor &coeffs, const at::Tensor &opacities, SHCompressionMode mode);
-
 } // namespace higs

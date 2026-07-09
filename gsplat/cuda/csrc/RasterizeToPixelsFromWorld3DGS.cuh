@@ -28,8 +28,8 @@
 #include "Utils.cuh"
 #include "Dispatch.h"
 
-namespace gsplat {
-
+namespace gsplat
+{
 ////////////////////////////////////////////////////////////////
 // Compact-CTA __launch_bounds__ occupancy hint, shared by the serial- and
 // parallel-batch world-space 3DGS forward kernels (both #include this header).
@@ -40,9 +40,9 @@ namespace gsplat {
 //   sm_90, sm_100, sm_120: 32 blocks/SM
 //   everything else:       16 blocks/SM (covers Ampere/Ada and anything older)
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
-    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 32
+#    define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 32
 #else
-    #define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 16
+#    define GSPLAT_ARCH_MAX_BLOCKS_PER_SM 16
 #endif
 
 // Range endpoints of the CDIM-indexed schedule. The schedule plateaus at
@@ -58,8 +58,7 @@ namespace gsplat {
 //              usage forces ptxas to spill).
 //   - CDIM=24: 16. HW cap on pre-sm_90, 25% occ on sm_90+; fits within the
 //              kernel's register footprint at full SH + extras.
-#define GSPLAT_MIN_BLOCKS_AT_MIN_CDIM \
-    (GSPLAT_ARCH_MAX_BLOCKS_PER_SM < 24 ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM : 24)
+#define GSPLAT_MIN_BLOCKS_AT_MIN_CDIM (GSPLAT_ARCH_MAX_BLOCKS_PER_SM < 24 ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM : 24)
 #define GSPLAT_MIN_BLOCKS_AT_MAX_CDIM 16u
 
 // Per-CDIM occupancy hint for __launch_bounds__ min_blocks_per_sm.
@@ -106,30 +105,27 @@ namespace gsplat {
 //    24 |      16      |       2       |      16       |       2
 //   >24 |       1      |       1       |       1       |       1
 
-template <uint32_t CDIM, uint32_t CTA_SIZE>
-constexpr uint32_t min_blocks_for_cdim() {
-    if constexpr (CDIM > GSPLAT_MAX_CDIM_FOR_HINT) {
+template<uint32_t CDIM, uint32_t CTA_SIZE>
+constexpr uint32_t min_blocks_for_cdim()
+{
+    if constexpr(CDIM > GSPLAT_MAX_CDIM_FOR_HINT)
+    {
         return 1;
-    } else {
-        constexpr uint32_t high = GSPLAT_MIN_BLOCKS_AT_MIN_CDIM;
-        constexpr uint32_t low = GSPLAT_MIN_BLOCKS_AT_MAX_CDIM;
-        constexpr uint32_t cdim_excess =
-            (CDIM > GSPLAT_MIN_CDIM_FOR_HINT)
-                ? (CDIM - GSPLAT_MIN_CDIM_FOR_HINT)
-                : 0u;
-        constexpr uint32_t cdim_span =
-            GSPLAT_MAX_CDIM_FOR_HINT - GSPLAT_MIN_CDIM_FOR_HINT;
-        constexpr uint32_t block_span = (high >= low) ? (high - low) : 0;
-        constexpr uint32_t decrement = (cdim_excess * block_span) / cdim_span;
-        constexpr uint32_t blocks_at_cta32 =
-            (high > decrement) ? (high - decrement) : low;
-        constexpr uint32_t threads_target = blocks_at_cta32 * 32u;
-        constexpr uint32_t blocks = threads_target / CTA_SIZE;
-        constexpr uint32_t lo_clamped = (blocks == 0u) ? 1u : blocks;
-        constexpr uint32_t hi_clamped =
-            (lo_clamped > GSPLAT_ARCH_MAX_BLOCKS_PER_SM)
-                ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM
-                : lo_clamped;
+    }
+    else
+    {
+        constexpr uint32_t high            = GSPLAT_MIN_BLOCKS_AT_MIN_CDIM;
+        constexpr uint32_t low             = GSPLAT_MIN_BLOCKS_AT_MAX_CDIM;
+        constexpr uint32_t cdim_excess     = (CDIM > GSPLAT_MIN_CDIM_FOR_HINT) ? (CDIM - GSPLAT_MIN_CDIM_FOR_HINT) : 0u;
+        constexpr uint32_t cdim_span       = GSPLAT_MAX_CDIM_FOR_HINT - GSPLAT_MIN_CDIM_FOR_HINT;
+        constexpr uint32_t block_span      = (high >= low) ? (high - low) : 0;
+        constexpr uint32_t decrement       = (cdim_excess * block_span) / cdim_span;
+        constexpr uint32_t blocks_at_cta32 = (high > decrement) ? (high - decrement) : low;
+        constexpr uint32_t threads_target  = blocks_at_cta32 * 32u;
+        constexpr uint32_t blocks          = threads_target / CTA_SIZE;
+        constexpr uint32_t lo_clamped      = (blocks == 0u) ? 1u : blocks;
+        constexpr uint32_t hi_clamped
+            = (lo_clamped > GSPLAT_ARCH_MAX_BLOCKS_PER_SM) ? GSPLAT_ARCH_MAX_BLOCKS_PER_SM : lo_clamped;
         return hi_clamped;
     }
 }
@@ -142,16 +138,18 @@ constexpr uint32_t min_blocks_for_cdim() {
 
 // TILE_SIZE and CTA_SIZE are a tuned launch-variant pair. Add a specialization
 // here whenever a new supported tile size needs its own CTA size.
-template <uint32_t TILE_SIZE>
+template<uint32_t TILE_SIZE>
 struct CtaSizeForTile;
 
-template <>
-struct CtaSizeForTile<8u> {
+template<>
+struct CtaSizeForTile<8u>
+{
     static constexpr uint32_t value = 32u;
 };
 
-template <>
-struct CtaSizeForTile<16u> {
+template<>
+struct CtaSizeForTile<16u>
+{
     static constexpr uint32_t value = 256u;
 };
 
@@ -182,7 +180,8 @@ using SupportedTileSizes = dispatch::IntParam<8, 16>;
 //     gaussian positions.
 ////////////////////////////////////////////////////////////////
 
-enum class SaturationTPolicy {
+enum class SaturationTPolicy
+{
     // Leave T at its pre-saturation value when the threshold is crossed.
     // SerialBatch and batch-replay use this when the post-saturation T is not
     // needed outside the local blend loop.
@@ -204,11 +203,15 @@ enum class SaturationTPolicy {
 // kernel uses inline. CTA_SIZE_T == 32 collapses the whole CTA
 // into one warp, so __syncwarp is sufficient (and cheaper than
 // __syncthreads); larger CTAs need a true __syncthreads.
-template <uint32_t CTA_SIZE_T>
-__device__ __forceinline__ void cta_sync() {
-    if constexpr (CTA_SIZE_T == 32) {
+template<uint32_t CTA_SIZE_T>
+__device__ __forceinline__ void cta_sync()
+{
+    if constexpr(CTA_SIZE_T == 32)
+    {
         __syncwarp();
-    } else {
+    }
+    else
+    {
         __syncthreads();
     }
 }
@@ -218,8 +221,9 @@ __device__ __forceinline__ void cta_sync() {
 // `__syncthreads_count` for now; left as a templated stub so a lower-
 // overhead warp-only specialisation can drop in for CTA_SIZE_T == 32
 // without touching call sites.
-template <uint32_t CTA_SIZE_T>
-__device__ __forceinline__ int32_t cta_sync_count(bool predicate) {
+template<uint32_t CTA_SIZE_T>
+__device__ __forceinline__ int32_t cta_sync_count(bool predicate)
+{
     return __syncthreads_count(predicate ? 1 : 0);
 }
 
@@ -247,7 +251,8 @@ __device__ __forceinline__ int32_t cta_sync_count(bool predicate) {
 // the fwd and bwd kernels is gated on `inside` (or a derived flag
 // like the bwd's `pixel_valid`); contributors must preserve this
 // contract.
-struct PixelCoords {
+struct PixelCoords
+{
     uint32_t row;
     uint32_t col;
     int32_t pix_id;
@@ -283,27 +288,34 @@ __device__ __forceinline__ PixelCoords compute_pixel_coords(
     const uint32_t image_width,
     const uint32_t image_height,
     const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> &lidar_device_coeffs
-) {
+)
+{
     PixelCoords out;
-    if (camera_model_type == CameraModelType::LIDAR) {
+    if(camera_model_type == CameraModelType::LIDAR)
+    {
         assert(lidar_device_coeffs);
         const int element_start = lidar_device_coeffs->tiles_pack_info[tile_id].x;
         const int element_count = lidar_device_coeffs->tiles_pack_info[tile_id].y;
-        const int element_id = static_cast<int>(tile_element_id);
-        if (element_id < element_count) {
+        const int element_id    = static_cast<int>(tile_element_id);
+        if(element_id < element_count)
+        {
             out.col = lidar_device_coeffs->tiles_to_elements_map[element_start + element_id].x;
             out.row = lidar_device_coeffs->tiles_to_elements_map[element_start + element_id].y;
             assert(out.row < image_height);
             assert(out.col < image_width);
             out.inside = true;
-        } else {
-            out.row = 0;
-            out.col = 0;
+        }
+        else
+        {
+            out.row    = 0;
+            out.col    = 0;
             out.inside = false;
         }
-    } else {
-        out.row = tile_row * tile_size + thread_row;
-        out.col = tile_col * tile_size + thread_col;
+    }
+    else
+    {
+        out.row    = tile_row * tile_size + thread_row;
+        out.col    = tile_col * tile_size + thread_col;
         out.inside = (out.row < image_height && out.col < image_width);
     }
     // pix_id is the unclamped natural product. OOB threads (inside=false)
@@ -333,7 +345,7 @@ __device__ __forceinline__ PixelCoords compute_pixel_coords(
 // Caller is responsible for honouring `ray.valid_flag` after the
 // call (e.g., marking the pixel done if the camera model rejected
 // the inverse projection).
-template <typename scalar_t>
+template<typename scalar_t>
 __device__ __forceinline__ WorldRay compute_world_ray(
     const uint32_t iid,
     const uint32_t j,
@@ -353,102 +365,141 @@ __device__ __forceinline__ WorldRay compute_world_ray(
     const FThetaCameraDistortionDeviceParams &ftheta_device_coeffs,
     const cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice> &lidar_device_coeffs,
     const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> &external_distortion_device_params
-) {
+)
+{
     WorldRay ray;
-    if (inside && rays == nullptr) {
-        if (camera_model_type == CameraModelType::PINHOLE) {
-            if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-                if (external_distortion_device_params.has_value()) {
+    if(inside && rays == nullptr)
+    {
+        if(camera_model_type == CameraModelType::PINHOLE)
+        {
+            if(radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr)
+            {
+                if(external_distortion_device_params.has_value())
+                {
                     using CameraModel = PerfectPinholeCameraModel<extdist::BivariateWindshieldModel>;
                     CameraModel::KernelParameters kernel_params = {
-                        { {image_width, image_height}, rs_type, *external_distortion_device_params },
+                        {{image_width, image_height}, rs_type, *external_distortion_device_params},
                         Ks,
                     };
                     CameraModel camera_model(kernel_params, iid);
                     ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                } else {
+                }
+                else
+                {
                     using CameraModel = PerfectPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
                     CameraModel::KernelParameters kernel_params = {
-                        { {image_width, image_height}, rs_type, {} },
+                        {{image_width, image_height}, rs_type, {}},
                         Ks,
                     };
                     CameraModel camera_model(kernel_params, iid);
                     ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
                 }
-            } else {
-                if (external_distortion_device_params.has_value()) {
+            }
+            else
+            {
+                if(external_distortion_device_params.has_value())
+                {
                     using CameraModel = OpenCVPinholeCameraModel<extdist::BivariateWindshieldModel>;
                     CameraModel::KernelParameters kernel_params = {
-                        { {image_width, image_height}, rs_type, *external_distortion_device_params },
-                        Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                        {{image_width, image_height}, rs_type, *external_distortion_device_params},
+                        Ks,
+                        radial_coeffs,
+                        tangential_coeffs,
+                        thin_prism_coeffs,
                     };
                     CameraModel camera_model(kernel_params, iid);
                     ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-                } else {
+                }
+                else
+                {
                     using CameraModel = OpenCVPinholeCameraModel<extdist::EmptyExternalDistortionModel>;
                     CameraModel::KernelParameters kernel_params = {
-                        { {image_width, image_height}, rs_type, {} },
-                        Ks, radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+                        {{image_width, image_height}, rs_type, {}},
+                        Ks,
+                        radial_coeffs,
+                        tangential_coeffs,
+                        thin_prism_coeffs,
                     };
                     CameraModel camera_model(kernel_params, iid);
                     ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
                 }
             }
-        } else if (camera_model_type == CameraModelType::FISHEYE) {
-            if (external_distortion_device_params.has_value()) {
+        }
+        else if(camera_model_type == CameraModelType::FISHEYE)
+        {
+            if(external_distortion_device_params.has_value())
+            {
                 using CameraModel = OpenCVFisheyeCameraModel<extdist::BivariateWindshieldModel>;
                 CameraModel::KernelParameters kernel_params = {
-                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
-                    Ks, radial_coeffs,
+                    {{image_width, image_height}, rs_type, *external_distortion_device_params},
+                    Ks,
+                    radial_coeffs,
                 };
                 CameraModel camera_model(kernel_params, iid);
                 ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            } else {
+            }
+            else
+            {
                 using CameraModel = OpenCVFisheyeCameraModel<extdist::EmptyExternalDistortionModel>;
                 CameraModel::KernelParameters kernel_params = {
-                    { {image_width, image_height}, rs_type, {} },
-                    Ks, radial_coeffs,
+                    {{image_width, image_height}, rs_type, {}},
+                    Ks,
+                    radial_coeffs,
                 };
                 CameraModel camera_model(kernel_params, iid);
                 ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
             }
-        } else if (camera_model_type == CameraModelType::FTHETA) {
-            if (external_distortion_device_params.has_value()) {
-                using CameraModel = FThetaCameraModel<extdist::BivariateWindshieldModel>;
+        }
+        else if(camera_model_type == CameraModelType::FTHETA)
+        {
+            if(external_distortion_device_params.has_value())
+            {
+                using CameraModel                           = FThetaCameraModel<extdist::BivariateWindshieldModel>;
                 CameraModel::KernelParameters kernel_params = {
-                    { {image_width, image_height}, rs_type, *external_distortion_device_params },
-                    Ks, ftheta_device_coeffs,
-                };
-                CameraModel camera_model(kernel_params, iid);
-                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-            } else {
-                using CameraModel = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
-                CameraModel::KernelParameters kernel_params = {
-                    { {image_width, image_height}, rs_type, {} },
-                    Ks, ftheta_device_coeffs,
+                    {{image_width, image_height}, rs_type, *external_distortion_device_params},
+                    Ks,
+                    ftheta_device_coeffs,
                 };
                 CameraModel camera_model(kernel_params, iid);
                 ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
             }
-        } else if (camera_model_type == CameraModelType::LIDAR) {
+            else
+            {
+                using CameraModel                           = FThetaCameraModel<extdist::EmptyExternalDistortionModel>;
+                CameraModel::KernelParameters kernel_params = {
+                    {{image_width, image_height}, rs_type, {}},
+                    Ks,
+                    ftheta_device_coeffs,
+                };
+                CameraModel camera_model(kernel_params, iid);
+                ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
+            }
+        }
+        else if(camera_model_type == CameraModelType::LIDAR)
+        {
             using CameraModel = RowOffsetStructuredSpinningLidarModel;
             assert(lidar_device_coeffs);
-            CameraModel::KernelParameters kernel_params = { *lidar_device_coeffs };
+            CameraModel::KernelParameters kernel_params = {*lidar_device_coeffs};
             CameraModel camera_model(kernel_params, iid);
             ray = camera_model.element_to_world_ray_shutter_pose(j, i, rs_params);
-        } else {
+        }
+        else
+        {
             assert(false);
             ray.valid_flag = false;
         }
-    } else {
+    }
+    else
+    {
         // Explicit rays path — rays may be nullptr for inactive threads
         // when inside == false.
         ray.valid_flag = false;
-        if (inside) {
+        if(inside)
+        {
             assert(rays != nullptr);
             // TODO: use at least 3x64b loads instead of 6x32b
-            ray.ray_org = {rays[pix_id * 6 + 0], rays[pix_id * 6 + 1], rays[pix_id * 6 + 2]};
-            ray.ray_dir = {rays[pix_id * 6 + 3], rays[pix_id * 6 + 4], rays[pix_id * 6 + 5]};
+            ray.ray_org    = {rays[pix_id * 6 + 0], rays[pix_id * 6 + 1], rays[pix_id * 6 + 2]};
+            ray.ray_dir    = {rays[pix_id * 6 + 3], rays[pix_id * 6 + 4], rays[pix_id * 6 + 5]};
             ray.valid_flag = true;
         }
     }
@@ -471,12 +522,7 @@ __device__ __forceinline__ WorldRay compute_world_ray(
 // any thread reads the shared batches. We don't sync inside so
 // that callers performing multiple loads with different ranges
 // can amortise the barrier when appropriate.
-template <
-    uint32_t FETCH_SIZE_T,
-    uint32_t CTA_SIZE_T,
-    bool ReturnNormals,
-    typename scalar_t
->
+template<uint32_t FETCH_SIZE_T, uint32_t CTA_SIZE_T, bool ReturnNormals, typename scalar_t>
 __device__ __forceinline__ void cooperative_load_fetch_round(
     const uint32_t tid,
     int32_t *__restrict__ id_batch,
@@ -493,40 +539,45 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
     const scalar_t *__restrict__ opacities,
     const uint32_t C,
     const uint32_t N
-) {
+)
+{
     // FETCH_SIZE_T > CTA_SIZE_T would leave shared-memory slots in
     // [CTA_SIZE_T, FETCH_SIZE_T) unloaded; downstream readers would
     // see garbage. Reject at compile time.
-    static_assert(FETCH_SIZE_T <= CTA_SIZE_T,
-                  "FETCH_SIZE_T must not exceed CTA_SIZE_T");
+    static_assert(FETCH_SIZE_T <= CTA_SIZE_T, "FETCH_SIZE_T must not exceed CTA_SIZE_T");
 
     // Whether `tid` maps to a valid shared-memory slot. When
     // FETCH_SIZE_T == CTA_SIZE_T no thread is excess and the check
     // is statically true; the `if constexpr` lets nvcc elide it.
     // Without this fold, nvcc emits a redundant ISETP that
     // serialises the predicate chain with `idx < range_end`.
-    auto thread_within_fetch_slot = [&]() {
-        if constexpr (FETCH_SIZE_T == CTA_SIZE_T) {
+    auto thread_within_fetch_slot = [&]()
+    {
+        if constexpr(FETCH_SIZE_T == CTA_SIZE_T)
+        {
             return true;
-        } else {
+        }
+        else
+        {
             return tid < FETCH_SIZE_T;
         }
     };
 
     // Each thread fetches 1 gaussian from front to back
     const uint32_t idx = batch_start + tid;
-    if (thread_within_fetch_slot() && idx < (uint32_t)range_end) {
+    if(thread_within_fetch_slot() && idx < (uint32_t)range_end)
+    {
         // TODO: only support 1 camera for now so it is ok to abuse the index.
-        int32_t isect_id = flatten_ids[idx];
-        int32_t isect_bid = isect_id / (C * N);
-        int32_t isect_gid = isect_id % N;
-        id_batch[tid] = isect_id;
-        const vec3 xyz = means[isect_bid * N + isect_gid];
-        const float opac = opacities[isect_id];
+        int32_t isect_id       = flatten_ids[idx];
+        int32_t isect_bid      = isect_id / (C * N);
+        int32_t isect_gid      = isect_id % N;
+        id_batch[tid]          = isect_id;
+        const vec3 xyz         = means[isect_bid * N + isect_gid];
+        const float opac       = opacities[isect_id];
         xyz_opacity_batch[tid] = {xyz.x, xyz.y, xyz.z, opac};
 
         const vec4 quat = quats[isect_bid * N + isect_gid];
-        vec3 scale = scales[isect_bid * N + isect_gid];
+        vec3 scale      = scales[isect_bid * N + isect_gid];
 
         // Projection kernel culls degenerate Gaussians (zero quaternion,
         // zero scale) by setting radii = 0, preventing them from entering
@@ -534,17 +585,14 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
         assert(glm::dot(quat, quat) > 0.f);
         assert(scale[0] > 0.f && scale[1] > 0.f && scale[2] > 0.f);
 
-        mat3 R = quat_to_rotmat(quat);
-        mat3 S = mat3(
-            1.0f / scale[0], 0.f, 0.f,
-            0.f, 1.0f / scale[1], 0.f,
-            0.f, 0.f, 1.0f / scale[2]
-        );
+        mat3 R              = quat_to_rotmat(quat);
+        mat3 S              = mat3(1.0f / scale[0], 0.f, 0.f, 0.f, 1.0f / scale[1], 0.f, 0.f, 0.f, 1.0f / scale[2]);
         iscl_rot_batch[tid] = S * glm::transpose(R);
-        scale_batch[tid] = scale;
+        scale_batch[tid]    = scale;
 
         // Normal = R * (0, 0, 1) = third column of R.
-        if constexpr (ReturnNormals) {
+        if constexpr(ReturnNormals)
+        {
             normal_batch[tid] = R[2];
         }
     }
@@ -572,7 +620,7 @@ __device__ __forceinline__ void cooperative_load_fetch_round(
 //
 // Caller must run cta_sync between the cooperative load and this
 // call so all threads see the loaded shared batches.
-template <
+template<
     uint32_t CDIM,
     uint32_t PIXELS_PER_THREAD_T,
     bool CHECK_THRESHOLD,
@@ -601,56 +649,64 @@ __device__ __forceinline__ void process_fetch_round_blend(
     int32_t (&cur_idx)[PIXELS_PER_THREAD_T],
     int32_t (&n_accumulated)[PIXELS_PER_THREAD_T],
     uint32_t &done_mask
-) {
-    constexpr bool store_post_saturation_t =
-        SaturationPolicy == SaturationTPolicy::StorePostSaturationT;
-    constexpr bool capture_post_saturation_t =
-        SaturationPolicy ==
-            SaturationTPolicy::KeepPreAndCapturePostSaturationT;
+)
+{
+    constexpr bool store_post_saturation_t   = SaturationPolicy == SaturationTPolicy::StorePostSaturationT;
+    constexpr bool capture_post_saturation_t = SaturationPolicy == SaturationTPolicy::KeepPreAndCapturePostSaturationT;
 
-    for (uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t) {
+    for(uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t)
+    {
         const vec4 xyz_opac = xyz_opacity_batch[t];
-        const float opac = xyz_opac[3];
-        const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+        const float opac    = xyz_opac[3];
+        const vec3 xyz      = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
         const mat3 iscl_rot = iscl_rot_batch[t];
-        const vec3 scale = scale_batch[t];
+        const vec3 scale    = scale_batch[t];
 
 #pragma unroll
-        for (uint32_t p = 0; p < PIXELS_PER_THREAD_T; ++p) {
-            if (done_mask & (1u << p)) {
+        for(uint32_t p = 0; p < PIXELS_PER_THREAD_T; ++p)
+        {
+            if(done_mask & (1u << p))
+            {
                 continue;
             }
 
-            const vec3 gro = iscl_rot * (ray_o[p] - xyz);
-            const vec3 grd = safe_normalize(iscl_rot * ray_d[p]);
+            const vec3 gro    = iscl_rot * (ray_o[p] - xyz);
+            const vec3 grd    = safe_normalize(iscl_rot * ray_d[p]);
             // hit_t < 0: closest approach is behind the camera origin — skip.
             const float hit_t = -glm::dot(grd, gro);
-            if (hit_t < 0.f) {
+            if(hit_t < 0.f)
+            {
                 continue;
             }
-            const vec3 gcrod = glm::cross(grd, gro);
+            const vec3 gcrod     = glm::cross(grd, gro);
             const float grayDist = glm::dot(gcrod, gcrod);
-            const float power = -0.5f * grayDist;
-            float max_response = __expf(power);
-            float alpha = min(MAX_ALPHA, opac * max_response);
+            const float power    = -0.5f * grayDist;
+            float max_response   = __expf(power);
+            float alpha          = min(MAX_ALPHA, opac * max_response);
 
-            if (alpha < ALPHA_THRESHOLD) {
+            if(alpha < ALPHA_THRESHOLD)
+            {
                 continue;
             }
 
             float hit_distance = 0.0f;
-            if constexpr (UseHitDistance) {
+            if constexpr(UseHitDistance)
+            {
                 const vec3 grds = scale * (grd * hit_t);
-                hit_distance = glm::length(grds);
+                hit_distance    = glm::length(grds);
             }
 
             const float next_T = T[p] * (1.0f - alpha);
-            if constexpr (CHECK_THRESHOLD) {
-                if (next_T <= transmittance_threshold[p]) {
-                    if constexpr (capture_post_saturation_t) {
+            if constexpr(CHECK_THRESHOLD)
+            {
+                if(next_T <= transmittance_threshold[p])
+                {
+                    if constexpr(capture_post_saturation_t)
+                    {
                         saturating_T[p] = next_T;
                     }
-                    if constexpr (store_post_saturation_t) {
+                    if constexpr(store_post_saturation_t)
+                    {
                         T[p] = next_T;
                     }
                     done_mask |= (1u << p);
@@ -658,29 +714,35 @@ __device__ __forceinline__ void process_fetch_round_blend(
                 }
             }
 
-            int32_t isect_id = id_batch[t];
-            const float vis = alpha * T[p];
+            int32_t isect_id   = id_batch[t];
+            const float vis    = alpha * T[p];
             const float *c_ptr = colors + isect_id * CDIM;
 
-            if constexpr (UseHitDistance) {
+            if constexpr(UseHitDistance)
+            {
 #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    const float value = (k == CDIM - 1) ? hit_distance : c_ptr[k];
-                    pix_out[p][k] += value * vis;
+                for(uint32_t k = 0; k < CDIM; ++k)
+                {
+                    const float value  = (k == CDIM - 1) ? hit_distance : c_ptr[k];
+                    pix_out[p][k]     += value * vis;
                 }
-            } else {
+            }
+            else
+            {
 #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
+                for(uint32_t k = 0; k < CDIM; ++k)
+                {
                     pix_out[p][k] += c_ptr[k] * vis;
                 }
             }
 
-            if constexpr (ReturnNormals) {
-                const vec3 unnormalized_normal = normal_batch[t];
-                const bool flipped = glm::dot(unnormalized_normal, ray_d[p]) > 0.0f;
-                const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
-                const vec3 normal = safe_normalize(unnormalized_flipped);
-                normal_out[p] += normal * vis;
+            if constexpr(ReturnNormals)
+            {
+                const vec3 unnormalized_normal   = normal_batch[t];
+                const bool flipped               = glm::dot(unnormalized_normal, ray_d[p]) > 0.0f;
+                const vec3 unnormalized_flipped  = flipped ? -unnormalized_normal : unnormalized_normal;
+                const vec3 normal                = safe_normalize(unnormalized_flipped);
+                normal_out[p]                   += normal * vis;
             }
 
             cur_idx[p] = batch_start + t;
@@ -706,7 +768,7 @@ __device__ __forceinline__ void process_fetch_round_blend(
 // execution covers the gap; with CTA_SIZE_T > 32 the consumer
 // kernel uses LOGICAL_BATCH == FETCH_SIZE so FETCHES_PER_BATCH
 // is 1 and the question is moot.
-template <
+template<
     uint32_t CDIM,
     uint32_t LOGICAL_BATCH_T,
     uint32_t FETCH_SIZE_T,
@@ -746,9 +808,9 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     int32_t (&cur_idx)[PIXELS_PER_THREAD_T],
     int32_t (&n_accumulated)[PIXELS_PER_THREAD_T],
     uint32_t &done_mask
-) {
-    static_assert(LOGICAL_BATCH_T % FETCH_SIZE_T == 0,
-                  "LOGICAL_BATCH_T must be a multiple of FETCH_SIZE_T");
+)
+{
+    static_assert(LOGICAL_BATCH_T % FETCH_SIZE_T == 0, "LOGICAL_BATCH_T must be a multiple of FETCH_SIZE_T");
     constexpr uint32_t FETCHES_PER_BATCH = LOGICAL_BATCH_T / FETCH_SIZE_T;
     static_assert(FETCHES_PER_BATCH >= 1, "FETCHES_PER_BATCH must be >= 1");
     // The multi-fetch path (FETCHES_PER_BATCH > 1) carries no inter-round
@@ -757,10 +819,12 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
     static_assert(
         CTA_SIZE_T == 32 || FETCHES_PER_BATCH == 1,
         "CTA_SIZE_T > 32 requires FETCHES_PER_BATCH == 1; the multi-fetch path "
-        "relies on warp-synchronous execution (no inter-round barrier).");
+        "relies on warp-synchronous execution (no inter-round barrier)."
+    );
 
 #pragma unroll
-    for (uint32_t r = 0; r < FETCHES_PER_BATCH; ++r) {
+    for(uint32_t r = 0; r < FETCHES_PER_BATCH; ++r)
+    {
         const uint32_t batch_start = logical_batch_start + FETCH_SIZE_T * r;
         // Skip rounds that fall past the tile's gaussian range (last
         // logical batch may be partial). Each thread votes "no fetch"
@@ -768,40 +832,67 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
         // cooperative_load_fetch_round; here we only skip the
         // cooperative fetch entirely when the whole round is past
         // range_end.
-        if (batch_start >= (uint32_t)range_end) {
+        if(batch_start >= (uint32_t)range_end)
+        {
             break;
         }
 
         cooperative_load_fetch_round<FETCH_SIZE_T, CTA_SIZE_T, ReturnNormals, scalar_t>(
             tid,
-            id_batch, xyz_opacity_batch, iscl_rot_batch,
-            scale_batch, normal_batch,
-            batch_start, range_end,
-            flatten_ids, means, quats, scales, opacities,
-            C, N);
+            id_batch,
+            xyz_opacity_batch,
+            iscl_rot_batch,
+            scale_batch,
+            normal_batch,
+            batch_start,
+            range_end,
+            flatten_ids,
+            means,
+            quats,
+            scales,
+            opacities,
+            C,
+            N
+        );
 
         cta_sync<CTA_SIZE_T>();
 
-        const uint32_t batch_size = min(FETCH_SIZE_T, ((uint32_t)range_end - batch_start));
+        const uint32_t batch_size = min(FETCH_SIZE_T, (uint32_t)range_end - batch_start);
         process_fetch_round_blend<
-            CDIM, PIXELS_PER_THREAD_T, CHECK_THRESHOLD,
+            CDIM,
+            PIXELS_PER_THREAD_T,
+            CHECK_THRESHOLD,
             SaturationPolicy,
-            UseHitDistance, ReturnNormals, scalar_t>(
-            id_batch, xyz_opacity_batch, iscl_rot_batch,
-            scale_batch, normal_batch,
-            batch_start, batch_size,
-            colors, ray_o, ray_d,
-            ALL_DONE,
-            transmittance_threshold,
-            T, saturating_T, pix_out, normal_out,
-            cur_idx, n_accumulated, done_mask);
+            UseHitDistance,
+            ReturnNormals,
+            scalar_t
+        >(id_batch,
+          xyz_opacity_batch,
+          iscl_rot_batch,
+          scale_batch,
+          normal_batch,
+          batch_start,
+          batch_size,
+          colors,
+          ray_o,
+          ray_d,
+          ALL_DONE,
+          transmittance_threshold,
+          T,
+          saturating_T,
+          pix_out,
+          normal_out,
+          cur_idx,
+          n_accumulated,
+          done_mask);
 
         // CTA-wide early stop: if every pixel in the CTA has crossed
         // the transmittance threshold (`done_mask == ALL_DONE` on every
         // thread), there's no point loading further fetch rounds. The
         // sync that backs `cta_sync_count` doubles as the inter-round
         // synchronisation, so the result is broadcast for free.
-        if (cta_sync_count<CTA_SIZE_T>(done_mask == ALL_DONE) >= (int32_t)CTA_SIZE_T) {
+        if(cta_sync_count<CTA_SIZE_T>(done_mask == ALL_DONE) >= (int32_t)CTA_SIZE_T)
+        {
             return true;
         }
     }
@@ -823,12 +914,7 @@ __device__ __forceinline__ bool process_logical_batch_gaussians(
 // `c=0` corresponds to the front-most batch boundary; `c=num_batches-1`
 // corresponds to the terminal state. The CSR slot layout these indices
 // follow is defined in `RasterizeCSR.cuh`.
-template <
-    uint32_t CDIM,
-    uint32_t PIXELS_PER_THREAD_T,
-    uint32_t CTA_SIZE_T,
-    bool ReturnNormals
->
+template<uint32_t CDIM, uint32_t PIXELS_PER_THREAD_T, uint32_t CTA_SIZE_T, bool ReturnNormals>
 __device__ __forceinline__ void persist_batch_state(
     uint32_t c,
     int64_t batch_base_slot,
@@ -836,40 +922,32 @@ __device__ __forceinline__ void persist_batch_state(
     uint32_t tid,
     const float (&T)[PIXELS_PER_THREAD_T],
     const float (&pix_out)[PIXELS_PER_THREAD_T][CDIM],
-    const vec3  (&normal_out)[PIXELS_PER_THREAD_T],
+    const vec3 (&normal_out)[PIXELS_PER_THREAD_T],
     float *__restrict__ fwd_batch_state
-) {
-    constexpr uint32_t state_dim =
-        FWD_BATCH_STATE_PIX_OFFSET + CDIM +
-        (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0u);
+)
+{
+    constexpr uint32_t state_dim
+        = FWD_BATCH_STATE_PIX_OFFSET + CDIM + (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0u);
     const int64_t ppt64 = static_cast<int64_t>(pixels_per_tile);
 #pragma unroll
-    for (uint32_t p = 0; p < PIXELS_PER_THREAD_T; ++p) {
-        const uint32_t tr = tid + p * CTA_SIZE_T;
-        const int64_t slot = batch_base_slot + static_cast<int64_t>(c);
-        const int64_t slot_base =
-            slot * static_cast<int64_t>(state_dim) * ppt64;
-        const int64_t pix64 = static_cast<int64_t>(tr);
-        fwd_batch_state[slot_base + FWD_BATCH_STATE_T_OFFSET * ppt64 + pix64] =
-            T[p];
+    for(uint32_t p = 0; p < PIXELS_PER_THREAD_T; ++p)
+    {
+        const uint32_t tr       = tid + p * CTA_SIZE_T;
+        const int64_t slot      = batch_base_slot + static_cast<int64_t>(c);
+        const int64_t slot_base = slot * static_cast<int64_t>(state_dim) * ppt64;
+        const int64_t pix64     = static_cast<int64_t>(tr);
+        fwd_batch_state[slot_base + FWD_BATCH_STATE_T_OFFSET * ppt64 + pix64] = T[p];
 #pragma unroll
-        for (uint32_t k = 0; k < CDIM; ++k) {
-            fwd_batch_state[
-                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + k) * ppt64 + pix64] =
-                pix_out[p][k];
+        for(uint32_t k = 0; k < CDIM; ++k)
+        {
+            fwd_batch_state[slot_base + (FWD_BATCH_STATE_PIX_OFFSET + k) * ppt64 + pix64] = pix_out[p][k];
         }
-        if constexpr (ReturnNormals) {
-            fwd_batch_state[
-                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 0) * ppt64 +
-                    pix64] = normal_out[p].x;
-            fwd_batch_state[
-                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 1) * ppt64 +
-                    pix64] = normal_out[p].y;
-            fwd_batch_state[
-                slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 2) * ppt64 +
-                    pix64] = normal_out[p].z;
+        if constexpr(ReturnNormals)
+        {
+            fwd_batch_state[slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 0) * ppt64 + pix64] = normal_out[p].x;
+            fwd_batch_state[slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 1) * ppt64 + pix64] = normal_out[p].y;
+            fwd_batch_state[slot_base + (FWD_BATCH_STATE_PIX_OFFSET + CDIM + 2) * ppt64 + pix64] = normal_out[p].z;
         }
     }
 }
-
 } // namespace gsplat
