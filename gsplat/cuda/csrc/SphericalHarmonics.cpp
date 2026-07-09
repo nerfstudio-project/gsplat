@@ -777,11 +777,11 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd_privateuseone(
         ")"
     );
 
-    at::Tensor v_coeffs_accum = at::zeros(coeffs.sizes(), coeffs.options().dtype(at::kFloat));
+    at::Tensor v_coeffs_accum = at::empty(coeffs.sizes(), coeffs.options().dtype(at::kFloat));
     at::Tensor v_dirs;
     if(compute_v_dirs)
     {
-        v_dirs = at::zeros_like(dirs);
+        v_dirs = at::empty_like(dirs);
     }
 
     launch_spherical_harmonics_bwd_kernels(
