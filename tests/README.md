@@ -244,11 +244,10 @@ Combine with feature flags to pre-configure the build environment:
 
 ## Running on memory-constrained machines
 
-A few tests in `tests/test_basic.py` (notably `test_rasterize_to_pixels` with
-`channels=128` and a non-empty `batch_dims`) push past 4–6 GB of GPU memory at
-peak. On hosts with 8 GB or less of dedicated VRAM, the PyTorch CUDA caching
-allocator can spill into shared/system memory, which is orders of magnitude
-slower and stalls the entire host.
+Some batched rasterization tests can use several GB of GPU memory at peak. On
+hosts with 8 GB or less of dedicated VRAM, the PyTorch CUDA caching allocator
+can spill into shared/system memory, which is orders of magnitude slower and
+stalls the entire host.
 
 The conftest installs a session-scoped CUDA-memory cap at **100% of the VRAM
 that is actually free after torch's CUDA context has initialized** (queried
@@ -304,15 +303,14 @@ When enabled, two peaks are recorded for every test:
   sampled from a background thread at ~20 Hz. Includes context overhead
   and any other CUDA allocator on the same device.
 
-At session end pytest prints a sorted summary of the heaviest tests:
+At session end pytest prints a sorted summary of the heaviest tests. The values
+and node ID in this format-only example are schematic:
 
 ```
-======================== CUDA memory peaks (top 25 of 412 tests) =========================
-session max:  device=  3548.2 MiB   torch=  2487.0 MiB
+================ CUDA memory peaks (top <shown> of <total> tests) ================
+session max:  device=<device_max> MiB   torch=<torch_max> MiB
    device_peak    torch_peak   test
-    3548.2 MiB    2487.0 MiB   tests/test_basic.py::test_rasterize_to_pixels[batch_dims2-128]
-    3401.7 MiB    2340.5 MiB   tests/test_basic.py::test_rasterize_to_pixels[batch_dims1-128]
-    1620.4 MiB     559.2 MiB   tests/test_basic.py::test_rasterize_to_pixels[batch_dims2-32]
+    <device> MiB    <torch> MiB   tests/...::test_name[param]
     ...
 ```
 

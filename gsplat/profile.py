@@ -298,8 +298,8 @@ def _apply_3dgs_replay_preset(inputs: dict[str, Any]) -> None:
             "thin_prism_coeffs": None,
             "ftheta_coeffs": None,
             "external_distortion_coeffs": None,
-            # Keep the preset to plain RGB. Input extra signals can request
-            # channel counts that are not part of the current build matrix.
+            # Keep the preset to a minimal plain-RGB workload without captured
+            # extra signals or background blending.
             "extra_signals": None,
             "extra_signals_sh_degree": None,
             "backgrounds": None,
@@ -407,7 +407,6 @@ def _adapt_2dgs_scene_inputs(
             "with_ut",
             "with_eval3d",
             "rasterize_mode",
-            "channel_chunk",
             "distributed",
             "camera_model",
             "segmented",
@@ -707,11 +706,17 @@ def _resize_color_last_dim(tensor: torch.Tensor, target: int) -> torch.Tensor:
 
 
 def _apply_channel_override(replay_inputs: dict[str, Any], channels: int) -> list[str]:
-    """Resize the templated channel count (CDIM) of a replay to ``channels``.
+    """Resize a replay's total rasterized feature width to ``channels``.
 
-    The rasterizer templates on the *concatenated* feature width
-    ``colors.shape[-1] + extra_signals.shape[-1] (+1 for a depth channel)``, so
-    this drives that effective count to ``channels`` for any captured scene.
+    The rasterizer concatenates colors, extra signals, and any depth channel,
+    producing the total width ``colors.shape[-1] + extra_signals.shape[-1] (+1
+    for a depth channel)``. This helper drives that total to ``channels`` for
+    any captured scene.
+
+    The selected high-level renderer dispatches this total as one or more
+    compiled channel-width launches. Chunked paths choose a minimum-launch
+    exact decomposition, so this helper controls the total workload width
+    rather than selecting one CDIM specialization.
     Color SH is dropped (``sh_degree -> None``, DC band kept as the base) so the
     color block's last dim can be sliced/tiled freely; the extra-signals and
     background-blend paths are resized to keep the post-concat width equal to
@@ -720,9 +725,9 @@ def _apply_channel_override(replay_inputs: dict[str, Any], channels: int) -> lis
     extra-signal channels pay for the reduction first (trimmed from the tail);
     colors are trimmed only after the extra signals are exhausted (keeping at
     least one channel so a color-bearing ``render_mode`` stays valid).
-    Channel *values* are irrelevant for kernel timing: only the count drives
-    the template / register / shared-memory footprint, and geometry plus
-    opacities (the alpha early-out) are untouched.
+    Channel *values* are irrelevant for kernel timing: the resolved per-launch
+    widths drive the template / register / shared-memory footprint, and geometry
+    plus opacities (the alpha early-out) are untouched.
     """
     if channels < 1:
         raise ValueError(f"--channels must be >= 1, got {channels}")
@@ -736,7 +741,8 @@ def _apply_channel_override(replay_inputs: dict[str, Any], channels: int) -> lis
     if has_depth_channel and not has_color:
         raise ValueError(
             f"--channels needs a color-bearing render_mode; {render_mode!r} "
-            "renders depth only, so `colors` never reaches the channel template"
+            "renders depth only, so `colors` does not contribute to the "
+            "rasterized feature width"
         )
     # rasterization() appends one depth channel onto the color tensor for
     # color+depth modes (RGB+D / RGB+ED / RGB-d / RGB-Ed); pure color adds none.
@@ -796,7 +802,9 @@ def _apply_channel_override(replay_inputs: dict[str, Any], channels: int) -> lis
     replay_inputs["colors"] = _resize_color_last_dim(colors, color_target)
     notes.append(f"resized color channels {cur} -> {color_target}")
     if e > 0:
-        notes.append(f"kept {e} extra-signal channel(s); effective CDIM = {channels}")
+        notes.append(
+            f"kept {e} extra-signal channel(s); total feature width = {channels}"
+        )
 
     backgrounds = replay_inputs.get("backgrounds")
     if backgrounds is not None:
@@ -1357,13 +1365,14 @@ def main() -> None:
         default=None,
         metavar="C",
         help=(
-            "Resize the replay's templated channel count (CDIM) to C before "
-            "profiling, so one captured scene can drive any compiled channel "
-            "count. The color block is sliced/tiled and color SH is dropped; "
-            "extra_signals and backgrounds are preserved and resized so the "
-            "post-concat width equals C. Errors on depth-only render modes. C "
-            "must be one of the channel counts compiled into the build (set via "
-            "the NUM_CHANNELS build env var)."
+            "Resize the replay's total rasterized feature width to C before "
+            "profiling. The selected high-level renderer dispatches C as one or "
+            "more kernel widths compiled through NUM_CHANNELS; chunked paths "
+            "choose a minimum-launch exact decomposition, so C does not select "
+            "one CDIM specialization. The color block is sliced/tiled and color "
+            "SH is dropped; extra_signals and backgrounds are preserved and "
+            "resized so the post-concat width equals C. Errors on depth-only "
+            "render modes and on totals that cannot be dispatched exactly."
         ),
     )
     args = parser.parse_args()

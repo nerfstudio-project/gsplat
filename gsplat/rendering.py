@@ -255,7 +255,6 @@ def rasterization(
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: RasterizeMode = "classic",
-    channel_chunk: int = 32,
     distributed: bool = False,
     camera_model: CameraModel = "pinhole",
     segmented: bool = False,
@@ -384,6 +383,8 @@ def rasterization(
         `meta["means2d"].absgrad`. This is an implementation of the paper
         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
         which is shown to be more effective for splitting Gaussians during training.
+        On the non-Eval3D path, this option raises ``RuntimeError`` when the total
+        rendered feature width requires multiple rasterization passes.
 
     .. note::
         **Camera Distortion and Rolling Shutter**: The function supports rendering with opencv
@@ -433,12 +434,11 @@ def rasterization(
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
-            `meta["means2d"].absgrad`. Default is False.
+            `meta["means2d"].absgrad`. On the non-Eval3D path, a total rendered
+            feature width that requires multiple rasterization passes raises
+            ``RuntimeError``. Default is False.
         rasterize_mode: The rasterization mode. Supported modes are "classic" and
             "antialiased". Default is "classic".
-        channel_chunk: The number of channels to render in one go. Default is 32.
-            If the required rendering channels are larger than this value, the rendering
-            will be done looply in chunks.
         distributed: Whether to use distributed rendering. Default is False. If True,
             The input Gaussians are expected to be a subset of scene in each rank, and
             the function will collaboratively render the images for all ranks.
@@ -616,7 +616,6 @@ def rasterization(
         rasterize_mode == "classic",
         camera_model_type,
         segmented,
-        channel_chunk,
         has_color,
         sh_degree_value,
         extra_signals.contiguous() if extra_signals is not None else None,
@@ -736,7 +735,7 @@ def _rasterization(
     backgrounds: Optional[Tensor] = None,
     render_mode: RenderMode = "RGB",
     rasterize_mode: RasterizeMode = "classic",
-    channel_chunk: int = 32,
+    _max_channels_per_launch: int = 32,
     batch_per_iter: int = 100,
     with_eval3d: bool = False,
     with_ut: bool = False,
@@ -955,14 +954,15 @@ def _rasterization(
         pass
 
     # Chunking logic for both eval3d and standard paths
-    if colors.shape[-1] > channel_chunk:
+    chunk_width = _max_channels_per_launch
+    if colors.shape[-1] > chunk_width:
         # slice into chunks
-        n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
+        n_chunks = (colors.shape[-1] + chunk_width - 1) // chunk_width
         render_colors, render_alphas = [], []
         for i in range(n_chunks):
-            colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
+            colors_chunk = colors[..., i * chunk_width : (i + 1) * chunk_width]
             backgrounds_chunk = (
-                backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
+                backgrounds[..., i * chunk_width : (i + 1) * chunk_width]
                 if backgrounds is not None
                 else None
             )
@@ -973,7 +973,7 @@ def _rasterization(
                     means=means,
                     quats=quats,
                     scales=scales,
-                    colors_chunk=colors_chunk,
+                    colors=colors_chunk,
                     opacities=opacities,
                     viewmats=viewmats,
                     camera_model=camera_model,
@@ -1417,13 +1417,11 @@ def rasterization_2dgs(
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
-            `meta["means2d"].absgrad`. Default is False.
-        channel_chunk: The number of channels to render in one go. Default is 32.
-            If the required rendering channels are larger than this value, the rendering
-            will be done looply in chunks.
+            `meta["means2d"].absgrad`. This option raises ``RuntimeError`` when
+            the total rendered feature width requires multiple rasterization
+            passes. Default is False.
         distloss: If true, use distortion regularization to get better geometry detail.
         depth_mode: render depth mode. Choose from expected depth and median depth.
-
     Returns:
         A tuple:
 

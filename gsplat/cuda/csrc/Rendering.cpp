@@ -19,6 +19,7 @@
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/util/TypeCast.h>
 #include <torch/torch.h>
 #include <algorithm>
 #include <cmath>
@@ -27,6 +28,7 @@
 #include <vector>
 
 #include "Cameras.h"
+#include "ChannelChunks.h"
 #include "Common.h"
 #include "Config.h"
 #include "DistributedCollectives.h"
@@ -99,9 +101,9 @@ namespace
         return features.unsqueeze(batch_ndim).expand(expanded_shape);
     }
 
-    [[maybe_unused]] at::Tensor channel_chunk_or_contiguous(const at::Tensor &features, int64_t start, int64_t end)
+    [[maybe_unused]] at::Tensor channel_slice_or_contiguous(const at::Tensor &features, int start, int end)
     {
-        const int64_t channels = features.size(-1);
+        const int channels = c10::checked_convert<int>(features.size(-1), "channels");
         if(start == 0 && end == channels)
         {
             return features.is_contiguous() ? features : features.contiguous();
@@ -195,7 +197,6 @@ namespace
         bool absgrad,
         bool calc_compensations,
         bool classic_rasterize_mode,
-        int64_t channel_chunk,
         CameraModelType camera_model,
         const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
         const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
@@ -330,7 +331,6 @@ namespace
             "Lidar coefficients must be given if and only if camera model is lidar"
         );
         TORCH_CHECK(!is_lidar_camera || with_ut, "Lidar camera model requires with_ut=True");
-        TORCH_CHECK(channel_chunk > 0, "channel_chunk must be > 0");
         if(with_eval3d)
         {
             TORCH_CHECK(
@@ -842,7 +842,6 @@ Rasterization3DGSResult rasterization_3dgs(
     bool rasterize_mode_is_classic,
     CameraModelType camera_model,
     bool segmented,
-    int64_t channel_chunk,
     bool has_color,
     int64_t sh_degree,
     const at::optional<at::Tensor> &extra_signals,
@@ -904,7 +903,6 @@ Rasterization3DGSResult rasterization_3dgs(
         absgrad,
         calc_compensations,
         rasterize_mode_is_classic,
-        channel_chunk,
         camera_model,
         lidar_coeffs,
         external_distortion_params,
@@ -1420,23 +1418,33 @@ Rasterization3DGSResult rasterization_3dgs(
     isect_offsets                            = isect_offsets.reshape(isect_offsets_shape);
 
     // --- Rasterize feature chunks ----------------------------------------
-    // Render at most channel_chunk feature channels per raster call, then
-    // concatenate the chunks.
+    // Use only channel widths for which kernels were compiled. The planner
+    // minimizes launches up to the largest compiled width.
     std::vector<at::Tensor> render_color_chunks;
     at::Tensor render_alphas;
     at::Tensor render_normals = at::empty({0}, means.options());
     at::Tensor absgrad_holder;
-    at::Tensor raster_isect_offsets = isect_offsets.contiguous();
-    at::Tensor raster_flatten_ids   = isects.flatten_ids.contiguous();
-    const int64_t channels          = projected_features.size(-1);
-    for(int64_t start = 0; start < channels; start += channel_chunk)
+    at::Tensor raster_isect_offsets     = isect_offsets.contiguous();
+    at::Tensor raster_flatten_ids       = isects.flatten_ids.contiguous();
+    const int channels                  = c10::checked_convert<int>(projected_features.size(-1), "channels");
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, {GSPLAT_NUM_CHANNELS});
+    TORCH_CHECK(
+        with_eval3d || !absgrad || chunk_widths.size() == 1,
+        "rasterization_3dgs does not support absgrad with multiple channel "
+        "chunks because per-chunk absolute gradients cannot be combined exactly"
+    );
+
+    int start = 0;
+    for(size_t chunk_index = 0; chunk_index < chunk_widths.size(); ++chunk_index)
     {
-        const int64_t end         = std::min(start + channel_chunk, channels);
-        at::Tensor features_chunk = channel_chunk_or_contiguous(projected_features, start, end);
+        const int end             = start + chunk_widths[chunk_index];
+        const bool first_chunk    = chunk_index == 0;
+        const bool final_chunk    = chunk_index + 1 == chunk_widths.size();
+        at::Tensor features_chunk = channel_slice_or_contiguous(projected_features, start, end);
         at::optional<at::Tensor> backgrounds_chunk;
         if(render_backgrounds.has_value())
         {
-            backgrounds_chunk = channel_chunk_or_contiguous(render_backgrounds.value(), start, end);
+            backgrounds_chunk = channel_slice_or_contiguous(render_backgrounds.value(), start, end);
         }
 
         if(with_eval3d)
@@ -1469,8 +1477,8 @@ Rasterization3DGSResult rasterization_3dgs(
                 raster_isect_offsets,
                 raster_flatten_ids,
                 false, // return_sample_counts
-                use_hit_distance,
-                return_normals && start == 0,
+                use_hit_distance && final_chunk,
+                return_normals && first_chunk,
                 renderer_config,
                 false, // return_last_ids
                 false  // unsafe_masked_tile_outputs (safe default: masked tiles write defined outputs)
@@ -1480,7 +1488,7 @@ Rasterization3DGSResult rasterization_3dgs(
             {
                 render_alphas = raster.alphas;
             }
-            if(return_normals && start == 0 && raster.normals.has_value())
+            if(return_normals && first_chunk && raster.normals.has_value())
             {
                 render_normals = raster.normals.value();
             }
@@ -1508,8 +1516,6 @@ Rasterization3DGSResult rasterization_3dgs(
             {
                 render_alphas = raster.alphas;
             }
-            // The observable absgrad holder is the one from the final chunk's
-            // rasterize call.
             absgrad_holder = raster.means2d_absgrad;
         }
 #    else
@@ -1523,7 +1529,9 @@ Rasterization3DGSResult rasterization_3dgs(
             );
         }
 #    endif
+        start = end;
     }
+    TORCH_INTERNAL_ASSERT(start == channels);
 
     // --- Reassemble output channels --------------------------------------
     at::Tensor render_colors
@@ -1912,6 +1920,7 @@ Rasterization2DGSResult rasterization_2dgs(
         std::vector<int64_t> opacity_shape = batch_shape_with_2dgs(means, {C, N});
         projected_opacities                = opacities.unsqueeze(batch_ndim).expand(opacity_shape);
     }
+    projected_opacities = projected_opacities.contiguous();
 
     // Gradient accumulator for densification (surfaced via meta["gradient_2dgs"]).
     at::Tensor densify = at::zeros_like(means2d).set_requires_grad(true);
@@ -1952,7 +1961,8 @@ Rasterization2DGSResult rasterization_2dgs(
         }
         else
         {
-            feature = colors;
+            feature
+                = normalize_features_layout(colors, means, B, C, N, batch_ids_opt, camera_ids_opt, gaussian_ids_opt);
         }
     }
     at::optional<at::Tensor> raster_backgrounds = backgrounds;
@@ -1974,31 +1984,77 @@ Rasterization2DGSResult rasterization_2dgs(
     }
     TORCH_CHECK(feature.defined(), "rasterization_2dgs requires at least one color or depth channel");
 
-    // --- Rasterize --------------------------------------------------------
-    RasterizeToPixels2DGSResult raster = rasterize_to_pixels_2dgs(
-        means2d,
-        ray_transforms,
-        feature,
-        projected_opacities,
-        normals,
-        densify,
-        raster_backgrounds,
-        c10::nullopt,
-        image_width,
-        image_height,
-        tile_size,
-        isect_offsets.contiguous(),
-        isects.flatten_ids.contiguous(),
-        packed,
-        absgrad,
-        distloss
+    // --- Rasterize compiled-width feature chunks -------------------------
+    const int channels                  = c10::checked_convert<int>(feature.size(-1), "channels");
+    const std::vector<int> chunk_widths = plan_channel_chunks(channels, {GSPLAT_NUM_CHANNELS});
+    TORCH_CHECK(
+        !absgrad || chunk_widths.size() == 1,
+        "rasterization_2dgs does not support absgrad with multiple channel "
+        "chunks because per-chunk absolute gradients cannot be combined exactly"
     );
-    at::Tensor render_colors   = raster.renders;
-    at::Tensor render_alphas   = raster.alphas;
-    at::Tensor render_normals  = raster.render_normals; // camera space
-    at::Tensor render_distort  = raster.render_distort;
-    at::Tensor render_median   = raster.render_median;
-    at::Tensor means2d_absgrad = raster.means2d_absgrad;
+
+    std::vector<at::Tensor> render_color_chunks;
+    render_color_chunks.reserve(chunk_widths.size());
+    at::Tensor render_alphas;
+    at::Tensor render_normals;
+    at::Tensor render_distort;
+    at::Tensor render_median;
+    at::Tensor means2d_absgrad;
+    const at::Tensor raster_isect_offsets = isect_offsets.contiguous();
+    const at::Tensor raster_flatten_ids   = isects.flatten_ids.contiguous();
+
+    int start = 0;
+    for(size_t chunk_index = 0; chunk_index < chunk_widths.size(); ++chunk_index)
+    {
+        const int end            = start + chunk_widths[chunk_index];
+        const bool first_chunk   = chunk_index == 0;
+        const bool final_chunk   = chunk_index + 1 == chunk_widths.size();
+        at::Tensor feature_chunk = channel_slice_or_contiguous(feature, start, end);
+        at::optional<at::Tensor> backgrounds_chunk;
+        if(raster_backgrounds.has_value())
+        {
+            backgrounds_chunk = channel_slice_or_contiguous(raster_backgrounds.value(), start, end);
+        }
+
+        RasterizeToPixels2DGSResult raster = rasterize_to_pixels_2dgs(
+            means2d,
+            ray_transforms,
+            feature_chunk,
+            projected_opacities,
+            normals,
+            densify,
+            backgrounds_chunk,
+            c10::nullopt,
+            image_width,
+            image_height,
+            tile_size,
+            raster_isect_offsets,
+            raster_flatten_ids,
+            packed,
+            absgrad,
+            distloss
+        );
+        render_color_chunks.push_back(raster.renders);
+        if(first_chunk)
+        {
+            // Keep channel-independent outputs and their VJPs from one launch.
+            render_alphas   = raster.alphas;
+            render_normals  = raster.render_normals; // camera space
+            means2d_absgrad = raster.means2d_absgrad;
+        }
+        if(final_chunk)
+        {
+            // The kernels interpret their launch-local final feature as depth,
+            // so the final chunk owns the depth auxiliaries and their VJPs.
+            render_distort = raster.render_distort;
+            render_median  = raster.render_median;
+        }
+        start = end;
+    }
+    TORCH_INTERNAL_ASSERT(start == channels);
+
+    at::Tensor render_colors
+        = render_color_chunks.size() == 1 ? render_color_chunks[0] : at::cat(render_color_chunks, -1);
 
     // --- Post-process render-mode outputs ---------------------------------
     // Normalize the accumulated depth channel by alpha for expected-depth modes.
