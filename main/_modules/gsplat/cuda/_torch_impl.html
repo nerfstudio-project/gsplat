@@ -1244,47 +1244,6 @@
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_rasterize_to_pixels_sparse</span><span class="p">(</span>
-    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N, 2]</span>
-    <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N, 3]</span>
-    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N, channels]</span>
-    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N]</span>
-    <span class="n">pixels</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P, 2] (row, col)</span>
-    <span class="n">image_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P]</span>
-    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">isect_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, tile_height, tile_width]</span>
-    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
-    <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [I, channels]</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pytorch reference for `gsplat.cuda._wrapper.rasterize_to_pixels_sparse()`.</span>
-
-<span class="sd">    The sparse rasterizer is defined to produce, at each requested pixel, exactly</span>
-<span class="sd">    the dense rendering result. So this reference renders the full dense images</span>
-<span class="sd">    with :func:`_rasterize_to_pixels` and gathers the requested pixels, packed in</span>
-<span class="sd">    original-pixel order (``[P, ...]``). Masks are not modeled here.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">_rasterize_to_pixels</span><span class="p">(</span>
-        <span class="n">means2d</span><span class="p">,</span>
-        <span class="n">conics</span><span class="p">,</span>
-        <span class="n">colors</span><span class="p">,</span>
-        <span class="n">opacities</span><span class="p">,</span>
-        <span class="n">image_width</span><span class="p">,</span>
-        <span class="n">image_height</span><span class="p">,</span>
-        <span class="n">tile_size</span><span class="p">,</span>
-        <span class="n">isect_offsets</span><span class="p">,</span>
-        <span class="n">flatten_ids</span><span class="p">,</span>
-        <span class="n">backgrounds</span><span class="p">,</span>
-    <span class="p">)</span>
-    <span class="n">img</span> <span class="o">=</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">long</span><span class="p">()</span>
-    <span class="n">rows</span> <span class="o">=</span> <span class="n">pixels</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">long</span><span class="p">()</span>
-    <span class="n">cols</span> <span class="o">=</span> <span class="n">pixels</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">long</span><span class="p">()</span>
-    <span class="n">out_colors</span> <span class="o">=</span> <span class="n">render_colors</span><span class="p">[</span><span class="n">img</span><span class="p">,</span> <span class="n">rows</span><span class="p">,</span> <span class="n">cols</span><span class="p">]</span>  <span class="c1"># [P, channels]</span>
-    <span class="n">out_alphas</span> <span class="o">=</span> <span class="n">render_alphas</span><span class="p">[</span><span class="n">img</span><span class="p">,</span> <span class="n">rows</span><span class="p">,</span> <span class="n">cols</span><span class="p">]</span>  <span class="c1"># [P, 1]</span>
-    <span class="k">return</span> <span class="n">out_colors</span><span class="p">,</span> <span class="n">out_alphas</span>
-
-
 <span class="k">def</span><span class="w"> </span><span class="nf">_eval_sh_bases_fast</span><span class="p">(</span><span class="n">basis_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">dirs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Evaluate spherical harmonics bases at unit direction for high orders</span>
