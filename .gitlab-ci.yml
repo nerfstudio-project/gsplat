@@ -96,6 +96,12 @@ code-format:
 .aot-base:
   extends: .test-base
 
+  # TEMPORARY: AOT build/test jobs are disabled to reduce CI load while the
+  # cmake-based build migration is in progress. Remove this `rules` block to
+  # re-enable all AOT jobs (aot-build-*/aot-test-*) once that work lands.
+  rules:
+    - when: never
+
   variables:
     # Mirror pytest.ini env entries needed by the explicit AOT build.
     BUILD_CAMERA_WRAPPERS: "1"
