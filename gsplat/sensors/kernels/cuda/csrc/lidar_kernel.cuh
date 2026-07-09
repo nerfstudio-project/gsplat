@@ -20,13 +20,9 @@
 // Tier-2 nvcc-only header.  Pulls in the Tier-1 POD parameter pack
 // (lidar_params.h), which also defines the SpinningDirection enum.
 //
-// Defines the device-side math the LiDAR kernels share: the SLERP
-// forward/backward (VJP) used by the rolling shutter, and the FOV /
-// nearest-row / nearest-column inverse-projection helpers.  The geometry
-// helpers (resolved via build.py extra_include_paths) supply the quaternion
-// rotate/conjugate math (quaternion.cuh), the scalar SE3 inverse transform
-// (pose.cuh), and the spherical<->cartesian angle conversions
-// (coordinate_conversions.cuh).
+// Defines LiDAR-specific device math: FOV checks, nearest-row/column lookup,
+// and inverse-projection helpers. Shared rotation, pose interpolation, and
+// ray/angle helpers come from geometry CUDA headers.
 
 #pragma once
 
@@ -103,53 +99,5 @@ template<>
 constexpr __device__ __forceinline__ double normalize_normsq_floor<double>()
 {
     return 1.0e-40;
-}
-
-// ===========================================================================
-// Two-pose SLERP (dtype-templated, scalar in/out, xyzw)
-// ===========================================================================
-//
-// The geometry pose.cuh `quat_slerp_pair_fwd_f/bwd_f` helpers are float-only,
-// so fp64 gradcheck cannot route through them.  These are the scalar form of
-// the dtype-templated `quat_slerp_batched_fwd_device/bwd_device` math
-// (quaternion.cuh) — hemisphere flip, clamp(dot), nlerp small-angle fallback —
-// transcribed to single-quaternion args so the LiDAR ray generator stays
-// float/double polymorphic without re-deriving the SLERP VJP.
-
-// SLERP q1->q2 at ti, xyzw, hemisphere flip, nlerp fallback when dot>0.9995.
-template<typename T>
-__device__ __forceinline__ void slerp_pair_fwd(
-    T x1, T y1, T z1, T w1, T x2, T y2, T z2, T w2, T ti, T *ox, T *oy, T *oz, T *ow
-)
-{
-    const T dot = x1 * x2 + y1 * y2 + z1 * z2 + w1 * w2;
-    const T s   = dot < T(0) ? T(-1) : T(1);
-    const T sx = s * x2, sy = s * y2, sz = s * z2, sw = s * w2;
-    const T c_raw = x1 * sx + y1 * sy + z1 * sz + w1 * sw;
-    const T c     = quat_slerp_clamp_dot<T>(c_raw);
-
-    if(c > quat_slerp_small_angle_dot_threshold<T>())
-    {
-        const T om    = T(1) - ti;
-        const T rx    = om * x1 + ti * sx;
-        const T ry    = om * y1 + ti * sy;
-        const T rz    = om * z1 + ti * sz;
-        const T rw    = om * w1 + ti * sw;
-        const T inv_n = T(1) / sqrt(rx * rx + ry * ry + rz * rz + rw * rw);
-        *ox           = rx * inv_n;
-        *oy           = ry * inv_n;
-        *oz           = rz * inv_n;
-        *ow           = rw * inv_n;
-        return;
-    }
-
-    const T theta     = acos(c);
-    const T sin_theta = sin(theta);
-    const T w1s       = sin((T(1) - ti) * theta) / sin_theta;
-    const T w2s       = sin(ti * theta) / sin_theta;
-    *ox               = w1s * x1 + w2s * sx;
-    *oy               = w1s * y1 + w2s * sy;
-    *oz               = w1s * z1 + w2s * sz;
-    *ow               = w1s * w1 + w2s * sw;
 }
 } // namespace gsplat_sensors

@@ -17,6 +17,8 @@
 
 #include <torch/extension.h>
 
+double slerp_small_angle_dot_threshold();
+
 void quat_normalize_safe_cuda(const at::Tensor &quat, at::Tensor &out);
 void quat_normalize_safe_bwd_cuda(const at::Tensor &quat, const at::Tensor &grad_out, at::Tensor &grad_quat);
 
@@ -1736,6 +1738,7 @@ torch::Tensor frame_transform_poses_tquat(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
+    m.attr("SLERP_SMALL_ANGLE_DOT_THRESHOLD") = slerp_small_angle_dot_threshold();
     m.def("quat_normalize_safe", &quat_normalize_safe, "Normalize quaternion xyzw with near-zero guard, CUDA");
     m.def("quat_normalize_safe_bwd", &quat_normalize_safe_bwd, "Backward for quat_normalize_safe, CUDA");
     m.def("quat_multiply", &quat_multiply, "Hamilton product q1*q2, xyzw, CUDA");

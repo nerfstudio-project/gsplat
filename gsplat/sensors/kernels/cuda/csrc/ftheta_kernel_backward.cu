@@ -415,8 +415,7 @@ __device__ __forceinline__ void ftheta_load_meanpose_10(
 //
 // Backward: project world points -> image points with mean shutter pose
 // (slerp alpha = 0.5, no external distortion). Chains d_image_point through
-// ftheta_project_ray_bwd, quat_inverse_rotate_bwd (mean rotation), and
-// quat_slerp_pair_bwd to world-point + start/end pose grads.
+// ftheta_project_ray_bwd and pose VJPs; interpolation time is fixed by the sensor.
 // =============================================================================
 
 __global__ void project_world_points_mean_pose_ftheta_no_external_backward_kernel(
@@ -468,7 +467,7 @@ __global__ void project_world_points_mean_pose_ftheta_no_external_backward_kerne
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
             float rx, ry, rz, rw;
-            trajectory_cuda::quat_slerp_pair_fwd_f(
+            gsplat_geometry::quat_slerp_pair_fwd<float>(
                 rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &rx, &ry, &rz, &rw
             );
             float4 rot_mid_xyzw   = make_float4(rx, ry, rz, rw);
@@ -489,8 +488,8 @@ __global__ void project_world_points_mean_pose_ftheta_no_external_backward_kerne
             d_trans1.y      += 0.5f * d_mean_t.y;
             d_trans1.z      += 0.5f * d_mean_t.z;
 
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-            trajectory_cuda::quat_slerp_pair_bwd_f(
+            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
                 rot0.x,
                 rot0.y,
                 rot0.z,
@@ -515,8 +514,7 @@ __global__ void project_world_points_mean_pose_ftheta_no_external_backward_kerne
                 &gq1x,
                 &gq1y,
                 &gq1z,
-                &gq1w,
-                &ga_unused
+                &gq1w
             );
             float4 d_r0  = make_float4(gq0x, gq0y, gq0z, gq0w);
             float4 d_r1  = make_float4(gq1x, gq1y, gq1z, gq1w);
@@ -652,7 +650,7 @@ __global__ void project_world_points_mean_pose_ftheta_bivariate_windshield_backw
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
             float rx, ry, rz, rw;
-            trajectory_cuda::quat_slerp_pair_fwd_f(
+            gsplat_geometry::quat_slerp_pair_fwd<float>(
                 rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, 0.5f, &rx, &ry, &rz, &rw
             );
             float4 rot_mid_xyzw   = make_float4(rx, ry, rz, rw);
@@ -672,8 +670,8 @@ __global__ void project_world_points_mean_pose_ftheta_bivariate_windshield_backw
             d_trans1.y      += 0.5f * d_mean_t.y;
             d_trans1.z      += 0.5f * d_mean_t.z;
 
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-            trajectory_cuda::quat_slerp_pair_bwd_f(
+            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
                 rot0.x,
                 rot0.y,
                 rot0.z,
@@ -698,8 +696,7 @@ __global__ void project_world_points_mean_pose_ftheta_bivariate_windshield_backw
                 &gq1x,
                 &gq1y,
                 &gq1z,
-                &gq1w,
-                &ga_unused
+                &gq1w
             );
             float4 d_r0  = make_float4(gq0x, gq0y, gq0z, gq0w);
             float4 d_r1  = make_float4(gq1x, gq1y, gq1z, gq1w);
@@ -1021,7 +1018,7 @@ __global__ void project_world_points_shutter_pose_ftheta_no_external_backward_ke
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
             float rx, ry, rz, rw;
-            trajectory_cuda::quat_slerp_pair_fwd_f(
+            gsplat_geometry::quat_slerp_pair_fwd<float>(
                 rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
             );
             float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
@@ -1041,8 +1038,8 @@ __global__ void project_world_points_shutter_pose_ftheta_no_external_backward_ke
             d_trans1.y      += alpha * d_pose_t.y;
             d_trans1.z      += alpha * d_pose_t.z;
 
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-            trajectory_cuda::quat_slerp_pair_bwd_f(
+            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
                 rot0.x,
                 rot0.y,
                 rot0.z,
@@ -1067,8 +1064,7 @@ __global__ void project_world_points_shutter_pose_ftheta_no_external_backward_ke
                 &gq1x,
                 &gq1y,
                 &gq1z,
-                &gq1w,
-                &ga_unused
+                &gq1w
             );
             float4 d_r0  = make_float4(gq0x, gq0y, gq0z, gq0w);
             float4 d_r1  = make_float4(gq1x, gq1y, gq1z, gq1w);
@@ -1211,7 +1207,7 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_ba
             float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
             float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
             float rx, ry, rz, rw;
-            trajectory_cuda::quat_slerp_pair_fwd_f(
+            gsplat_geometry::quat_slerp_pair_fwd<float>(
                 rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
             );
             float4 rot_alpha_xyzw = make_float4(rx, ry, rz, rw);
@@ -1231,8 +1227,8 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_ba
             d_trans1.y      += alpha * d_pose_t.y;
             d_trans1.z      += alpha * d_pose_t.z;
 
-            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-            trajectory_cuda::quat_slerp_pair_bwd_f(
+            float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+            gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
                 rot0.x,
                 rot0.y,
                 rot0.z,
@@ -1257,8 +1253,7 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_ba
                 &gq1x,
                 &gq1y,
                 &gq1z,
-                &gq1w,
-                &ga_unused
+                &gq1w
             );
             float4 d_r0  = make_float4(gq0x, gq0y, gq0z, gq0w);
             float4 d_r1  = make_float4(gq1x, gq1y, gq1z, gq1w);
@@ -1332,10 +1327,8 @@ __global__ void project_world_points_shutter_pose_ftheta_bivariate_windshield_ba
 // D7 backward -- image_points_to_world_rays_shutter_pose_ftheta_no_external
 //
 // Backward: FTheta backproject image points -> world rays with rolling-shutter
-// pose (no external distortion). d_origin splits (1-alpha)/(alpha) to
-// start/end translation; d_direction chains through quat_rotate_bwd and
-// quat_slerp_pair_bwd into start/end rotation, then through
-// ftheta_backproject_image_point_bwd to d_image_point + intrinsic grads.
+// pose (no external distortion). Pose interpolation is not time-differentiable
+// here; gradients flow only to world point, endpoint poses, and intrinsics.
 // =============================================================================
 
 __global__ void image_points_to_world_rays_shutter_pose_ftheta_no_external_backward_kernel(
@@ -1391,7 +1384,7 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_no_external_backw
         float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
         float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
         float rx, ry, rz, rw;
-        trajectory_cuda::quat_slerp_pair_fwd_f(
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
             rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
         );
         float4 pose_r_xyzw = make_float4(rx, ry, rz, rw);
@@ -1404,8 +1397,8 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_no_external_backw
         float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
         quat_rotate_bwd_xyzw_geom(pose_r_xyzw, camera_ray, d_direction, d_pose_r, d_camera_ray);
 
-        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-        trajectory_cuda::quat_slerp_pair_bwd_f(
+        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+        gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
             rot0.x,
             rot0.y,
             rot0.z,
@@ -1430,8 +1423,7 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_no_external_backw
             &gq1x,
             &gq1y,
             &gq1z,
-            &gq1w,
-            &ga_unused
+            &gq1w
         );
         float4 d_r0  = make_float4(gq0x, gq0y, gq0z, gq0w);
         float4 d_r1  = make_float4(gq1x, gq1y, gq1z, gq1w);
@@ -1565,7 +1557,7 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshi
         float4 rot0 = read_quat_xyzw_from_wxyz(start_rotation, 0);
         float4 rot1 = read_quat_xyzw_from_wxyz(end_rotation, 0);
         float rx, ry, rz, rw;
-        trajectory_cuda::quat_slerp_pair_fwd_f(
+        gsplat_geometry::quat_slerp_pair_fwd<float>(
             rot0.x, rot0.y, rot0.z, rot0.w, rot1.x, rot1.y, rot1.z, rot1.w, alpha, &rx, &ry, &rz, &rw
         );
         float4 pose_r_xyzw  = make_float4(rx, ry, rz, rw);
@@ -1574,8 +1566,8 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshi
         float3 d_camera_ray = make_float3(0.0f, 0.0f, 0.0f);
         quat_rotate_bwd_xyzw_geom(pose_r_xyzw, camera_ray, d_direction, d_pose_r, d_camera_ray);
 
-        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w, ga_unused;
-        trajectory_cuda::quat_slerp_pair_bwd_f(
+        float gq0x, gq0y, gq0z, gq0w, gq1x, gq1y, gq1z, gq1w;
+        gsplat_geometry::quat_slerp_pair_bwd_no_time_grad<float>(
             rot0.x,
             rot0.y,
             rot0.z,
@@ -1600,8 +1592,7 @@ __global__ void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshi
             &gq1x,
             &gq1y,
             &gq1z,
-            &gq1w,
-            &ga_unused
+            &gq1w
         );
         float4 d_r0  = make_float4(gq0x, gq0y, gq0z, gq0w);
         float4 d_r1  = make_float4(gq1x, gq1y, gq1z, gq1w);

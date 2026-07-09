@@ -71,18 +71,6 @@ def _has_schema(op_name: str) -> bool:
     return True
 
 
-def _dense_contiguous(t: Optional[Tensor]) -> Optional[Tensor]:
-    """Materialize an incoming output gradient as a dense, contiguous tensor.
-
-    Backward CUDA ops index raw dense storage and require contiguous inputs, so a
-    sparse gradient is densified and any gradient is made contiguous. ``None`` (a
-    disabled or non-differentiable output) passes through unchanged.
-    """
-    if t is None:
-        return None
-    return (t.to_dense() if t.is_sparse else t).contiguous()
-
-
 def _register_autograd(register: type) -> None:
     """Attach a Python autograd backward to the C++ forward op ``gsplat::<base>``.
 
@@ -495,7 +483,7 @@ class RegisterSphericalHarmonics:
             dirs,
             coeffs,
             masks,
-            _dense_contiguous(v_colors),
+            v_colors,
             compute_v_dirs,
         )
         return (
@@ -556,8 +544,8 @@ class RegisterQuatScaleToCovarPreci:
             quats,
             scales,
             ctx.triu,
-            _dense_contiguous(v_covars),
-            _dense_contiguous(v_precis),
+            v_covars,
+            v_precis,
         )
         return (
             v_quats,
@@ -654,8 +642,8 @@ class RegisterProjectionEWASimple:
             ctx.width,
             ctx.height,
             ctx.camera_model,
-            _dense_contiguous(v_means2d),
-            _dense_contiguous(v_covars2d),
+            v_means2d,
+            v_covars2d,
         )
         return (
             v_means,
@@ -887,10 +875,10 @@ class RegisterProjectionEWA3DGSFused:
             radii,
             conics,
             compensations,
-            _dense_contiguous(v_means2d),
-            _dense_contiguous(v_depths),
-            _dense_contiguous(v_conics),
-            _dense_contiguous(v_compensations),
+            v_means2d,
+            v_depths,
+            v_conics,
+            v_compensations,
             ctx.needs_input_grad[
                 5
             ],  # viewmats_requires_grad (viewmats is input index 5)
@@ -1015,10 +1003,10 @@ class RegisterProjectionEWA3DGSPacked:
             gaussian_ids,
             conics,
             compensations,
-            _dense_contiguous(v_means2d),
-            _dense_contiguous(v_depths),
-            _dense_contiguous(v_conics),
-            _dense_contiguous(v_compensations),
+            v_means2d,
+            v_depths,
+            v_conics,
+            v_compensations,
             ctx.needs_input_grad[
                 5
             ],  # viewmats_requires_grad (viewmats is input index 5)
@@ -1942,8 +1930,8 @@ class RegisterRasterizeToPixels3DGS:
             ctx.height,
             ctx.tile_size,
             ctx.absgrad,
-            _dense_contiguous(v_render_colors),
-            _dense_contiguous(v_render_alphas),
+            v_render_colors,
+            v_render_alphas,
             ctx.needs_input_grad[
                 4
             ],  # compute_v_backgrounds (backgrounds is input index 4)
@@ -2078,8 +2066,8 @@ class RegisterRasterizeToPixelsSparse:
             ctx.tile_width,
             ctx.tile_height,
             ctx.absgrad,
-            _dense_contiguous(v_render_colors),
-            _dense_contiguous(v_render_alphas),
+            v_render_colors,
+            v_render_alphas,
             ctx.needs_input_grad[
                 4
             ],  # compute_v_backgrounds (backgrounds is input index 4)
@@ -2629,10 +2617,10 @@ class RegisterProjection2DGSFused:
             ctx.height,
             radii,
             ray_transforms,
-            _dense_contiguous(v_means2d),
-            _dense_contiguous(v_depths),
-            _dense_contiguous(v_ray_transforms),
-            _dense_contiguous(v_normals),
+            v_means2d,
+            v_depths,
+            v_ray_transforms,
+            v_normals,
             ctx.needs_input_grad[
                 3
             ],  # viewmats_requires_grad (viewmats is input index 3)
@@ -2738,10 +2726,10 @@ class RegisterProjection2DGSPacked:
             camera_ids,
             gaussian_ids,
             ray_transforms,
-            _dense_contiguous(v_means2d),
-            _dense_contiguous(v_depths),
-            _dense_contiguous(v_ray_transforms),
-            _dense_contiguous(v_normals),
+            v_means2d,
+            v_depths,
+            v_ray_transforms,
+            v_normals,
             ctx.needs_input_grad[
                 3
             ],  # viewmats_requires_grad (viewmats is input index 3)
@@ -2965,11 +2953,11 @@ class RegisterRasterizeToPixels2DGS:
             ctx.height,
             ctx.tile_size,
             ctx.absgrad,
-            _dense_contiguous(v_render_colors),
-            _dense_contiguous(v_render_alphas),
-            _dense_contiguous(v_render_normals),
-            _dense_contiguous(v_render_distort),
-            _dense_contiguous(v_render_median),
+            v_render_colors,
+            v_render_alphas,
+            v_render_normals,
+            v_render_distort,
+            v_render_median,
             ctx.needs_input_grad[
                 6
             ],  # compute_v_backgrounds (backgrounds is input index 6)

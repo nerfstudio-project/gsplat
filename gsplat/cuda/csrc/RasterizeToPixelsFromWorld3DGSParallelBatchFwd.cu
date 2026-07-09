@@ -710,7 +710,6 @@ template<
     uint32_t TILE_SIZE,
     uint32_t CTA_SIZE,
     bool ReturnNormals,
-    bool UseHitDistance,
     bool ForBackward,
     // When false (unsafe_masked_tile_outputs=True), the masked-tile safe-store
     // below compiles out — masked outputs are left undefined. Mirrors the
@@ -1822,7 +1821,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
                 TILE_SIZE,
                 CTA_SIZE,
                 ReturnNormals,
-                UseHitDistance,
                 ForBackward,
                 SAFE_MASKED_OUTPUTS,
                 float

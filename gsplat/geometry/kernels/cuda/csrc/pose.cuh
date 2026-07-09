@@ -27,6 +27,8 @@
 
 #include "quaternion.cuh"
 
+namespace gsplat_geometry
+{
 // -----------------------------------------------------------------------------
 // se3pose_from_matrix with normalize-safe quaternion recovery.
 // Shared quaternion primitives: quaternion.cuh (QuatNormEps, quat_normalize_safe_*_write, quat_to_matrix_fwd_write).
@@ -229,90 +231,6 @@ __device__ void shepperd_from_matrix_bwd(
     }
 }
 
-namespace trajectory_cuda
-{
-// Float32 trajectory: uses quaternion.cuh templates (cross3, quat_rotate_vector_*, quat_multiply_impl, quat_slerp_clamp_dot).
-
-// SLERP q1→q2 at parameter ti∈[0,1]; xyzw; hemisphere flip; if dot>0.9995 use normalized lerp. Outputs *ox..*ow.
-__forceinline__ __device__ void quat_slerp_pair_fwd_f(
-    float x1,
-    float y1,
-    float z1,
-    float w1,
-    float x2,
-    float y2,
-    float z2,
-    float w2,
-    float ti,
-    float *ox,
-    float *oy,
-    float *oz,
-    float *ow
-)
-{
-    quat_slerp_pair_fwd<float>(x1, y1, z1, w1, x2, y2, z2, w2, ti, ox, oy, oz, ow);
-}
-
-// VJP for quat_slerp_pair_fwd_f: forward outputs (rx,ry,rz,rw) and upstream (gx..gw) → *gq1*, *gq2*, *grad_t.
-__forceinline__ __device__ void quat_slerp_pair_bwd_f(
-    float x1,
-    float y1,
-    float z1,
-    float w1,
-    float x2,
-    float y2,
-    float z2,
-    float w2,
-    float ti,
-    float rx,
-    float ry,
-    float rz,
-    float rw,
-    float gx,
-    float gy,
-    float gz,
-    float gw,
-    float *gq1x,
-    float *gq1y,
-    float *gq1z,
-    float *gq1w,
-    float *gq2x,
-    float *gq2y,
-    float *gq2z,
-    float *gq2w,
-    float *grad_t
-)
-{
-    quat_slerp_pair_bwd<float>(
-        x1,
-        y1,
-        z1,
-        w1,
-        x2,
-        y2,
-        z2,
-        w2,
-        ti,
-        rx,
-        ry,
-        rz,
-        rw,
-        gx,
-        gy,
-        gz,
-        gw,
-        gq1x,
-        gq1y,
-        gq1z,
-        gq1w,
-        gq2x,
-        gq2y,
-        gq2z,
-        gq2w,
-        grad_t
-    );
-}
-
 // Time-interpolation chain rule: grad_alpha = ∂L/∂α with α=(qt-t_min)/(t_max-t_min), d=t_max-t_min.
 // Outputs *g_t0,*g_t1,*g_qt for ∂L/∂time0, ∂L/∂time1, ∂L/∂query_time (handles t0>t1 swap).
 __forceinline__ __device__ void trajectory_alpha_time_grads_f(
@@ -389,7 +307,7 @@ __forceinline__ __device__ void trajectory_transform_point_2poses_fwd_device(
         tix            = om * tx0 + alpha * tx1;
         tiy            = om * ty0 + alpha * ty1;
         tiz            = om * tz0 + alpha * tz1;
-        quat_slerp_pair_fwd_f(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
     }
     else
     {
@@ -397,7 +315,7 @@ __forceinline__ __device__ void trajectory_transform_point_2poses_fwd_device(
         tix            = om * tx1 + alpha * tx0;
         tiy            = om * ty1 + alpha * ty0;
         tiz            = om * tz1 + alpha * tz0;
-        quat_slerp_pair_fwd_f(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
     }
     float rx, ry, rz;
     quat_rotate_vector_fwd_impl<float>(qix, qiy, qiz, qiw, px, py, pz, &rx, &ry, &rz);
@@ -452,11 +370,11 @@ __forceinline__ __device__ void trajectory_transform_point_2poses_bwd_device(
     float qix, qiy, qiz, qiw;
     if(t0s <= t1s)
     {
-        quat_slerp_pair_fwd_f(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
     }
     else
     {
-        quat_slerp_pair_fwd_f(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
     }
 
     const float gtx = grad_result_point[o3 + 0];
@@ -499,7 +417,7 @@ __forceinline__ __device__ void trajectory_transform_point_2poses_bwd_device(
     float gq1x, gq1y, gq1z, gq1w, gq2x, gq2y, gq2z, gq2w, ga_slerp = 0.0f;
     if(t0s <= t1s)
     {
-        quat_slerp_pair_bwd_f(
+        quat_slerp_pair_bwd_with_time_grad<float>(
             qx0,
             qy0,
             qz0,
@@ -538,7 +456,7 @@ __forceinline__ __device__ void trajectory_transform_point_2poses_bwd_device(
     }
     else
     {
-        quat_slerp_pair_bwd_f(
+        quat_slerp_pair_bwd_with_time_grad<float>(
             qx1,
             qy1,
             qz1,
@@ -614,11 +532,11 @@ __forceinline__ __device__ void trajectory_get_rotation_2poses_fwd_device(
     float ox, oy, oz, ow;
     if(t0s <= t1s)
     {
-        quat_slerp_pair_fwd_f(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &ox, &oy, &oz, &ow);
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &ox, &oy, &oz, &ow);
     }
     else
     {
-        quat_slerp_pair_fwd_f(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &ox, &oy, &oz, &ow);
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &ox, &oy, &oz, &ow);
     }
     result_quat[o4 + 0] = ox;
     result_quat[o4 + 1] = oy;
@@ -662,11 +580,11 @@ __forceinline__ __device__ void trajectory_get_rotation_2poses_bwd_device(
     float qix, qiy, qiz, qiw;
     if(t0s <= t1s)
     {
-        quat_slerp_pair_fwd_f(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
     }
     else
     {
-        quat_slerp_pair_fwd_f(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
     }
 
     const float gx = grad_result_quat[o4 + 0];
@@ -677,7 +595,7 @@ __forceinline__ __device__ void trajectory_get_rotation_2poses_bwd_device(
     float gq1x, gq1y, gq1z, gq1w, gq2x, gq2y, gq2z, gq2w, ga_slerp = 0.0f;
     if(t0s <= t1s)
     {
-        quat_slerp_pair_bwd_f(
+        quat_slerp_pair_bwd_with_time_grad<float>(
             qx0,
             qy0,
             qz0,
@@ -716,7 +634,7 @@ __forceinline__ __device__ void trajectory_get_rotation_2poses_bwd_device(
     }
     else
     {
-        quat_slerp_pair_bwd_f(
+        quat_slerp_pair_bwd_with_time_grad<float>(
             qx1,
             qy1,
             qz1,
@@ -876,154 +794,163 @@ __forceinline__ __device__ void frame_transform_poses_tquat_fwd_device(
     output_poses[o7 + 5] = nqz;
     output_poses[o7 + 6] = nqw;
 }
-} // namespace trajectory_cuda
 
 namespace packed_track_cuda
 {
-template<typename scalar_t>
-__forceinline__ __device__ void atomic_add(scalar_t *__restrict__ address, scalar_t value)
-{
-    atomicAdd(address, value);
-}
-
-template<typename time_t>
-__forceinline__ __device__ time_t clamp_time(time_t value, time_t first, time_t last)
-{
-    return value < first ? first : (value > last ? last : value);
-}
-
-template<typename time_t>
-__forceinline__ __device__ int64_t
-    lower_bound_local(const time_t *__restrict__ times, int64_t start, int64_t count, time_t query)
-{
-    int64_t lo = 0;
-    int64_t hi = count;
-    while(lo < hi)
+    template<typename scalar_t>
+    __forceinline__ __device__ void atomic_add(scalar_t *__restrict__ address, scalar_t value)
     {
-        const int64_t mid = lo + ((hi - lo) >> 1);
-        if(times[start + mid] < query)
+        atomicAdd(address, value);
+    }
+
+    template<typename time_t>
+    __forceinline__ __device__ time_t clamp_time(time_t value, time_t first, time_t last)
+    {
+        return value < first ? first : (value > last ? last : value);
+    }
+
+    template<typename time_t>
+    __forceinline__ __device__ int64_t
+        lower_bound_local(const time_t *__restrict__ times, int64_t start, int64_t count, time_t query)
+    {
+        int64_t lo = 0;
+        int64_t hi = count;
+        while(lo < hi)
         {
-            lo = mid + 1;
+            const int64_t mid = lo + ((hi - lo) >> 1);
+            if(times[start + mid] < query)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid;
+            }
         }
-        else
+        return lo;
+    }
+
+    template<typename scalar_t, typename time_t>
+    __forceinline__ __device__ scalar_t interpolation_alpha(time_t left, time_t right, time_t query, bool valid)
+    {
+        if(!valid)
         {
-            hi = mid;
+            return scalar_t(0);
+        }
+        return static_cast<scalar_t>((query - left) / (right - left));
+    }
+
+    template<typename scalar_t>
+    __forceinline__ __device__ scalar_t interpolation_alpha(int64_t left, int64_t right, int64_t query, bool valid)
+    {
+        if(!valid)
+        {
+            return scalar_t(0);
+        }
+        const bool numerator_fits = !((left > 0 && query < INT64_MIN + left) || (left < 0 && query > INT64_MAX + left));
+        const bool denominator_fits
+            = !((left > 0 && right < INT64_MIN + left) || (left < 0 && right > INT64_MAX + left));
+        const double numerator   = numerator_fits ? static_cast<double>(query - left)
+                                                  : static_cast<double>(query) - static_cast<double>(left);
+        const double denominator = denominator_fits ? static_cast<double>(right - left)
+                                                    : static_cast<double>(right) - static_cast<double>(left);
+        return denominator != 0.0 ? static_cast<scalar_t>(numerator / denominator) : scalar_t(0);
+    }
+
+    __forceinline__ __device__ bool valid_track_range(int64_t start, int64_t count, int64_t n_poses)
+    {
+        return start >= 0 && count > 0 && start <= n_poses && count <= n_poses - start;
+    }
+
+    template<typename scalar_t, typename time_t>
+    __forceinline__ __device__ void accumulate_interpolation_time_grads(
+        time_t left_time,
+        time_t right_time,
+        time_t clamped_query,
+        bool valid,
+        int64_t left,
+        int64_t right,
+        int64_t track,
+        scalar_t grad_alpha,
+        time_t *__restrict__ grad_pose_times,
+        time_t *__restrict__ grad_query_times
+    )
+    {
+        const time_t d = right_time - left_time;
+        if(valid && d != time_t(0))
+        {
+            const time_t grad_alpha_t = static_cast<time_t>(grad_alpha);
+            const time_t d2           = d * d;
+            atomic_add(grad_pose_times + left, grad_alpha_t * (clamped_query - right_time) / d2);
+            atomic_add(grad_pose_times + right, -grad_alpha_t * (clamped_query - left_time) / d2);
+            grad_query_times[track] = grad_alpha_t / d;
         }
     }
-    return lo;
-}
 
-template<typename scalar_t, typename time_t>
-__forceinline__ __device__ scalar_t interpolation_alpha(time_t left, time_t right, time_t query, bool valid)
-{
-    if(!valid)
+    template<typename scalar_t>
+    __forceinline__ __device__ void accumulate_interpolation_time_grads(
+        int64_t,
+        int64_t,
+        int64_t,
+        bool,
+        int64_t,
+        int64_t,
+        int64_t,
+        scalar_t,
+        int64_t *__restrict__,
+        int64_t *__restrict__
+    )
     {
-        return scalar_t(0);
-    }
-    return static_cast<scalar_t>((query - left) / (right - left));
-}
-
-template<typename scalar_t>
-__forceinline__ __device__ scalar_t interpolation_alpha(int64_t left, int64_t right, int64_t query, bool valid)
-{
-    if(!valid)
-    {
-        return scalar_t(0);
-    }
-    const bool numerator_fits   = !((left > 0 && query < INT64_MIN + left) || (left < 0 && query > INT64_MAX + left));
-    const bool denominator_fits = !((left > 0 && right < INT64_MIN + left) || (left < 0 && right > INT64_MAX + left));
-    const double numerator
-        = numerator_fits ? static_cast<double>(query - left) : static_cast<double>(query) - static_cast<double>(left);
-    const double denominator
-        = denominator_fits ? static_cast<double>(right - left) : static_cast<double>(right) - static_cast<double>(left);
-    return denominator != 0.0 ? static_cast<scalar_t>(numerator / denominator) : scalar_t(0);
-}
-
-__forceinline__ __device__ bool valid_track_range(int64_t start, int64_t count, int64_t n_poses)
-{
-    return start >= 0 && count > 0 && start <= n_poses && count <= n_poses - start;
-}
-
-template<typename scalar_t, typename time_t>
-__forceinline__ __device__ void accumulate_interpolation_time_grads(
-    time_t left_time,
-    time_t right_time,
-    time_t clamped_query,
-    bool valid,
-    int64_t left,
-    int64_t right,
-    int64_t track,
-    scalar_t grad_alpha,
-    time_t *__restrict__ grad_pose_times,
-    time_t *__restrict__ grad_query_times
-)
-{
-    const time_t d = right_time - left_time;
-    if(valid && d != time_t(0))
-    {
-        const time_t grad_alpha_t = static_cast<time_t>(grad_alpha);
-        const time_t d2           = d * d;
-        atomic_add(grad_pose_times + left, grad_alpha_t * (clamped_query - right_time) / d2);
-        atomic_add(grad_pose_times + right, -grad_alpha_t * (clamped_query - left_time) / d2);
-        grad_query_times[track] = grad_alpha_t / d;
-    }
-}
-
-template<typename scalar_t>
-__forceinline__ __device__ void accumulate_interpolation_time_grads(
-    int64_t, int64_t, int64_t, bool, int64_t, int64_t, int64_t, scalar_t, int64_t *__restrict__, int64_t *__restrict__
-)
-{
-}
-
-template<typename time_t>
-__forceinline__ __device__ void track_interval(
-    const time_t *__restrict__ times,
-    int64_t start,
-    int64_t count,
-    time_t query,
-    int64_t *left_index,
-    int64_t *right_index,
-    bool *same_pose,
-    bool *valid_interval,
-    time_t *clamped_query,
-    time_t *left_time,
-    time_t *right_time
-)
-{
-    const time_t first_time  = times[start];
-    const time_t last_time   = times[start + count - 1];
-    const time_t clamped     = clamp_time(query, first_time, last_time);
-    int64_t right_local      = lower_bound_local(times, start, count, clamped);
-    const int64_t last_local = count - 1;
-    if(query <= first_time)
-    {
-        right_local = 0;
-    }
-    else if(query > last_time)
-    {
-        right_local = last_local;
-    }
-    else if(right_local > last_local)
-    {
-        right_local = last_local;
     }
 
-    const int64_t right       = start + right_local;
-    const time_t rt           = times[right];
-    const bool exact_or_first = right_local == 0 || rt == clamped;
-    const int64_t left_local  = exact_or_first ? right_local : right_local - 1;
-    const int64_t left        = start + left_local;
-    const time_t lt           = times[left];
-    const bool same           = left == right;
-    *left_index               = left;
-    *right_index              = right;
-    *same_pose                = same;
-    *valid_interval           = !same && rt != lt;
-    *clamped_query            = clamped;
-    *left_time                = lt;
-    *right_time               = rt;
-}
+    template<typename time_t>
+    __forceinline__ __device__ void track_interval(
+        const time_t *__restrict__ times,
+        int64_t start,
+        int64_t count,
+        time_t query,
+        int64_t *left_index,
+        int64_t *right_index,
+        bool *same_pose,
+        bool *valid_interval,
+        time_t *clamped_query,
+        time_t *left_time,
+        time_t *right_time
+    )
+    {
+        const time_t first_time  = times[start];
+        const time_t last_time   = times[start + count - 1];
+        const time_t clamped     = clamp_time(query, first_time, last_time);
+        int64_t right_local      = lower_bound_local(times, start, count, clamped);
+        const int64_t last_local = count - 1;
+        if(query <= first_time)
+        {
+            right_local = 0;
+        }
+        else if(query > last_time)
+        {
+            right_local = last_local;
+        }
+        else if(right_local > last_local)
+        {
+            right_local = last_local;
+        }
+
+        const int64_t right       = start + right_local;
+        const time_t rt           = times[right];
+        const bool exact_or_first = right_local == 0 || rt == clamped;
+        const int64_t left_local  = exact_or_first ? right_local : right_local - 1;
+        const int64_t left        = start + left_local;
+        const time_t lt           = times[left];
+        const bool same           = left == right;
+        *left_index               = left;
+        *right_index              = right;
+        *same_pose                = same;
+        *valid_interval           = !same && rt != lt;
+        *clamped_query            = clamped;
+        *left_time                = lt;
+        *right_time               = rt;
+    }
 } // namespace packed_track_cuda
 
 // Batch row i: out = R(q_i) p_i + t_i. translation/point (N,3), rotation (N,4) xyzw, contiguous row-major.
@@ -1423,3 +1350,4 @@ __device__ void se3pose_from_matrix_bwd_device(
     grad_m16[o + 9]  += gR[7];
     grad_m16[o + 10] += gR[8];
 }
+} // namespace gsplat_geometry

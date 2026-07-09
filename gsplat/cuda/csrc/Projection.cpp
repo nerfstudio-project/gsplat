@@ -613,11 +613,14 @@ ProjectionEWA3DGSFusedBwdResult projection_ewa_3dgs_fused_bwd(
     CHECK_INPUT(radii);
     CHECK_INPUT(conics);
     CHECK_DENSE(grad.means2d);
-    CHECK_INPUT(grad.means2d);
     CHECK_DENSE(grad.depths);
-    CHECK_INPUT(grad.depths);
     CHECK_DENSE(grad.conics);
-    CHECK_INPUT(grad.conics);
+    at::Tensor grad_means2d = grad.means2d.contiguous();
+    at::Tensor grad_depths  = grad.depths.contiguous();
+    at::Tensor grad_conics  = grad.conics.contiguous();
+    CHECK_INPUT(grad_means2d);
+    CHECK_INPUT(grad_depths);
+    CHECK_INPUT(grad_conics);
     if(compensations.has_value())
     {
         CHECK_INPUT(compensations.value());
@@ -626,11 +629,13 @@ ProjectionEWA3DGSFusedBwdResult projection_ewa_3dgs_fused_bwd(
     // computed; under materialize_grads a compensations output that was not
     // requested can still receive a zero gradient, which is ignored here.
     at::optional<at::Tensor> compensation_grad;
+    at::Tensor grad_compensations;
     if(compensations.has_value() && grad.compensations.has_value())
     {
         CHECK_DENSE(grad.compensations.value());
-        CHECK_INPUT(grad.compensations.value());
-        compensation_grad = grad.compensations;
+        grad_compensations = grad.compensations.value().contiguous();
+        CHECK_INPUT(grad_compensations);
+        compensation_grad = grad_compensations;
     }
 
     at::Tensor v_means = at::zeros_like(means);
@@ -665,9 +670,9 @@ ProjectionEWA3DGSFusedBwdResult projection_ewa_3dgs_fused_bwd(
         radii,
         conics,
         compensations,
-        grad.means2d,
-        grad.depths,
-        grad.conics,
+        grad_means2d,
+        grad_depths,
+        grad_conics,
         compensation_grad,
         viewmats_requires_grad,
         // outputs
@@ -1091,9 +1096,12 @@ ProjectionEWA3DGSPackedBwdResult projection_ewa_3dgs_packed_bwd(
     CHECK_DENSE(grad.means2d);
     CHECK_DENSE(grad.depths);
     CHECK_DENSE(grad.conics);
-    CHECK_INPUT(grad.means2d);
-    CHECK_INPUT(grad.depths);
-    CHECK_INPUT(grad.conics);
+    at::Tensor grad_means2d = grad.means2d.contiguous();
+    at::Tensor grad_depths  = grad.depths.contiguous();
+    at::Tensor grad_conics  = grad.conics.contiguous();
+    CHECK_INPUT(grad_means2d);
+    CHECK_INPUT(grad_depths);
+    CHECK_INPUT(grad_conics);
     if(compensations.has_value())
     {
         CHECK_INPUT(compensations.value());
@@ -1102,11 +1110,13 @@ ProjectionEWA3DGSPackedBwdResult projection_ewa_3dgs_packed_bwd(
     // computed; under materialize_grads a compensations output that was not
     // requested can still receive a zero gradient, which is ignored here.
     at::optional<at::Tensor> compensation_grad;
+    at::Tensor grad_compensations;
     if(compensations.has_value() && grad.compensations.has_value())
     {
         CHECK_DENSE(grad.compensations.value());
-        CHECK_INPUT(grad.compensations.value());
-        compensation_grad = grad.compensations;
+        grad_compensations = grad.compensations.value().contiguous();
+        CHECK_INPUT(grad_compensations);
+        compensation_grad = grad_compensations;
     }
 
     auto opt     = means.options();
@@ -1162,9 +1172,9 @@ ProjectionEWA3DGSPackedBwdResult projection_ewa_3dgs_packed_bwd(
         conics,
         compensations,
         // grad outputs
-        grad.means2d,
-        grad.depths,
-        grad.conics,
+        grad_means2d,
+        grad_depths,
+        grad_conics,
         compensation_grad,
         sparse_grad,
         // outputs

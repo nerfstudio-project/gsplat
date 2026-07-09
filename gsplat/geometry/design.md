@@ -71,6 +71,7 @@ gsplat/geometry/
       build.py
       ext.cpp
       csrc/
+        coordinate_conversions.cuh
         quaternion.cu
         quaternion.cuh
         pose.cu
@@ -199,10 +200,13 @@ holds the device-side implementation that kernels need, and the translation unit
 holds launch helpers, `__global__` kernels, and the extension entry points
 (`*_cuda`, `*_bwd_cuda`) bound from C++/Python.
 
+Reusable device helpers live in the owning `.cuh` under `gsplat_geometry`;
+host exports stay in the `.cu` translation units.
+
 **`quaternion.cuh` / `quaternion.cu`**
 
 - `quaternion.cuh`: template and small `__device__` helpers (e.g. `cross3`,
-  `quat_multiply_impl`, `quat_rotate_vector_*_impl`, `quat_to_matrix_fwd_write`,
+  `quat_multiply_impl`, `quat_rotate_vector_*_impl`, `quat_slerp_pair_*`, `quat_to_matrix_fwd_write`,
   `quat_normalize_safe_*_write`), per-row `*_fwd_device` / `*_bwd_device` bodies
   (which delegate to those scalars where applicable), and related constants/traits
   (`QuatNormEps`, etc.). Intended to be included from quaternion kernels and,
@@ -216,7 +220,7 @@ holds launch helpers, `__global__` kernels, and the extension entry points
 - `pose.cuh` includes `quaternion.cuh` so pose and trajectory kernels can reuse
   quaternion device math **without** introducing a third shared-only device
   header. It adds pose-specific device helpers (e.g. Shepperd matrix→quaternion,
-  SE3 transforms, `trajectory_cuda` orchestration using quaternion.cuh templates)
+  SE3 transforms, trajectory orchestration using quaternion.cuh templates)
   and the pose `*_device` entry bodies.
 - `pose.cu` mirrors the quaternion pattern: globals, launches, and exported
   pose/trajectory CUDA entry points.
@@ -336,7 +340,8 @@ The test suite verifies that:
 
 - Public geometry functions are defined in `functional/`.
 - Backend implementation details are defined in `kernels/`.
-- Shared implementation helpers are defined in `include/`.
+- Reserve `include/` for shared public or host-side headers; keep CUDA device
+  helpers with their owning sources under `kernels/cuda/csrc/`.
 - The package remains conceptually organized around geometry concepts first and
   implementation details second.
 - Directory structure should make it clear which code is public, which code is

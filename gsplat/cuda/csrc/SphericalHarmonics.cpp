@@ -186,11 +186,12 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
     check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
     TORCH_INTERNAL_ASSERT(grad.colors.defined());
     CHECK_DENSE(grad.colors);
-    CHECK_INPUT(grad.colors);
+    at::Tensor grad_colors = grad.colors.contiguous();
+    CHECK_INPUT(grad_colors);
     TORCH_CHECK(
-        grad.colors.size(-1) == coeffs.size(-1),
+        grad_colors.size(-1) == coeffs.size(-1),
         "v_colors last dim (",
-        grad.colors.size(-1),
+        grad_colors.size(-1),
         ") must match coeffs last dim (",
         coeffs.size(-1),
         ")"
@@ -207,7 +208,7 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
     }
 
     launch_spherical_harmonics_bwd_kernel(
-        degrees_to_use, dirs, coeffs, masks, grad.colors, v_coeffs_accum, as_optional_tensor(v_dirs)
+        degrees_to_use, dirs, coeffs, masks, grad_colors, v_coeffs_accum, as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_coeffs
