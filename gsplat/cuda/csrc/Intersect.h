@@ -188,13 +188,41 @@ void launch_intersect_offset_sparse_kernel(
     at::Tensor offsets // [num_active_tiles + 1] int32
 );
 
+// One thread per pixel: tightly packs the dense tile id and raster-order in-tile
+// position into a single int64 sort key (tile_id << pos_bits | pos).
+void launch_compute_tile_keys_kernel(
+    // inputs
+    const at::Tensor pixels,    // [P, 2] int32, (row, col)
+    const at::Tensor image_ids, // [P] int32
+    const int64_t n_tiles,
+    const int64_t tile_size,
+    const int64_t tile_width,
+    const int64_t pos_bits,
+    // output
+    at::Tensor keys // [P] int64
+);
+
+// Bit-bounded radix sort of (key, pixel index) pairs over [0, end_bit).
+// keys/pixel_index are the inputs (and double-buffer halves); the sorted results
+// are exposed through keys_sorted / pixel_map.
+void launch_sort_tile_keys(
+    const int64_t P,
+    const int end_bit,
+    at::Tensor keys,        // [P] int64
+    at::Tensor pixel_index, // [P] int64 (arange)
+    at::Tensor keys_sorted, // [P] int64
+    at::Tensor pixel_map    // [P] int64
+);
+
 // Per-active-tile raster-order bitmask. One thread per active tile ORs its
-// pixels' in-tile positions into the tile's words. out_bitmask must be zeroed.
+// pixels' in-tile positions (low pos_bits of each sorted key) into the tile's
+// words. out_bitmask must be zeroed.
 void launch_build_tile_bitmask_kernel(
     // inputs
-    const at::Tensor pix_in_tile_sorted, // [P] int64, sorted by (tile, in-tile)
-    const at::Tensor tile_pixel_cumsum,  // [num_active_tiles] int64, inclusive
+    const at::Tensor sorted_keys,       // [P] int64, sorted (tile_id<<pos | pos)
+    const at::Tensor tile_pixel_cumsum, // [num_active_tiles] int64, inclusive
     const uint32_t words_per_tile,
+    const int64_t pos_bits,
     // output
     at::Tensor out_bitmask // [num_active_tiles, words_per_tile] int64 (zeroed)
 );

@@ -117,6 +117,7 @@ def _ensure_autograd_registrations() -> None:
     _register_autograd(RegisterProjection2DGSPacked)
     _register_autograd(RegisterRasterizeToPixels3DGS)
     _register_autograd(RegisterRasterizeToPixels2DGS)
+    _register_autograd(RegisterRasterizeToPixelsSparse)
     _AUTOGRAD_REGISTRATIONS_DONE = True
 
 
@@ -1413,6 +1414,107 @@ def rasterize_to_pixels(
     return render_colors, render_alphas
 
 
+@trace_function("render2D-sparse-fwd")
+def rasterize_to_pixels_sparse(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    colors: Tensor,  # [..., N, channels] or [nnz, channels]
+    opacities: Tensor,  # [..., N] or [nnz]
+    image_ids: Tensor,  # [P]
+    active_tiles: Tensor,  # [AT]
+    tile_offsets: Tensor,  # [AT + 1]
+    flatten_ids: Tensor,  # [n_isects]
+    tile_pixel_mask: Tensor,  # [AT, words]
+    tile_pixel_cumsum: Tensor,  # [AT]
+    pixel_map: Tensor,  # [P]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+    backgrounds: Optional[Tensor] = None,  # [n_images, channels]
+    masks: Optional[Tensor] = None,  # [n_images, tile_height, tile_width]
+    packed: bool = False,
+    absgrad: bool = False,
+) -> Tuple[Tensor, Tensor]:
+    """Rasterizes Gaussians to a packed set of pixels (sparse rasterization).
+
+    Renders only the pixels described by the sparse tile layout, touching only
+    active tiles. Outputs are packed in the original pixel order -- the same
+    order as the ``pixels`` / ``image_ids`` passed to
+    :func:`build_sparse_tile_layout` -- as ``[P, ...]`` rather than dense images.
+
+    The layout tensors (``active_tiles`` / ``tile_pixel_mask`` /
+    ``tile_pixel_cumsum`` / ``pixel_map``) come from
+    :func:`build_sparse_tile_layout`; ``tile_offsets`` / ``flatten_ids`` come
+    from :func:`intersect_tile_sparse`. ``image_ids`` is the same ``[P]`` tensor
+    given to :func:`build_sparse_tile_layout` (needed for the background
+    gradient).
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.
+        conics: Inverse projected covariances (upper triangle). [..., N, 3] or [nnz, 3].
+        colors: Gaussian colors or ND features. [..., N, channels] or [nnz, channels].
+            ``colors.shape[-1]`` must be a channel count compiled into ``GSPLAT_NUM_CHANNELS``.
+        opacities: Gaussian opacities. [..., N] or [nnz].
+        image_ids: Image index of each requested pixel. [P].
+        active_tiles: Ascending dense ids of active tiles. [AT].
+        tile_offsets: Per-active-tile intersection offsets. [AT + 1].
+        flatten_ids: Flattened Gaussian indices. [n_isects].
+        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].
+        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].
+        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        tile_width: Number of tiles along the image width.
+        tile_height: Number of tiles along the image height.
+        backgrounds: Background colors. [n_images, channels]. Default: None.
+        masks: Tile mask to skip masked tiles. [n_images, tile_height, tile_width]. Default: None.
+        packed: If True, inputs are packed with shape [nnz, ...]. Default: False.
+        absgrad: If True, backward computes a ``.absgrad`` attribute for ``means2d``. Default: False.
+
+    Returns:
+        A tuple:
+
+        - **Rendered colors**. [P, channels]
+        - **Rendered alphas**. [P, 1]
+    """
+    if backgrounds is not None:
+        backgrounds = backgrounds.contiguous()
+    if masks is not None:
+        masks = masks.contiguous()
+
+    render_colors, render_alphas, means2d_absgrad, _last_ids = _make_lazy_cuda_func(
+        "rasterize_to_pixels_sparse"
+    )(
+        means2d.contiguous(),
+        conics.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds,
+        masks,
+        image_ids.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        tile_width,
+        tile_height,
+        active_tiles.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        tile_pixel_mask.contiguous(),
+        tile_pixel_cumsum.contiguous(),
+        pixel_map.contiguous(),
+        packed,
+        absgrad,
+    )
+    if absgrad:
+        means2d.absgrad = means2d_absgrad
+
+    return render_colors, render_alphas
+
+
 @torch.no_grad()
 @trace_function("render2D-count")
 def rasterize_num_contributing_gaussians(
@@ -1452,6 +1554,72 @@ def rasterize_num_contributing_gaussians(
         image_width,
         image_height,
         tile_size,
+    )
+
+
+@torch.no_grad()
+@trace_function("render2D-count-sparse")
+def rasterize_num_contributing_gaussians_sparse(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    opacities: Tensor,  # [..., N] or [nnz]
+    active_tiles: Tensor,  # [AT]
+    tile_offsets: Tensor,  # [AT + 1]
+    flatten_ids: Tensor,  # [n_isects]
+    tile_pixel_mask: Tensor,  # [AT, words]
+    tile_pixel_cumsum: Tensor,  # [AT]
+    pixel_map: Tensor,  # [P]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+) -> Tuple[Tensor, Tensor]:
+    """Sparse counterpart of :func:`rasterize_num_contributing_gaussians`.
+
+    Counts contributing Gaussians (and accumulated alpha) for only the requested
+    pixels, packed in original-pixel order (the order of the ``pixels`` /
+    ``image_ids`` given to :func:`build_sparse_tile_layout`). Consumes the
+    layout tensors from :func:`build_sparse_tile_layout` and the intersections
+    from :func:`intersect_tile_sparse`.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.
+        conics: Inverse projected covariances. [..., N, 3] or [nnz, 3].
+        opacities: Gaussian opacities. [..., N] or [nnz].
+        active_tiles: Ascending dense ids of active tiles. [AT].
+        tile_offsets: Per-active-tile intersection offsets. [AT + 1].
+        flatten_ids: Flattened Gaussian indices. [n_isects].
+        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].
+        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].
+        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        tile_width: Number of tiles along the image width.
+        tile_height: Number of tiles along the image height.
+
+    Returns:
+        A tuple:
+
+        - **Number of contributing Gaussians**. Int32 [P].
+        - **Rendered alphas**. [P].
+    """
+    return _make_lazy_cuda_func("rasterize_num_contributing_gaussians_sparse")(
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        tile_width,
+        tile_height,
+        active_tiles.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        tile_pixel_mask.contiguous(),
+        tile_pixel_cumsum.contiguous(),
+        pixel_map.contiguous(),
     )
 
 
@@ -1505,6 +1673,76 @@ def rasterize_contributing_gaussian_ids(
 
 
 @torch.no_grad()
+@trace_function("render2D-contributors-sparse")
+def rasterize_contributing_gaussian_ids_sparse(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    opacities: Tensor,  # [..., N] or [nnz]
+    active_tiles: Tensor,  # [AT]
+    tile_offsets: Tensor,  # [AT + 1]
+    flatten_ids: Tensor,  # [n_isects]
+    tile_pixel_mask: Tensor,  # [AT, words]
+    tile_pixel_cumsum: Tensor,  # [AT]
+    pixel_map: Tensor,  # [P]
+    num_contributing_gaussians: Tensor,  # [P] int32
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+) -> Tuple[Tensor, Tensor]:
+    """Sparse counterpart of :func:`rasterize_contributing_gaussian_ids`.
+
+    Records the contributing Gaussian ids and weights for only the requested
+    pixels, packed in original-pixel order (``[P, K]`` where ``K`` is the max
+    per-pixel contributor count). Consumes the layout from
+    :func:`build_sparse_tile_layout`, the intersections from
+    :func:`intersect_tile_sparse`, and the per-pixel counts from
+    :func:`rasterize_num_contributing_gaussians_sparse`.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.
+        conics: Inverse projected covariances. [..., N, 3] or [nnz, 3].
+        opacities: Gaussian opacities. [..., N] or [nnz].
+        active_tiles: Ascending dense ids of active tiles. [AT].
+        tile_offsets: Per-active-tile intersection offsets. [AT + 1].
+        flatten_ids: Flattened Gaussian indices. [n_isects].
+        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].
+        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].
+        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].
+        num_contributing_gaussians: Per-pixel contributor counts. Int32 [P].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        tile_width: Number of tiles along the image width.
+        tile_height: Number of tiles along the image height.
+
+    Returns:
+        A tuple:
+
+        - **Contributing Gaussian ids**. Int32 [P, K] (-1 padded).
+        - **Contributing weights**. [P, K].
+    """
+    return _make_lazy_cuda_func("rasterize_contributing_gaussian_ids_sparse")(
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        tile_width,
+        tile_height,
+        active_tiles.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        tile_pixel_mask.contiguous(),
+        tile_pixel_cumsum.contiguous(),
+        pixel_map.contiguous(),
+        num_contributing_gaussians.contiguous(),
+    )
+
+
+@torch.no_grad()
 @trace_function("render2D-top-contributors")
 def rasterize_top_contributing_gaussian_ids(
     means2d: Tensor,  # [..., N, 2] or [nnz, 2]
@@ -1549,6 +1787,75 @@ def rasterize_top_contributing_gaussian_ids(
         image_height,
         tile_size,
         num_depth_samples,
+    )
+
+
+@torch.no_grad()
+@trace_function("render2D-top-contributors-sparse")
+def rasterize_top_contributing_gaussian_ids_sparse(
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    conics: Tensor,  # [..., N, 3] or [nnz, 3]
+    opacities: Tensor,  # [..., N] or [nnz]
+    active_tiles: Tensor,  # [AT]
+    tile_offsets: Tensor,  # [AT + 1]
+    flatten_ids: Tensor,  # [n_isects]
+    tile_pixel_mask: Tensor,  # [AT, words]
+    tile_pixel_cumsum: Tensor,  # [AT]
+    pixel_map: Tensor,  # [P]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+    num_depth_samples: int,
+) -> Tuple[Tensor, Tensor]:
+    """Sparse counterpart of :func:`rasterize_top_contributing_gaussian_ids`.
+
+    Keeps the top-``num_depth_samples`` contributors (by weight, in depth order)
+    for only the requested pixels, packed in original-pixel order
+    (``[P, num_depth_samples]``). Consumes the layout from
+    :func:`build_sparse_tile_layout` and the intersections from
+    :func:`intersect_tile_sparse`.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.
+        conics: Inverse projected covariances. [..., N, 3] or [nnz, 3].
+        opacities: Gaussian opacities. [..., N] or [nnz].
+        active_tiles: Ascending dense ids of active tiles. [AT].
+        tile_offsets: Per-active-tile intersection offsets. [AT + 1].
+        flatten_ids: Flattened Gaussian indices. [n_isects].
+        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].
+        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].
+        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        tile_width: Number of tiles along the image width.
+        tile_height: Number of tiles along the image height.
+        num_depth_samples: Number of top contributors to keep per pixel.
+
+    Returns:
+        A tuple:
+
+        - **Top Gaussian ids**. Int32 [P, num_depth_samples] (-1 padded).
+        - **Top weights**. [P, num_depth_samples].
+    """
+    return _make_lazy_cuda_func("rasterize_top_contributing_gaussian_ids_sparse")(
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        tile_width,
+        tile_height,
+        num_depth_samples,
+        active_tiles.contiguous(),
+        tile_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        tile_pixel_mask.contiguous(),
+        tile_pixel_cumsum.contiguous(),
+        pixel_map.contiguous(),
     )
 
 
@@ -1657,6 +1964,149 @@ class RegisterRasterizeToPixels3DGS:
             None,  # tile_size
             None,  # isect_offsets
             None,  # flatten_ids
+            None,  # packed
+            None,  # absgrad
+        )
+
+
+class RegisterRasterizeToPixelsSparse:
+    """Python autograd hooks for the gsplat::rasterize_to_pixels_sparse op."""
+
+    base = "rasterize_to_pixels_sparse"
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        (
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            image_ids,
+            image_width,
+            image_height,
+            tile_size,
+            tile_width,
+            tile_height,
+            active_tiles,
+            tile_offsets,
+            flatten_ids,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            _packed,
+            absgrad,
+        ) = inputs
+        _render_colors, render_alphas, means2d_absgrad, last_ids = output
+        # last_ids and the absgrad holder are forward-internal; the backward fills
+        # the holder in place (it must not be tracked by autograd).
+        ctx.mark_non_differentiable(last_ids, means2d_absgrad)
+        ctx.width = image_width
+        ctx.height = image_height
+        ctx.tile_size = tile_size
+        ctx.tile_width = tile_width
+        ctx.tile_height = tile_height
+        ctx.absgrad = absgrad
+        ctx.save_for_backward(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            image_ids,
+            active_tiles,
+            tile_offsets,
+            flatten_ids,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            render_alphas,
+            last_ids,
+            means2d_absgrad,
+        )
+
+    @classmethod
+    def backward(
+        cls, ctx, v_render_colors, v_render_alphas, v_means2d_absgrad, v_last_ids
+    ):
+        (
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            image_ids,
+            active_tiles,
+            tile_offsets,
+            flatten_ids,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            render_alphas,
+            last_ids,
+            means2d_absgrad,
+        ) = ctx.saved_tensors
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+        ) = _make_lazy_cuda_func(f"{cls.base}_bwd")(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            image_ids,
+            active_tiles,
+            tile_offsets,
+            flatten_ids,
+            tile_pixel_mask,
+            tile_pixel_cumsum,
+            pixel_map,
+            render_alphas,
+            last_ids,
+            ctx.width,
+            ctx.height,
+            ctx.tile_size,
+            ctx.tile_width,
+            ctx.tile_height,
+            ctx.absgrad,
+            _dense_contiguous(v_render_colors),
+            _dense_contiguous(v_render_alphas),
+            ctx.needs_input_grad[
+                4
+            ],  # compute_v_backgrounds (backgrounds is input index 4)
+        )
+        # The abs gradient is not a returned input grad; surface it by filling the
+        # saved means2d.absgrad holder in place.
+        if ctx.absgrad and v_means2d_abs is not None:
+            means2d_absgrad.copy_(v_means2d_abs)
+        return (
+            v_means2d,
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            None,  # masks
+            None,  # image_ids
+            None,  # image_width
+            None,  # image_height
+            None,  # tile_size
+            None,  # tile_width
+            None,  # tile_height
+            None,  # active_tiles
+            None,  # tile_offsets
+            None,  # flatten_ids
+            None,  # tile_pixel_mask
+            None,  # tile_pixel_cumsum
+            None,  # pixel_map
             None,  # packed
             None,  # absgrad
         )

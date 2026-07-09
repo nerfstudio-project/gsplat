@@ -24,6 +24,7 @@
 
 #include "Rasterization.h"
 #include "RasterizeContributingCommon.cuh"
+#include "RasterizeContributingCommonSparse.cuh"
 
 namespace gsplat {
 
@@ -162,6 +163,109 @@ void launch_rasterize_contributing_gaussian_ids_kernel(
 
     if (tile_size == 16) {
         launch_variant.template operator()<16, 64>();
+    } else if (tile_size == 4) {
+        launch_variant.template operator()<4, 16>();
+    } else {
+        AT_ERROR(
+            "Unsupported tile_size ",
+            tile_size,
+            "; supported values are {4, 16}."
+        );
+    }
+}
+
+// Sparse counterpart: reuses ContributingIdsAccumulator with the sparse
+// traversal harness. Outputs are packed in original-pixel order ([P, K]). One
+// thread per pixel (CTA_SIZE == tile_size^2).
+void launch_rasterize_contributing_gaussian_ids_sparse_kernel(
+    // Gaussian parameters
+    const at::Tensor means2d,
+    const at::Tensor conics,
+    const at::Tensor opacities,
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const uint32_t max_num_contributing,
+    // sparse layout
+    const at::Tensor active_tiles,
+    const at::Tensor tile_offsets,
+    const at::Tensor flatten_ids,
+    const at::Tensor tile_pixel_mask,
+    const at::Tensor tile_pixel_cumsum,
+    const at::Tensor pixel_map,
+    // outputs ([P, K])
+    at::Tensor contributing_ids,
+    at::Tensor contributing_weights
+) {
+    const uint32_t AT = active_tiles.size(0);
+    if (AT == 0) {
+        return;
+    }
+    const bool packed = means2d.dim() == 2;
+    const uint32_t N = packed ? 0 : means2d.size(-2);
+    const uint32_t words = tile_pixel_mask.size(1);
+    const dim3 grid = {AT, 1, 1};
+
+    auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>() {
+        const dim3 threads = dim3{CTA_SIZE, 1, 1};
+        constexpr uint32_t PIXELS_PER_THREAD = TILE_SIZE * TILE_SIZE / CTA_SIZE;
+        using Accumulator = ContributingIdsAccumulator<PIXELS_PER_THREAD>;
+        const int64_t shmem_size =
+            rasterize_contributing_common_shmem_size<CTA_SIZE>();
+
+        if (cudaFuncSetAttribute(
+                rasterize_contributing_common_sparse_kernel<
+                    TILE_SIZE,
+                    CTA_SIZE,
+                    Accumulator>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                shmem_size
+            ) != cudaSuccess) {
+            AT_ERROR(
+                "Failed to set maximum shared memory size (requested ",
+                shmem_size,
+                " bytes), try lowering tile_size."
+            );
+        }
+
+        Accumulator accum{
+            N,
+            packed,
+            max_num_contributing,
+            contributing_ids.data_ptr<int32_t>(),
+            contributing_weights.data_ptr<float>(),
+        };
+
+        rasterize_contributing_common_sparse_kernel<
+            TILE_SIZE,
+            CTA_SIZE,
+            Accumulator>
+            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
+                reinterpret_cast<const vec3 *>(conics.const_data_ptr<float>()),
+                opacities.const_data_ptr<float>(),
+                image_width,
+                image_height,
+                tile_width,
+                tile_height,
+                active_tiles.const_data_ptr<int32_t>(),
+                tile_offsets.const_data_ptr<int32_t>(),
+                flatten_ids.const_data_ptr<int32_t>(),
+                reinterpret_cast<const uint64_t *>(
+                    tile_pixel_mask.const_data_ptr<int64_t>()
+                ),
+                tile_pixel_cumsum.const_data_ptr<int64_t>(),
+                pixel_map.const_data_ptr<int64_t>(),
+                words,
+                accum
+            );
+    };
+
+    if (tile_size == 16) {
+        launch_variant.template operator()<16, 256>();
     } else if (tile_size == 4) {
         launch_variant.template operator()<4, 16>();
     } else {
