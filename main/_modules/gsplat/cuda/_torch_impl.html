@@ -913,6 +913,120 @@
     <span class="k">return</span> <span class="n">tile_offsets</span><span class="p">,</span> <span class="n">flatten_ids</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_num_words_per_tile_bitmask</span><span class="p">(</span><span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Number of int64 words needed to bit-pack a ``tile_size x tile_size`` tile.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">tile_size</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">+</span> <span class="mi">63</span><span class="p">)</span> <span class="o">//</span> <span class="mi">64</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_build_sparse_tile_layout</span><span class="p">(</span>
+    <span class="n">pixels</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P, 2] int, (row, col) == (y, x)</span>
+    <span class="n">image_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P] int, image/camera index of each pixel</span>
+    <span class="n">n_images</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pytorch reference for ``gsplat.cuda._wrapper.build_sparse_tile_layout()``.</span>
+
+<span class="sd">    Builds the per-active-tile layout that sparse rasterization consumes. Pixels</span>
+<span class="sd">    are given in packed form (``pixels`` + ``image_ids``) rather than as a single</span>
+<span class="sd">    ragged batch.</span>
+
+<span class="sd">    Coordinate convention: ``pixels[p] = (row, col)`` with ``row`` in</span>
+<span class="sd">    ``[0, height)`` and ``col`` in ``[0, width)``. A pixel&#39;s dense tile id is</span>
+<span class="sd">    ``image_id * (tile_height * tile_width) + (row // tile_size) * tile_width +</span>
+<span class="sd">    (col // tile_size)`` and its raster-order position within a tile is</span>
+<span class="sd">    ``(row % tile_size) * tile_size + (col % tile_size)``.</span>
+
+<span class="sd">    Returns (see ``build_sparse_tile_layout`` for full semantics):</span>
+<span class="sd">      * ``active_tiles`` -- int32 ``[AT]``, ascending dense ids of tiles holding</span>
+<span class="sd">        &gt;= 1 active pixel.</span>
+<span class="sd">      * ``active_tile_mask`` -- bool ``[n_images, tile_height, tile_width]``.</span>
+<span class="sd">      * ``tile_pixel_mask`` -- int64 ``[AT, words_per_tile]`` raster-order bitmask</span>
+<span class="sd">        of active pixels per active tile (``words_per_tile =</span>
+<span class="sd">        ceil(tile_size^2 / 64)``); bits stored as the int64 two&#39;s-complement</span>
+<span class="sd">        pattern (bit 63 -&gt; negative).</span>
+<span class="sd">      * ``tile_pixel_cumsum`` -- int64 ``[AT]``, *inclusive* prefix sum of the</span>
+<span class="sd">        active-pixel count per active tile (consumers read ``cumsum[t-1]`` as the</span>
+<span class="sd">        start of active tile ``t``).</span>
+<span class="sd">      * ``pixel_map`` -- int64 ``[P]``, the argsort taking pixels to</span>
+<span class="sd">        (tile_id, in-tile) sorted order (the write order within tiles).</span>
+
+<span class="sd">    PRECONDITION: ``pixels`` contains no duplicate (image, row, col); callers</span>
+<span class="sd">    deduplicate first. This is an obvious-correct (looped) reference.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">pixels</span><span class="o">.</span><span class="n">device</span>
+    <span class="n">n_tiles</span> <span class="o">=</span> <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_height</span>
+    <span class="n">words</span> <span class="o">=</span> <span class="n">_num_words_per_tile_bitmask</span><span class="p">(</span><span class="n">tile_size</span><span class="p">)</span>
+    <span class="n">P</span> <span class="o">=</span> <span class="n">pixels</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="n">P</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">n_images</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+            <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+                <span class="n">n_images</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bool</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+            <span class="p">),</span>
+            <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">words</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+            <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+            <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+        <span class="p">)</span>
+
+    <span class="n">rows</span> <span class="o">=</span> <span class="n">pixels</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+    <span class="n">cols</span> <span class="o">=</span> <span class="n">pixels</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">P</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+
+    <span class="n">tile_row</span> <span class="o">=</span> <span class="n">rows</span> <span class="o">//</span> <span class="n">tile_size</span>
+    <span class="n">tile_col</span> <span class="o">=</span> <span class="n">cols</span> <span class="o">//</span> <span class="n">tile_size</span>
+    <span class="n">tile_id</span> <span class="o">=</span> <span class="n">img</span> <span class="o">*</span> <span class="n">n_tiles</span> <span class="o">+</span> <span class="n">tile_row</span> <span class="o">*</span> <span class="n">tile_width</span> <span class="o">+</span> <span class="n">tile_col</span>
+    <span class="n">pix_in_tile</span> <span class="o">=</span> <span class="p">(</span><span class="n">rows</span> <span class="o">%</span> <span class="n">tile_size</span><span class="p">)</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">+</span> <span class="p">(</span><span class="n">cols</span> <span class="o">%</span> <span class="n">tile_size</span><span class="p">)</span>
+
+    <span class="c1"># Per-tile activity mask over the dense [n_images, TH, TW] grid.</span>
+    <span class="n">active_tile_mask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n_images</span> <span class="o">*</span> <span class="n">n_tiles</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bool</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">active_tile_mask</span><span class="p">[</span><span class="n">tile_id</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">active_tile_mask</span> <span class="o">=</span> <span class="n">active_tile_mask</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">n_images</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">)</span>
+
+    <span class="c1"># Sort pixels by (tile_id, in-tile position); pixel_map is the argsort.</span>
+    <span class="n">key</span> <span class="o">=</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">&lt;&lt;</span> <span class="mi">32</span><span class="p">)</span> <span class="o">|</span> <span class="n">pix_in_tile</span>
+    <span class="n">pixel_map</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">stable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">tile_id_sorted</span> <span class="o">=</span> <span class="n">tile_id</span><span class="p">[</span><span class="n">pixel_map</span><span class="p">]</span>
+    <span class="n">pix_in_tile_sorted</span> <span class="o">=</span> <span class="n">pix_in_tile</span><span class="p">[</span><span class="n">pixel_map</span><span class="p">]</span>
+
+    <span class="c1"># Run-length encode the sorted tile ids -&gt; active tiles + per-tile counts.</span>
+    <span class="n">active_tiles</span><span class="p">,</span> <span class="n">counts</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">unique_consecutive</span><span class="p">(</span><span class="n">tile_id_sorted</span><span class="p">,</span> <span class="n">return_counts</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">active_tiles</span> <span class="o">=</span> <span class="n">active_tiles</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+    <span class="n">tile_pixel_cumsum</span> <span class="o">=</span> <span class="n">counts</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># inclusive</span>
+
+    <span class="c1"># Per-active-tile raster-order bitmask (built in python ints, then wrapped to</span>
+    <span class="c1"># the int64 two&#39;s-complement bit pattern so bit 63 round-trips).</span>
+    <span class="n">AT</span> <span class="o">=</span> <span class="n">active_tiles</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">starts_l</span> <span class="o">=</span> <span class="p">(</span><span class="n">tile_pixel_cumsum</span> <span class="o">-</span> <span class="n">counts</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+    <span class="n">counts_l</span> <span class="o">=</span> <span class="n">counts</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+    <span class="n">pit_cpu</span> <span class="o">=</span> <span class="n">pix_in_tile_sorted</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+    <span class="n">mask_words</span> <span class="o">=</span> <span class="p">[[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">words</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">AT</span><span class="p">)]</span>
+    <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">AT</span><span class="p">):</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="n">starts_l</span><span class="p">[</span><span class="n">t</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">s</span> <span class="o">+</span> <span class="n">counts_l</span><span class="p">[</span><span class="n">t</span><span class="p">]):</span>
+            <span class="n">bit</span> <span class="o">=</span> <span class="n">pit_cpu</span><span class="p">[</span><span class="n">k</span><span class="p">]</span>
+            <span class="n">mask_words</span><span class="p">[</span><span class="n">t</span><span class="p">][</span><span class="n">bit</span> <span class="o">//</span> <span class="mi">64</span><span class="p">]</span> <span class="o">|=</span> <span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="p">(</span><span class="n">bit</span> <span class="o">%</span> <span class="mi">64</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">AT</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">wi</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">words</span><span class="p">):</span>
+            <span class="n">v</span> <span class="o">=</span> <span class="n">mask_words</span><span class="p">[</span><span class="n">t</span><span class="p">][</span><span class="n">wi</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">v</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">63</span><span class="p">):</span>
+                <span class="n">v</span> <span class="o">-=</span> <span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">64</span>
+            <span class="n">mask_words</span><span class="p">[</span><span class="n">t</span><span class="p">][</span><span class="n">wi</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span>
+    <span class="n">tile_pixel_mask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
+        <span class="n">mask_words</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">AT</span><span class="p">,</span> <span class="n">words</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="n">active_tiles</span><span class="p">,</span>
+        <span class="n">active_tile_mask</span><span class="p">,</span>
+        <span class="n">tile_pixel_mask</span><span class="p">,</span>
+        <span class="n">tile_pixel_cumsum</span><span class="p">,</span>
+        <span class="n">pixel_map</span><span class="p">,</span>
+    <span class="p">)</span>
+
+
 <div class="viewcode-block" id="accumulate">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.accumulate">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">accumulate</span><span class="p">(</span>

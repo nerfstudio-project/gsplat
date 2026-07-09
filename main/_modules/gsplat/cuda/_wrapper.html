@@ -1612,6 +1612,69 @@
     <span class="k">return</span> <span class="n">tile_offsets</span><span class="p">,</span> <span class="n">flatten_ids</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">build_sparse_tile_layout</span><span class="p">(</span>
+    <span class="n">pixels</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P, 2] int, (row, col)</span>
+    <span class="n">image_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P] int, image/camera index of each pixel</span>
+    <span class="n">n_images</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Builds the per-active-tile layout consumed by sparse rasterization.</span>
+
+<span class="sd">    Given the pixels to render, it computes the tile/pixel bookkeeping that lets</span>
+<span class="sd">    sparse rasterization touch only active tiles and write only active pixels.</span>
+<span class="sd">    Pixels are passed in *packed* form (a flat ``[P, 2]`` tensor plus ``[P]``</span>
+<span class="sd">    ``image_ids``, where ``image_ids`` is the per-element batch index).</span>
+
+<span class="sd">    Coordinate convention: ``pixels[p] = (row, col)`` with ``row`` in</span>
+<span class="sd">    ``[0, height)`` and ``col`` in ``[0, width)``. A pixel&#39;s dense tile id is</span>
+<span class="sd">    ``image_id * (tile_height * tile_width) + (row // tile_size) * tile_width +</span>
+<span class="sd">    (col // tile_size)``.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        pixels: Pixel coordinates to render, ``(row, col)``. [P, 2], int.</span>
+<span class="sd">        image_ids: Image/camera index of each pixel. [P], int.</span>
+<span class="sd">        n_images: Number of images (sizes ``active_tile_mask``); may exceed the</span>
+<span class="sd">            largest id present in ``image_ids``.</span>
+<span class="sd">        tile_size: Tile size in pixels.</span>
+<span class="sd">        tile_width: Number of tiles along the image width.</span>
+<span class="sd">        tile_height: Number of tiles along the image height.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **active_tiles**. Int32 [AT]. Ascending dense tile ids of tiles holding</span>
+<span class="sd">          at least one active pixel. Equals ``nonzero(active_tile_mask.flatten())``.</span>
+<span class="sd">        - **active_tile_mask**. Bool [n_images, tile_height, tile_width].</span>
+<span class="sd">        - **tile_pixel_mask**. Int64 [AT, words_per_tile], ``words_per_tile =</span>
+<span class="sd">          ceil(tile_size**2 / 64)``. Raster-order bitmask of active pixels in each</span>
+<span class="sd">          active tile (stored as the int64 two&#39;s-complement bit pattern).</span>
+<span class="sd">        - **tile_pixel_cumsum**. Int64 [AT]. *Inclusive* prefix sum of the</span>
+<span class="sd">          active-pixel count per active tile; consumers read ``cumsum[t-1]`` as</span>
+<span class="sd">          the start of active tile ``t``.</span>
+<span class="sd">        - **pixel_map**. Int64 [P]. Argsort taking pixels into (tile_id, in-tile)</span>
+<span class="sd">          sorted order -- the write order of pixels within tiles.</span>
+
+<span class="sd">    Note:</span>
+<span class="sd">        Callers must deduplicate: ``pixels`` must not contain a repeated</span>
+<span class="sd">        ``(image, row, col)``. The empty case (``P == 0``) returns a length-1</span>
+<span class="sd">        ``tile_pixel_cumsum`` of zero.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="n">pixels</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">pixels</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span><span class="p">,</span> <span class="n">pixels</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">P</span> <span class="o">=</span> <span class="n">pixels</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">assert</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">P</span><span class="p">,),</span> <span class="p">(</span><span class="n">image_ids</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">P</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;build_sparse_tile_layout&quot;</span><span class="p">)(</span>
+        <span class="n">pixels</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">n_images</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">tile_width</span><span class="p">,</span>
+        <span class="n">tile_height</span><span class="p">,</span>
+    <span class="p">)</span>
+
+
 <div class="viewcode-block" id="rasterize_to_pixels">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_pixels">[docs]</a>
 <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-fwd&quot;</span><span class="p">)</span>
