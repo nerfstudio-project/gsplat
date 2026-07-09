@@ -45,6 +45,10 @@ void register_spherical_harmonics_cuda_impl(torch::Library &m);
 
 } // namespace gsplat
 
+#if GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
+#include "OpsNHT.h"
+#endif
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // We define exported types as being "module_local"
@@ -78,8 +82,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         config["reloc"] = static_cast<bool>(GSPLAT_BUILD_RELOC);
         config["losses"] = static_cast<bool>(GSPLAT_BUILD_LOSSES);
         config["camera_wrappers"] = static_cast<bool>(GSPLAT_BUILD_CAMERA_WRAPPERS);
+        config["nht"] = static_cast<bool>(GSPLAT_BUILD_NHT);
         return config;
     });
+
+#if GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
+    m.attr("encoding_expansion_factor") = gsplat::nht_encoding_expansion_factor();
+    m.attr("num_encoding_frequencies") = gsplat::nht_num_encoding_frequencies();
+    m.attr("feature_divisor") = gsplat::nht_feature_divisor();
+#endif
 }
 
 namespace {
@@ -996,6 +1007,13 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("mcmc_perturb_positions(Tensor(a!) positions, Tensor quats, Tensor scales, Tensor opacities, Tensor noise, float scaler) -> ()");
 #endif
 
+#if GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
+    m.def("rasterize_to_pixels_from_world_nht_3dgs_fwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool center_ray_mode, float ray_dir_scale, Tensor? depths_per_gauss, bool use_hit_distance, bool with_normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def("rasterize_to_pixels_from_world_nht_3dgs_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, Tensor? depths_per_gauss, bool use_hit_distance, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor? v_render_depth, Tensor? v_render_normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def("rasterize_to_pixels_from_world_nht_3dgs_fused_fwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool center_ray_mode, float ray_dir_scale, Tensor mlp_params, int mlp_hidden_dim, int mlp_num_layers, bool save_state) -> (Tensor, Tensor, Tensor, Tensor)");
+    m.def("rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool center_ray_mode, float ray_dir_scale, Tensor mlp_params, int mlp_hidden_dim, int mlp_num_layers, float loss_scale, Tensor render_feat, Tensor render_alphas, Tensor last_ids, Tensor v_render_rgb, Tensor v_render_alphas, bool compute_mlp_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
+#endif
+
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
     m.def("distort_camera_rays(Tensor rays, Tensor h_poly, Tensor v_poly, Tensor h_inv_poly, Tensor v_inv_poly, int reference_poly, bool inverse) -> Tensor");
     m.def("eval_bivariate_poly(Tensor x, Tensor y, Tensor poly_coeffs, int order) -> Tensor");
@@ -1027,6 +1045,13 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
 
 #if GSPLAT_BUILD_3DGS
     gsplat::register_mcmc_perturb_cuda_impl(m);
+#endif
+
+#if GSPLAT_BUILD_NHT && GSPLAT_BUILD_3DGS
+    m.impl("rasterize_to_pixels_from_world_nht_3dgs_fwd",           &gsplat::rasterize_to_pixels_from_world_nht_3dgs_fwd);
+    m.impl("rasterize_to_pixels_from_world_nht_3dgs_bwd",           &gsplat::rasterize_to_pixels_from_world_nht_3dgs_bwd);
+    m.impl("rasterize_to_pixels_from_world_nht_3dgs_fused_fwd", &gsplat::rasterize_to_pixels_from_world_nht_3dgs_fused_fwd);
+    m.impl("rasterize_to_pixels_from_world_nht_3dgs_fused_bwd",     &gsplat::rasterize_to_pixels_from_world_nht_3dgs_fused_bwd);
 #endif
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS

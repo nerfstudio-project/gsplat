@@ -1306,6 +1306,7 @@ def rasterize_to_pixels_eval3d(
     use_hit_distance: bool = False,
     return_normals: bool = False,
     renderer_config: Any = None,
+    nht_params: Optional["NHTParams"] = None,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -1363,6 +1364,7 @@ def rasterize_to_pixels_eval3d(
         use_hit_distance=use_hit_distance,
         return_normals=return_normals,
         renderer_config=renderer_config,
+        nht_params=nht_params,
     )
     return colors, alphas
 
@@ -1402,6 +1404,7 @@ def rasterize_to_pixels_eval3d_extra(
     renderer_config: Any = None,
     return_last_ids: bool = True,
     unsafe_masked_tile_outputs: bool = False,
+    nht_params: Optional["NHTParams"] = None,
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
@@ -1440,6 +1443,41 @@ def rasterize_to_pixels_eval3d_extra(
     if ut_params is None:
         ut_params = UnscentedTransformParameters()
     renderer_config = _renderer_config_to_cuda(renderer_config)
+
+    if nht_params is not None:
+        from gsplat.nht._wrapper import rasterize_to_pixels_eval3d_nht_extra
+
+        return rasterize_to_pixels_eval3d_nht_extra(
+            means=means,
+            quats=quats,
+            scales=scales,
+            colors=colors,
+            opacities=opacities,
+            viewmats=viewmats,
+            Ks=Ks,
+            image_width=image_width,
+            image_height=image_height,
+            tile_size=tile_size,
+            isect_offsets=isect_offsets,
+            flatten_ids=flatten_ids,
+            backgrounds=backgrounds,
+            masks=masks,
+            camera_model=camera_model,
+            ut_params=ut_params,
+            rays=rays,
+            radial_coeffs=radial_coeffs,
+            tangential_coeffs=tangential_coeffs,
+            thin_prism_coeffs=thin_prism_coeffs,
+            ftheta_coeffs=ftheta_coeffs,
+            lidar_coeffs=lidar_coeffs,
+            external_distortion_coeffs=external_distortion_coeffs,
+            rolling_shutter=rolling_shutter,
+            viewmats_rs=viewmats_rs,
+            return_sample_counts=return_sample_counts,
+            use_hit_distance=use_hit_distance,
+            return_normals=return_normals,
+            nht_params=nht_params,
+        )
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)

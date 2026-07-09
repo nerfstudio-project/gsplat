@@ -304,9 +304,8 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h).");
 
     auto launch_kernel = [&]<typename ChannelsT>() {
-        constexpr uint32_t CDIM = ChannelsT::value;
-
         auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>() {
+            constexpr uint32_t CDIM = ChannelsT::value;
             const dim3 threads = dim3{CTA_SIZE, 1, 1};
             const int64_t shmem_size =
                 CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));

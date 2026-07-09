@@ -1380,7 +1380,12 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     const at::Tensor batch_offsets,   // [num_tiles + 1] int32
     const at::Tensor bid_to_slot,     // [total_batches] int32
     const int64_t total_batches,       // scalar; equals batch_offsets[num_tiles]
-    const bool fwd_only,
+    // NOTE: must match RasterizeToPixelsFromWorld3DGS.h exactly (no top-level
+    // `const`). A `const` here is dropped from the function *type* but perturbs
+    // MSVC's argument back-reference table under nvcc's host compiler, so the
+    // .cu emits a different mangled name than cl-compiled Rasterization.cpp
+    // expects -> LNK2019 on Windows. Keep the qualifier identical to the decl.
+    bool fwd_only,
     // outputs
     at::Tensor renders, // [..., C, image_height, image_width, channels]
     at::Tensor alphas,  // [..., C, image_height, image_width]
@@ -1621,6 +1626,19 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
         // batch-replay keep a single instantiation. unsafe_masked_tile_outputs
         // compiles out batch-scan's masked-tile safe-store.
         auto launch_batch_scan = [&]<bool SAFE_MASKED_OUTPUTS>() {
+            // Re-derived locally (not captured) — MSVC rejects implicit
+            // capture of an enclosing lambda's constexpr local as a
+            // "simple capture" (no automatic storage duration). The
+            // enclosing lambdas' own type template parameters (ChannelsT,
+            // ReturnNormalsT, UseHitDistanceT, TileSizeT, FwdOnlyT) are
+            // always visible here without capture, so re-deriving from
+            // them sidesteps the issue.
+            constexpr uint32_t CDIM = ChannelsT::value;
+            constexpr bool ReturnNormals = static_cast<bool>(ReturnNormalsT::value);
+            constexpr bool UseHitDistance = static_cast<bool>(UseHitDistanceT::value);
+            constexpr uint32_t TILE_SIZE = TileSizeT::value;
+            constexpr uint32_t CTA_SIZE = CtaSizeForTile<TILE_SIZE>::value;
+            constexpr bool ForBackward = FwdOnlyT::value == 0;
             rasterize_to_pixels_from_world_3dgs_fwd_batch_scan_kernel<CDIM, TILE_SIZE, CTA_SIZE, ReturnNormals, UseHitDistance, ForBackward, SAFE_MASKED_OUTPUTS, float>
                 <<<grid_batch_scan, threads, 0, stream>>>(
                     B, C, N, n_isects,
