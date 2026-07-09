@@ -1201,6 +1201,89 @@
 
 
 
+<span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;isect-sparse&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">isect_tiles_sparse</span><span class="p">(</span>
+    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N, 2] or [nnz, 2]</span>
+    <span class="n">radii</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N, 2] or [nnz, 2]</span>
+    <span class="n">depths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, N] or [nnz]</span>
+    <span class="n">tile_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [I, tile_height, tile_width] bool</span>
+    <span class="n">active_tiles</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [num_active_tiles] int32</span>
+    <span class="n">n_images</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz] int32, required in packed mode</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Maps projected Gaussians to a caller-supplied set of *active* tiles.</span>
+
+<span class="sd">    The sparse counterpart of :func:`isect_tiles` + :func:`isect_offset_encode`:</span>
+<span class="sd">    it enumerates only the intersections that fall in tiles flagged active by</span>
+<span class="sd">    ``tile_mask`` and returns a compacted per-active-tile offset table.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means2d: Projected Gaussian means. [I, N, 2] (dense) or [nnz, 2] (packed).</span>
+<span class="sd">        radii: Per-axis pixel radii. [I, N, 2] (dense) or [nnz, 2] (packed).</span>
+<span class="sd">        depths: Z-depth of the projected Gaussians. [I, N] or [nnz].</span>
+<span class="sd">        tile_mask: Bool tile-activity mask. [n_images, tile_height, tile_width].</span>
+<span class="sd">        active_tiles: Ascending dense tile ids (``image_id * tile_height *</span>
+<span class="sd">            tile_width + y * tile_width + x``) of the active tiles. [num_active_tiles],</span>
+<span class="sd">            int32. Conventionally ``nonzero(tile_mask.flatten())``.</span>
+<span class="sd">        n_images: Number of images.</span>
+<span class="sd">        tile_size: Tile size in pixels.</span>
+<span class="sd">        tile_width: Number of tiles along the image width.</span>
+<span class="sd">        tile_height: Number of tiles along the image height.</span>
+<span class="sd">        image_ids: The image index of each Gaussian. [nnz], int32. Required (and</span>
+<span class="sd">            only used) in packed mode.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Tile offsets**. Int32 [num_active_tiles + 1]. ``tile_offsets[i]`` is</span>
+<span class="sd">          the exclusive prefix-sum start of the flatten-id range for</span>
+<span class="sd">          ``active_tiles[i]``; the trailing sentinel ``tile_offsets[-1] ==</span>
+<span class="sd">          n_isects``.</span>
+<span class="sd">        - **Flatten ids**. Int32 [n_isects]. The global flatten indices in</span>
+<span class="sd">          [I * N] (dense) or [nnz] (packed), sorted by ``(image_id, tile_id,</span>
+<span class="sd">          depth)`` near-to-far.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">packed</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span>
+    <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
+        <span class="n">nnz</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">image_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;image_ids is required when packed ([nnz, 2])&quot;</span>
+        <span class="k">assert</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">image_ids</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">I</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">I</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">I</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">I</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">I</span> <span class="o">==</span> <span class="n">n_images</span><span class="p">,</span> <span class="p">(</span><span class="n">I</span><span class="p">,</span> <span class="n">n_images</span><span class="p">)</span>
+
+    <span class="k">assert</span> <span class="n">tile_mask</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">n_images</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">),</span> <span class="n">tile_mask</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">tile_mask</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">bool</span><span class="p">,</span> <span class="n">tile_mask</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="k">assert</span> <span class="n">active_tiles</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">active_tiles</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="p">(</span>
+        <span class="n">active_tiles</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+        <span class="n">active_tiles</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">tile_offsets</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;intersect_tile_sparse&quot;</span><span class="p">)(</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">radii</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">depths</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">image_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">tile_mask</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">active_tiles</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">n_images</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">tile_width</span><span class="p">,</span>
+        <span class="n">tile_height</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">tile_offsets</span><span class="p">,</span> <span class="n">flatten_ids</span>
+
+
 <div class="viewcode-block" id="rasterize_to_pixels">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_pixels">[docs]</a>
 <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-fwd&quot;</span><span class="p">)</span>
