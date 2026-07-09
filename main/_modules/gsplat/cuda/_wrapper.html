@@ -347,6 +347,13 @@
 <span class="n">ExternalDistortionModelMeta</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;bivariate-windshield&quot;</span><span class="p">]</span>
 <span class="n">CameraModel</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">,</span> <span class="s2">&quot;lidar&quot;</span><span class="p">]</span>
 
+<span class="c1"># Autograd for the migrated ops is attached in Python (torch.library.register_autograd)</span>
+<span class="c1"># rather than C++. The C++ module exports only each op&#39;s `&lt;op&gt;_fwd` and `&lt;op&gt;_bwd`; the</span>
+<span class="c1"># backward is wired to the forward op when this module is imported (the call at the end</span>
+<span class="c1"># of the file), so direct torch.ops.gsplat.* callers get autograd too, not only the</span>
+<span class="c1"># Python wrappers.</span>
+<span class="n">_AUTOGRAD_REGISTRATIONS_DONE</span> <span class="o">=</span> <span class="kc">False</span>
+
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_lazy_cuda_func</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">call_cuda</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
@@ -358,9 +365,69 @@
         <span class="c1"># pylint: disable=import-outside-toplevel</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
 
+        <span class="k">if</span> <span class="n">_C</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">_ensure_autograd_registrations</span><span class="p">()</span>
         <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">gsplat</span><span class="p">,</span> <span class="n">name</span><span class="p">)(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">call_cuda</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_has_schema</span><span class="p">(</span><span class="n">op_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Whether `gsplat::&lt;op_name&gt;` is registered (it may be compiled out by build flags).&quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">_C</span><span class="o">.</span><span class="n">_dispatch_find_schema_or_throw</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;gsplat::</span><span class="si">{</span><span class="n">op_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">RuntimeError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">False</span>
+    <span class="k">return</span> <span class="kc">True</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_dense_contiguous</span><span class="p">(</span><span class="n">t</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Materialize an incoming output gradient as a dense, contiguous tensor.</span>
+
+<span class="sd">    Backward CUDA ops index raw dense storage and require contiguous inputs, so a</span>
+<span class="sd">    sparse gradient is densified and any gradient is made contiguous. ``None`` (a</span>
+<span class="sd">    disabled or non-differentiable output) passes through unchanged.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">t</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">to_dense</span><span class="p">()</span> <span class="k">if</span> <span class="n">t</span><span class="o">.</span><span class="n">is_sparse</span> <span class="k">else</span> <span class="n">t</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_register_autograd</span><span class="p">(</span><span class="n">register</span><span class="p">:</span> <span class="nb">type</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Attach a Python autograd backward to the C++ forward op ``gsplat::&lt;base&gt;``.</span>
+
+<span class="sd">    ``register`` is a per-op class grouping the op&#39;s hooks: its ``base`` op name and</span>
+<span class="sd">    static ``setup_context`` / ``backward`` methods. Registering autograd on the</span>
+<span class="sd">    forward op makes the op itself differentiable through the dispatcher, so its</span>
+<span class="sd">    backward is recorded whenever it runs under autograd; ``backward`` invokes</span>
+<span class="sd">    ``torch.ops.gsplat.&lt;base&gt;_bwd``. No-op if either op was compiled out.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="n">register</span><span class="o">.</span><span class="n">base</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">_has_schema</span><span class="p">(</span><span class="n">base</span><span class="p">)</span> <span class="ow">and</span> <span class="n">_has_schema</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)):</span>
+        <span class="k">return</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">library</span><span class="o">.</span><span class="n">register_autograd</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;gsplat::</span><span class="si">{</span><span class="n">base</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">register</span><span class="o">.</span><span class="n">backward</span><span class="p">,</span> <span class="n">setup_context</span><span class="o">=</span><span class="n">register</span><span class="o">.</span><span class="n">setup_context</span>
+    <span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_ensure_autograd_registrations</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Install the Python autograd backends for the migrated ops, exactly once.</span>
+
+<span class="sd">    Populated one op at a time as each C++ autograd Function is ported to Python.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">global</span> <span class="n">_AUTOGRAD_REGISTRATIONS_DONE</span>
+    <span class="k">if</span> <span class="n">_AUTOGRAD_REGISTRATIONS_DONE</span><span class="p">:</span>
+        <span class="k">return</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterSphericalHarmonics</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterQuatScaleToCovarPreci</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterProjectionEWASimple</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterProjectionEWA3DGSFused</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterProjectionEWA3DGSPacked</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterProjection2DGSFused</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterProjection2DGSPacked</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterRasterizeToPixels3DGS</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterRasterizeToPixels2DGS</span><span class="p">)</span>
+    <span class="n">_AUTOGRAD_REGISTRATIONS_DONE</span> <span class="o">=</span> <span class="kc">True</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_lazy_cuda_cls</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
@@ -721,6 +788,39 @@
 
 
 
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterSphericalHarmonics</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::spherical_harmonics op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;spherical_harmonics&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">degrees_to_use</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">degrees_to_use</span> <span class="o">=</span> <span class="n">degrees_to_use</span>
+        <span class="c1"># save_for_backward round-trips None as None, so the optional masks save directly.</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
+        <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="c1"># dirs is forward input index 1; its gradient is wanted only when requested.</span>
+        <span class="n">compute_v_dirs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">v_coeffs</span><span class="p">,</span> <span class="n">v_dirs</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">degrees_to_use</span><span class="p">,</span>
+            <span class="n">dirs</span><span class="p">,</span>
+            <span class="n">coeffs</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_colors</span><span class="p">),</span>
+            <span class="n">compute_v_dirs</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># degrees_to_use</span>
+            <span class="n">v_dirs</span><span class="p">,</span>
+            <span class="n">v_coeffs</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># masks</span>
+        <span class="p">)</span>
+
+
 <div class="viewcode-block" id="quat_scale_to_covar_preci">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.quat_scale_to_covar_preci">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">quat_scale_to_covar_preci</span><span class="p">(</span>
@@ -753,6 +853,37 @@
         <span class="n">quats</span><span class="p">,</span> <span class="n">scales</span><span class="p">,</span> <span class="n">compute_covar</span><span class="p">,</span> <span class="n">compute_preci</span><span class="p">,</span> <span class="n">triu</span>
     <span class="p">)</span></div>
 
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterQuatScaleToCovarPreci</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::quat_scale_to_covar_preci op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;quat_scale_to_covar_preci&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">quats</span><span class="p">,</span> <span class="n">scales</span><span class="p">,</span> <span class="n">_compute_covar</span><span class="p">,</span> <span class="n">_compute_preci</span><span class="p">,</span> <span class="n">triu</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">triu</span> <span class="o">=</span> <span class="n">triu</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">scales</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_precis</span><span class="p">):</span>
+        <span class="n">quats</span><span class="p">,</span> <span class="n">scales</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="c1"># A disabled output has a None grad, which passes through unchanged.</span>
+        <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">triu</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_covars</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_precis</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_quats</span><span class="p">,</span>
+            <span class="n">v_scales</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># compute_covar</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># compute_preci</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># triu</span>
+        <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">persp_proj</span><span class="p">(</span>
@@ -819,6 +950,42 @@
         <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">camera_model_type</span>
     <span class="p">)</span></div>
 
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjectionEWASimple</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_ewa_simple op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_ewa_simple&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">camera_model</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model</span> <span class="o">=</span> <span class="n">camera_model</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_covars2d</span><span class="p">):</span>
+        <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_covars2d</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_covars</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Ks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># camera_model</span>
+        <span class="p">)</span>
 
 
 <div class="viewcode-block" id="fully_fused_projection">
@@ -970,6 +1137,234 @@
             <span class="n">camera_model_type</span><span class="p">,</span>
         <span class="p">)</span></div>
 
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjectionEWA3DGSFused</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_ewa_3dgs_fused op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_ewa_3dgs_fused&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">_opacities</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">,</span>
+            <span class="n">eps2d</span><span class="p">,</span>
+            <span class="n">_near_plane</span><span class="p">,</span>
+            <span class="n">_far_plane</span><span class="p">,</span>
+            <span class="n">_radius_clip</span><span class="p">,</span>
+            <span class="n">_calc_compensations</span><span class="p">,</span>
+            <span class="n">camera_model</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="n">radii</span><span class="p">,</span> <span class="n">_means2d</span><span class="p">,</span> <span class="n">_depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">output</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span> <span class="o">=</span> <span class="n">eps2d</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model</span> <span class="o">=</span> <span class="n">camera_model</span>
+        <span class="c1"># covars / quats / scales / compensations may be None; save_for_backward</span>
+        <span class="c1"># round-trips None as None.</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">radii</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">compensations</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_conics</span><span class="p">,</span> <span class="n">v_compensations</span><span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">radii</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">compensations</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+        <span class="p">)(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model</span><span class="p">,</span>
+            <span class="n">radii</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">compensations</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_depths</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_conics</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_compensations</span><span class="p">),</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
+                <span class="mi">5</span>
+            <span class="p">],</span>  <span class="c1"># viewmats_requires_grad (viewmats is input index 5)</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_covars</span><span class="p">,</span>
+            <span class="n">v_quats</span><span class="p">,</span>
+            <span class="n">v_scales</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># opacities</span>
+            <span class="n">v_viewmats</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Ks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># eps2d</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># near_plane</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># far_plane</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># radius_clip</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># calc_compensations</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># camera_model</span>
+        <span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjectionEWA3DGSPacked</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_ewa_3dgs_packed op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_ewa_3dgs_packed&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">_opacities</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">,</span>
+            <span class="n">eps2d</span><span class="p">,</span>
+            <span class="n">_near_plane</span><span class="p">,</span>
+            <span class="n">_far_plane</span><span class="p">,</span>
+            <span class="n">_radius_clip</span><span class="p">,</span>
+            <span class="n">sparse_grad</span><span class="p">,</span>
+            <span class="n">_calc_compensations</span><span class="p">,</span>
+            <span class="n">camera_model</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="p">(</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">_indptr</span><span class="p">,</span>
+            <span class="n">_radii</span><span class="p">,</span>
+            <span class="n">_means2d</span><span class="p">,</span>
+            <span class="n">_depths</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">compensations</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">output</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span> <span class="o">=</span> <span class="n">eps2d</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model</span> <span class="o">=</span> <span class="n">camera_model</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span> <span class="o">=</span> <span class="n">sparse_grad</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">compensations</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
+        <span class="bp">cls</span><span class="p">,</span>
+        <span class="n">ctx</span><span class="p">,</span>
+        <span class="n">v_batch_ids</span><span class="p">,</span>
+        <span class="n">v_camera_ids</span><span class="p">,</span>
+        <span class="n">v_gaussian_ids</span><span class="p">,</span>
+        <span class="n">v_indptr</span><span class="p">,</span>
+        <span class="n">v_radii</span><span class="p">,</span>
+        <span class="n">v_means2d</span><span class="p">,</span>
+        <span class="n">v_depths</span><span class="p">,</span>
+        <span class="n">v_conics</span><span class="p">,</span>
+        <span class="n">v_compensations</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">compensations</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+        <span class="p">)(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">compensations</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_depths</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_conics</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_compensations</span><span class="p">),</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
+                <span class="mi">5</span>
+            <span class="p">],</span>  <span class="c1"># viewmats_requires_grad (viewmats is input index 5)</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_covars</span><span class="p">,</span>
+            <span class="n">v_quats</span><span class="p">,</span>
+            <span class="n">v_scales</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># opacities</span>
+            <span class="n">v_viewmats</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Ks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># eps2d</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># near_plane</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># far_plane</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># radius_clip</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># sparse_grad</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># calc_compensations</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># camera_model</span>
+        <span class="p">)</span>
 
 
 <div class="viewcode-block" id="isect_tiles">
@@ -1265,7 +1660,7 @@
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
-    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">means2d_absgrad</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">,</span> <span class="n">_last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
         <span class="s2">&quot;rasterize_to_pixels_3dgs&quot;</span>
     <span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1435,6 +1830,116 @@
         <span class="n">num_depth_samples</span><span class="p">,</span>
     <span class="p">)</span></div>
 
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterRasterizeToPixels3DGS</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::rasterize_to_pixels_3dgs op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;rasterize_to_pixels_3dgs&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">image_width</span><span class="p">,</span>
+            <span class="n">image_height</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">_packed</span><span class="p">,</span>
+            <span class="n">absgrad</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="n">_render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">,</span> <span class="n">last_ids</span> <span class="o">=</span> <span class="n">output</span>
+        <span class="c1"># last_ids and the absgrad holder are forward-internal; the backward fills the</span>
+        <span class="c1"># holder in place (it must not be tracked by autograd).</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">mark_non_differentiable</span><span class="p">(</span><span class="n">last_ids</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">)</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">image_width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">image_height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span> <span class="o">=</span> <span class="n">tile_size</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span> <span class="o">=</span> <span class="n">absgrad</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">means2d_absgrad</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
+        <span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_render_colors</span><span class="p">,</span> <span class="n">v_render_alphas</span><span class="p">,</span> <span class="n">v_means2d_absgrad</span><span class="p">,</span> <span class="n">v_last_ids</span>
+    <span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">means2d_absgrad</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="p">(</span>
+            <span class="n">v_means2d_abs</span><span class="p">,</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_backgrounds</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_colors</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_alphas</span><span class="p">),</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
+                <span class="mi">4</span>
+            <span class="p">],</span>  <span class="c1"># compute_v_backgrounds (backgrounds is input index 4)</span>
+        <span class="p">)</span>
+        <span class="c1"># The abs gradient is not a returned input grad; surface it by filling the</span>
+        <span class="c1"># saved means2d.absgrad holder in place.</span>
+        <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span> <span class="ow">and</span> <span class="n">v_means2d_abs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">means2d_absgrad</span><span class="o">.</span><span class="n">copy_</span><span class="p">(</span><span class="n">v_means2d_abs</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_backgrounds</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># masks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_size</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># isect_offsets</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># flatten_ids</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># packed</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># absgrad</span>
+        <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_eval3d</span><span class="p">(</span>
@@ -1904,6 +2409,194 @@
 
 
 
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjection2DGSFused</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_2dgs_fused op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_2dgs_fused&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">,</span>
+            <span class="n">_eps2d</span><span class="p">,</span>
+            <span class="n">_near_plane</span><span class="p">,</span>
+            <span class="n">_far_plane</span><span class="p">,</span>
+            <span class="n">_radius_clip</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="n">radii</span><span class="p">,</span> <span class="n">_means2d</span><span class="p">,</span> <span class="n">_depths</span><span class="p">,</span> <span class="n">ray_transforms</span><span class="p">,</span> <span class="n">_normals</span> <span class="o">=</span> <span class="n">output</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">radii</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_ray_transforms</span><span class="p">,</span> <span class="n">v_normals</span><span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">radii</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+        <span class="p">)(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">radii</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_depths</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_ray_transforms</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_normals</span><span class="p">),</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
+                <span class="mi">3</span>
+            <span class="p">],</span>  <span class="c1"># viewmats_requires_grad (viewmats is input index 3)</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_quats</span><span class="p">,</span>
+            <span class="n">v_scales</span><span class="p">,</span>
+            <span class="n">v_viewmats</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Ks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># eps2d</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># near_plane</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># far_plane</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># radius_clip</span>
+        <span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterProjection2DGSPacked</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::projection_2dgs_packed op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;projection_2dgs_packed&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">,</span>
+            <span class="n">_near_plane</span><span class="p">,</span>
+            <span class="n">_far_plane</span><span class="p">,</span>
+            <span class="n">_radius_clip</span><span class="p">,</span>
+            <span class="n">sparse_grad</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="p">(</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">_indptr</span><span class="p">,</span>
+            <span class="n">_radii</span><span class="p">,</span>
+            <span class="n">_means2d</span><span class="p">,</span>
+            <span class="n">_depths</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+            <span class="n">_normals</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">output</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span> <span class="o">=</span> <span class="n">sparse_grad</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
+        <span class="bp">cls</span><span class="p">,</span>
+        <span class="n">ctx</span><span class="p">,</span>
+        <span class="n">v_batch_ids</span><span class="p">,</span>
+        <span class="n">v_camera_ids</span><span class="p">,</span>
+        <span class="n">v_gaussian_ids</span><span class="p">,</span>
+        <span class="n">v_indptr</span><span class="p">,</span>
+        <span class="n">v_radii</span><span class="p">,</span>
+        <span class="n">v_means2d</span><span class="p">,</span>
+        <span class="n">v_depths</span><span class="p">,</span>
+        <span class="n">v_ray_transforms</span><span class="p">,</span>
+        <span class="n">v_normals</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+        <span class="p">)(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_means2d</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_depths</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_ray_transforms</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_normals</span><span class="p">),</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
+                <span class="mi">3</span>
+            <span class="p">],</span>  <span class="c1"># viewmats_requires_grad (viewmats is input index 3)</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_quats</span><span class="p">,</span>
+            <span class="n">v_scales</span><span class="p">,</span>
+            <span class="n">v_viewmats</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Ks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># near_plane</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># far_plane</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># radius_clip</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># sparse_grad</span>
+        <span class="p">)</span>
+
+
 <div class="viewcode-block" id="rasterize_to_pixels_2dgs">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_pixels_2dgs">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_2dgs</span><span class="p">(</span>
@@ -1966,6 +2659,8 @@
         <span class="n">render_distort</span><span class="p">,</span>
         <span class="n">render_median</span><span class="p">,</span>
         <span class="n">means2d_absgrad</span><span class="p">,</span>
+        <span class="n">_last_ids</span><span class="p">,</span>
+        <span class="n">_median_ids</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_2dgs&quot;</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">ray_transforms</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1989,6 +2684,155 @@
 
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">render_normals</span><span class="p">,</span> <span class="n">render_distort</span><span class="p">,</span> <span class="n">render_median</span></div>
 
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterRasterizeToPixels2DGS</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::rasterize_to_pixels_2dgs op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;rasterize_to_pixels_2dgs&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">normals</span><span class="p">,</span>
+            <span class="n">densify</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">image_width</span><span class="p">,</span>
+            <span class="n">image_height</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">tile_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">_packed</span><span class="p">,</span>
+            <span class="n">absgrad</span><span class="p">,</span>
+            <span class="n">_distloss</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="p">(</span>
+            <span class="n">render_colors</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">_render_normals</span><span class="p">,</span>
+            <span class="n">_render_distort</span><span class="p">,</span>
+            <span class="n">_render_median</span><span class="p">,</span>
+            <span class="n">means2d_absgrad</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">median_ids</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">output</span>
+        <span class="c1"># last_ids / median_ids and the absgrad holder are forward-internal; the</span>
+        <span class="c1"># backward fills the holder in place (it must not be tracked by autograd).</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">mark_non_differentiable</span><span class="p">(</span><span class="n">last_ids</span><span class="p">,</span> <span class="n">median_ids</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">)</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">image_width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">image_height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span> <span class="o">=</span> <span class="n">tile_size</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span> <span class="o">=</span> <span class="n">absgrad</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">normals</span><span class="p">,</span>
+            <span class="n">densify</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">tile_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_colors</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">median_ids</span><span class="p">,</span>
+            <span class="n">means2d_absgrad</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
+        <span class="bp">cls</span><span class="p">,</span>
+        <span class="n">ctx</span><span class="p">,</span>
+        <span class="n">v_render_colors</span><span class="p">,</span>
+        <span class="n">v_render_alphas</span><span class="p">,</span>
+        <span class="n">v_render_normals</span><span class="p">,</span>
+        <span class="n">v_render_distort</span><span class="p">,</span>
+        <span class="n">v_render_median</span><span class="p">,</span>
+        <span class="n">v_means2d_absgrad</span><span class="p">,</span>
+        <span class="n">v_last_ids</span><span class="p">,</span>
+        <span class="n">v_median_ids</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">normals</span><span class="p">,</span>
+            <span class="n">densify</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">tile_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_colors</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">median_ids</span><span class="p">,</span>
+            <span class="n">means2d_absgrad</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="p">(</span>
+            <span class="n">v_means2d_abs</span><span class="p">,</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_ray_transforms</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_normals</span><span class="p">,</span>
+            <span class="n">v_densify</span><span class="p">,</span>
+            <span class="n">v_backgrounds</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">ray_transforms</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">normals</span><span class="p">,</span>
+            <span class="n">densify</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">tile_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_colors</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">median_ids</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_colors</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_alphas</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_normals</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_distort</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_median</span><span class="p">),</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
+                <span class="mi">6</span>
+            <span class="p">],</span>  <span class="c1"># compute_v_backgrounds (backgrounds is input index 6)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span> <span class="ow">and</span> <span class="n">v_means2d_abs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">means2d_absgrad</span><span class="o">.</span><span class="n">copy_</span><span class="p">(</span><span class="n">v_means2d_abs</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_ray_transforms</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_normals</span><span class="p">,</span>
+            <span class="n">v_densify</span><span class="p">,</span>
+            <span class="n">v_backgrounds</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># masks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_size</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_offsets</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># flatten_ids</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># packed</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># absgrad</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># distloss</span>
+        <span class="p">)</span>
 
 
 <div class="viewcode-block" id="rasterize_to_indices_in_range_2dgs">
@@ -2052,6 +2896,12 @@
         <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
     <span class="p">)</span></div>
 
+
+
+<span class="c1"># Wire the Python autograd backends now, at import time. The module-level handles above</span>
+<span class="c1"># already load the C extension, so by here the op schemas exist; _register_autograd is a</span>
+<span class="c1"># no-op for any op whose schema is absent, and the whole pass is idempotent.</span>
+<span class="n">_ensure_autograd_registrations</span><span class="p">()</span>
 </pre></div>
         </article>
       </div>
