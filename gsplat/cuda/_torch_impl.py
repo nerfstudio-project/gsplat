@@ -603,6 +603,120 @@ def _isect_tiles_sparse(
     return tile_offsets, flatten_ids
 
 
+def _num_words_per_tile_bitmask(tile_size: int) -> int:
+    """Number of int64 words needed to bit-pack a ``tile_size x tile_size`` tile."""
+    return (tile_size * tile_size + 63) // 64
+
+
+def _build_sparse_tile_layout(
+    pixels: Tensor,  # [P, 2] int, (row, col) == (y, x)
+    image_ids: Tensor,  # [P] int, image/camera index of each pixel
+    n_images: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Pytorch reference for ``gsplat.cuda._wrapper.build_sparse_tile_layout()``.
+
+    Builds the per-active-tile layout that sparse rasterization consumes. Pixels
+    are given in packed form (``pixels`` + ``image_ids``) rather than as a single
+    ragged batch.
+
+    Coordinate convention: ``pixels[p] = (row, col)`` with ``row`` in
+    ``[0, height)`` and ``col`` in ``[0, width)``. A pixel's dense tile id is
+    ``image_id * (tile_height * tile_width) + (row // tile_size) * tile_width +
+    (col // tile_size)`` and its raster-order position within a tile is
+    ``(row % tile_size) * tile_size + (col % tile_size)``.
+
+    Returns (see ``build_sparse_tile_layout`` for full semantics):
+      * ``active_tiles`` -- int32 ``[AT]``, ascending dense ids of tiles holding
+        >= 1 active pixel.
+      * ``active_tile_mask`` -- bool ``[n_images, tile_height, tile_width]``.
+      * ``tile_pixel_mask`` -- int64 ``[AT, words_per_tile]`` raster-order bitmask
+        of active pixels per active tile (``words_per_tile =
+        ceil(tile_size^2 / 64)``); bits stored as the int64 two's-complement
+        pattern (bit 63 -> negative).
+      * ``tile_pixel_cumsum`` -- int64 ``[AT]``, *inclusive* prefix sum of the
+        active-pixel count per active tile (consumers read ``cumsum[t-1]`` as the
+        start of active tile ``t``).
+      * ``pixel_map`` -- int64 ``[P]``, the argsort taking pixels to
+        (tile_id, in-tile) sorted order (the write order within tiles).
+
+    PRECONDITION: ``pixels`` contains no duplicate (image, row, col); callers
+    deduplicate first. This is an obvious-correct (looped) reference.
+    """
+    device = pixels.device
+    n_tiles = tile_width * tile_height
+    words = _num_words_per_tile_bitmask(tile_size)
+    P = pixels.shape[0]
+
+    if P == 0 or n_images == 0:
+        return (
+            torch.empty(0, dtype=torch.int32, device=device),
+            torch.zeros(
+                n_images, tile_height, tile_width, dtype=torch.bool, device=device
+            ),
+            torch.empty(0, words, dtype=torch.int64, device=device),
+            torch.zeros(1, dtype=torch.int64, device=device),
+            torch.empty(0, dtype=torch.int64, device=device),
+        )
+
+    rows = pixels[:, 0].to(torch.int64)
+    cols = pixels[:, 1].to(torch.int64)
+    img = image_ids.reshape(P).to(torch.int64)
+
+    tile_row = rows // tile_size
+    tile_col = cols // tile_size
+    tile_id = img * n_tiles + tile_row * tile_width + tile_col
+    pix_in_tile = (rows % tile_size) * tile_size + (cols % tile_size)
+
+    # Per-tile activity mask over the dense [n_images, TH, TW] grid.
+    active_tile_mask = torch.zeros(n_images * n_tiles, dtype=torch.bool, device=device)
+    active_tile_mask[tile_id] = True
+    active_tile_mask = active_tile_mask.view(n_images, tile_height, tile_width)
+
+    # Sort pixels by (tile_id, in-tile position); pixel_map is the argsort.
+    key = (tile_id << 32) | pix_in_tile
+    pixel_map = torch.argsort(key, stable=True)
+    tile_id_sorted = tile_id[pixel_map]
+    pix_in_tile_sorted = pix_in_tile[pixel_map]
+
+    # Run-length encode the sorted tile ids -> active tiles + per-tile counts.
+    active_tiles, counts = torch.unique_consecutive(tile_id_sorted, return_counts=True)
+    active_tiles = active_tiles.to(torch.int32)
+    tile_pixel_cumsum = counts.cumsum(0)  # inclusive
+
+    # Per-active-tile raster-order bitmask (built in python ints, then wrapped to
+    # the int64 two's-complement bit pattern so bit 63 round-trips).
+    AT = active_tiles.shape[0]
+    starts_l = (tile_pixel_cumsum - counts).tolist()
+    counts_l = counts.tolist()
+    pit_cpu = pix_in_tile_sorted.cpu().tolist()
+    mask_words = [[0] * words for _ in range(AT)]
+    for t in range(AT):
+        s = starts_l[t]
+        for k in range(s, s + counts_l[t]):
+            bit = pit_cpu[k]
+            mask_words[t][bit // 64] |= 1 << (bit % 64)
+    for t in range(AT):
+        for wi in range(words):
+            v = mask_words[t][wi]
+            if v >= (1 << 63):
+                v -= 1 << 64
+            mask_words[t][wi] = v
+    tile_pixel_mask = torch.tensor(
+        mask_words, dtype=torch.int64, device=device
+    ).reshape(AT, words)
+
+    return (
+        active_tiles,
+        active_tile_mask,
+        tile_pixel_mask,
+        tile_pixel_cumsum,
+        pixel_map,
+    )
+
+
 def accumulate(
     means2d: Tensor,  # [..., N, 2]
     conics: Tensor,  # [..., N, 3]

@@ -1281,6 +1281,69 @@ def isect_tiles_sparse(
     return tile_offsets, flatten_ids
 
 
+def build_sparse_tile_layout(
+    pixels: Tensor,  # [P, 2] int, (row, col)
+    image_ids: Tensor,  # [P] int, image/camera index of each pixel
+    n_images: int,
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Builds the per-active-tile layout consumed by sparse rasterization.
+
+    Given the pixels to render, it computes the tile/pixel bookkeeping that lets
+    sparse rasterization touch only active tiles and write only active pixels.
+    Pixels are passed in *packed* form (a flat ``[P, 2]`` tensor plus ``[P]``
+    ``image_ids``, where ``image_ids`` is the per-element batch index).
+
+    Coordinate convention: ``pixels[p] = (row, col)`` with ``row`` in
+    ``[0, height)`` and ``col`` in ``[0, width)``. A pixel's dense tile id is
+    ``image_id * (tile_height * tile_width) + (row // tile_size) * tile_width +
+    (col // tile_size)``.
+
+    Args:
+        pixels: Pixel coordinates to render, ``(row, col)``. [P, 2], int.
+        image_ids: Image/camera index of each pixel. [P], int.
+        n_images: Number of images (sizes ``active_tile_mask``); may exceed the
+            largest id present in ``image_ids``.
+        tile_size: Tile size in pixels.
+        tile_width: Number of tiles along the image width.
+        tile_height: Number of tiles along the image height.
+
+    Returns:
+        A tuple:
+
+        - **active_tiles**. Int32 [AT]. Ascending dense tile ids of tiles holding
+          at least one active pixel. Equals ``nonzero(active_tile_mask.flatten())``.
+        - **active_tile_mask**. Bool [n_images, tile_height, tile_width].
+        - **tile_pixel_mask**. Int64 [AT, words_per_tile], ``words_per_tile =
+          ceil(tile_size**2 / 64)``. Raster-order bitmask of active pixels in each
+          active tile (stored as the int64 two's-complement bit pattern).
+        - **tile_pixel_cumsum**. Int64 [AT]. *Inclusive* prefix sum of the
+          active-pixel count per active tile; consumers read ``cumsum[t-1]`` as
+          the start of active tile ``t``.
+        - **pixel_map**. Int64 [P]. Argsort taking pixels into (tile_id, in-tile)
+          sorted order -- the write order of pixels within tiles.
+
+    Note:
+        Callers must deduplicate: ``pixels`` must not contain a repeated
+        ``(image, row, col)``. The empty case (``P == 0``) returns a length-1
+        ``tile_pixel_cumsum`` of zero.
+    """
+    assert pixels.dim() == 2 and pixels.shape[1] == 2, pixels.shape
+    P = pixels.shape[0]
+    assert image_ids.shape == (P,), (image_ids.shape, P)
+
+    return _make_lazy_cuda_func("build_sparse_tile_layout")(
+        pixels.contiguous(),
+        image_ids.contiguous(),
+        n_images,
+        tile_size,
+        tile_width,
+        tile_height,
+    )
+
+
 @trace_function("render2D-fwd")
 def rasterize_to_pixels(
     means2d: Tensor,  # [..., N, 2] or [nnz, 2]
