@@ -364,6 +364,11 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">depth_to_normal</span><span class="p">,</span> <span class="n">get_projection_matrix</span>
 
 
+<span class="c1"># Fused post-transform codes for the proj_features assembler (SHPostOp in CUDA):</span>
+<span class="c1"># none -&gt; identity, shift -&gt; +0.5, shift_relu -&gt; max(x + 0.5, 0).</span>
+<span class="n">_POST_CODE</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;none&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;shift&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;shift_relu&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">}</span>
+
+
 <span class="c1"># Gaussian depth modes (D/ED): use projection depth (controlled by global_z_order)</span>
 <span class="c1"># Hit distance modes (d/Ed): compute along-ray distance in rasterization</span>
 <span class="n">RenderMode</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-d&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB-Ed&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span>
