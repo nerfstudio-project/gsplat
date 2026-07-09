@@ -23,11 +23,13 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/csrc/autograd/custom_function.h>
 #include <torch/library.h>
 #include <torch/torch.h>
 
 #include "Common.h"     // where all the macros are defined
 #include "Projection.h" // where the launch function is declared
+#include "TorchUtils.h"
 #include "Cameras.h"
 #include "Lidars.h"
 #include "Lidars.cuh"
@@ -36,20 +38,85 @@
 
 namespace gsplat {
 
+template <> struct TorchArgDef<ProjectionUT3DGSFusedResult> {
+    static auto to(const ProjectionUT3DGSFusedResult &r) { return to_torch_args(
+        r.radii, r.means2d, r.depths, r.conics, r.compensations
+    ); }
+};
+
 #if GSPLAT_BUILD_3DGS
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
+namespace {
+
+void check_projection_ewa_simple_inputs(
+    const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
+    CameraModelType camera_model
+) {
+    TORCH_CHECK(
+        camera_model != CameraModelType::FTHETA,
+        "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+    );
+
+    TORCH_CHECK(
+        means.dim() >= 3,
+        "means must have shape [..., C, N, 3], got ",
+        means.sizes()
+    );
+    const int64_t batch_ndim = means.dim() - 3;
+    const int64_t C = means.size(batch_ndim);
+    const int64_t N = means.size(batch_ndim + 1);
+    at::DimVector batch_shape(means.sizes().slice(0, batch_ndim));
+
+    TORCH_CHECK(
+        means.size(batch_ndim + 2) == 3,
+        "means must have shape [..., C, N, 3], got ",
+        means.sizes()
+    );
+
+    at::DimVector covars_shape(batch_shape);
+    covars_shape.append({C, N, 3, 3});
+    TORCH_CHECK(
+        covars.sizes() == covars_shape,
+        "covars must have shape [..., C, N, 3, 3], got ",
+        covars.sizes()
+    );
+
+    at::DimVector Ks_shape(batch_shape);
+    Ks_shape.append({C, 3, 3});
+    TORCH_CHECK(
+        Ks.sizes() == Ks_shape,
+        "Ks must have shape [..., C, 3, 3], got ",
+        Ks.sizes()
+    );
+
+    CHECK_INPUT(means);
+    CHECK_INPUT(covars);
+    CHECK_INPUT(Ks);
+}
+} // namespace
+
+struct ProjectionEWASimpleFwdResult {
+    at::Tensor means2d;
+    at::Tensor covars2d;
+};
+
+template <> struct TorchArgDef<ProjectionEWASimpleFwdResult> {
+    static auto to(const ProjectionEWASimpleFwdResult &r) { return to_torch_args(r.means2d, r.covars2d); }
+};
+
+using ProjectionEWASimpleResult = ProjectionEWASimpleFwdResult;
+
+ProjectionEWASimpleFwdResult projection_ewa_simple_fwd(
     const at::Tensor &means,  // [..., C, N, 3]
     const at::Tensor &covars, // [..., C, N, 3, 3]
     const at::Tensor &Ks,     // [..., C, 3, 3]
     int64_t width,
     int64_t height,
-    int64_t camera_model
+    CameraModelType camera_model
 ) {
+    check_projection_ewa_simple_inputs(means, covars, Ks, camera_model);
+
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(covars);
-    CHECK_INPUT(Ks);
 
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
@@ -71,30 +138,58 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
         Ks,
         width,
         height,
-        static_cast<CameraModelType>(camera_model),
+        camera_model,
         // outputs
         means2d,
         covars2d
     );
-    return std::make_tuple(means2d, covars2d);
+    return ProjectionEWASimpleFwdResult{
+        .means2d = means2d,
+        .covars2d = covars2d,
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
+template <> struct TorchArgDef<ProjectionEWA3DGSFusedFwdResult> {
+    static auto to(const ProjectionEWA3DGSFusedFwdResult &r) { return to_torch_args(
+        r.radii, r.means2d, r.depths, r.conics, r.compensations
+    ); }
+};
+
+template <> struct TorchArgDef<ProjectionEWA3DGSPackedFwdResult> {
+    static auto to(const ProjectionEWA3DGSPackedFwdResult &r) { return to_torch_args(
+        r.batch_ids, r.camera_ids, r.gaussian_ids, r.indptr, r.radii,
+        r.means2d, r.depths, r.conics, r.compensations
+    ); }
+};
+
+struct ProjectionEWASimpleBwdResult {
+    at::Tensor v_means;
+    at::Tensor v_covars;
+};
+
+// Gradients of the differentiable forward outputs.
+struct ProjectionEWASimpleGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor means2d;  // [..., C, N, 2]
+    at::Tensor covars2d; // [..., C, N, 2, 2]
+};
+
+// Full backward for projection_ewa_simple.
+ProjectionEWASimpleBwdResult projection_ewa_simple_bwd(
     const at::Tensor &means,  // [..., C, N, 3]
     const at::Tensor &covars, // [..., C, N, 3, 3]
     const at::Tensor &Ks,     // [..., C, 3, 3]
     int64_t width,
     int64_t height,
-    int64_t camera_model,
-    at::Tensor &v_means2d, // [..., C, N, 2]
-    at::Tensor &v_covars2d // [..., C, N, 2, 2]
+    CameraModelType camera_model,
+    const ProjectionEWASimpleGrad &grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     CHECK_INPUT(covars);
     CHECK_INPUT(Ks);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_covars2d);
+    CHECK_INPUT(grad.means2d);
+    CHECK_INPUT(grad.covars2d);
 
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
@@ -116,22 +211,218 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
         Ks,
         width,
         height,
-        static_cast<CameraModelType>(camera_model),
-        v_means2d,
-        v_covars2d,
+        camera_model,
+        grad.means2d,
+        grad.covars2d,
         // outputs
         v_means,
         v_covars
     );
-    return std::make_tuple(v_means, v_covars);
+    return {
+        .v_means = v_means,
+        .v_covars = v_covars,
+    };
 }
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+namespace {
+
+class ProjectionEWASimpleAutograd
+    : public torch::autograd::Function<ProjectionEWASimpleAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS, COVARS, KS,
+            WIDTH, HEIGHT, CAMERA_MODEL,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum { MEANS2D, COVARS2D, COUNT };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
+        int64_t width, int64_t height, CameraModelType camera_model
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        ProjectionEWASimpleFwdResult outputs = projection_ewa_simple_fwd(
+            means, covars, Ks, width, height, camera_model
+        );
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&projection_ewa_simple_bwd>(
+            ctx, means, covars, Ks, width, height, camera_model
+        );
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::MEANS2D]  = outputs.means2d;
+        out[FwdOutput::COVARS2D] = outputs.covars2d;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        ProjectionEWASimpleGrad grad{
+            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
+            .covars2d = grad_outputs[FwdOutput::COVARS2D].contiguous(),
+        };
+        ProjectionEWASimpleBwdResult g = apply_bwd<&projection_ewa_simple_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS]  = g.v_means;
+        grads[FwdInput::COVARS] = g.v_covars;
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static ProjectionEWASimpleResult call(
+        const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
+        int64_t width, int64_t height, CameraModelType camera_model
+    ) {
+        torch::autograd::variable_list outputs =
+            apply(means, covars, Ks, width, height, camera_model);
+        return {
+            .means2d = outputs[FwdOutput::MEANS2D],
+            .covars2d = outputs[FwdOutput::COVARS2D],
+        };
+    }
+};
+
+} // namespace
+
+ProjectionEWASimpleResult projection_ewa_simple(
+    const at::Tensor &means, const at::Tensor &covars, const at::Tensor &Ks,
+    int64_t width, int64_t height, CameraModelType camera_model
+) {
+    // No fwd-only guard here: the custom forward is light, and apply() already
+    // avoids recording a backward node when autograd is inactive.
+    return ProjectionEWASimpleAutograd::call(
+        means, covars, Ks, width, height, camera_model
+    );
+}
+
+namespace {
+
+void check_projection_ewa_3dgs_fused_inputs(
+    const at::Tensor &means, const at::optional<at::Tensor> &covars,
+    const at::optional<at::Tensor> &quats,
+    const at::optional<at::Tensor> &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    CameraModelType camera_model
+) {
+    TORCH_CHECK(
+        camera_model != CameraModelType::FTHETA,
+        "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+    );
+
+    TORCH_CHECK(
+        means.dim() >= 2,
+        "means must have shape [..., N, 3], got ",
+        means.sizes()
+    );
+    const int64_t batch_ndim = means.dim() - 2;
+    const int64_t N = means.size(batch_ndim);
+    at::DimVector batch_shape(means.sizes().slice(0, batch_ndim));
+    TORCH_CHECK(
+        means.size(batch_ndim + 1) == 3,
+        "means must have shape [..., N, 3], got ",
+        means.sizes()
+    );
+    TORCH_CHECK(
+        viewmats.dim() == batch_ndim + 3,
+        "viewmats must have shape [..., C, 4, 4], got ",
+        viewmats.sizes()
+    );
+    TORCH_CHECK(
+        Ks.dim() == batch_ndim + 3,
+        "Ks must have shape [..., C, 3, 3], got ",
+        Ks.sizes()
+    );
+
+    const int64_t C = viewmats.size(batch_ndim);
+    at::DimVector viewmats_shape(batch_shape);
+    viewmats_shape.append({C, 4, 4});
+    TORCH_CHECK(
+        viewmats.sizes() == viewmats_shape,
+        "viewmats must have shape [..., C, 4, 4], got ",
+        viewmats.sizes()
+    );
+
+    at::DimVector Ks_shape(batch_shape);
+    Ks_shape.append({C, 3, 3});
+    TORCH_CHECK(
+        Ks.sizes() == Ks_shape,
+        "Ks must have shape [..., C, 3, 3], got ",
+        Ks.sizes()
+    );
+
+    CHECK_INPUT(means);
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+
+    if (covars.has_value()) {
+        const at::Tensor &covars_tensor = covars.value();
+        at::DimVector covars_shape(batch_shape);
+        covars_shape.append({N, 6});
+        TORCH_CHECK(
+            covars_tensor.sizes() == covars_shape,
+            "covars must have shape [..., N, 6], got ",
+            covars_tensor.sizes()
+        );
+        CHECK_INPUT(covars_tensor);
+    } else {
+        TORCH_CHECK(quats.has_value(), "covars or quats is required");
+        TORCH_CHECK(scales.has_value(), "covars or scales is required");
+
+        const at::Tensor &quats_tensor = quats.value();
+        const at::Tensor &scales_tensor = scales.value();
+        at::DimVector quats_shape(batch_shape);
+        quats_shape.append({N, 4});
+        TORCH_CHECK(
+            quats_tensor.sizes() == quats_shape,
+            "quats must have shape [..., N, 4], got ",
+            quats_tensor.sizes()
+        );
+
+        at::DimVector scales_shape(batch_shape);
+        scales_shape.append({N, 3});
+        TORCH_CHECK(
+            scales_tensor.sizes() == scales_shape,
+            "scales must have shape [..., N, 3], got ",
+            scales_tensor.sizes()
+        );
+        CHECK_INPUT(quats_tensor);
+        CHECK_INPUT(scales_tensor);
+    }
+
+    if (opacities.has_value()) {
+        const at::Tensor &opacities_tensor = opacities.value();
+        at::DimVector opacities_shape(batch_shape);
+        opacities_shape.append({N});
+        TORCH_CHECK(
+            opacities_tensor.sizes() == opacities_shape,
+            "opacities must have shape [..., N], got ",
+            opacities_tensor.sizes()
+        );
+        CHECK_INPUT(opacities_tensor);
+    }
+}
+
+} // namespace
+
+ProjectionEWA3DGSFusedFwdResult
 projection_ewa_3dgs_fused_fwd(
     const at::Tensor &means,                // [..., N, 3]
     const at::optional<at::Tensor> &covars, // [..., N, 6] optional
@@ -147,19 +438,13 @@ projection_ewa_3dgs_fused_fwd(
     double far_plane,
     double radius_clip,
     bool calc_compensations,
-    int64_t camera_model
+    CameraModelType camera_model
 ) {
+    check_projection_ewa_3dgs_fused_inputs(
+        means, covars, quats, scales, opacities, viewmats, Ks, camera_model
+    );
+
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    if (covars.has_value()) {
-        CHECK_INPUT(covars.value());
-    } else {
-        assert(quats.has_value() && scales.has_value());
-        CHECK_INPUT(quats.value());
-        CHECK_INPUT(scales.value());
-    }
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
 
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
@@ -201,7 +486,7 @@ projection_ewa_3dgs_fused_fwd(
         near_plane,
         far_plane,
         radius_clip,
-        static_cast<CameraModelType>(camera_model),
+        camera_model,
         // outputs
         radii,
         means2d,
@@ -210,10 +495,35 @@ projection_ewa_3dgs_fused_fwd(
         calc_compensations ? at::optional<at::Tensor>(compensations)
                            : c10::nullopt
     );
-    return std::make_tuple(radii, means2d, depths, conics, compensations);
+    return ProjectionEWA3DGSFusedFwdResult{
+        .radii = radii,
+        .means2d = means2d,
+        .depths = depths,
+        .conics = conics,
+        .compensations = calc_compensations ? at::optional<at::Tensor>(compensations)
+                                            : c10::nullopt
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+struct ProjectionEWA3DGSFusedBwdResult {
+    at::Tensor v_means;
+    at::optional<at::Tensor> v_covars;
+    at::optional<at::Tensor> v_quats;
+    at::optional<at::Tensor> v_scales;
+    at::optional<at::Tensor> v_viewmats;
+};
+
+// Gradients of the differentiable forward outputs.
+struct ProjectionEWA3DGSFusedGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor means2d; // [..., C, N, 2]
+    at::Tensor depths;  // [..., C, N]
+    at::Tensor conics;  // [..., C, N, 3]
+    at::optional<at::Tensor> compensations; // [..., C, N]
+};
+
+// Full backward for projection_ewa_3dgs_fused.
+ProjectionEWA3DGSFusedBwdResult
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
     const at::Tensor &means,                // [..., N, 3]
@@ -225,24 +535,19 @@ projection_ewa_3dgs_fused_bwd(
     int64_t image_width,
     int64_t image_height,
     double eps2d,
-    int64_t camera_model,
+    CameraModelType camera_model,
     // fwd outputs
     const at::Tensor &radii,                       // [..., C, N, 2]
     const at::Tensor &conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> &compensations, // [..., C, N] optional
-    // grad outputs
-    const at::Tensor &v_means2d,                     // [..., C, N, 2]
-    const at::Tensor &v_depths,                      // [..., C, N]
-    const at::Tensor &v_conics,                      // [..., C, N, 3]
-    const at::optional<at::Tensor> &v_compensations, // [..., C, N] optional
-    bool viewmats_requires_grad
+    const ProjectionEWA3DGSFusedGrad &grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     if (covars.has_value()) {
         CHECK_INPUT(covars.value());
     } else {
-        assert(quats.has_value() && scales.has_value());
+        TORCH_INTERNAL_ASSERT(quats.has_value() && scales.has_value());
         CHECK_INPUT(quats.value());
         CHECK_INPUT(scales.value());
     }
@@ -250,15 +555,19 @@ projection_ewa_3dgs_fused_bwd(
     CHECK_INPUT(Ks);
     CHECK_INPUT(radii);
     CHECK_INPUT(conics);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_conics);
+    CHECK_INPUT(grad.means2d);
+    CHECK_INPUT(grad.depths);
+    CHECK_INPUT(grad.conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
     }
-    if (v_compensations.has_value()) {
-        CHECK_INPUT(v_compensations.value());
-        assert(compensations.has_value());
+    // A compensation gradient is meaningful only when compensations were
+    // computed; under materialize_grads a compensations output that was not
+    // requested can still receive a zero gradient, which is ignored here.
+    at::optional<at::Tensor> compensation_grad;
+    if (compensations.has_value() && grad.compensations.has_value()) {
+        CHECK_INPUT(grad.compensations.value());
+        compensation_grad = grad.compensations;
     }
 
     at::Tensor v_means = at::zeros_like(means);
@@ -270,7 +579,7 @@ projection_ewa_3dgs_fused_bwd(
         v_scales = at::zeros_like(scales.value());
     }
     at::Tensor v_viewmats;
-    if (viewmats_requires_grad) {
+    if (viewmats.requires_grad()) {
         v_viewmats = at::zeros_like(viewmats);
     }
 
@@ -285,15 +594,15 @@ projection_ewa_3dgs_fused_bwd(
         image_width,
         image_height,
         eps2d,
-        static_cast<CameraModelType>(camera_model),
+        camera_model,
         radii,
         conics,
         compensations,
-        v_means2d,
-        v_depths,
-        v_conics,
-        v_compensations,
-        viewmats_requires_grad,
+        grad.means2d,
+        grad.depths,
+        grad.conics,
+        compensation_grad,
+        viewmats.requires_grad(),
         // outputs
         v_means,
         v_covars,
@@ -302,19 +611,198 @@ projection_ewa_3dgs_fused_bwd(
         v_viewmats
     );
 
-    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
+    return {
+        .v_means = v_means,
+        .v_covars = as_optional_tensor(v_covars),
+        .v_quats = as_optional_tensor(v_quats),
+        .v_scales = as_optional_tensor(v_scales),
+        .v_viewmats = as_optional_tensor(v_viewmats),
+    };
 }
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+namespace {
+
+class ProjectionEWA3DGSFusedAutograd
+    : public torch::autograd::Function<ProjectionEWA3DGSFusedAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS, COVARS, QUATS, SCALES, OPACITIES,
+            VIEWMATS, KS,
+            IMAGE_WIDTH, IMAGE_HEIGHT,
+            EPS2D, NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,
+            CALC_COMPENSATIONS, CAMERA_MODEL,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum { RADII, MEANS2D, DEPTHS, CONICS, COMPENSATIONS, COUNT };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means, const at::optional<at::Tensor> &covars,
+        const at::optional<at::Tensor> &quats,
+        const at::optional<at::Tensor> &scales,
+        const at::optional<at::Tensor> &opacities,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double eps2d, double near_plane, double far_plane, double radius_clip,
+        bool calc_compensations, CameraModelType camera_model
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        ProjectionEWA3DGSFusedFwdResult outputs = projection_ewa_3dgs_fused_fwd(
+            means, covars, quats, scales, opacities,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip,
+            calc_compensations, camera_model
+        );
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&projection_ewa_3dgs_fused_bwd>(
+            ctx, means, covars, quats, scales, viewmats, Ks,
+            image_width, image_height, eps2d, camera_model,
+            outputs.radii, outputs.conics, outputs.compensations
+        );
+
+        // --- Normalize optional outputs for autograd ----------------------
+        // C++ custom autograd functions cannot return an undefined Tensor
+        // output. Use a defined, zero-length sentinel for the non-compensation
+        // case; the Python wrapper turns this slot back into None based on the
+        // original calc_compensations flag. The non-differentiable mark makes
+        // its grad arrive undefined in backward, which the bwd reads as "no
+        // compensation gradient".
+        at::Tensor compensations_output = as_tensor(outputs.compensations);
+        if (!compensations_output.defined()) {
+            compensations_output = at::empty({0}, means.options());
+            ctx->mark_non_differentiable({compensations_output});
+        }
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::RADII]         = outputs.radii;
+        out[FwdOutput::MEANS2D]       = outputs.means2d;
+        out[FwdOutput::DEPTHS]        = outputs.depths;
+        out[FwdOutput::CONICS]        = outputs.conics;
+        out[FwdOutput::COMPENSATIONS] = compensations_output;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        ProjectionEWA3DGSFusedGrad grad{
+            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
+            .depths = grad_outputs[FwdOutput::DEPTHS].contiguous(),
+            .conics = grad_outputs[FwdOutput::CONICS].contiguous(),
+            .compensations = contiguous_optional(as_optional_tensor(grad_outputs[FwdOutput::COMPENSATIONS])),
+        };
+        ProjectionEWA3DGSFusedBwdResult g = apply_bwd<&projection_ewa_3dgs_fused_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS]    = g.v_means;
+        grads[FwdInput::COVARS]   = as_tensor(g.v_covars);
+        grads[FwdInput::QUATS]    = as_tensor(g.v_quats);
+        grads[FwdInput::SCALES]   = as_tensor(g.v_scales);
+        grads[FwdInput::VIEWMATS] = as_tensor(g.v_viewmats);
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static ProjectionEWA3DGSFusedResult call(
+        const at::Tensor &means, const at::optional<at::Tensor> &covars,
+        const at::optional<at::Tensor> &quats,
+        const at::optional<at::Tensor> &scales,
+        const at::optional<at::Tensor> &opacities,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double eps2d, double near_plane, double far_plane, double radius_clip,
+        bool calc_compensations, CameraModelType camera_model
+    ) {
+        torch::autograd::variable_list outputs = apply(
+            means, covars, quats, scales, opacities,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip,
+            calc_compensations, camera_model
+        );
+        return {
+            .radii = outputs[FwdOutput::RADII],
+            .means2d = outputs[FwdOutput::MEANS2D],
+            .depths = outputs[FwdOutput::DEPTHS],
+            .conics = outputs[FwdOutput::CONICS],
+            .compensations = as_optional_tensor(
+                calc_compensations ? outputs[FwdOutput::COMPENSATIONS] : at::Tensor{}
+            ),
+        };
+    }
+};
+
+} // namespace
+
+ProjectionEWA3DGSFusedResult projection_ewa_3dgs_fused(
+    const at::Tensor &means, const at::optional<at::Tensor> &covars,
+    const at::optional<at::Tensor> &quats,
+    const at::optional<at::Tensor> &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip,
+    bool calc_compensations, CameraModelType camera_model
+) {
+    const bool use_custom_autograd = needs_custom_autograd(
+        means, covars, quats, scales, opacities, viewmats, Ks
+    );
+    if (!use_custom_autograd) {
+        return projection_ewa_3dgs_fused_fwd(
+            means, covars, quats, scales, opacities,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip,
+            calc_compensations, camera_model
+        );
+    }
+
+    return ProjectionEWA3DGSFusedAutograd::call(
+        means, covars, quats, scales, opacities,
+        viewmats, Ks,
+        image_width, image_height,
+        eps2d, near_plane, far_plane, radius_clip,
+        calc_compensations, camera_model
+    );
+}
+
+namespace {
+
+void check_projection_ewa_3dgs_packed_inputs(
+    const at::Tensor &means, const at::optional<at::Tensor> &covars,
+    const at::optional<at::Tensor> &quats,
+    const at::optional<at::Tensor> &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    bool sparse_grad, CameraModelType camera_model
+) {
+    check_projection_ewa_3dgs_fused_inputs(
+        means, covars, quats, scales, opacities, viewmats, Ks, camera_model
+    );
+    TORCH_CHECK(
+        !sparse_grad || means.dim() == 2,
+        "sparse_grad does not support batch dimensions"
+    );
+}
+
+} // namespace
+
+ProjectionEWA3DGSPackedFwdResult
 projection_ewa_3dgs_packed_fwd(
     const at::Tensor &means,                // [..., N, 3]
     const at::optional<at::Tensor> &covars, // [..., N, 6] optional
@@ -329,20 +817,17 @@ projection_ewa_3dgs_packed_fwd(
     double near_plane,
     double far_plane,
     double radius_clip,
+    bool sparse_grad,
     bool calc_compensations,
-    int64_t camera_model
+    CameraModelType camera_model
 ) {
+    check_projection_ewa_3dgs_packed_inputs(
+        means, covars, quats, scales, opacities,
+        viewmats, Ks,
+        sparse_grad, camera_model
+    );
+
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    if (covars.has_value()) {
-        CHECK_INPUT(covars.value());
-    } else {
-        assert(quats.has_value() && scales.has_value());
-        CHECK_INPUT(quats.value());
-        CHECK_INPUT(scales.value());
-    }
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
 
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t C = viewmats.size(-3);       // number of cameras
@@ -375,7 +860,7 @@ projection_ewa_3dgs_packed_fwd(
             far_plane,
             radius_clip,
             c10::nullopt, // block_accum
-            static_cast<CameraModelType>(camera_model),
+            camera_model,
             // outputs
             block_cnts,
             c10::nullopt, // indptr
@@ -428,7 +913,7 @@ projection_ewa_3dgs_packed_fwd(
             far_plane,
             radius_clip,
             block_accum,
-            static_cast<CameraModelType>(camera_model),
+            camera_model,
             // outputs
             c10::nullopt, // block_cnts
             indptr,
@@ -446,20 +931,39 @@ projection_ewa_3dgs_packed_fwd(
         indptr.fill_(0);
     }
 
-    return std::make_tuple(
-        indptr,
-        batch_ids,
-        camera_ids,
-        gaussian_ids,
-        radii,
-        means2d,
-        depths,
-        conics,
-        compensations
-    );
+    return ProjectionEWA3DGSPackedFwdResult{
+        .batch_ids = batch_ids,
+        .camera_ids = camera_ids,
+        .gaussian_ids = gaussian_ids,
+        .indptr = indptr,
+        .radii = radii,
+        .means2d = means2d,
+        .depths = depths,
+        .conics = conics,
+        .compensations = calc_compensations ? at::optional<at::Tensor>(compensations)
+                                            : c10::nullopt
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+struct ProjectionEWA3DGSPackedBwdResult {
+    at::Tensor v_means;
+    at::optional<at::Tensor> v_covars;
+    at::optional<at::Tensor> v_quats;
+    at::optional<at::Tensor> v_scales;
+    at::optional<at::Tensor> v_viewmats;
+};
+
+// Gradients of the differentiable forward outputs.
+struct ProjectionEWA3DGSPackedGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor means2d; // [nnz, 2]
+    at::Tensor depths;  // [nnz]
+    at::Tensor conics;  // [nnz, 3]
+    at::optional<at::Tensor> compensations; // [nnz]
+};
+
+// Full backward for projection_ewa_3dgs_packed.
+ProjectionEWA3DGSPackedBwdResult
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
     const at::Tensor &means,                // [..., N, 3]
@@ -471,7 +975,8 @@ projection_ewa_3dgs_packed_bwd(
     int64_t image_width,
     int64_t image_height,
     double eps2d,
-    int64_t camera_model,
+    CameraModelType camera_model,
+    bool sparse_grad,
     // fwd outputs
     const at::Tensor &batch_ids,                     // [nnz]
     const at::Tensor &camera_ids,                    // [nnz]
@@ -479,19 +984,14 @@ projection_ewa_3dgs_packed_bwd(
     const at::Tensor &conics,                        // [nnz, 3]
     const at::optional<at::Tensor> &compensations,   // [nnz] optional
     // grad outputs
-    const at::Tensor &v_means2d,                     // [nnz, 2]
-    const at::Tensor &v_depths,                      // [nnz]
-    const at::Tensor &v_conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> &v_compensations, // [nnz] optional
-    bool viewmats_requires_grad,
-    bool sparse_grad
+    const ProjectionEWA3DGSPackedGrad &grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     if (covars.has_value()) {
         CHECK_INPUT(covars.value());
     } else {
-        assert(quats.has_value() && scales.has_value());
+        TORCH_INTERNAL_ASSERT(quats.has_value() && scales.has_value());
         CHECK_INPUT(quats.value());
         CHECK_INPUT(scales.value());
     }
@@ -501,15 +1001,19 @@ projection_ewa_3dgs_packed_bwd(
     CHECK_INPUT(camera_ids);
     CHECK_INPUT(gaussian_ids);
     CHECK_INPUT(conics);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_conics);
+    CHECK_INPUT(grad.means2d);
+    CHECK_INPUT(grad.depths);
+    CHECK_INPUT(grad.conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
     }
-    if (v_compensations.has_value()) {
-        CHECK_INPUT(v_compensations.value());
-        assert(compensations.has_value());
+    // A compensation gradient is meaningful only when compensations were
+    // computed; under materialize_grads a compensations output that was not
+    // requested can still receive a zero gradient, which is ignored here.
+    at::optional<at::Tensor> compensation_grad;
+    if (compensations.has_value() && grad.compensations.has_value()) {
+        CHECK_INPUT(grad.compensations.value());
+        compensation_grad = grad.compensations;
     }
 
     auto opt = means.options();
@@ -532,7 +1036,7 @@ projection_ewa_3dgs_packed_bwd(
             v_scales = at::zeros_like(scales.value(), opt);
         }
     }
-    if (viewmats_requires_grad) {
+    if (viewmats.requires_grad()) {
         v_viewmats = at::zeros_like(viewmats, opt);
     }
 
@@ -547,7 +1051,7 @@ projection_ewa_3dgs_packed_bwd(
         image_width,
         image_height,
         eps2d,
-        static_cast<CameraModelType>(camera_model),
+        camera_model,
         // fwd outputs
         batch_ids,
         camera_ids,
@@ -555,10 +1059,10 @@ projection_ewa_3dgs_packed_bwd(
         conics,
         compensations,
         // grad outputs
-        v_means2d,
-        v_depths,
-        v_conics,
-        v_compensations,
+        grad.means2d,
+        grad.depths,
+        grad.conics,
+        compensation_grad,
         sparse_grad,
         // outputs
         v_means,
@@ -568,19 +1072,304 @@ projection_ewa_3dgs_packed_bwd(
         v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
                              : c10::nullopt
     );
-    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
+
+    // When sparse_grad is set, the kernel writes per-nnz dense gradients indexed
+    // by gaussian_ids; wrap them as sparse COO over the full per-input shapes so
+    // the optimizer can scatter-update only the touched gaussians. Coalesced
+    // when there is a single batch (each gaussian_id appears once).
+    if (sparse_grad) {
+        const bool is_coalesced = viewmats.size(0) == 1;
+        const at::Tensor sparse_grad_indices = gaussian_ids.unsqueeze(0);
+        v_means = make_sparse_coo_grad(
+            sparse_grad_indices, v_means, means.sizes(), is_coalesced);
+        if (covars.has_value()) {
+            v_covars = make_sparse_coo_grad(
+                sparse_grad_indices, v_covars, covars.value().sizes(),
+                is_coalesced);
+        } else {
+            v_quats = make_sparse_coo_grad(
+                sparse_grad_indices, v_quats, quats.value().sizes(),
+                is_coalesced);
+            v_scales = make_sparse_coo_grad(
+                sparse_grad_indices, v_scales, scales.value().sizes(),
+                is_coalesced);
+        }
+    }
+
+    return ProjectionEWA3DGSPackedBwdResult{
+        .v_means = v_means,
+        .v_covars = as_optional_tensor(v_covars),
+        .v_quats = as_optional_tensor(v_quats),
+        .v_scales = as_optional_tensor(v_scales),
+        .v_viewmats = as_optional_tensor(v_viewmats),
+    };
+}
+
+namespace {
+
+class ProjectionEWA3DGSPackedAutograd
+    : public torch::autograd::Function<ProjectionEWA3DGSPackedAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS, COVARS, QUATS, SCALES, OPACITIES,
+            VIEWMATS, KS,
+            IMAGE_WIDTH, IMAGE_HEIGHT,
+            EPS2D, NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,
+            SPARSE_GRAD, CALC_COMPENSATIONS, CAMERA_MODEL,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum {
+            BATCH_IDS, CAMERA_IDS, GAUSSIAN_IDS, INDPTR,
+            RADII, MEANS2D, DEPTHS, CONICS, COMPENSATIONS,
+            COUNT,
+        };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means, const at::optional<at::Tensor> &covars,
+        const at::optional<at::Tensor> &quats,
+        const at::optional<at::Tensor> &scales,
+        const at::optional<at::Tensor> &opacities,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double eps2d, double near_plane, double far_plane, double radius_clip,
+        bool sparse_grad, bool calc_compensations, CameraModelType camera_model
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        ProjectionEWA3DGSPackedFwdResult outputs = projection_ewa_3dgs_packed_fwd(
+            means, covars, quats, scales, opacities,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip,
+            sparse_grad, calc_compensations, camera_model
+        );
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&projection_ewa_3dgs_packed_bwd>(
+            ctx, means, covars, quats, scales, viewmats, Ks,
+            image_width, image_height, eps2d, camera_model, sparse_grad,
+            outputs.batch_ids, outputs.camera_ids, outputs.gaussian_ids,
+            outputs.conics, outputs.compensations
+        );
+
+        // --- Normalize optional outputs for autograd ----------------------
+        at::Tensor compensations_output = as_tensor(outputs.compensations);
+        if (!compensations_output.defined()) {
+            compensations_output = at::empty({0}, means.options());
+            ctx->mark_non_differentiable({compensations_output});
+        }
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::BATCH_IDS]     = outputs.batch_ids;
+        out[FwdOutput::CAMERA_IDS]    = outputs.camera_ids;
+        out[FwdOutput::GAUSSIAN_IDS]  = outputs.gaussian_ids;
+        out[FwdOutput::INDPTR]        = outputs.indptr;
+        out[FwdOutput::RADII]         = outputs.radii;
+        out[FwdOutput::MEANS2D]       = outputs.means2d;
+        out[FwdOutput::DEPTHS]        = outputs.depths;
+        out[FwdOutput::CONICS]        = outputs.conics;
+        out[FwdOutput::COMPENSATIONS] = compensations_output;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        ProjectionEWA3DGSPackedGrad grad{
+            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
+            .depths = grad_outputs[FwdOutput::DEPTHS].contiguous(),
+            .conics = grad_outputs[FwdOutput::CONICS].contiguous(),
+            .compensations = contiguous_optional(as_optional_tensor(grad_outputs[FwdOutput::COMPENSATIONS])),
+        };
+        ProjectionEWA3DGSPackedBwdResult g = apply_bwd<&projection_ewa_3dgs_packed_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS]    = g.v_means;
+        grads[FwdInput::COVARS]   = as_tensor(g.v_covars);
+        grads[FwdInput::QUATS]    = as_tensor(g.v_quats);
+        grads[FwdInput::SCALES]   = as_tensor(g.v_scales);
+        grads[FwdInput::VIEWMATS] = as_tensor(g.v_viewmats);
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static ProjectionEWA3DGSPackedResult call(
+        const at::Tensor &means, const at::optional<at::Tensor> &covars,
+        const at::optional<at::Tensor> &quats,
+        const at::optional<at::Tensor> &scales,
+        const at::optional<at::Tensor> &opacities,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double eps2d, double near_plane, double far_plane, double radius_clip,
+        bool sparse_grad, bool calc_compensations, CameraModelType camera_model
+    ) {
+        torch::autograd::variable_list outputs = apply(
+            means, covars, quats, scales, opacities,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip,
+            sparse_grad, calc_compensations, camera_model
+        );
+        return {
+            .batch_ids = outputs[FwdOutput::BATCH_IDS],
+            .camera_ids = outputs[FwdOutput::CAMERA_IDS],
+            .gaussian_ids = outputs[FwdOutput::GAUSSIAN_IDS],
+            .indptr = outputs[FwdOutput::INDPTR],
+            .radii = outputs[FwdOutput::RADII],
+            .means2d = outputs[FwdOutput::MEANS2D],
+            .depths = outputs[FwdOutput::DEPTHS],
+            .conics = outputs[FwdOutput::CONICS],
+            .compensations = as_optional_tensor(
+                calc_compensations ? outputs[FwdOutput::COMPENSATIONS] : at::Tensor{}
+            ),
+        };
+    }
+};
+
+} // namespace
+
+ProjectionEWA3DGSPackedResult projection_ewa_3dgs_packed(
+    const at::Tensor &means, const at::optional<at::Tensor> &covars,
+    const at::optional<at::Tensor> &quats,
+    const at::optional<at::Tensor> &scales,
+    const at::optional<at::Tensor> &opacities,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip,
+    bool sparse_grad, bool calc_compensations, CameraModelType camera_model
+) {
+    const bool use_custom_autograd = needs_custom_autograd(
+        means, covars, quats, scales, opacities, viewmats, Ks
+    );
+    if (!use_custom_autograd) {
+        return projection_ewa_3dgs_packed_fwd(
+            means, covars, quats, scales, opacities,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip,
+            sparse_grad, calc_compensations, camera_model
+        );
+    }
+
+    return ProjectionEWA3DGSPackedAutograd::call(
+        means, covars, quats, scales, opacities,
+        viewmats, Ks,
+        image_width, image_height,
+        eps2d, near_plane, far_plane, radius_clip,
+        sparse_grad, calc_compensations, camera_model
+    );
 }
 
 #endif
 
 #if GSPLAT_BUILD_2DGS
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+namespace {
+
+void check_projection_2dgs_inputs(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks
+) {
+    TORCH_CHECK(
+        means.dim() >= 2,
+        "means must have shape [..., N, 3], got ",
+        means.sizes()
+    );
+    const int64_t batch_ndim = means.dim() - 2;
+    const int64_t N = means.size(batch_ndim);
+    at::DimVector batch_shape(means.sizes().slice(0, batch_ndim));
+
+    TORCH_CHECK(
+        means.size(batch_ndim + 1) == 3,
+        "means must have shape [..., N, 3], got ",
+        means.sizes()
+    );
+    TORCH_CHECK(
+        quats.dim() == batch_ndim + 2,
+        "quats must have shape [..., N, 4], got ",
+        quats.sizes()
+    );
+    TORCH_CHECK(
+        scales.dim() == batch_ndim + 2,
+        "scales must have shape [..., N, 3], got ",
+        scales.sizes()
+    );
+    TORCH_CHECK(
+        viewmats.dim() == batch_ndim + 3,
+        "viewmats must have shape [..., C, 4, 4], got ",
+        viewmats.sizes()
+    );
+    TORCH_CHECK(
+        Ks.dim() == batch_ndim + 3,
+        "Ks must have shape [..., C, 3, 3], got ",
+        Ks.sizes()
+    );
+
+    const int64_t C = viewmats.size(batch_ndim);
+    at::DimVector quats_shape(batch_shape);
+    quats_shape.append({N, 4});
+    TORCH_CHECK(
+        quats.sizes() == quats_shape,
+        "quats must have shape [..., N, 4], got ",
+        quats.sizes()
+    );
+
+    at::DimVector scales_shape(batch_shape);
+    scales_shape.append({N, 3});
+    TORCH_CHECK(
+        scales.sizes() == scales_shape,
+        "scales must have shape [..., N, 3], got ",
+        scales.sizes()
+    );
+
+    at::DimVector viewmats_shape(batch_shape);
+    viewmats_shape.append({C, 4, 4});
+    TORCH_CHECK(
+        viewmats.sizes() == viewmats_shape,
+        "viewmats must have shape [..., C, 4, 4], got ",
+        viewmats.sizes()
+    );
+
+    at::DimVector Ks_shape(batch_shape);
+    Ks_shape.append({C, 3, 3});
+    TORCH_CHECK(
+        Ks.sizes() == Ks_shape,
+        "Ks must have shape [..., C, 3, 3], got ",
+        Ks.sizes()
+    );
+
+    CHECK_INPUT(means);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+}
+
+} // namespace
+
+template <> struct TorchArgDef<Projection2DGSFusedResult> {
+    static auto to(const Projection2DGSFusedResult &r) { return to_torch_args(
+        r.radii, r.means2d, r.depths, r.ray_transforms, r.normals
+    ); }
+};
+
+using Projection2DGSFusedFwdResult = Projection2DGSFusedResult;
+
+Projection2DGSFusedFwdResult
 projection_2dgs_fused_fwd(
     const at::Tensor &means,    // [..., N, 3]
     const at::Tensor &quats,    // [..., N, 4]
@@ -594,12 +1383,9 @@ projection_2dgs_fused_fwd(
     double far_plane,
     double radius_clip
 ) {
+    check_projection_2dgs_inputs(means, quats, scales, viewmats, Ks);
+
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
 
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
@@ -645,10 +1431,33 @@ projection_2dgs_fused_fwd(
         ray_transforms,
         normals
     );
-    return std::make_tuple(radii, means2d, depths, ray_transforms, normals);
+    return Projection2DGSFusedFwdResult{
+        .radii = radii,
+        .means2d = means2d,
+        .depths = depths,
+        .ray_transforms = ray_transforms,
+        .normals = normals,
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+struct Projection2DGSFusedBwdResult {
+    at::Tensor v_means;
+    at::Tensor v_quats;
+    at::Tensor v_scales;
+    at::optional<at::Tensor> v_viewmats;
+};
+
+// Gradients of the differentiable forward outputs.
+struct Projection2DGSFusedGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor means2d;        // [..., C, N, 2]
+    at::Tensor depths;         // [..., C, N]
+    at::Tensor ray_transforms; // [..., C, N, 3, 3]
+    at::Tensor normals;        // [..., C, N, 3]
+};
+
+// Full backward for projection_2dgs_fused.
+Projection2DGSFusedBwdResult
 projection_2dgs_fused_bwd(
     // fwd inputs
     const at::Tensor &means,    // [..., N, 3]
@@ -661,12 +1470,7 @@ projection_2dgs_fused_bwd(
     // fwd outputs
     const at::Tensor &radii,          // [..., C, N, 2]
     const at::Tensor &ray_transforms, // [..., C, N, 3, 3]
-    // grad outputs
-    const at::Tensor &v_means2d,        // [..., C, N, 2]
-    const at::Tensor &v_depths,         // [..., C, N]
-    const at::Tensor &v_normals,        // [..., C, N, 3]
-    const at::Tensor &v_ray_transforms, // [..., C, N, 3, 3]
-    bool viewmats_requires_grad
+    const Projection2DGSFusedGrad &grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -676,16 +1480,16 @@ projection_2dgs_fused_bwd(
     CHECK_INPUT(Ks);
     CHECK_INPUT(radii);
     CHECK_INPUT(ray_transforms);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_normals);
-    CHECK_INPUT(v_ray_transforms);
+    CHECK_INPUT(grad.means2d);
+    CHECK_INPUT(grad.depths);
+    CHECK_INPUT(grad.normals);
+    CHECK_INPUT(grad.ray_transforms);
 
     at::Tensor v_means = at::zeros_like(means);
     at::Tensor v_quats = at::zeros_like(quats);
     at::Tensor v_scales = at::zeros_like(scales);
     at::Tensor v_viewmats;
-    if (viewmats_requires_grad) {
+    if (viewmats.requires_grad()) {
         v_viewmats = at::zeros_like(viewmats);
     }
 
@@ -700,11 +1504,11 @@ projection_2dgs_fused_bwd(
         image_height,
         radii,
         ray_transforms,
-        v_means2d,
-        v_depths,
-        v_normals,
-        v_ray_transforms,
-        viewmats_requires_grad,
+        grad.means2d,
+        grad.depths,
+        grad.normals,
+        grad.ray_transforms,
+        viewmats.requires_grad(),
         // outputs
         v_means,
         v_quats,
@@ -712,19 +1516,155 @@ projection_2dgs_fused_bwd(
         v_viewmats
     );
 
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+    return Projection2DGSFusedBwdResult{
+        .v_means = v_means,
+        .v_quats = v_quats,
+        .v_scales = v_scales,
+        .v_viewmats = as_optional_tensor(v_viewmats),
+    };
 }
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+namespace {
+
+class Projection2DGSFusedAutograd
+    : public torch::autograd::Function<Projection2DGSFusedAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS, QUATS, SCALES,
+            VIEWMATS, KS,
+            IMAGE_WIDTH, IMAGE_HEIGHT,
+            EPS2D, NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum { RADII, MEANS2D, DEPTHS, RAY_TRANSFORMS, NORMALS, COUNT };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means, const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double eps2d, double near_plane, double far_plane, double radius_clip
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        Projection2DGSFusedFwdResult outputs = projection_2dgs_fused_fwd(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip
+        );
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&projection_2dgs_fused_bwd>(
+            ctx, means, quats, scales, viewmats, Ks,
+            image_width, image_height,
+            outputs.radii, outputs.ray_transforms
+        );
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::RADII]          = outputs.radii;
+        out[FwdOutput::MEANS2D]        = outputs.means2d;
+        out[FwdOutput::DEPTHS]         = outputs.depths;
+        out[FwdOutput::RAY_TRANSFORMS] = outputs.ray_transforms;
+        out[FwdOutput::NORMALS]        = outputs.normals;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        Projection2DGSFusedGrad grad{
+            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
+            .depths = grad_outputs[FwdOutput::DEPTHS].contiguous(),
+            .ray_transforms = grad_outputs[FwdOutput::RAY_TRANSFORMS].contiguous(),
+            .normals = grad_outputs[FwdOutput::NORMALS].contiguous(),
+        };
+        Projection2DGSFusedBwdResult g = apply_bwd<&projection_2dgs_fused_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS]    = g.v_means;
+        grads[FwdInput::QUATS]    = g.v_quats;
+        grads[FwdInput::SCALES]   = g.v_scales;
+        grads[FwdInput::VIEWMATS] = as_tensor(g.v_viewmats);
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static Projection2DGSFusedResult call(
+        const at::Tensor &means, const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double eps2d, double near_plane, double far_plane, double radius_clip
+    ) {
+        torch::autograd::variable_list outputs = apply(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip
+        );
+        return {
+            .radii          = outputs[FwdOutput::RADII],
+            .means2d        = outputs[FwdOutput::MEANS2D],
+            .depths         = outputs[FwdOutput::DEPTHS],
+            .ray_transforms = outputs[FwdOutput::RAY_TRANSFORMS],
+            .normals        = outputs[FwdOutput::NORMALS],
+        };
+    }
+};
+
+} // namespace
+
+Projection2DGSFusedFwdResult projection_2dgs_fused(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double eps2d, double near_plane, double far_plane, double radius_clip
+) {
+    const bool use_custom_autograd = needs_custom_autograd(
+        means, quats, scales, viewmats, Ks
+    );
+    if (!use_custom_autograd) {
+        return projection_2dgs_fused_fwd(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip
+        );
+    }
+
+    return Projection2DGSFusedAutograd::call(
+        means, quats, scales,
+        viewmats, Ks,
+        image_width, image_height,
+        eps2d, near_plane, far_plane, radius_clip
+    );
+}
+
+template <> struct TorchArgDef<Projection2DGSPackedResult> {
+    static auto to(const Projection2DGSPackedResult &r) { return to_torch_args(
+        r.batch_ids, r.camera_ids, r.gaussian_ids, r.indptr, r.radii,
+        r.means2d, r.depths, r.ray_transforms, r.normals
+    ); }
+};
+
+using Projection2DGSPackedFwdResult = Projection2DGSPackedResult;
+
+Projection2DGSPackedFwdResult
 projection_2dgs_packed_fwd(
     const at::Tensor &means,    // [..., N, 3]
     const at::Tensor &quats,    // [..., N, 4]
@@ -735,14 +1675,11 @@ projection_2dgs_packed_fwd(
     int64_t image_height,
     double near_plane,
     double far_plane,
-    double radius_clip
+    double radius_clip,
+    bool sparse_grad
 ) {
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
+    check_projection_2dgs_inputs(means, quats, scales, viewmats, Ks);
 
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2)); // number of batches
@@ -831,20 +1768,37 @@ projection_2dgs_packed_fwd(
         indptr.fill_(0);
     }
 
-    return std::make_tuple(
-        indptr,
-        batch_ids,
-        camera_ids,
-        gaussian_ids,
-        radii,
-        means2d,
-        depths,
-        ray_transforms,
-        normals
-    );
+    return Projection2DGSPackedFwdResult{
+        .batch_ids = batch_ids,
+        .camera_ids = camera_ids,
+        .gaussian_ids = gaussian_ids,
+        .indptr = indptr,
+        .radii = radii,
+        .means2d = means2d,
+        .depths = depths,
+        .ray_transforms = ray_transforms,
+        .normals = normals,
+    };
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+struct Projection2DGSPackedBwdResult {
+    at::Tensor v_means;
+    at::Tensor v_quats;
+    at::Tensor v_scales;
+    at::optional<at::Tensor> v_viewmats;
+};
+
+// Gradients of the differentiable forward outputs.
+struct Projection2DGSPackedGrad {
+    static constexpr bool is_grad_bundle = true;
+    at::Tensor means2d;        // [nnz, 2]
+    at::Tensor depths;         // [nnz]
+    at::Tensor ray_transforms; // [nnz, 3, 3]
+    at::Tensor normals;        // [nnz, 3]
+};
+
+// Full backward for projection_2dgs_packed.
+Projection2DGSPackedBwdResult
 projection_2dgs_packed_bwd(
     // fwd inputs
     const at::Tensor &means,    // [..., N, 3]
@@ -854,33 +1808,21 @@ projection_2dgs_packed_bwd(
     const at::Tensor &Ks,       // [..., C, 3, 3]
     int64_t image_width,
     int64_t image_height,
+    bool sparse_grad,
     // fwd outputs
     const at::Tensor &batch_ids,      // [nnz]
     const at::Tensor &camera_ids,     // [nnz]
     const at::Tensor &gaussian_ids,   // [nnz]
     const at::Tensor &ray_transforms, // [nnz, 3, 3]
     // grad outputs
-    const at::Tensor &v_means2d,        // [nnz, 2]
-    const at::Tensor &v_depths,         // [nnz]
-    const at::Tensor &v_ray_transforms, // [nnz, 3, 3]
-    const at::Tensor &v_normals,        // [nnz, 3]
-    bool viewmats_requires_grad,
-    bool sparse_grad
+    const Projection2DGSPackedGrad &grad
 ) {
     DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
-    CHECK_INPUT(batch_ids);
-    CHECK_INPUT(camera_ids);
-    CHECK_INPUT(gaussian_ids);
-    CHECK_INPUT(ray_transforms);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_normals);
-    CHECK_INPUT(v_ray_transforms);
+    check_projection_2dgs_inputs(means, quats, scales, viewmats, Ks);
+    CHECK_INPUT(grad.means2d);
+    CHECK_INPUT(grad.depths);
+    CHECK_INPUT(grad.normals);
+    CHECK_INPUT(grad.ray_transforms);
 
     auto opt = means.options();
     uint32_t nnz = batch_ids.size(0);
@@ -895,7 +1837,7 @@ projection_2dgs_packed_bwd(
         v_quats = at::zeros_like(quats, opt);
         v_scales = at::zeros_like(scales, opt);
     }
-    if (viewmats_requires_grad) {
+    if (viewmats.requires_grad()) {
         v_viewmats = at::zeros_like(viewmats, opt);
     }
     
@@ -914,10 +1856,10 @@ projection_2dgs_packed_bwd(
         gaussian_ids,
         ray_transforms,
         // grad outputs
-        v_means2d,
-        v_depths,
-        v_ray_transforms,
-        v_normals,
+        grad.means2d,
+        grad.depths,
+        grad.ray_transforms,
+        grad.normals,
         sparse_grad,
         // outputs
         v_means,
@@ -926,19 +1868,187 @@ projection_2dgs_packed_bwd(
         v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
                              : c10::nullopt
     );
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+
+    // When sparse_grad is set, the kernel writes per-nnz dense gradients indexed
+    // by gaussian_ids; wrap them as sparse COO over the full per-input shapes so
+    // the optimizer can scatter-update only the touched gaussians. Coalesced
+    // when there is a single batch (each gaussian_id appears once).
+    if (sparse_grad) {
+        const bool is_coalesced = viewmats.size(0) == 1;
+        const at::Tensor sparse_grad_indices = gaussian_ids.unsqueeze(0);
+        v_means = make_sparse_coo_grad(
+            sparse_grad_indices, v_means, means.sizes(), is_coalesced);
+        v_quats = make_sparse_coo_grad(
+            sparse_grad_indices, v_quats, quats.sizes(), is_coalesced);
+        v_scales = make_sparse_coo_grad(
+            sparse_grad_indices, v_scales, scales.sizes(), is_coalesced);
+    }
+
+    return Projection2DGSPackedBwdResult{
+        .v_means = v_means,
+        .v_quats = v_quats,
+        .v_scales = v_scales,
+        .v_viewmats = as_optional_tensor(v_viewmats),
+    };
+}
+
+namespace {
+
+class Projection2DGSPackedAutograd
+    : public torch::autograd::Function<Projection2DGSPackedAutograd> {
+public:
+    // Forward-input positions; COUNT sizes the returned grad list.
+    struct FwdInput {
+        enum {
+            MEANS, QUATS, SCALES,
+            VIEWMATS, KS,
+            IMAGE_WIDTH, IMAGE_HEIGHT,
+            NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,
+            SPARSE_GRAD,
+            COUNT,
+        };
+    };
+
+    // Forward-output positions, in forward()'s return order.
+    struct FwdOutput {
+        enum {
+            BATCH_IDS, CAMERA_IDS, GAUSSIAN_IDS, INDPTR,
+            RADII, MEANS2D, DEPTHS, RAY_TRANSFORMS, NORMALS,
+            COUNT,
+        };
+    };
+
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const at::Tensor &means, const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double near_plane, double far_plane, double radius_clip,
+        bool sparse_grad
+    ) {
+        static_assert(
+            FwdInput::COUNT == fwd_input_count<&forward>(),
+            "FwdInput must have one enumerator per forward input"
+        );
+
+        // --- Run forward --------------------------------------------------
+        Projection2DGSPackedFwdResult outputs = projection_2dgs_packed_fwd(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            near_plane, far_plane, radius_clip,
+            sparse_grad
+        );
+
+        // --- Save state for backward --------------------------------------
+        ctx_save<&projection_2dgs_packed_bwd>(
+            ctx, means, quats, scales, viewmats, Ks,
+            image_width, image_height, sparse_grad,
+            outputs.batch_ids, outputs.camera_ids, outputs.gaussian_ids,
+            outputs.ray_transforms
+        );
+
+        torch::autograd::variable_list out(FwdOutput::COUNT);
+        out[FwdOutput::BATCH_IDS]      = outputs.batch_ids;
+        out[FwdOutput::CAMERA_IDS]     = outputs.camera_ids;
+        out[FwdOutput::GAUSSIAN_IDS]   = outputs.gaussian_ids;
+        out[FwdOutput::INDPTR]         = outputs.indptr;
+        out[FwdOutput::RADII]          = outputs.radii;
+        out[FwdOutput::MEANS2D]        = outputs.means2d;
+        out[FwdOutput::DEPTHS]         = outputs.depths;
+        out[FwdOutput::RAY_TRANSFORMS] = outputs.ray_transforms;
+        out[FwdOutput::NORMALS]        = outputs.normals;
+        return out;
+    }
+
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    ) {
+        Projection2DGSPackedGrad grad{
+            .means2d = grad_outputs[FwdOutput::MEANS2D].contiguous(),
+            .depths = grad_outputs[FwdOutput::DEPTHS].contiguous(),
+            .ray_transforms = grad_outputs[FwdOutput::RAY_TRANSFORMS].contiguous(),
+            .normals = grad_outputs[FwdOutput::NORMALS].contiguous(),
+        };
+        Projection2DGSPackedBwdResult g = apply_bwd<&projection_2dgs_packed_bwd>(ctx, grad);
+
+        torch::autograd::variable_list grads(FwdInput::COUNT);
+        grads[FwdInput::MEANS]    = g.v_means;
+        grads[FwdInput::QUATS]    = g.v_quats;
+        grads[FwdInput::SCALES]   = g.v_scales;
+        grads[FwdInput::VIEWMATS] = as_tensor(g.v_viewmats);
+        return grads;
+    }
+
+    // Forwards to apply() and packs the variable_list into the typed result.
+    static Projection2DGSPackedResult call(
+        const at::Tensor &means, const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &viewmats, const at::Tensor &Ks,
+        int64_t image_width, int64_t image_height,
+        double near_plane, double far_plane, double radius_clip,
+        bool sparse_grad
+    ) {
+        torch::autograd::variable_list outputs = apply(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            near_plane, far_plane, radius_clip,
+            sparse_grad
+        );
+        return {
+            .batch_ids      = outputs[FwdOutput::BATCH_IDS],
+            .camera_ids     = outputs[FwdOutput::CAMERA_IDS],
+            .gaussian_ids   = outputs[FwdOutput::GAUSSIAN_IDS],
+            .indptr         = outputs[FwdOutput::INDPTR],
+            .radii          = outputs[FwdOutput::RADII],
+            .means2d        = outputs[FwdOutput::MEANS2D],
+            .depths         = outputs[FwdOutput::DEPTHS],
+            .ray_transforms = outputs[FwdOutput::RAY_TRANSFORMS],
+            .normals        = outputs[FwdOutput::NORMALS],
+        };
+    }
+};
+
+} // namespace
+
+Projection2DGSPackedResult projection_2dgs_packed(
+    const at::Tensor &means, const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &viewmats, const at::Tensor &Ks,
+    int64_t image_width, int64_t image_height,
+    double near_plane, double far_plane, double radius_clip,
+    bool sparse_grad
+) {
+    const bool use_custom_autograd = needs_custom_autograd(
+        means, quats, scales, viewmats, Ks
+    );
+    if (!use_custom_autograd) {
+        return projection_2dgs_packed_fwd(
+            means, quats, scales,
+            viewmats, Ks,
+            image_width, image_height,
+            near_plane, far_plane, radius_clip,
+            sparse_grad
+        );
+    }
+
+    return Projection2DGSPackedAutograd::call(
+        means, quats, scales,
+        viewmats, Ks,
+        image_width, image_height,
+        near_plane, far_plane, radius_clip,
+        sparse_grad
+    );
 }
 
 #endif
 
 #if GSPLAT_BUILD_3DGUT
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+ProjectionUT3DGSFusedResult
 projection_ut_3dgs_fused_impl(
     const at::Tensor means,                   // [..., N, 3]
     const at::Tensor quats,                   // [..., N, 4]
@@ -957,12 +2067,12 @@ projection_ut_3dgs_fused_impl(
     const CameraModelType camera_model,
     const bool global_z_order,
     // uncented transform
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    const at::optional<c10::intrusive_ptr<UnscentedTransformParameters>> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs, // shared parameters for all cameras
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
@@ -996,6 +2106,92 @@ projection_ut_3dgs_fused_impl(
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
     uint32_t N = means.size(-2);    // number of gaussians
     uint32_t C = Ks.size(-3);       // number of cameras
+
+    // Validate inputs.
+    // Contiguity/device/dtype are already covered by the CHECK_INPUT calls above.
+    {
+        at::DimVector means_shape(batch_dims);
+        means_shape.append({N, 3});
+        TORCH_CHECK(
+            means.sizes() == means_shape,
+            "means must have shape [..., N, 3], got ", means.sizes()
+        );
+        at::DimVector quats_shape(batch_dims);
+        quats_shape.append({N, 4});
+        TORCH_CHECK(
+            quats.sizes() == quats_shape,
+            "quats must have shape [..., N, 4], got ", quats.sizes()
+        );
+        at::DimVector scales_shape(batch_dims);
+        scales_shape.append({N, 3});
+        TORCH_CHECK(
+            scales.sizes() == scales_shape,
+            "scales must have shape [..., N, 3], got ", scales.sizes()
+        );
+        if (opacities.has_value()) {
+            at::DimVector opacities_shape(batch_dims);
+            opacities_shape.append({N});
+            TORCH_CHECK(
+                opacities.value().sizes() == opacities_shape,
+                "opacities must have shape [..., N], got ", opacities.value().sizes()
+            );
+        }
+        at::DimVector viewmats_shape(batch_dims);
+        viewmats_shape.append({C, 4, 4});
+        TORCH_CHECK(
+            viewmats0.sizes() == viewmats_shape,
+            "viewmats must have shape [..., C, 4, 4], got ", viewmats0.sizes()
+        );
+        at::DimVector Ks_shape(batch_dims);
+        Ks_shape.append({C, 3, 3});
+        TORCH_CHECK(
+            Ks.sizes() == Ks_shape, "Ks must have shape [..., C, 3, 3], got ", Ks.sizes()
+        );
+        if (radial_coeffs.has_value()) {
+            const at::Tensor &radial = radial_coeffs.value();
+            at::DimVector radial_prefix(batch_dims);
+            radial_prefix.append({C});
+            // Guard the prefix slice on rank >= 1 so a sub-1-D radial fails this
+            // check cleanly instead of underflowing slice()'s size_t length.
+            const int64_t radial_ndim = radial.dim();
+            const int64_t radial_last = radial_ndim >= 1 ? radial.size(-1) : -1;
+            TORCH_CHECK(
+                radial_ndim >= 1 &&
+                    radial.sizes().slice(0, radial_ndim - 1) == radial_prefix &&
+                    (radial_last == 6 || radial_last == 4),
+                "radial_coeffs must have shape [..., C, 6] or [..., C, 4], got ",
+                radial.sizes()
+            );
+        }
+        if (tangential_coeffs.has_value()) {
+            at::DimVector tangential_shape(batch_dims);
+            tangential_shape.append({C, 2});
+            TORCH_CHECK(
+                tangential_coeffs.value().sizes() == tangential_shape,
+                "tangential_coeffs must have shape [..., C, 2], got ",
+                tangential_coeffs.value().sizes()
+            );
+        }
+        if (thin_prism_coeffs.has_value()) {
+            at::DimVector thin_prism_shape(batch_dims);
+            thin_prism_shape.append({C, 4});
+            TORCH_CHECK(
+                thin_prism_coeffs.value().sizes() == thin_prism_shape,
+                "thin_prism_coeffs must have shape [..., C, 4], got ",
+                thin_prism_coeffs.value().sizes()
+            );
+        }
+        if (viewmats1.has_value()) {
+            at::DimVector viewmats1_shape(batch_dims);
+            viewmats1_shape.append({C, 4, 4});
+            TORCH_CHECK(
+                viewmats1.value().sizes() == viewmats1_shape,
+                "viewmats_rs must have shape [..., C, 4, 4], got ",
+                viewmats1.value().sizes()
+            );
+        }
+    }
+
     auto opt = means.options();
 
     at::DimVector radii_shape(batch_dims);
@@ -1056,17 +2252,19 @@ projection_ut_3dgs_fused_impl(
         calc_compensations ? at::optional<at::Tensor>(compensations)
                            : at::nullopt
     );
-    return std::make_tuple(radii, means2d, depths, conics, compensations);
+    return {
+        .radii = radii,
+        .means2d = means2d,
+        .depths = depths,
+        .conics = conics,
+        .compensations = calc_compensations ? at::optional<at::Tensor>(compensations)
+                                            : at::nullopt
+    };
 }
 
 #endif // GSPLAT_BUILD_3DGUT
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+ProjectionUT3DGSFusedResult
 projection_ut_3dgs_fused(
     const at::Tensor &means,                   // [..., N, 3]
     const at::Tensor &quats,                   // [..., N, 4]
@@ -1082,14 +2280,14 @@ projection_ut_3dgs_fused(
     double far_plane,
     double radius_clip,
     bool calc_compensations,
-    int64_t camera_model,
+    CameraModelType camera_model,
     bool global_z_order,
-    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
-    int64_t rs_type,
+    const at::optional<c10::intrusive_ptr<UnscentedTransformParameters>> &ut_params,
+    ShutterType rs_type,
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
@@ -1115,10 +2313,10 @@ projection_ut_3dgs_fused(
         far_plane,
         radius_clip,
         calc_compensations,
-        static_cast<CameraModelType>(camera_model),
+        camera_model,
         global_z_order,
         ut_params,
-        static_cast<ShutterType>(rs_type),
+        rs_type,
         radial_coeffs,
         tangential_coeffs,
         thin_prism_coeffs,
@@ -1131,22 +2329,29 @@ projection_ut_3dgs_fused(
 
 void register_projection_cuda_impl(torch::Library &m) {
 #if GSPLAT_BUILD_3DGS
-    m.impl("projection_ewa_simple_fwd", &projection_ewa_simple_fwd);
-    m.impl("projection_ewa_simple_bwd", &projection_ewa_simple_bwd);
-    m.impl("projection_ewa_3dgs_fused_fwd", &projection_ewa_3dgs_fused_fwd);
-    m.impl("projection_ewa_3dgs_fused_bwd", &projection_ewa_3dgs_fused_bwd);
-    m.impl("projection_ewa_3dgs_packed_fwd", &projection_ewa_3dgs_packed_fwd);
-    m.impl("projection_ewa_3dgs_packed_bwd", &projection_ewa_3dgs_packed_bwd);
+    m.impl("projection_ewa_simple", to_torch_op<&projection_ewa_simple_fwd>);
+    m.impl("projection_ewa_3dgs_fused", to_torch_op<&projection_ewa_3dgs_fused_fwd>);
+    m.impl("projection_ewa_3dgs_packed", to_torch_op<&projection_ewa_3dgs_packed_fwd>);
 #endif
 
 #if GSPLAT_BUILD_2DGS
-    m.impl("projection_2dgs_fused_fwd", &projection_2dgs_fused_fwd);
-    m.impl("projection_2dgs_fused_bwd", &projection_2dgs_fused_bwd);
-    m.impl("projection_2dgs_packed_fwd", &projection_2dgs_packed_fwd);
-    m.impl("projection_2dgs_packed_bwd", &projection_2dgs_packed_bwd);
+    m.impl("projection_2dgs_fused", to_torch_op<&projection_2dgs_fused_fwd>);
+    m.impl("projection_2dgs_packed", to_torch_op<&projection_2dgs_packed_fwd>);
 #endif
 
-    m.impl("projection_ut_3dgs_fused", &projection_ut_3dgs_fused);
+    m.impl("projection_ut_3dgs_fused", to_torch_op<&projection_ut_3dgs_fused>);
+}
+
+void register_projection_autograd_cuda_impl(torch::Library &m) {
+#if GSPLAT_BUILD_3DGS
+    m.impl("projection_ewa_simple", to_torch_op<&projection_ewa_simple>);
+    m.impl("projection_ewa_3dgs_fused", to_torch_op<&projection_ewa_3dgs_fused>);
+    m.impl("projection_ewa_3dgs_packed", to_torch_op<&projection_ewa_3dgs_packed>);
+#endif
+#if GSPLAT_BUILD_2DGS
+    m.impl("projection_2dgs_fused", to_torch_op<&projection_2dgs_fused>);
+    m.impl("projection_2dgs_packed", to_torch_op<&projection_2dgs_packed>);
+#endif
 }
 
 } // namespace gsplat

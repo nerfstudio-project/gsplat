@@ -37,11 +37,16 @@ void register_gaussian_losses_cuda_impl(torch::Library &m);
 void register_intersect_cuda_impl(torch::Library &m);
 void register_mcmc_perturb_cuda_impl(torch::Library &m);
 void register_projection_cuda_impl(torch::Library &m);
+void register_projection_autograd_cuda_impl(torch::Library &m);
 void register_quat_scale_to_covar_cuda_impl(torch::Library &m);
+void register_quat_scale_to_covar_autograd_cuda_impl(torch::Library &m);
 void register_rasterization_cuda_impl(torch::Library &m);
 void register_rasterization_autograd_cuda_impl(torch::Library &m);
+void register_rendering_cuda_impl(torch::Library &m);
+void register_rendering_autograd_cuda_impl(torch::Library &m);
 void register_relocation_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_cuda_impl(torch::Library &m);
+void register_spherical_harmonics_autograd_cuda_impl(torch::Library &m);
 
 } // namespace gsplat
 
@@ -939,46 +944,42 @@ TORCH_LIBRARY(gsplat, m) {
 
 
 #if GSPLAT_BUILD_3DGS
-    m.def("quat_scale_to_covar_preci_fwd(Tensor quats, Tensor scales, bool compute_covar, bool compute_preci, bool triu) -> (Tensor, Tensor)");
-    m.def("quat_scale_to_covar_preci_bwd(Tensor quats, Tensor scales, bool triu, Tensor? v_covars, Tensor? v_precis) -> (Tensor, Tensor)");
+    m.def("quat_scale_to_covar_preci(Tensor quats, Tensor scales, bool compute_covar, bool compute_preci, bool triu) -> (Tensor?, Tensor?)");
 #endif
 
-    m.def("spherical_harmonics_fwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks) -> Tensor");
-    m.def("spherical_harmonics_bwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks, Tensor v_colors, bool compute_v_dirs) -> (Tensor, Tensor)");
+    m.def("spherical_harmonics(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks) -> Tensor");
 
-    m.def("intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? conics, Tensor? opacities, Tensor? image_ids, Tensor? gaussian_ids, int I, int tile_size, int tile_width, int tile_height, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
+    m.def("intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? conics, Tensor? opacities, Tensor? image_ids, Tensor? gaussian_ids, int? n_images, int tile_size, int tile_width, int tile_height, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
     m.def("intersect_offset(Tensor isect_ids, int I, int tile_width, int tile_height) -> Tensor");
     m.def("intersect_tile_sparse(Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor tile_mask, Tensor active_tiles, int I, int tile_size, int tile_width, int tile_height) -> (Tensor, Tensor)");
-    m.def("intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int I, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
+    m.def("intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int? n_images, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
 
 #if GSPLAT_BUILD_3DGS
-    m.def("projection_ewa_simple_fwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> (Tensor, Tensor)");
-    m.def("projection_ewa_simple_bwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model, Tensor v_means2d, Tensor v_covars2d) -> (Tensor, Tensor)");
+    m.def("projection_ewa_simple(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> (Tensor, Tensor)");
 
-    m.def("projection_ewa_3dgs_fused_fwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("projection_ewa_3dgs_fused_bwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, int camera_model, Tensor radii, Tensor conics, Tensor? compensations, Tensor v_means2d, Tensor v_depths, Tensor v_conics, Tensor? v_compensations, bool viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def("projection_ewa_3dgs_fused(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, Tensor?)");
 
-    m.def("projection_ewa_3dgs_packed_fwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("projection_ewa_3dgs_packed_bwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, int camera_model, Tensor batch_ids, Tensor camera_ids, Tensor gaussian_ids, Tensor conics, Tensor? compensations, Tensor v_means2d, Tensor v_depths, Tensor v_conics, Tensor? v_compensations, bool viewmats_requires_grad, bool sparse_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def("projection_ewa_3dgs_packed(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool sparse_grad, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)");
 
-    m.def("rasterize_to_pixels_3dgs_fwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor isect_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_3dgs_bwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, bool absgrad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_indices_3dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor conics, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor)");
+    m.def("rasterize_to_pixels_3dgs(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor isect_offsets, Tensor flatten_ids, bool packed, bool absgrad) -> (Tensor, Tensor, Tensor)");
+    m.def("rasterize_to_indices_3dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor conics, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor)");
     m.def("rasterize_num_contributing_gaussians(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size) -> (Tensor, Tensor)");
     m.def("rasterize_contributing_gaussian_ids(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size, Tensor num_contributing_gaussians) -> (Tensor, Tensor)");
     m.def("rasterize_top_contributing_gaussian_ids(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size, int num_depth_samples) -> (Tensor, Tensor)");
 #endif
 
+#if GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT
+    m.def("rasterization_3dgs(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor opacities, Tensor? colors, Tensor viewmats, Tensor Ks, int image_width, int image_height, int tile_size, float eps2d, float near_plane, float far_plane, float radius_clip, Tensor? backgrounds, bool packed, bool sparse_grad, bool absgrad, bool calc_compensations, bool rasterize_mode_is_classic, int camera_model, bool segmented, int channel_chunk, bool has_color, int sh_degree, Tensor? extra_signals, int extra_signals_sh_degree, bool append_depth, bool expected_depth, bool with_eval3d, bool with_ut, Tensor? rays, Tensor? viewmats_rs, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rolling_shutter, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, bool global_z_order, bool use_hit_distance, bool return_normals, int renderer_config, str? process_group_name, int world_size) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, int)");
+#endif
+
 #if GSPLAT_BUILD_2DGS
-    m.def("projection_2dgs_fused_fwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("projection_2dgs_fused_bwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, Tensor radii, Tensor ray_transforms, Tensor v_means2d, Tensor v_depths, Tensor v_normals, Tensor v_ray_transforms, bool viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor)");
+    m.def("projection_2dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
 
-    m.def("projection_2dgs_packed_fwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float near_plane, float far_plane, float radius_clip) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("projection_2dgs_packed_bwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, Tensor batch_ids, Tensor camera_ids, Tensor gaussian_ids, Tensor ray_transforms, Tensor v_means2d, Tensor v_depths, Tensor v_ray_transforms, Tensor v_normals, bool viewmats_requires_grad, bool sparse_grad) -> (Tensor, Tensor, Tensor, Tensor)");
+    m.def("projection_2dgs_packed(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float near_plane, float far_plane, float radius_clip, bool sparse_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
 
-    m.def("rasterize_to_pixels_2dgs_fwd(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor normals, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_2dgs_bwd(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor normals, Tensor densify, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids, Tensor render_colors, Tensor render_alphas, Tensor last_ids, Tensor median_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor v_render_normals, Tensor v_render_distort, Tensor v_render_median, bool absgrad) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_indices_2dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor ray_transforms, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor)");
+    m.def("rasterize_to_pixels_2dgs(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor normals, Tensor densify, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids, bool packed, bool absgrad, bool distloss) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def("rasterize_to_indices_2dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor ray_transforms, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor)");
+    m.def("rasterization_2dgs(Tensor means, Tensor quats, Tensor scales, Tensor opacities, Tensor colors, Tensor viewmats, Tensor Ks, int image_width, int image_height, int tile_size, float eps2d, float near_plane, float far_plane, float radius_clip, Tensor? backgrounds, bool packed, bool sparse_grad, bool absgrad, bool distloss, int? sh_degree, str render_mode, str depth_mode) -> (Tensor, Tensor, Tensor, Tensor?, Tensor, Tensor, Tensor, Tensor?, Tensor?, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, int, int)");
 #endif
 
 #if GSPLAT_BUILD_ADAM
@@ -989,7 +990,7 @@ TORCH_LIBRARY(gsplat, m) {
     m.def("relocation(Tensor opacities, Tensor scales, Tensor ratios, Tensor binoms, int n_max) -> (Tensor, Tensor)");
 #endif
 
-    m.def("projection_ut_3dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor? opacities, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model, bool global_z_order, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def("projection_ut_3dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor? opacities, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model, bool global_z_order, __torch__.torch.classes.gsplat.UnscentedTransformParameters? ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters? ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params) -> (Tensor, Tensor, Tensor, Tensor, Tensor?)");
     m.def("rasterize_to_pixels_from_world_3dgs(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool return_sample_counts, bool use_hit_distance, bool return_normals, int renderer_config, bool return_last_ids, bool unsafe_masked_tile_outputs=False) -> (Tensor, Tensor, Tensor?, Tensor?, Tensor?)");
 
 #if GSPLAT_BUILD_3DGS
@@ -1016,6 +1017,7 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
     gsplat::register_spherical_harmonics_cuda_impl(m);
     gsplat::register_projection_cuda_impl(m);
     gsplat::register_rasterization_cuda_impl(m);
+    gsplat::register_rendering_cuda_impl(m);
 
 #if GSPLAT_BUILD_ADAM
     gsplat::register_adam_cuda_impl(m);
@@ -1039,5 +1041,11 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
 }
 
 TORCH_LIBRARY_IMPL(gsplat, AutogradCUDA, m) {
+#if GSPLAT_BUILD_3DGS
+    gsplat::register_quat_scale_to_covar_autograd_cuda_impl(m);
+#endif
+    gsplat::register_spherical_harmonics_autograd_cuda_impl(m);
+    gsplat::register_projection_autograd_cuda_impl(m);
     gsplat::register_rasterization_autograd_cuda_impl(m);
+    gsplat::register_rendering_autograd_cuda_impl(m);
 }

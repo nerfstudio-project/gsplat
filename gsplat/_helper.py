@@ -159,6 +159,44 @@ def assert_shape(name: str, t: torch.Tensor, shape: tuple):
         raise ValueError(f"{name} must have shape {shape}, got {t.shape}")
 
 
+def ensure_shape(name: str, t: torch.Tensor, shape: tuple) -> torch.Tensor:
+    """
+    Expand a tensor to an exact shape, or raise if that is not possible.
+
+    Returns a tensor whose shape is exactly ``shape``. It accepts size-1 and
+    missing leading broadcast dimensions, but rejects inputs that would
+    broadcast to a larger shape than requested.
+
+    Args:
+        name: Name of the tensor, used in error messages.
+        t: Tensor to validate and expand.
+        shape: Exact shape to return.
+
+    Returns:
+        ``t`` itself when it already has the exact shape, otherwise an expanded
+        view with shape ``shape``.
+    """
+
+    actual_shape = tuple(t.shape)
+    expected_shape = tuple(shape)
+    try:
+        broadcast_shape = tuple(torch.broadcast_shapes(actual_shape, expected_shape))
+    except RuntimeError as exc:
+        raise ValueError(
+            f"{name} must have shape {expected_shape}, got {actual_shape}."
+        ) from exc
+    # Extra leading dimensions can be broadcast-compatible while producing a
+    # larger result than the kernel shape. Those are not safe to flatten.
+    if broadcast_shape != expected_shape:
+        raise ValueError(
+            f"{name} must have shape {expected_shape}, got {actual_shape}."
+        )
+
+    if actual_shape == expected_shape:
+        return t
+    return t.expand(shape)
+
+
 def assert_close(
     actual,
     expected,

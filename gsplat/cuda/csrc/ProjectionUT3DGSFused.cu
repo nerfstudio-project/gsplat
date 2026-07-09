@@ -249,12 +249,12 @@ void launch_projection_ut_3dgs_fused_kernel(
     const CameraModelType camera_model,
     const bool global_z_order,
     // uncented transform
-    const c10::intrusive_ptr<UnscentedTransformParameters>& ut_params,
+    const at::optional<c10::intrusive_ptr<UnscentedTransformParameters>>& ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs, // shared parameters for all cameras
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params, // external distortion parameters
     // outputs
@@ -328,13 +328,14 @@ void launch_projection_ut_3dgs_fused_kernel(
             );
         }
         else if (camera_model == CameraModelType::FTHETA) {
+            TORCH_CHECK(ftheta_coeffs.has_value(), "ftheta coefficients must be given for ftheta camera model");
             return to_sensor_model_kernel_params(
                 get_camera_model_kernel_params<FThetaCameraModel>(
                     {image_width, image_height},
                     rs_type,
                     external_distortion_kernel_params,
                     Ks.const_data_ptr<float>(),
-                    *ftheta_coeffs
+                    *ftheta_coeffs.value()
                 )
             );
         }
@@ -346,6 +347,11 @@ void launch_projection_ut_3dgs_fused_kernel(
             TORCH_CHECK(false, "Invalid camera model: only pinhole, fisheye, ftheta, and lidar camera models are supported");
         }
     }();
+
+    // Default unscented-transform parameters when the caller leaves them unset.
+    const auto ut = ut_params.has_value()
+                        ? ut_params.value()
+                        : c10::make_intrusive<UnscentedTransformParameters>();
 
     auto launch_kernel = [&]<typename SensorModel>() {
         projection_ut_3dgs_fused_kernel<SensorModel, float>
@@ -372,7 +378,7 @@ void launch_projection_ut_3dgs_fused_kernel(
                 radius_clip,
                 global_z_order,
                 // uncented transform
-                *ut_params,
+                *ut,
                 std::get<typename SensorModel::KernelParameters>(sensor_model_params),
                 radii.data_ptr<int32_t>(),
                 means2d.data_ptr<float>(),
