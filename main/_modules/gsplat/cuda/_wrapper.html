@@ -427,6 +427,7 @@
     <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterProjection2DGSPacked</span><span class="p">)</span>
     <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterRasterizeToPixels3DGS</span><span class="p">)</span>
     <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterRasterizeToPixels2DGS</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterRasterizeToPixelsSparse</span><span class="p">)</span>
     <span class="n">_AUTOGRAD_REGISTRATIONS_DONE</span> <span class="o">=</span> <span class="kc">True</span>
 
 
@@ -1747,6 +1748,107 @@
 
 
 
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-sparse-fwd&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_sparse</span><span class="p">(</span>
+    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
+    <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, channels] or [nnz, channels]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N] or [nnz]</span>
+    <span class="n">image_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P]</span>
+    <span class="n">active_tiles</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT]</span>
+    <span class="n">tile_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT + 1]</span>
+    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+    <span class="n">tile_pixel_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT, words]</span>
+    <span class="n">tile_pixel_cumsum</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT]</span>
+    <span class="n">pixel_map</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P]</span>
+    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [n_images, channels]</span>
+    <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [n_images, tile_height, tile_width]</span>
+    <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to a packed set of pixels (sparse rasterization).</span>
+
+<span class="sd">    Renders only the pixels described by the sparse tile layout, touching only</span>
+<span class="sd">    active tiles. Outputs are packed in the original pixel order -- the same</span>
+<span class="sd">    order as the ``pixels`` / ``image_ids`` passed to</span>
+<span class="sd">    :func:`build_sparse_tile_layout` -- as ``[P, ...]`` rather than dense images.</span>
+
+<span class="sd">    The layout tensors (``active_tiles`` / ``tile_pixel_mask`` /</span>
+<span class="sd">    ``tile_pixel_cumsum`` / ``pixel_map``) come from</span>
+<span class="sd">    :func:`build_sparse_tile_layout`; ``tile_offsets`` / ``flatten_ids`` come</span>
+<span class="sd">    from :func:`intersect_tile_sparse`. ``image_ids`` is the same ``[P]`` tensor</span>
+<span class="sd">    given to :func:`build_sparse_tile_layout` (needed for the background</span>
+<span class="sd">    gradient).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.</span>
+<span class="sd">        conics: Inverse projected covariances (upper triangle). [..., N, 3] or [nnz, 3].</span>
+<span class="sd">        colors: Gaussian colors or ND features. [..., N, channels] or [nnz, channels].</span>
+<span class="sd">            ``colors.shape[-1]`` must be a channel count compiled into ``GSPLAT_NUM_CHANNELS``.</span>
+<span class="sd">        opacities: Gaussian opacities. [..., N] or [nnz].</span>
+<span class="sd">        image_ids: Image index of each requested pixel. [P].</span>
+<span class="sd">        active_tiles: Ascending dense ids of active tiles. [AT].</span>
+<span class="sd">        tile_offsets: Per-active-tile intersection offsets. [AT + 1].</span>
+<span class="sd">        flatten_ids: Flattened Gaussian indices. [n_isects].</span>
+<span class="sd">        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].</span>
+<span class="sd">        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].</span>
+<span class="sd">        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].</span>
+<span class="sd">        image_width: Image width.</span>
+<span class="sd">        image_height: Image height.</span>
+<span class="sd">        tile_size: Tile size.</span>
+<span class="sd">        tile_width: Number of tiles along the image width.</span>
+<span class="sd">        tile_height: Number of tiles along the image height.</span>
+<span class="sd">        backgrounds: Background colors. [n_images, channels]. Default: None.</span>
+<span class="sd">        masks: Tile mask to skip masked tiles. [n_images, tile_height, tile_width]. Default: None.</span>
+<span class="sd">        packed: If True, inputs are packed with shape [nnz, ...]. Default: False.</span>
+<span class="sd">        absgrad: If True, backward computes a ``.absgrad`` attribute for ``means2d``. Default: False.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Rendered colors**. [P, channels]</span>
+<span class="sd">        - **Rendered alphas**. [P, 1]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+
+    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">,</span> <span class="n">_last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+        <span class="s2">&quot;rasterize_to_pixels_sparse&quot;</span>
+    <span class="p">)(</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">backgrounds</span><span class="p">,</span>
+        <span class="n">masks</span><span class="p">,</span>
+        <span class="n">image_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_width</span><span class="p">,</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">tile_width</span><span class="p">,</span>
+        <span class="n">tile_height</span><span class="p">,</span>
+        <span class="n">active_tiles</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_pixel_mask</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_pixel_cumsum</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">pixel_map</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">packed</span><span class="p">,</span>
+        <span class="n">absgrad</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">absgrad</span><span class="p">:</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">absgrad</span> <span class="o">=</span> <span class="n">means2d_absgrad</span>
+
+    <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span>
+
+
 <div class="viewcode-block" id="rasterize_num_contributing_gaussians">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_num_contributing_gaussians">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
@@ -1790,6 +1892,72 @@
         <span class="n">tile_size</span><span class="p">,</span>
     <span class="p">)</span></div>
 
+
+
+<span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-count-sparse&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_num_contributing_gaussians_sparse</span><span class="p">(</span>
+    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
+    <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N] or [nnz]</span>
+    <span class="n">active_tiles</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT]</span>
+    <span class="n">tile_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT + 1]</span>
+    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+    <span class="n">tile_pixel_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT, words]</span>
+    <span class="n">tile_pixel_cumsum</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT]</span>
+    <span class="n">pixel_map</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P]</span>
+    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Sparse counterpart of :func:`rasterize_num_contributing_gaussians`.</span>
+
+<span class="sd">    Counts contributing Gaussians (and accumulated alpha) for only the requested</span>
+<span class="sd">    pixels, packed in original-pixel order (the order of the ``pixels`` /</span>
+<span class="sd">    ``image_ids`` given to :func:`build_sparse_tile_layout`). Consumes the</span>
+<span class="sd">    layout tensors from :func:`build_sparse_tile_layout` and the intersections</span>
+<span class="sd">    from :func:`intersect_tile_sparse`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.</span>
+<span class="sd">        conics: Inverse projected covariances. [..., N, 3] or [nnz, 3].</span>
+<span class="sd">        opacities: Gaussian opacities. [..., N] or [nnz].</span>
+<span class="sd">        active_tiles: Ascending dense ids of active tiles. [AT].</span>
+<span class="sd">        tile_offsets: Per-active-tile intersection offsets. [AT + 1].</span>
+<span class="sd">        flatten_ids: Flattened Gaussian indices. [n_isects].</span>
+<span class="sd">        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].</span>
+<span class="sd">        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].</span>
+<span class="sd">        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].</span>
+<span class="sd">        image_width: Image width.</span>
+<span class="sd">        image_height: Image height.</span>
+<span class="sd">        tile_size: Tile size.</span>
+<span class="sd">        tile_width: Number of tiles along the image width.</span>
+<span class="sd">        tile_height: Number of tiles along the image height.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Number of contributing Gaussians**. Int32 [P].</span>
+<span class="sd">        - **Rendered alphas**. [P].</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_num_contributing_gaussians_sparse&quot;</span><span class="p">)(</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_width</span><span class="p">,</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">tile_width</span><span class="p">,</span>
+        <span class="n">tile_height</span><span class="p">,</span>
+        <span class="n">active_tiles</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_pixel_mask</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_pixel_cumsum</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">pixel_map</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+    <span class="p">)</span>
 
 
 <div class="viewcode-block" id="rasterize_contributing_gaussian_ids">
@@ -1844,6 +2012,76 @@
 
 
 
+<span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-contributors-sparse&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_contributing_gaussian_ids_sparse</span><span class="p">(</span>
+    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
+    <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N] or [nnz]</span>
+    <span class="n">active_tiles</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT]</span>
+    <span class="n">tile_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT + 1]</span>
+    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+    <span class="n">tile_pixel_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT, words]</span>
+    <span class="n">tile_pixel_cumsum</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT]</span>
+    <span class="n">pixel_map</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P]</span>
+    <span class="n">num_contributing_gaussians</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P] int32</span>
+    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Sparse counterpart of :func:`rasterize_contributing_gaussian_ids`.</span>
+
+<span class="sd">    Records the contributing Gaussian ids and weights for only the requested</span>
+<span class="sd">    pixels, packed in original-pixel order (``[P, K]`` where ``K`` is the max</span>
+<span class="sd">    per-pixel contributor count). Consumes the layout from</span>
+<span class="sd">    :func:`build_sparse_tile_layout`, the intersections from</span>
+<span class="sd">    :func:`intersect_tile_sparse`, and the per-pixel counts from</span>
+<span class="sd">    :func:`rasterize_num_contributing_gaussians_sparse`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.</span>
+<span class="sd">        conics: Inverse projected covariances. [..., N, 3] or [nnz, 3].</span>
+<span class="sd">        opacities: Gaussian opacities. [..., N] or [nnz].</span>
+<span class="sd">        active_tiles: Ascending dense ids of active tiles. [AT].</span>
+<span class="sd">        tile_offsets: Per-active-tile intersection offsets. [AT + 1].</span>
+<span class="sd">        flatten_ids: Flattened Gaussian indices. [n_isects].</span>
+<span class="sd">        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].</span>
+<span class="sd">        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].</span>
+<span class="sd">        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].</span>
+<span class="sd">        num_contributing_gaussians: Per-pixel contributor counts. Int32 [P].</span>
+<span class="sd">        image_width: Image width.</span>
+<span class="sd">        image_height: Image height.</span>
+<span class="sd">        tile_size: Tile size.</span>
+<span class="sd">        tile_width: Number of tiles along the image width.</span>
+<span class="sd">        tile_height: Number of tiles along the image height.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Contributing Gaussian ids**. Int32 [P, K] (-1 padded).</span>
+<span class="sd">        - **Contributing weights**. [P, K].</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_contributing_gaussian_ids_sparse&quot;</span><span class="p">)(</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_width</span><span class="p">,</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">tile_width</span><span class="p">,</span>
+        <span class="n">tile_height</span><span class="p">,</span>
+        <span class="n">active_tiles</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_pixel_mask</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_pixel_cumsum</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">pixel_map</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">num_contributing_gaussians</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+    <span class="p">)</span>
+
+
 <div class="viewcode-block" id="rasterize_top_contributing_gaussian_ids">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_top_contributing_gaussian_ids">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
@@ -1893,6 +2131,75 @@
         <span class="n">num_depth_samples</span><span class="p">,</span>
     <span class="p">)</span></div>
 
+
+
+<span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;render2D-top-contributors-sparse&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_top_contributing_gaussian_ids_sparse</span><span class="p">(</span>
+    <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 2] or [nnz, 2]</span>
+    <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3] or [nnz, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N] or [nnz]</span>
+    <span class="n">active_tiles</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT]</span>
+    <span class="n">tile_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT + 1]</span>
+    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+    <span class="n">tile_pixel_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT, words]</span>
+    <span class="n">tile_pixel_cumsum</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [AT]</span>
+    <span class="n">pixel_map</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [P]</span>
+    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">num_depth_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Sparse counterpart of :func:`rasterize_top_contributing_gaussian_ids`.</span>
+
+<span class="sd">    Keeps the top-``num_depth_samples`` contributors (by weight, in depth order)</span>
+<span class="sd">    for only the requested pixels, packed in original-pixel order</span>
+<span class="sd">    (``[P, num_depth_samples]``). Consumes the layout from</span>
+<span class="sd">    :func:`build_sparse_tile_layout` and the intersections from</span>
+<span class="sd">    :func:`intersect_tile_sparse`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means2d: Projected Gaussian means. [..., N, 2] or [nnz, 2] if packed.</span>
+<span class="sd">        conics: Inverse projected covariances. [..., N, 3] or [nnz, 3].</span>
+<span class="sd">        opacities: Gaussian opacities. [..., N] or [nnz].</span>
+<span class="sd">        active_tiles: Ascending dense ids of active tiles. [AT].</span>
+<span class="sd">        tile_offsets: Per-active-tile intersection offsets. [AT + 1].</span>
+<span class="sd">        flatten_ids: Flattened Gaussian indices. [n_isects].</span>
+<span class="sd">        tile_pixel_mask: Per-active-tile raster-order active-pixel bitmask. [AT, words].</span>
+<span class="sd">        tile_pixel_cumsum: Inclusive per-active-tile active-pixel count. [AT].</span>
+<span class="sd">        pixel_map: Argsort taking pixels into (tile, in-tile) order. [P].</span>
+<span class="sd">        image_width: Image width.</span>
+<span class="sd">        image_height: Image height.</span>
+<span class="sd">        tile_size: Tile size.</span>
+<span class="sd">        tile_width: Number of tiles along the image width.</span>
+<span class="sd">        tile_height: Number of tiles along the image height.</span>
+<span class="sd">        num_depth_samples: Number of top contributors to keep per pixel.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Top Gaussian ids**. Int32 [P, num_depth_samples] (-1 padded).</span>
+<span class="sd">        - **Top weights**. [P, num_depth_samples].</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_top_contributing_gaussian_ids_sparse&quot;</span><span class="p">)(</span>
+        <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_width</span><span class="p">,</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">tile_width</span><span class="p">,</span>
+        <span class="n">tile_height</span><span class="p">,</span>
+        <span class="n">num_depth_samples</span><span class="p">,</span>
+        <span class="n">active_tiles</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_pixel_mask</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">tile_pixel_cumsum</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">pixel_map</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+    <span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">RegisterRasterizeToPixels3DGS</span><span class="p">:</span>
@@ -2000,6 +2307,149 @@
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_size</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># isect_offsets</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># flatten_ids</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># packed</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># absgrad</span>
+        <span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterRasterizeToPixelsSparse</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the gsplat::rasterize_to_pixels_sparse op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;rasterize_to_pixels_sparse&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">image_ids</span><span class="p">,</span>
+            <span class="n">image_width</span><span class="p">,</span>
+            <span class="n">image_height</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">tile_width</span><span class="p">,</span>
+            <span class="n">tile_height</span><span class="p">,</span>
+            <span class="n">active_tiles</span><span class="p">,</span>
+            <span class="n">tile_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">tile_pixel_mask</span><span class="p">,</span>
+            <span class="n">tile_pixel_cumsum</span><span class="p">,</span>
+            <span class="n">pixel_map</span><span class="p">,</span>
+            <span class="n">_packed</span><span class="p">,</span>
+            <span class="n">absgrad</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="n">_render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">,</span> <span class="n">last_ids</span> <span class="o">=</span> <span class="n">output</span>
+        <span class="c1"># last_ids and the absgrad holder are forward-internal; the backward fills</span>
+        <span class="c1"># the holder in place (it must not be tracked by autograd).</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">mark_non_differentiable</span><span class="p">(</span><span class="n">last_ids</span><span class="p">,</span> <span class="n">means2d_absgrad</span><span class="p">)</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">image_width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">image_height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span> <span class="o">=</span> <span class="n">tile_size</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">tile_width</span> <span class="o">=</span> <span class="n">tile_width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">tile_height</span> <span class="o">=</span> <span class="n">tile_height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span> <span class="o">=</span> <span class="n">absgrad</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">image_ids</span><span class="p">,</span>
+            <span class="n">active_tiles</span><span class="p">,</span>
+            <span class="n">tile_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">tile_pixel_mask</span><span class="p">,</span>
+            <span class="n">tile_pixel_cumsum</span><span class="p">,</span>
+            <span class="n">pixel_map</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">means2d_absgrad</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
+        <span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_render_colors</span><span class="p">,</span> <span class="n">v_render_alphas</span><span class="p">,</span> <span class="n">v_means2d_absgrad</span><span class="p">,</span> <span class="n">v_last_ids</span>
+    <span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">image_ids</span><span class="p">,</span>
+            <span class="n">active_tiles</span><span class="p">,</span>
+            <span class="n">tile_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">tile_pixel_mask</span><span class="p">,</span>
+            <span class="n">tile_pixel_cumsum</span><span class="p">,</span>
+            <span class="n">pixel_map</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">means2d_absgrad</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="p">(</span>
+            <span class="n">v_means2d_abs</span><span class="p">,</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_backgrounds</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">image_ids</span><span class="p">,</span>
+            <span class="n">active_tiles</span><span class="p">,</span>
+            <span class="n">tile_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">tile_pixel_mask</span><span class="p">,</span>
+            <span class="n">tile_pixel_cumsum</span><span class="p">,</span>
+            <span class="n">pixel_map</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">tile_width</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">tile_height</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span><span class="p">,</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_colors</span><span class="p">),</span>
+            <span class="n">_dense_contiguous</span><span class="p">(</span><span class="n">v_render_alphas</span><span class="p">),</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span>
+                <span class="mi">4</span>
+            <span class="p">],</span>  <span class="c1"># compute_v_backgrounds (backgrounds is input index 4)</span>
+        <span class="p">)</span>
+        <span class="c1"># The abs gradient is not a returned input grad; surface it by filling the</span>
+        <span class="c1"># saved means2d.absgrad holder in place.</span>
+        <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">absgrad</span> <span class="ow">and</span> <span class="n">v_means2d_abs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">means2d_absgrad</span><span class="o">.</span><span class="n">copy_</span><span class="p">(</span><span class="n">v_means2d_abs</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means2d</span><span class="p">,</span>
+            <span class="n">v_conics</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_backgrounds</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># masks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_ids</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># image_height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_size</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_width</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_height</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># active_tiles</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_offsets</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># flatten_ids</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_pixel_mask</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># tile_pixel_cumsum</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># pixel_map</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># packed</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># absgrad</span>
         <span class="p">)</span>

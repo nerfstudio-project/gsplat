@@ -334,7 +334,13 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Strategy</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">.ops</span><span class="w"> </span><span class="kn">import</span> <span class="n">inject_noise_to_position</span><span class="p">,</span> <span class="n">relocate</span><span class="p">,</span> <span class="n">sample_add</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.ops</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">DEFAULT_MCMC_OPACITY_K</span><span class="p">,</span>
+    <span class="n">DEFAULT_MCMC_OPACITY_T</span><span class="p">,</span>
+    <span class="n">inject_noise_to_position</span><span class="p">,</span>
+    <span class="n">relocate</span><span class="p">,</span>
+    <span class="n">sample_add</span><span class="p">,</span>
+<span class="p">)</span>
 
 <span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.scene</span><span class="w"> </span><span class="kn">import</span> <span class="n">Scene</span>
@@ -364,6 +370,10 @@
 <span class="sd">        refine_every (int): Refine GSs every this steps. Default to 100.</span>
 <span class="sd">        min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.</span>
 <span class="sd">        verbose (bool): Whether to print verbose information. Default to False.</span>
+<span class="sd">        noise_opacity_t (float): Opacity transition point for noise suppression.</span>
+<span class="sd">            Default to 0.005.</span>
+<span class="sd">        noise_opacity_k (float): Sharpness of the opacity noise-suppression gate.</span>
+<span class="sd">            Default to 100.</span>
 
 <span class="sd">    Examples:</span>
 
@@ -389,6 +399,8 @@
     <span class="n">refine_every</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span>
     <span class="n">min_opacity</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.005</span>
     <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">noise_opacity_t</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_MCMC_OPACITY_T</span>
+    <span class="n">noise_opacity_k</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_MCMC_OPACITY_K</span>
 
 <div class="viewcode-block" id="MCMCStrategy.initialize_state">
 <a class="viewcode-back" href="../../../apis/strategy.html#gsplat.MCMCStrategy.initialize_state">[docs]</a>
@@ -495,7 +507,9 @@
                 <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">,</span>
                 <span class="n">optimizers</span><span class="o">=</span><span class="n">optimizers</span><span class="p">,</span>
                 <span class="n">state</span><span class="o">=</span><span class="p">{},</span>
-                <span class="n">scaler</span><span class="o">=</span><span class="n">lr</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">noise_lr</span><span class="p">,</span>
+                <span class="n">noise_scale</span><span class="o">=</span><span class="n">lr</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">noise_lr</span><span class="p">,</span>
+                <span class="n">t</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">noise_opacity_t</span><span class="p">,</span>
+                <span class="n">k</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">noise_opacity_k</span><span class="p">,</span>
             <span class="p">)</span></div>
 
 
