@@ -502,23 +502,24 @@ class _FusedBgGridLosses(torch.autograd.Function):
             v_grid_frame_tv_loss = torch.zeros(ctx.numel_gf, device=_dev, dtype=_dt)
             tv_f_f = -1.0
 
-        # Gradient buffers — zero-init because the bwd kernel uses atomicAdd.
+        # Gradient buffers — the gather backward writes every entry exactly once
+        # (zero when a sub-loss is disabled), so no pre-zeroing is needed.
         v_bg_tex = (
-            torch.zeros_like(bg_tex)
+            torch.empty_like(bg_tex)
             if ctx.has_bg_tex
-            else torch.zeros(0, device=v_bg_tex_loss.device, dtype=v_bg_tex_loss.dtype)
+            else torch.empty(0, device=v_bg_tex_loss.device, dtype=v_bg_tex_loss.dtype)
         )
         v_grids_camera = (
-            torch.zeros_like(grids_camera)
+            torch.empty_like(grids_camera)
             if ctx.has_grids_camera
-            else torch.zeros(
+            else torch.empty(
                 0, device=v_grids_drift_loss.device, dtype=v_grids_drift_loss.dtype
             )
         )
         v_grids_frame = (
-            torch.zeros_like(grids_frame)
+            torch.empty_like(grids_frame)
             if ctx.has_grids_frame
-            else torch.zeros(
+            else torch.empty(
                 0, device=v_grids_drift_loss.device, dtype=v_grids_drift_loss.dtype
             )
         )
