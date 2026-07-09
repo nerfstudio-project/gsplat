@@ -55,6 +55,7 @@ void register_rendering_privateuseone_impl(torch::Library &m);
 void register_rendering_autograd_privateuseone_impl(torch::Library &m);
 void register_rasterization_privateuseone_impl(torch::Library &m);
 void register_relocation_cuda_impl(torch::Library &m);
+void register_ssim_losses_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_privateuseone_impl(torch::Library &m);
 } // namespace gsplat
@@ -1318,6 +1319,16 @@ TORCH_LIBRARY(gsplat, m)
         "float grid_frame_tv_factor, Tensor v_bg_tex_loss, Tensor v_grids_drift_loss, Tensor v_grid_camera_tv_loss, "
         "Tensor v_grid_frame_tv_loss, Tensor(a!) v_bg_tex, Tensor(b!) v_grids_camera, Tensor(c!) v_grids_frame) -> ()"
     );
+    m.def(
+        "ssim_losses_fwd(Tensor flags, Tensor pred, Tensor target, float factor, bool mask_mode_target, float "
+        "constant_mask_value, Tensor(a!) loss, Tensor(b!) dm_dmu1, Tensor(c!) dm_dsigma1_sq, Tensor(d!) "
+        "dm_dsigma12) -> ()"
+    );
+    m.def(
+        "ssim_losses_bwd(Tensor flags, Tensor pred, Tensor target, float factor, bool mask_mode_target, float "
+        "constant_mask_value, Tensor v_loss, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12, Tensor(a!) "
+        "v_pred) -> ()"
+    );
 #endif
 }
 
@@ -1354,6 +1365,7 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m)
     gsplat::register_camera_losses_cuda_impl(m);
     gsplat::register_lidar_losses_cuda_impl(m);
     gsplat::register_bg_grid_losses_cuda_impl(m);
+    gsplat::register_ssim_losses_cuda_impl(m);
 #endif
 }
 

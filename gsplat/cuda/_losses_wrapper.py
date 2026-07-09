@@ -553,3 +553,73 @@ class _FusedBgGridLosses(torch.autograd.Function):
             None,
             None,  # 5 factors
         )
+
+
+class _FusedSSIMLosses(torch.autograd.Function):
+    """Fused invalid-pixel blend + Gaussian SSIM + masked reduction."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        flags: Tensor,  # [B, H, W] int32
+        pred: Tensor,  # [B, H, W, C]
+        target: Tensor,  # [B, H, W, C]
+        factor: float,
+        mask_mode_target: bool,
+        constant_mask_value: float,
+    ) -> Tensor:
+        ctx.set_materialize_grads(False)
+
+        flags = flags.contiguous()
+        pred = pred.contiguous()
+        target = target.contiguous()
+        B, H, W, C = pred.shape
+
+        loss = torch.empty((B, H, W, 1), device=pred.device, dtype=pred.dtype)
+        dm_dmu1 = torch.empty((B, C, H, W), device=pred.device, dtype=pred.dtype)
+        dm_dsigma1_sq = torch.empty((B, C, H, W), device=pred.device, dtype=pred.dtype)
+        dm_dsigma12 = torch.empty((B, C, H, W), device=pred.device, dtype=pred.dtype)
+
+        _make_lazy_cuda_func("ssim_losses_fwd")(
+            flags,
+            pred,
+            target,
+            factor,
+            mask_mode_target,
+            constant_mask_value,
+            loss,
+            dm_dmu1,
+            dm_dsigma1_sq,
+            dm_dsigma12,
+        )
+
+        ctx.save_for_backward(flags, pred, target, dm_dmu1, dm_dsigma1_sq, dm_dsigma12)
+        ctx.factor = factor
+        ctx.mask_mode_target = mask_mode_target
+        ctx.constant_mask_value = constant_mask_value
+        return loss
+
+    @staticmethod
+    def backward(ctx, v_loss: Optional[Tensor]) -> Tuple[Optional[Tensor], ...]:
+        flags, pred, target, dm_dmu1, dm_dsigma1_sq, dm_dsigma12 = ctx.saved_tensors
+        if v_loss is None:
+            v_pred = torch.zeros_like(pred)
+        else:
+            v_pred = torch.empty_like(pred)
+            _make_lazy_cuda_func("ssim_losses_bwd")(
+                flags,
+                pred,
+                target,
+                ctx.factor,
+                ctx.mask_mode_target,
+                ctx.constant_mask_value,
+                v_loss.contiguous(),
+                dm_dmu1,
+                dm_dsigma1_sq,
+                dm_dsigma12,
+                v_pred,
+            )
+
+        # Gradients for: flags, pred, target, factor, mask_mode_target,
+        # constant_mask_value
+        return None, v_pred, None, None, None, None
