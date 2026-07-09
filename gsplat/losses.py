@@ -26,9 +26,10 @@ returning reduced ones because the element-wise computation dominates.
 
 from __future__ import annotations
 
+import bisect
 import math
 import os
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 import warnings
 
 import torch
@@ -1181,3 +1182,404 @@ def bilateral_grid_drift_loss(
     if not grids:
         return torch.empty(0, device="cpu", dtype=torch.float32)
     return torch.cat([identity_distance(g, num_rows, num_cols).view(-1) for g in grids])
+
+
+# ---------------------------------------------------------------------------
+# Background-in-track + node-semantic Gaussian losses
+#
+# Pure-PyTorch reference/fallback for the fused CUDA kernel behind
+# gsplat.losses_fused.FusedBgTrackNodeSemanticLosses. The track containment
+# test reproduces the CUDA `interpolate_track_boxes` precompute exactly:
+# SE(3) pose interpolation (lerp centers, slerp unit quaternions in
+# (x, y, z, w) order) at the truncated-mean camera timestamp, followed by an
+# inclusive AABB test in each track's local frame.
+# ---------------------------------------------------------------------------
+
+
+def _quat_xyzw_to_rotmat(quat: Tensor) -> Tensor:
+    """Rotation matrix from a unit quaternion in ``(x, y, z, w)`` order.
+
+    Mirrors ``ku::unitquat_rotmatrix`` so the fallback matches the CUDA
+    track-box precompute bit-for-bit up to float evaluation order.
+    """
+    x, y, z, w = quat.unbind(-1)
+    xx, yy, zz, ww = x * x, y * y, z * z, w * w
+    row0 = torch.stack([xx - yy - zz + ww, 2 * (x * y - z * w), 2 * (x * z + y * w)])
+    row1 = torch.stack([2 * (x * y + z * w), -xx + yy - zz + ww, 2 * (y * z - x * w)])
+    row2 = torch.stack([2 * (x * z - y * w), 2 * (y * z + x * w), -xx - yy + zz + ww])
+    return torch.stack([row0, row1, row2])
+
+
+def _unitquat_slerp(q0: Tensor, q1: Tensor, alpha: float) -> Tensor:
+    """Shortest-arc slerp between unit quaternions ``[4]``.
+
+    Mirrors ``ku::unitquat_slerp``: negates ``q1`` when the dot product is
+    negative and falls back to normalized lerp for nearby quaternions
+    (``cos(omega) > 1 - 1e-3``).
+    """
+    cos_omega = (q0 * q1).sum()
+    sign = 1.0 - 2.0 * (cos_omega < 0).to(q0.dtype)
+    q1 = q1 * sign
+    cos_omega = cos_omega * sign
+    nearby = cos_omega > 1.0 - 1e-3
+    # Clamp keeps acos finite when cos_omega marginally exceeds 1; the nearby
+    # branch is selected in that regime so the clamp never changes the result.
+    omega = torch.acos(cos_omega.clamp(max=1.0))
+    alpha_t = q0.new_tensor(alpha)
+    a = torch.where(nearby, 1.0 - alpha_t, torch.sin((1.0 - alpha_t) * omega))
+    b = torch.where(nearby, alpha_t, torch.sin(alpha_t * omega))
+    quat = a * q0 + b * q1
+    return quat / quat.norm()
+
+
+def _interpolate_track_boxes(
+    camera_timestamps_startend_us: Tensor,
+    tracks_packinfo: Tensor,
+    tracks_poses: Tensor,
+    tracks_timestamps_us: Tensor,
+    cuboids_dims: Tensor,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Interpolate each cuboid track's oriented box at the camera timestamp.
+
+    Reference implementation of the CUDA ``interpolate_track_boxes`` kernel.
+    The query timestamp is ``start + trunc((end - start) / 2)`` from the first
+    row of *camera_timestamps_startend_us* (exact int64 arithmetic matching
+    the kernel's C truncation, which equals ``torch.mean(float64).to(int64)``
+    for positive microsecond Unix timestamps).
+
+    A track is **invalid** (never contains any point) when it has fewer than
+    two poses, when the timestamp falls outside its pose-timestamp range
+    (time-window gating), or when the bracketing pose timestamps coincide.
+
+    Args:
+        camera_timestamps_startend_us: ``[B, 2]`` int64; only row 0 is read.
+        tracks_packinfo: ``[T, 2]`` int ``(start_index, n_poses)`` per track
+            into the packed pose arrays.
+        tracks_poses: ``[P, 7]`` float ``(tx, ty, tz, qx, qy, qz, qw)``.
+        tracks_timestamps_us: ``[P]`` int64, sorted within each track.
+        cuboids_dims: ``[T, 3]`` float full cuboid extents.
+
+    Returns:
+        Tuple ``(rot_w2l [T, 3, 3], centers [T, 3], half_dims [T, 3],
+        valid [T] bool)`` where ``rot_w2l`` maps world offsets into the track
+        frame (``local = rot_w2l @ (p - center)``).
+
+    Note:
+        Host-side control flow: reads the pack info and timestamps to the CPU
+        (synchronizes on CUDA tensors). Intended for the fallback path.
+    """
+    n_tracks = int(tracks_packinfo.shape[0])
+    device = tracks_poses.device
+    dtype = tracks_poses.dtype
+    rot_w2l = torch.zeros((n_tracks, 3, 3), device=device, dtype=dtype)
+    centers = torch.zeros((n_tracks, 3), device=device, dtype=dtype)
+    half_dims = torch.zeros((n_tracks, 3), device=device, dtype=dtype)
+    valid = torch.zeros(n_tracks, dtype=torch.bool, device=device)
+    if n_tracks == 0:
+        return rot_w2l, centers, half_dims, valid
+
+    timestamps_flat = camera_timestamps_startend_us.reshape(-1)
+    t_start = int(timestamps_flat[0].item())
+    t_end = int(timestamps_flat[1].item())
+    delta = t_end - t_start
+    # C-style truncation toward zero (Python // floors), matching the kernel.
+    timestamp = t_start + (abs(delta) // 2) * (1 if delta >= 0 else -1)
+
+    packinfo = tracks_packinfo.detach().cpu().tolist()
+    pose_timestamps = tracks_timestamps_us.detach().cpu().tolist()
+
+    with torch.no_grad():
+        for track_idx in range(n_tracks):
+            start_idx = int(packinfo[track_idx][0])
+            n_poses = int(packinfo[track_idx][1])
+            if n_poses <= 1:
+                continue
+            local_ts = pose_timestamps[start_idx : start_idx + n_poses]
+            if timestamp < local_ts[0] or timestamp > local_ts[-1]:
+                continue
+            # ku::binary_search_interp: data[idx-1] < t <= data[idx], with the
+            # boundary special cases t == data[0] -> 1 and t == data[-1] -> n-1.
+            if timestamp == local_ts[0]:
+                end_idx = 1
+            elif timestamp == local_ts[-1]:
+                end_idx = n_poses - 1
+            else:
+                end_idx = bisect.bisect_left(local_ts, timestamp)
+            t0 = local_ts[end_idx - 1]
+            t1 = local_ts[end_idx]
+            if t1 == t0:
+                continue
+            alpha = (timestamp - t0) / (t1 - t0)
+            pose0 = tracks_poses[start_idx + end_idx - 1]
+            pose1 = tracks_poses[start_idx + end_idx]
+            centers[track_idx] = (1.0 - alpha) * pose0[:3] + alpha * pose1[:3]
+            quat = _unitquat_slerp(pose0[3:7], pose1[3:7], alpha)
+            rot_w2l[track_idx] = _quat_xyzw_to_rotmat(quat).transpose(0, 1)
+            half_dims[track_idx] = cuboids_dims[track_idx] * 0.5
+            valid[track_idx] = True
+    return rot_w2l, centers, half_dims, valid
+
+
+def _points_in_tracks(
+    positions: Tensor,
+    rot_w2l: Tensor,
+    centers: Tensor,
+    half_dims: Tensor,
+    valid: Tensor,
+) -> Tensor:
+    """Boolean ``[N]`` mask: point lies inside **any** valid track box.
+
+    Containment is inclusive at the cuboid boundary
+    (``|rot_w2l @ (p - center)| <= half_dims`` per axis), matching the CUDA
+    ``point_inside_box`` arithmetic (rotate the centered offset, then compare).
+    """
+    n_points = positions.shape[0]
+    inside_any = torch.zeros(n_points, dtype=torch.bool, device=positions.device)
+    if n_points == 0 or int(valid.sum().item()) == 0:
+        return inside_any
+    with torch.no_grad():
+        rot = rot_w2l[valid]  # [K, 3, 3]
+        center = centers[valid]  # [K, 3]
+        half = half_dims[valid]  # [K, 3]
+        rel = positions.detach().unsqueeze(1) - center.unsqueeze(0)  # [N, K, 3]
+        local = torch.einsum("kij,nkj->nki", rot, rel)  # [N, K, 3]
+        inside = (local.abs() <= half.unsqueeze(0)).all(dim=-1)  # [N, K]
+        inside_any = inside.any(dim=1)
+    return inside_any
+
+
+def _semantic_class_membership(
+    semantic_logits: Tensor, class_ids: Sequence[int]
+) -> Tensor:
+    """Boolean ``[N]`` mask: per-point semantic argmax is in *class_ids*.
+
+    Class ids outside ``[0, C)`` are ignored (matching the CUDA
+    ``make_semantic_class_masks`` behavior); an empty id set matches nothing.
+    Ties in the argmax resolve to the first maximal class, as in the kernel's
+    strict-greater scan and ``torch.argmax``.
+    """
+    argmax = semantic_logits.detach().argmax(dim=1)
+    n_classes = semantic_logits.shape[1]
+    valid_ids = sorted({int(c) for c in class_ids if 0 <= int(c) < n_classes})
+    if not valid_ids:
+        return torch.zeros_like(argmax, dtype=torch.bool)
+    ids = torch.tensor(valid_ids, dtype=argmax.dtype, device=argmax.device)
+    return torch.isin(argmax, ids)
+
+
+def _validate_segment_layout(
+    name: str,
+    semantic_logits: Sequence[Tensor],
+    segment_ends: Sequence[int],
+    max_end: int,
+) -> None:
+    """Check the packed-segment contract shared by both grouped losses."""
+    if len(semantic_logits) != len(segment_ends):
+        raise ValueError(
+            f"{name}: semantic tensors and segments must have the same length, "
+            f"got {len(semantic_logits)} vs {len(segment_ends)}."
+        )
+    prev_end = 0
+    for seg_idx, (seg_logits, end) in enumerate(zip(semantic_logits, segment_ends)):
+        if end < prev_end or end > max_end:
+            raise ValueError(
+                f"{name}: segment ends must be nondecreasing and bounded by "
+                f"{max_end}, got end={end} after {prev_end} (segment {seg_idx})."
+            )
+        if seg_logits.dim() != 2 or seg_logits.shape[1] < 1:
+            raise ValueError(
+                f"{name}: each semantic tensor must be [N_segment, C], got "
+                f"{tuple(seg_logits.shape)} (segment {seg_idx})."
+            )
+        if seg_logits.shape[0] != end - prev_end:
+            raise ValueError(
+                f"{name}: semantic tensor rows ({seg_logits.shape[0]}) must "
+                f"equal the segment length ({end - prev_end}) (segment {seg_idx})."
+            )
+        prev_end = end
+
+
+def background_in_track_loss(
+    positions: Tensor,
+    density_logits: Tensor,
+    camera_timestamps_startend_us: Tensor,
+    tracks_packinfo: Tensor,
+    tracks_poses: Tensor,
+    tracks_timestamps_us: Tensor,
+    cuboids_dims: Tensor,
+    semantic_logits: Optional[Sequence[Tensor]] = None,
+    semantic_segments: Optional[Sequence[tuple[int, Sequence[int]]]] = None,
+    background_lambda: float = 1.0,
+    density_logits_min: float = -20.0,
+) -> tuple[Tensor, Tensor]:
+    """Background-in-track BCE suppression loss (grouped family, bg member).
+
+    Penalizes the density of background Gaussians that lie inside any dynamic
+    cuboid track at the (truncated) mean camera timestamp. A point is
+    *selected* when all of the following hold:
+
+    - its density logit is strictly greater than *density_logits_min*;
+    - its semantic argmax is one of the allowed class ids for its segment
+      (points past the last segment end are **unfiltered** and always pass;
+      a segment with an empty id list selects nothing);
+    - it lies inside at least one valid track box (inclusive AABB test in the
+      track frame after SE(3) interpolation, with time-window gating against
+      the track's pose timestamps).
+
+    The raw loss is the mean of ``BCEWithLogits(density_logit, 0)`` (i.e.
+    ``softplus``) over selected points — a selected-count denominator, exactly
+    zero (still differentiable) when nothing is selected. Only
+    *density_logits* receives gradients; the containment and semantic tests
+    are non-differentiable selections.
+
+    Args:
+        positions: ``[N, 3]`` world-space Gaussian positions.
+        density_logits: ``[N]`` pre-activation density logits.
+        camera_timestamps_startend_us: ``[B, 2]`` int64; row 0 holds the
+            (start, end) capture timestamps in microseconds.
+        tracks_packinfo: ``[T, 2]`` int ``(start_index, n_poses)`` per track.
+        tracks_poses: ``[P, 7]`` float packed ``(tx, ty, tz, qx, qy, qz, qw)``.
+        tracks_timestamps_us: ``[P]`` int64 packed pose timestamps.
+        cuboids_dims: ``[T, 3]`` float full cuboid extents.
+        semantic_logits: Optional per-segment logits ``[N_i, C_i]`` covering
+            the first ``sum(N_i)`` points (filtered layers are packed first).
+        semantic_segments: Optional ``(exclusive_end, allowed_class_ids)`` per
+            segment, aligned with *semantic_logits*.
+        background_lambda: Loss weight for the returned weighted scalar.
+        density_logits_min: Selection threshold (strictly-greater comparison);
+            defaults to ``-20.0``.
+
+    Returns:
+        Tuple ``(raw, weighted)`` of scalar tensors with
+        ``weighted = background_lambda * raw``.
+    """
+    if positions.dim() != 2 or positions.shape[1] != 3:
+        raise ValueError(
+            f"background_in_track_loss: positions must be [N, 3], got "
+            f"{tuple(positions.shape)}."
+        )
+    if density_logits.dim() != 1 or density_logits.shape[0] != positions.shape[0]:
+        raise ValueError(
+            f"background_in_track_loss: density_logits must be [N] matching "
+            f"positions, got {tuple(density_logits.shape)} vs N={positions.shape[0]}."
+        )
+    if (semantic_logits is None) != (semantic_segments is None):
+        raise ValueError(
+            "background_in_track_loss: semantic_logits and semantic_segments "
+            "must be provided together."
+        )
+    n_points = int(density_logits.shape[0])
+    semantic_logits = list(semantic_logits) if semantic_logits is not None else []
+    semantic_segments = list(semantic_segments) if semantic_segments is not None else []
+    segment_ends = [int(end) for end, _ in semantic_segments]
+    _validate_segment_layout(
+        "background_in_track_loss", semantic_logits, segment_ends, n_points
+    )
+
+    rot_w2l, centers, half_dims, valid = _interpolate_track_boxes(
+        camera_timestamps_startend_us,
+        tracks_packinfo,
+        tracks_poses,
+        tracks_timestamps_us,
+        cuboids_dims,
+    )
+    in_track = _points_in_tracks(positions, rot_w2l, centers, half_dims, valid)
+
+    # Semantic filter: per-segment allowed ids; the unfiltered suffix (points
+    # past the last segment end) always passes.
+    allowed = torch.ones(n_points, dtype=torch.bool, device=density_logits.device)
+    prev_end = 0
+    for (end, class_ids), seg_logits in zip(semantic_segments, semantic_logits):
+        allowed[prev_end : int(end)] = _semantic_class_membership(seg_logits, class_ids)
+        prev_end = int(end)
+
+    selected = in_track & allowed & (density_logits.detach() > density_logits_min)
+    # Gather-then-reduce: only selected logits are ever read, so a non-finite
+    # value in an unselected point cannot poison the loss or its gradient
+    # (parity with the CUDA kernels, which predicate every read on the
+    # selection bit). With nothing selected this is an empty-view sum: an
+    # exact, still-differentiable zero.
+    selected_logits = density_logits[selected]
+    per_element = F.binary_cross_entropy_with_logits(
+        selected_logits, torch.zeros_like(selected_logits), reduction="none"
+    )
+    count = selected.sum()
+    raw = per_element.sum() / count.clamp(min=1)
+    return raw, background_lambda * raw
+
+
+def node_semantic_loss(
+    density_logits: Tensor,
+    semantic_logits: Sequence[Tensor],
+    segments: Sequence[tuple[int, Sequence[int], bool]],
+    node_lambda: float = 1.0,
+) -> tuple[Tensor, Tensor]:
+    """Node-semantic grouped BCE suppression loss (grouped family, node member).
+
+    Density logits from all configured nodes are packed into one ``[N]``
+    tensor; each segment ``(exclusive_end, class_ids, select_matches)`` owns
+    a contiguous row range and its own semantic tensor (class counts may
+    differ between segments). A point is *selected* — i.e. penalized — when
+
+    ``(argmax(semantic_logits) in class_ids) == select_matches``.
+
+    So ``select_matches=True`` penalizes points whose class **is** in
+    *class_ids* (an exclusion list), and ``select_matches=False``
+    penalizes points whose class is **not** in *class_ids* (an allow list).
+    The predicate polarity matters for the empty-id edge
+    cases: empty ids with ``select_matches=True`` penalize **nothing**, empty
+    ids with ``select_matches=False`` penalize **everything** — both are legal
+    configurations.
+
+    The raw loss is the mean of ``BCEWithLogits(density_logit, 0)`` over the
+    union of selected points across **all** segments (one shared
+    selected-count denominator), zero when nothing is selected. Only
+    *density_logits* receives gradients.
+
+    Args:
+        density_logits: ``[N]`` packed pre-activation density logits.
+        semantic_logits: Per-segment logits ``[N_i, C_i]``; segments must
+            cover every packed row.
+        segments: ``(exclusive_end, class_ids, select_matches)`` per segment.
+        node_lambda: Loss weight for the returned weighted scalar.
+
+    Returns:
+        Tuple ``(raw, weighted)`` of scalar tensors with
+        ``weighted = node_lambda * raw``.
+    """
+    if density_logits.dim() != 1:
+        raise ValueError(
+            f"node_semantic_loss: density_logits must be [N], got "
+            f"{tuple(density_logits.shape)}."
+        )
+    n_points = int(density_logits.shape[0])
+    semantic_logits = list(semantic_logits)
+    segments = list(segments)
+    segment_ends = [int(end) for end, _, _ in segments]
+    _validate_segment_layout(
+        "node_semantic_loss", semantic_logits, segment_ends, n_points
+    )
+    if (segment_ends[-1] if segment_ends else 0) != n_points:
+        raise ValueError(
+            f"node_semantic_loss: segments must cover every packed density row "
+            f"(last end {segment_ends[-1] if segment_ends else 0} != {n_points})."
+        )
+
+    selected = torch.zeros(n_points, dtype=torch.bool, device=density_logits.device)
+    prev_end = 0
+    for (end, class_ids, select_matches), seg_logits in zip(segments, semantic_logits):
+        matches = _semantic_class_membership(seg_logits, class_ids)
+        selected[prev_end : int(end)] = matches if select_matches else ~matches
+        prev_end = int(end)
+
+    # Gather-then-reduce: only selected logits are ever read (see
+    # background_in_track_loss), keeping non-finite unselected points out of
+    # the loss and its gradient; the no-selection case is an empty-view sum
+    # (exact, differentiable zero).
+    selected_logits = density_logits[selected]
+    per_element = F.binary_cross_entropy_with_logits(
+        selected_logits, torch.zeros_like(selected_logits), reduction="none"
+    )
+    count = selected.sum()
+    raw = per_element.sum() / count.clamp(min=1)
+    return raw, node_lambda * raw

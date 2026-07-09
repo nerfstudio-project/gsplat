@@ -433,6 +433,337 @@ class _FusedGroundGaussiansLosses(torch.autograd.Function):
         return v_positions, v_rotations, None, None, None, None, None, None
 
 
+class _FusedBgTrackNodeSemantic(torch.autograd.Function):
+    """Fused forward+backward for the background-in-track + node-semantic
+    grouped BCE losses.
+
+    One call computes up to two scalar loss pairs sharing a single selection
+    pass: the background-in-track member (suppress background Gaussians whose
+    position falls inside any dynamic cuboid track) and the node-semantic
+    member (suppress Gaussians whose semantic argmax fails a per-node
+    ``(class_ids, select_matches)`` predicate). A member is enabled iff its
+    lambda is ``>= 0``; at least one must be enabled. Only the two density
+    tensors are differentiable — positions and semantic logits feed
+    non-differentiable selections.
+
+    Modes:
+
+    - **joint** (``n_semantic_points is None``): node member enabled and the
+      primary node shares the background point domain; ``semantic_logits``
+      is that domain's single ``[Nbg, C]`` semantic tensor and an explicit
+      ``node_primary_predicate`` is REQUIRED (an *empty* predicate is legal:
+      empty ids + ``select_matches=True`` penalize no primary point, empty
+      ids + ``select_matches=False`` penalize all of them; the C++ op
+      rejects a missing predicate with a TORCH_CHECK).
+    - **packed** (``n_semantic_points`` given, node enabled): background runs
+      the generic segmented path over its own semantic segments (points past
+      ``n_semantic_points`` are unfiltered); nodes run packed segments over
+      ``other_density_logits``. Requires the background member enabled.
+    - **background-only** (node lambda ``< 0``): generic segmented background
+      path alone; requires ``n_semantic_points``.
+
+    Op contract for the C++/CUDA side (TORCH_LIBRARY schema, ext.cpp)::
+
+        bg_track_node_semantic_losses_fwd(
+            Tensor positions, Tensor density_logits, Tensor semantic_logits,
+            int? n_semantic_points,
+            Tensor[] background_semantic_logits,
+            int[] background_segment_ends,
+            int[] background_segment_class_ids,
+            int[] background_segment_class_offsets,
+            Tensor other_density_logits,
+            Tensor[] other_semantic_logits,
+            int[] other_segment_ends,
+            int[] other_segment_class_ids,
+            int[] other_segment_class_offsets,
+            bool[] other_segment_select_matches,
+            Tensor camera_timestamps_startend_us, Tensor tracks_packinfo,
+            Tensor tracks_poses, Tensor tracks_timestamps_us,
+            Tensor cuboids_dims,
+            int[] background_allowed_class_ids,
+            int[]? node_primary_class_ids, bool node_primary_select_matches,
+            float density_logits_min,
+            float background_lambda, float node_lambda,
+            Tensor(a!) track_boxes, Tensor(b!) selection_bits,
+            Tensor(c!) workspace,
+            Tensor(d!) background_unweighted_loss,
+            Tensor(e!) background_weighted_loss,
+            Tensor(f!) node_unweighted_loss,
+            Tensor(g!) node_weighted_loss) -> ()
+
+        bg_track_node_semantic_losses_bwd(
+            Tensor background_density_logits, Tensor other_density_logits,
+            Tensor selection_bits, Tensor workspace,
+            Tensor grad_background_unweighted,
+            Tensor grad_background_weighted,
+            Tensor grad_node_unweighted, Tensor grad_node_weighted,
+            float background_lambda, float node_lambda,
+            Tensor(a!)? grad_background_density_logits,
+            Tensor(b!)? grad_other_node_density_logits) -> ()
+
+    Boundary conventions (all caller-allocated, written by the op):
+
+    - Ragged per-segment class-id lists cross as a flat ``int[]`` plus a
+      ``len(segments) + 1`` prefix-offset ``int[]`` (segment *i* owns
+      ``class_ids[offsets[i]:offsets[i+1]]``); segment ends are exclusive
+      and nondecreasing. ``node_primary_class_ids is None`` means "no
+      predicate" (only legal when the joint mode is not selected).
+    - ``semantic_logits`` is only read in joint mode; other modes pass an
+      empty ``[0, 1]`` placeholder.
+    - ``track_boxes`` is a ``[T, 16]`` float workspace (three world-to-local
+      rotation rows with the world center in the 4th column, then half dims
+      + valid flag); ``selection_bits`` is ``uint8 [Nbg + Nother]``
+      (bit 0 = background-in-track, bit 1 = node-semantic);  ``workspace``
+      is a zeroed, 16-byte-aligned int32 reduction buffer sized 4 for fp32
+      inputs (8 for fp64) holding (loss_sum, selected_count) per member.
+    - The four loss outputs are one-element float tensors; raw values are
+      selected-count means (0 when nothing is selected) and weighted values
+      are ``lambda * raw``. Disabled members' outputs are left untouched
+      (they are zero-initialized here).
+    - The backward upstream loss grads are always defined (absent grads are
+      normalized to zeros before dispatch); the two density-grad outputs are
+      optional and skipped for inputs that do not need gradients.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        positions: Tensor,  # [Nbg, 3]
+        density_logits: Tensor,  # [Nbg] (differentiable)
+        semantic_logits: Optional[Tensor],  # [Nbg, C] joint mode only
+        other_density_logits: Tensor,  # [Nother] (differentiable)
+        camera_timestamps_startend_us: Tensor,  # [B, 2] int64
+        tracks_packinfo: Tensor,  # [T, 2] int32
+        tracks_poses: Tensor,  # [P, 7]
+        tracks_timestamps_us: Tensor,  # [P] int64
+        cuboids_dims: Tensor,  # [T, 3]
+        n_semantic_points,  # Optional[int]; None selects the joint mode
+        background_semantic_logits,  # list[Tensor [Ni, Ci]] (generic mode)
+        background_segments,  # list[(end, class_ids)] (generic mode)
+        other_semantic_logits,  # list[Tensor [Ni, Ci]]
+        other_segments,  # list[(end, class_ids, select_matches)]
+        background_allowed_class_ids,  # list[int] (joint mode)
+        node_primary_predicate,  # Optional[(class_ids, select_matches)]
+        background_lambda: float,
+        node_lambda: float,
+        density_logits_min: float,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        # Unused outputs must reach backward as None rather than materialized
+        # zeros; backward() then normalizes each None to a defined exact-zero
+        # upstream, so an unused output can never feed the native op anything
+        # but zero (see _upstream below).
+        ctx.set_materialize_grads(False)
+        background_enabled = background_lambda >= 0.0
+        node_enabled = node_lambda >= 0.0
+        if not background_enabled and not node_enabled:
+            raise ValueError(
+                "_FusedBgTrackNodeSemantic: at least one of background_lambda "
+                "and node_lambda must be >= 0."
+            )
+        if (
+            node_enabled
+            and n_semantic_points is None
+            and node_primary_predicate is None
+        ):
+            # Mirrors the C++ TORCH_CHECK: the joint path requires an explicit
+            # primary-domain predicate (an empty one is legal, absence is not).
+            raise ValueError(
+                "_FusedBgTrackNodeSemantic: the joint node-semantic path "
+                "requires an explicit node_primary_predicate; pass "
+                "(class_ids, select_matches). Empty ids with "
+                "select_matches=True penalize no primary point, with "
+                "select_matches=False they penalize all of them."
+            )
+
+        positions = positions.contiguous()
+        density_logits = density_logits.contiguous()
+        other_density_logits = other_density_logits.contiguous()
+        if semantic_logits is None:
+            semantic_logits = density_logits.new_zeros((0, 1))
+        semantic_logits = semantic_logits.contiguous()
+        camera_timestamps_startend_us = camera_timestamps_startend_us.contiguous()
+        tracks_packinfo = tracks_packinfo.contiguous()
+        tracks_poses = tracks_poses.contiguous()
+        tracks_timestamps_us = tracks_timestamps_us.contiguous()
+        cuboids_dims = cuboids_dims.contiguous()
+        background_semantic_logits = [
+            t.contiguous() for t in background_semantic_logits
+        ]
+        other_semantic_logits = [t.contiguous() for t in other_semantic_logits]
+
+        def _flatten_id_groups(groups):
+            flat = []
+            ends = []
+            for ids in groups:
+                flat.extend(int(i) for i in ids)
+                ends.append(len(flat))
+            return flat, ends
+
+        background_segment_ends = [int(end) for end, _ in background_segments]
+        background_ids_flat, background_ids_ends = _flatten_id_groups(
+            [ids for _, ids in background_segments]
+        )
+        other_segment_ends = [int(end) for end, _, _ in other_segments]
+        other_ids_flat, other_ids_ends = _flatten_id_groups(
+            [ids for _, ids, _ in other_segments]
+        )
+        other_select_matches = [bool(sel) for _, _, sel in other_segments]
+
+        if node_primary_predicate is not None:
+            node_primary_class_ids = [int(i) for i in node_primary_predicate[0]]
+            node_primary_select_matches = bool(node_primary_predicate[1])
+        else:
+            node_primary_class_ids = None
+            node_primary_select_matches = False
+
+        n_background = density_logits.shape[0]
+        n_other = other_density_logits.shape[0]
+        n_tracks = tracks_packinfo.shape[0]
+        device = density_logits.device
+        dtype = density_logits.dtype
+
+        # Caller-allocated workspaces and outputs (see the op contract above).
+        track_boxes = torch.zeros((n_tracks, 16), dtype=dtype, device=device)
+        selection_bits = torch.zeros(
+            n_background + n_other, dtype=torch.uint8, device=device
+        )
+        # int32[8] for both dtypes: the reduction struct needs 32 B under fp64
+        # and the kernel checks a dtype-independent size.
+        workspace = torch.zeros(8, dtype=torch.int32, device=device)
+        background_unweighted_loss = torch.zeros(1, dtype=dtype, device=device)
+        background_weighted_loss = torch.zeros(1, dtype=dtype, device=device)
+        node_unweighted_loss = torch.zeros(1, dtype=dtype, device=device)
+        node_weighted_loss = torch.zeros(1, dtype=dtype, device=device)
+
+        _make_lazy_cuda_func("bg_track_node_semantic_losses_fwd")(
+            positions,
+            density_logits,
+            semantic_logits,
+            None if n_semantic_points is None else int(n_semantic_points),
+            background_semantic_logits,
+            background_segment_ends,
+            background_ids_flat,
+            background_ids_ends,
+            other_density_logits,
+            other_semantic_logits,
+            other_segment_ends,
+            other_ids_flat,
+            other_ids_ends,
+            other_select_matches,
+            camera_timestamps_startend_us,
+            tracks_packinfo,
+            tracks_poses,
+            tracks_timestamps_us,
+            cuboids_dims,
+            [int(i) for i in background_allowed_class_ids],
+            node_primary_class_ids,
+            node_primary_select_matches,
+            float(density_logits_min),
+            float(background_lambda),
+            float(node_lambda),
+            track_boxes,
+            selection_bits,
+            workspace,
+            background_unweighted_loss,
+            background_weighted_loss,
+            node_unweighted_loss,
+            node_weighted_loss,
+        )
+
+        ctx.save_for_backward(
+            density_logits, other_density_logits, selection_bits, workspace
+        )
+        ctx.background_lambda = float(background_lambda)
+        ctx.node_lambda = float(node_lambda)
+
+        return (
+            background_unweighted_loss.reshape(()),
+            background_weighted_loss.reshape(()),
+            node_unweighted_loss.reshape(()),
+            node_weighted_loss.reshape(()),
+        )
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_background_raw: Optional[Tensor],
+        v_background_weighted: Optional[Tensor],
+        v_node_raw: Optional[Tensor],
+        v_node_weighted: Optional[Tensor],
+    ) -> Tuple[Optional[Tensor], ...]:
+        (
+            density_logits,
+            other_density_logits,
+            selection_bits,
+            workspace,
+        ) = ctx.saved_tensors
+
+        def _upstream(grad: Optional[Tensor]) -> Tensor:
+            # Normalize absent upstream grads to defined zero scalars so the
+            # kernel can dereference all four unconditionally.
+            if grad is None:
+                return density_logits.new_zeros(1)
+            return grad.reshape(1).contiguous()
+
+        needs_background = ctx.needs_input_grad[1]
+        # The node member owns the only gradient path into
+        # other_density_logits; with it disabled the generic backward never
+        # writes that buffer, so skip it entirely.
+        needs_other = ctx.needs_input_grad[3] and ctx.node_lambda >= 0.0
+
+        v_density_logits = (
+            torch.empty_like(density_logits) if needs_background else None
+        )
+        v_other_density_logits = (
+            torch.empty_like(other_density_logits) if needs_other else None
+        )
+
+        if needs_background or needs_other:
+            _make_lazy_cuda_func("bg_track_node_semantic_losses_bwd")(
+                density_logits,
+                other_density_logits,
+                selection_bits,
+                workspace,
+                _upstream(v_background_raw),
+                _upstream(v_background_weighted),
+                _upstream(v_node_raw),
+                _upstream(v_node_weighted),
+                ctx.background_lambda,
+                ctx.node_lambda,
+                v_density_logits,
+                v_other_density_logits,
+            )
+
+        # Gradients for: positions, density_logits, semantic_logits,
+        # other_density_logits, camera_timestamps_startend_us,
+        # tracks_packinfo, tracks_poses, tracks_timestamps_us, cuboids_dims,
+        # n_semantic_points, background_semantic_logits, background_segments,
+        # other_semantic_logits, other_segments,
+        # background_allowed_class_ids, node_primary_predicate,
+        # background_lambda, node_lambda, density_logits_min
+        return (
+            None,
+            v_density_logits,
+            None,
+            v_other_density_logits,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
 class _FusedBgGridLosses(torch.autograd.Function):
     """Fused forward+backward for sky-envmap TV + bilateral-grid drift + grid
     spatial TV via a single pair of CUDA kernels.
@@ -514,15 +845,21 @@ class _FusedBgGridLosses(torch.autograd.Function):
         )
 
         ctx.save_for_backward(
-            bg_tex
-            if bg_tex is not None
-            else torch.empty(0, device=device, dtype=dtype),
-            grids_camera
-            if grids_camera is not None
-            else torch.empty(0, device=device, dtype=dtype),
-            grids_frame
-            if grids_frame is not None
-            else torch.empty(0, device=device, dtype=dtype),
+            (
+                bg_tex
+                if bg_tex is not None
+                else torch.empty(0, device=device, dtype=dtype)
+            ),
+            (
+                grids_camera
+                if grids_camera is not None
+                else torch.empty(0, device=device, dtype=dtype)
+            ),
+            (
+                grids_frame
+                if grids_frame is not None
+                else torch.empty(0, device=device, dtype=dtype)
+            ),
         )
         ctx.has_bg_tex = bg_tex is not None
         ctx.has_grids_camera = grids_camera is not None
@@ -561,7 +898,7 @@ class _FusedBgGridLosses(torch.autograd.Function):
         # with a shape-correct zero placeholder for the native op and disable that output's
         # factor(s) (negative), so the native backward skips it — otherwise a NaN factor on
         # an unused output would contaminate a finite sibling's shared-input gradient.
-        (bg_f, drift_c_f, drift_f_f, tv_c_f, tv_f_f) = ctx.factors
+        bg_f, drift_c_f, drift_f_f, tv_c_f, tv_f_f = ctx.factors
         _ref = next(
             t for t in (bg_tex_arg, grids_camera_arg, grids_frame_arg) if t is not None
         )
