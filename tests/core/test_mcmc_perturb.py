@@ -8,7 +8,7 @@ numerically consistent with the PyTorch reference implementation in
 gsplat/strategy/ops.py::inject_noise_to_position.
 
 Usage:
-    pytest tests/test_mcmc_perturb.py -s
+    pytest tests/core/test_mcmc_perturb.py -s
 """
 
 import pytest

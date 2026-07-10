@@ -37,7 +37,7 @@ checkpointing / viz in v1 — those land in follow-ups.
 
 CUDA is required at runtime (``gsplat.rasterization`` is CUDA-only).
 Component construction (build_* helpers) and config validation work on CPU
-and are covered by ``tests/test_dynamic_surgical_trainer.py``; the actual
+and are covered by ``tests/core/test_dynamic_surgical_trainer.py``; the actual
 training step is covered by a CUDA-only integration test in the same file.
 """
 

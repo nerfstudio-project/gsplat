@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 import torch
 
-PROFILE_PATH = Path(__file__).resolve().parents[1] / "gsplat" / "profile.py"
+PROFILE_PATH = Path(__file__).resolve().parents[2] / "gsplat" / "profile.py"
 
 
 @pytest.fixture

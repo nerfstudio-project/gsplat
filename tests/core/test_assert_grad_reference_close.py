@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 import torch
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _HELPER_PATH = _REPO_ROOT / "gsplat" / "_helper.py"
 _HELPER_SPEC = importlib.util.spec_from_file_location(
     "gsplat_helper_under_test", _HELPER_PATH

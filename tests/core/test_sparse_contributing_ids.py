@@ -12,29 +12,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Unit tests for the sparse num-contributing-gaussians op.
+"""Unit tests for the sparse contributing-gaussian-ids op.
 
-Validates ``rasterize_num_contributing_gaussians_sparse`` against the dense
-``rasterize_num_contributing_gaussians`` gathered at the requested pixels -- the
-sparse op must reproduce, at each requested pixel, exactly the dense per-pixel
-contributor count and accumulated alpha. Shared scene/pixel/gather helpers live
-in ``tests.sparse_test_helpers``.
+Validates ``rasterize_contributing_gaussian_ids_sparse`` against the dense
+``rasterize_contributing_gaussian_ids`` gathered at the requested pixels: the
+recorded contributor ids (exact) and weights must match the dense result at each
+requested pixel, up to the per-pixel contributor count (the rest is padding).
+Shared scene/pixel/gather helpers come from the sibling
+``sparse_test_helpers`` module.
 """
 
 import pytest
 import torch
 
-from tests.sparse_test_helpers import (
-    all_pixels,
-    gather,
-    grid,
-    make_scene,
-    subset_pixels,
-)
+from .sparse_test_helpers import gather, grid, make_scene, subset_pixels
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(),
-    reason="rasterize_num_contributing_gaussians_sparse is CUDA-only",
+    reason="rasterize_contributing_gaussian_ids_sparse is CUDA-only",
 )
 
 
@@ -42,6 +37,7 @@ def _dense(scene, width, height, tile_size):
     from gsplat import (
         isect_offset_encode,
         isect_tiles,
+        rasterize_contributing_gaussian_ids,
         rasterize_num_contributing_gaussians,
     )
 
@@ -52,8 +48,19 @@ def _dense(scene, width, height, tile_size):
         means2d, radii, depths, tile_size, tw, th, n_images=C
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tw, th)
-    return rasterize_num_contributing_gaussians(
+    ncg, _ = rasterize_num_contributing_gaussians(
         means2d, conics, opacities, isect_offsets, flatten_ids, width, height, tile_size
+    )
+    return rasterize_contributing_gaussian_ids(
+        means2d,
+        conics,
+        opacities,
+        isect_offsets,
+        flatten_ids,
+        width,
+        height,
+        tile_size,
+        ncg,
     )
 
 
@@ -61,6 +68,7 @@ def _sparse(scene, pixels, image_ids, width, height, tile_size):
     from gsplat import (
         build_sparse_tile_layout,
         isect_tiles_sparse,
+        rasterize_contributing_gaussian_ids_sparse,
         rasterize_num_contributing_gaussians_sparse,
     )
 
@@ -77,7 +85,7 @@ def _sparse(scene, pixels, image_ids, width, height, tile_size):
     tile_offsets, flatten_ids = isect_tiles_sparse(
         means2d, radii, depths, active_tile_mask, active_tiles, C, tile_size, tw, th
     )
-    return rasterize_num_contributing_gaussians_sparse(
+    ncg, _ = rasterize_num_contributing_gaussians_sparse(
         means2d,
         conics,
         opacities,
@@ -93,41 +101,41 @@ def _sparse(scene, pixels, image_ids, width, height, tile_size):
         tw,
         th,
     )
-
-
-@pytest.mark.parametrize("C,N", [(1, 32), (2, 128), (3, 256)])
-@pytest.mark.parametrize("tile_size", [4, 16])
-def test_all_pixels(C, N, tile_size):
-    W, H = 40, 28
-    scene = make_scene(C, N, W, H, seed=100 + N + tile_size)
-    dc, da = _dense(scene, W, H, tile_size)
-    pixels, image_ids = all_pixels(C, W, H)
-    sc, sa = _sparse(scene, pixels, image_ids, W, H, tile_size)
-    # contributor counts are exact integers
-    torch.testing.assert_close(sc, gather(dc, pixels, image_ids), rtol=0, atol=0)
-    torch.testing.assert_close(sa, gather(da, pixels, image_ids), rtol=1e-5, atol=1e-5)
+    return rasterize_contributing_gaussian_ids_sparse(
+        means2d,
+        conics,
+        opacities,
+        active_tiles,
+        tile_offsets,
+        flatten_ids,
+        tile_pixel_mask,
+        tile_pixel_cumsum,
+        pixel_map,
+        ncg,
+        width,
+        height,
+        tile_size,
+        tw,
+        th,
+    )
 
 
 @pytest.mark.parametrize("C,N", [(1, 64), (2, 128)])
 @pytest.mark.parametrize("frac", [0.1, 0.5])
-def test_subset(C, N, frac):
+@pytest.mark.parametrize("tile_size", [4, 16])
+def test_contributing_ids(C, N, frac, tile_size):
     W, H = 48, 32
-    ts = 16
-    scene = make_scene(C, N, W, H, seed=7 + N)
-    dc, da = _dense(scene, W, H, ts)
+    scene = make_scene(C, N, W, H, seed=7 + N + tile_size)
+    d_ids, d_w = _dense(scene, W, H, tile_size)
     pixels, image_ids = subset_pixels(C, W, H, frac, seed=N)
-    sc, sa = _sparse(scene, pixels, image_ids, W, H, ts)
-    torch.testing.assert_close(sc, gather(dc, pixels, image_ids), rtol=0, atol=0)
-    torch.testing.assert_close(sa, gather(da, pixels, image_ids), rtol=1e-5, atol=1e-5)
+    s_ids, s_w = _sparse(scene, pixels, image_ids, W, H, tile_size)
 
+    d_ids_g = gather(d_ids, pixels, image_ids)  # [P, K_dense]
+    d_w_g = gather(d_w, pixels, image_ids)
 
-def test_non_square():
-    C, N = 2, 200
-    W, H = 73, 41
-    ts = 16
-    scene = make_scene(C, N, W, H, seed=11)
-    dc, da = _dense(scene, W, H, ts)
-    pixels, image_ids = subset_pixels(C, W, H, 0.4, seed=3)
-    sc, sa = _sparse(scene, pixels, image_ids, W, H, ts)
-    torch.testing.assert_close(sc, gather(dc, pixels, image_ids), rtol=0, atol=0)
-    torch.testing.assert_close(sa, gather(da, pixels, image_ids), rtol=1e-5, atol=1e-5)
+    Ks = s_ids.shape[1]  # K_sparse <= K_dense (subset of pixels)
+    assert Ks <= d_ids_g.shape[1]
+    # ids are exact; weights match to fp tolerance. Both are front-to-back with
+    # -1 / 0 padding beyond each pixel's contributor count.
+    torch.testing.assert_close(s_ids, d_ids_g[:, :Ks], rtol=0, atol=0)
+    torch.testing.assert_close(s_w, d_w_g[:, :Ks], rtol=1e-5, atol=1e-5)

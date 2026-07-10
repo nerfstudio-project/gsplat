@@ -21,7 +21,7 @@ import types
 import pytest
 
 
-TRACE_PATH = Path(__file__).resolve().parents[1] / "gsplat" / "trace.py"
+TRACE_PATH = Path(__file__).resolve().parents[2] / "gsplat" / "trace.py"
 
 
 class _FakeDomain:

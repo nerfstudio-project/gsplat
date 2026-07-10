@@ -11,9 +11,8 @@ Three test groups:
   requires a real-data EndoNeRF directory (the synthetic 32×32 fixture
   produces sub-pixel Gaussian scales after unprojection + kNN); point at
   one via ``ENDONERF_DATA_DIR`` (typically a ``pulling/`` directory).
-  Skipped if either CUDA or the env var is missing — that's the same
-  contract documented on
-  ``tests/test_contrib_dynamic_strategy.py::test_dynamic_strategy_one_step_train_no_nan``.
+  Skipped if either CUDA or the env var is missing; the focused
+  ``DynamicStrategy`` tests document the same contract.
 
 Seed is set to 42 by the autouse fixture in ``conftest.py``.
 """
@@ -35,7 +34,7 @@ import torch
 Image = pytest.importorskip("PIL.Image")
 pytest.importorskip("tqdm")
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -205,12 +204,11 @@ def test_init_means_inside_derived_hexplane_aabb(trainer_dir: Path):
 def test_trainer_one_step_train_no_nan():
     """End-to-end one-step training pass — no NaN / Inf in losses or params.
 
-    Activates the deferred test
-    ``test_dynamic_strategy_one_step_train_no_nan`` from
-    ``tests/test_contrib_dynamic_strategy.py``. The synthetic
-    ``trainer_dir`` fixture is too small to exercise rasterization
-    meaningfully (sub-pixel Gaussian scales after kNN init), so this test
-    points at a real dataset via ``ENDONERF_DATA_DIR``.
+    Activates the deferred integration marker in the focused
+    ``DynamicStrategy`` tests. The synthetic ``trainer_dir`` fixture is too
+    small to exercise rasterization meaningfully (sub-pixel Gaussian scales
+    after kNN init), so this test points at a real dataset via
+    ``ENDONERF_DATA_DIR``.
     """
     from gsplat.contrib.dynamic import DynamicStrategy
 

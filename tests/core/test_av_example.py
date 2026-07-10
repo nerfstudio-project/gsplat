@@ -31,7 +31,7 @@ import gsplat
 
 SCRIPT_DIR = os.path.dirname(__file__)
 
-sys.path.insert(0, os.path.join(SCRIPT_DIR, "../examples"))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "../../examples"))
 
 # Import av_trainer behind importorskip so that this test module loads cleanly
 # on environments (e.g. upstream GitHub Actions core_tests.yml on
@@ -44,7 +44,7 @@ av_trainer = pytest.importorskip(
     reason="av_trainer optional dependencies not installed (e.g. imageio)",
 )
 
-PANDASET_PATH = os.path.join(SCRIPT_DIR, "../assets/test_pandaset.npz")
+PANDASET_PATH = os.path.join(SCRIPT_DIR, "../../assets/test_pandaset.npz")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 import torch
 
-from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
+from .av_helpers import av_trainer, make_av_scene, make_av_splats
 
 # Skip the whole module when av_trainer's optional dependencies are not
 # installed (e.g. upstream GitHub Actions core_tests.yml). The fixture

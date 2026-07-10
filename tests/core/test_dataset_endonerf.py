@@ -22,7 +22,7 @@ Image = pytest.importorskip("PIL.Image")
 # The ``examples`` directory is a sibling of ``gsplat/`` and isn't installed.
 # Add the gsplat repo root to ``sys.path`` so ``examples.datasets.endonerf``
 # resolves the same way the trainer would.
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

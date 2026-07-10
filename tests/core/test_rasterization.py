@@ -32,7 +32,7 @@ import pytest
 import torch
 
 from gsplat._helper import assert_grad_reference_close
-from tests.test_cameras import parse_lidar_camera
+from tests.core.test_cameras import parse_lidar_camera
 from gsplat.rendering import (
     RenderMode,
     RendererConfig,
