@@ -133,7 +133,6 @@ RUN --mount=type=tmpfs,target=/tmp \
         "nvtx==0.2.15"
         "rich==14.3.3"
         "torch==2.9.1"
-        "typing_extensions; python_version<'3.8'"
     )
 
     check_gsplat_deps.sh -f /opt/dep-check/setup.py:install -- "${packages[@]}"

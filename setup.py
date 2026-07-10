@@ -139,7 +139,6 @@ INSTALL_REQUIRES = [
     # torch.library.register_autograd needs PyTorch >=2.4;
     # Blackwell (sm_120) support needs PyTorch >=2.7
     "torch>=2.7",
-    "typing_extensions; python_version<'3.8'",
 ]
 
 
@@ -278,7 +277,7 @@ def _setup():
         keywords="gaussian, splatting, cuda",
         url=URL,
         download_url=f"{URL}/archive/gsplat-{__version__}.tar.gz",
-        python_requires=">=3.7",
+        python_requires=">=3.10",
         install_requires=INSTALL_REQUIRES,
         extras_require=get_extras_require(),
         ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
