@@ -46,6 +46,11 @@ cpp_extensions=(
     '*.cu'
     '*.cuh'
 )
+cmake_extensions=(
+    '*.cmake'
+    'CMakeLists.txt'
+    '*/CMakeLists.txt'
+)
 
 # Read a formatter's version from its single pin in the shared dev dependencies.
 read_dev_pin() {
@@ -515,4 +520,39 @@ if [[ "${mode}" == "staged" ]] && $staged_failed; then
         echo "To commit without this check (e.g. history surgery): git commit --no-verify"
     } >&2
     exit 1
+fi
+
+# CMake formatting ==========================
+mapfile -d '' cmake_files < <(
+    find_repo_files "${cmake_extensions[@]}"
+)
+
+if (( ${#cmake_files[@]} == 0 )); then
+    echo "CMake formatting was not performed because there are no selected CMake files."
+elif ! command -v gersemi >/dev/null 2>&1; then
+    echo "WARNING: gersemi is not installed; skipping CMake formatting." >&2
+else
+    gersemi_version="$(read_dev_pin gersemi)"
+    if [[ -z "${gersemi_version}" ]]; then
+        echo "ERROR: pyproject.toml's dev extra must pin gersemi==<version>." >&2
+        exit 1
+    fi
+    # Formatting output is only stable within one gersemi version; enforce
+    # the exact pin so every environment produces identical layout.
+    installed_gersemi="$(gersemi --version | head -1 | awk '{print $2}')"
+    if [[ "${installed_gersemi}" != "${gersemi_version}" ]]; then
+        echo "ERROR: gersemi version mismatch." >&2
+        echo "Expected gersemi ${gersemi_version} from pyproject.toml; found ${installed_gersemi}." >&2
+        echo "Install it with 'pip install gersemi==${gersemi_version}'." >&2
+        exit 1
+    fi
+
+    # Definitions and style live in .gersemirc so editors format identically.
+    if $check_mode; then
+        # A custom command without a definition in .gersemirc degrades its
+        # call sites to preserved layout; fail the check instead.
+        gersemi --check --diff --warnings-as-errors -- "${cmake_files[@]}"
+    else
+        gersemi --in-place -- "${cmake_files[@]}"
+    fi
 fi

@@ -1,0 +1,9 @@
+line_length: 100
+indent: 4
+list_expansion: favour-inlining
+definitions:
+  - cmake
+  - tests/CMakeLists.txt
+  - tests/cmake/GSplatTorchCudaTest.cmake
+  - tests/cmake/GSplatTorchPrefixTest.cmake
+  - third_party/CMakeLists.txt

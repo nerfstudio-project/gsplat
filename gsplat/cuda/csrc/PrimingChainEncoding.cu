@@ -3,19 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "Config.h"
-
 #include <ATen/ATen.h>
 
 #include "PrimingChainEncoding.h"
 
-#if GSPLAT_BUILD_3DGUT
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <torch/extension.h>
 
-#    include <ATen/cuda/CUDAContext.h>
-#    include <c10/cuda/CUDAGuard.h>
-#    include <torch/extension.h>
-
-#    include "PrimingChainEncoding.cuh"
+#include "PrimingChainEncoding.cuh"
 
 namespace gsplat
 {
@@ -95,20 +91,3 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> launch_pr
     return std::make_tuple(T_init_used, stored_K, stored_sat, chain_saturated, use_stored_state);
 }
 } // namespace gsplat
-
-#else
-
-namespace gsplat
-{
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> launch_priming_decode_for_batch(
-    const at::Tensor &packed, const at::Tensor &batch_ids
-)
-{
-    (void)packed;
-    (void)batch_ids;
-    TORCH_CHECK(false, "launch_priming_decode_for_batch requires GSPLAT_BUILD_3DGUT=1");
-    return {};
-}
-} // namespace gsplat
-
-#endif // GSPLAT_BUILD_3DGUT

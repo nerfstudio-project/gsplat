@@ -15,20 +15,18 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_3DGS
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-
-#    include "Common.h"
-#    include "Dispatch.h"
-#    include "KernelUtils.cuh"
-#    include "Rasterization.h"
-#    include "RasterizeSparseAddressing.cuh"
-#    include "RasterizeToPixels3DGSDevice.cuh"
+#include "Common.h"
+#include "Dispatch.h"
+#include "KernelUtils.cuh"
+#include "Rasterization.h"
+#include "RasterizeSparseAddressing.cuh"
+#include "RasterizeToPixels3DGSDevice.cuh"
 
 namespace gsplat
 {
@@ -110,7 +108,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
     float py[PIXELS_PER_THREAD];
     int64_t out_idx[PIXELS_PER_THREAD];
     uint32_t done_mask = 0;
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         const uint32_t local_row = thread_y + p * ROW_STRIDE;
@@ -134,7 +132,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
     // active output slot is left uninitialized.
     if(masks != nullptr && !masks[global_tile])
     {
-#    pragma unroll
+#pragma unroll
         for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
         {
             if(done_mask & (1u << p))
@@ -142,7 +140,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
                 continue;
             }
             const int64_t o = out_idx[p];
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 render_colors[o * CDIM + k] = backgrounds == nullptr ? 0.0f : backgrounds[k];
@@ -170,7 +168,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
     vec3 *conic_batch      = reinterpret_cast<vec3 *>(&xy_opacity_batch[BATCH_SIZE]); // [BATCH_SIZE]
 
     float T[PIXELS_PER_THREAD];
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         T[p] = 1.0f;
@@ -178,7 +176,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
     uint32_t cur_idx[PIXELS_PER_THREAD]    = {0u};
     float pix_out[PIXELS_PER_THREAD][CDIM] = {0.f};
 
-#    pragma unroll 1
+#pragma unroll 1
     for(uint32_t b = 0; b < num_batches; ++b)
     {
         // each thread fetch 1 gaussian from front to back
@@ -203,7 +201,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
             const vec3 xy_opac = xy_opacity_batch[t];
             const int32_t g    = id_batch[t];
             const float *c_ptr = colors + g * CDIM;
-#    pragma unroll
+#pragma unroll
             for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
             {
                 if(done_mask & (1u << p))
@@ -226,7 +224,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
         }
     }
 
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         const int64_t o = out_idx[p];
@@ -238,7 +236,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
         {
             render_alphas[o] = 1.0f - T[p];
         }
-#    pragma unroll
+#pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             render_colors[o * CDIM + k]
@@ -294,7 +292,7 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     auto launch_kernel = [&]<typename ChannelsT>()
@@ -374,5 +372,3 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 } // namespace gsplat
-
-#endif

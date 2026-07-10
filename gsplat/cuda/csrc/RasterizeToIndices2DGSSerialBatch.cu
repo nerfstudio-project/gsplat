@@ -16,17 +16,13 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
 
-#if GSPLAT_BUILD_2DGS
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-
-#    include "Common.h"
-#    include "Rasterization.h"
+#include "Common.h"
+#include "Rasterization.h"
 
 namespace gsplat
 {
@@ -298,5 +294,3 @@ void launch_rasterize_to_indices_2dgs_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

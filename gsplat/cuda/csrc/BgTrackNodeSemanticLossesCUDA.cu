@@ -15,27 +15,23 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
+#include <c10/macros/Macros.h>
 
-#if GSPLAT_BUILD_LOSSES
+#include <algorithm>
+#include <cstdint>
+#include <limits>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAException.h>
-#    include <c10/cuda/CUDAGuard.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <c10/macros/Macros.h>
+#include "BgTrackNodeSemanticLosses.h"
+#include "Common.h"
+#include "KernelUtils.cuh"
+#include "cores/BgTrackNodeSemanticCore.cuh"
 
-#    include <algorithm>
-#    include <cstdint>
-#    include <limits>
-
-#    include "BgTrackNodeSemanticLosses.h"
-#    include "Common.h"
-#    include "KernelUtils.cuh"
-#    include "cores/BgTrackNodeSemanticCore.cuh"
-
-#    include "../../geometry/kernels/cuda/csrc/quaternion.cuh"
+#include "../../geometry/kernels/cuda/csrc/quaternion.cuh"
 
 namespace gsplat
 {
@@ -134,10 +130,10 @@ namespace
     {
         scalar_t out9[9];
         gsplat_geometry::quat_to_matrix_fwd_write(q[0], q[1], q[2], q[3], out9);
-#    pragma unroll
+#pragma unroll
         for(int row = 0; row < 3; row++)
         {
-#    pragma unroll
+#pragma unroll
             for(int col = 0; col < 3; col++)
             {
                 R[row][col] = out9[row * 3 + col];
@@ -265,7 +261,7 @@ namespace
         const scalar_t *const pose1 = tracks_poses + static_cast<int64_t>(track_start_idx + interpolation_end_idx) * 7;
 
         scalar_t center[3];
-#    pragma unroll
+#pragma unroll
         for(int i = 0; i < 3; i++)
         {
             center[i] = (scalar_t(1) - alpha) * pose0[i] + alpha * pose1[i];
@@ -278,10 +274,10 @@ namespace
         unitquat_rotmatrix(quat, R);
 
         // world-to-local rows are the transpose of the local-to-world rotation.
-#    pragma unroll
+#pragma unroll
         for(int row = 0; row < 3; row++)
         {
-#    pragma unroll
+#pragma unroll
             for(int col = 0; col < 3; col++)
             {
                 box[row * 4 + col] = R[col][row];
@@ -2166,5 +2162,3 @@ void launch_bg_track_node_semantic_losses_bwd_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

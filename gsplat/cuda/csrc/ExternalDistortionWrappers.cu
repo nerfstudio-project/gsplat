@@ -24,12 +24,10 @@
  * of the device code.
  */
 
-#if GSPLAT_BUILD_CAMERA_WRAPPERS
-
-#    include "ExternalDistortionWrappers.h"
-#    include "ExternalDistortion.cuh"
-#    include <c10/cuda/CUDAStream.h>
-#    include <torch/library.h>
+#include "ExternalDistortionWrappers.h"
+#include "ExternalDistortion.cuh"
+#include <c10/cuda/CUDAStream.h>
+#include <torch/library.h>
 
 namespace gsplat::extdist
 {
@@ -171,5 +169,3 @@ void register_external_distortion_wrappers_cuda_impl(torch::Library &m)
     m.impl("eval_bivariate_poly", to_torch_op<&extdist::eval_bivariate_poly_wrapper>);
 }
 } // namespace gsplat
-
-#endif // GSPLAT_BUILD_CAMERA_WRAPPERS

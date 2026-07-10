@@ -31,15 +31,11 @@ device = torch.device("cuda:0")
 
 
 def _native_cuda_major() -> int:
-    """Return the built extension's CUDA major or skip a CPU-only installation."""
+    """Return the CUDA major embedded in the CMake-built extension."""
 
     from gsplat.cuda._wrapper import _build_config
 
-    build_config = _build_config()
-    if not build_config:
-        pytest.skip("CUDA extension was not built")
-
-    cuda_version = build_config.get("cuda_version")
+    cuda_version = _build_config().get("cuda_version")
     assert type(cuda_version) is int
     assert cuda_version >= 1000
     return cuda_version // 1000

@@ -14,8 +14,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 METADATA_HELPER_PATH = REPO_ROOT / "gsplat/build_support/pyproject_metadata.py"
-CUDA_BUILD_HELPER_PATH = REPO_ROOT / "gsplat/cuda/build.py"
 CUPY_REQUIREMENT_HELPER_PATH = REPO_ROOT / "gsplat/build_support/cupy_requirement.py"
+WHEEL_METADATA_PROVIDER_PATH = (
+    REPO_ROOT / "gsplat/build_support/wheel_build_metadata.py"
+)
 
 
 def _load_metadata_helper():
@@ -29,15 +31,14 @@ def _load_metadata_helper():
     return module
 
 
-def _load_cuda_build_helper():
-    """Load the pre-CMake build helper without importing gsplat."""
+def _load_wheel_metadata_provider():
+    """Load the wheel metadata provider without importing gsplat."""
 
     spec = importlib.util.spec_from_file_location(
-        "_gsplat_pre_cmake_build", CUDA_BUILD_HELPER_PATH
+        "_gsplat_wheel_build_metadata", WHEEL_METADATA_PROVIDER_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -190,20 +191,21 @@ def test_pyproject_metadata_command_line_interface(pyproject_path):
     assert pin.stdout == "22.3.0\n"
 
 
-def test_pre_cmake_build_rejects_cuda_major_mismatch(monkeypatch):
-    """The JIT build cannot mix a compiler with a different Torch CUDA ABI."""
+def test_wheel_metadata_selects_build_cuda_cupy(monkeypatch):
+    """Wheels select CuPy from build Torch while sdists remain portable."""
 
-    build = _load_cuda_build_helper()
-    monkeypatch.setattr(build.torch.version, "cuda", "12.8")
-    monkeypatch.setattr(build, "CUDA_HOME", "/mock/cuda")
-    monkeypatch.setattr(
-        build.subprocess,
-        "check_output",
-        lambda *args, **kwargs: "Cuda compilation tools, release 13.0, V13.0.0",
-    )
+    provider_module = _load_wheel_metadata_provider()
+    monkeypatch.setattr(provider_module, "_build_torch_cuda_version", lambda: "12.8")
+    provider = provider_module.WheelBuildMetadataProvider()
 
-    with pytest.raises(RuntimeError, match="CUDA 13 compiler.*CUDA 12 ABI"):
-        build._cuda_major_for_build()
+    provider.build_state("wheel")
+    assert provider.dynamic_metadata({}, {}) == {
+        "dependencies": ['cupy-cuda12x; extra == "png"']
+    }
+
+    provider.build_state("sdist")
+    assert provider.dynamic_metadata({}, {}) == {"dependencies": []}
+    assert provider.dynamic_wheel({}) == {"dependencies": True}
 
 
 def test_cupy_requirement_env_override_wins(monkeypatch):

@@ -13,25 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Load native scene CUDA ops, preferring prebuilt then JIT build."""
+"""Lazily load the CMake-built scene CUDA extension."""
 
 from __future__ import annotations
 
 from gsplat._lazy_backend import make_lazy_backend
 
-
-def _build():
-    # Deferred so importing this module does not import .cuda.build.
-    from .cuda.build import build_and_load_scene_cuda
-
-    return build_and_load_scene_cuda()
-
-
 _get_backend, __getattr__ = make_lazy_backend(
     module_name=__name__,
     public_name="_SCENE_CUDA",
-    prebuilt_module="gsplat_scene_cuda",
-    jit_loader=_build,
+    extension_module="gsplat_scene_cuda",
 )
 
 __all__ = ["_SCENE_CUDA"]

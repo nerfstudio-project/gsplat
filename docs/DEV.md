@@ -1,6 +1,6 @@
 # Development
 
-## Installation
+## Set up the development environment
 
 Clone the repository and submodules with
 
@@ -8,33 +8,207 @@ Clone the repository and submodules with
 git clone --recurse-submodules URL
 ```
 
-For CUDA development, it is recommend to install with `BUILD_NO_CUDA=1`, which
-will disable compiling during pip install, and instead use JIT compiling on your
-first run. The benefit of JIT compiling is that it does incremental compiling as
-you modify your cuda code so it is much faster than re-compile through pip. Note
-the JIT compiled library can be found under `~/.cache/torch_extensions/py*-cu*/`.
-
-Install the development extra. The CuPy wheel matching the local CUDA toolkit
-is selected automatically. On Python 3.13, `dev` skips the PNG-compression
-extra (`vc-flas` doesn't support 3.13 yet); install `gsplat[png]` separately on
-3.10-3.12 if you need it.
+Install an [NVIDIA CUDA Toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
+supported by PyTorch. Activate an existing Python environment, then run:
 
 ```bash
-BUILD_NO_CUDA=1 pip install -e ".[dev]"
+./bootstrap.sh
 ```
 
-If you won't touch the underlying CUDA code, you can just install with compiling:
+This installs the development extra. The CuPy wheel matching the local CUDA
+toolkit is selected automatically. On Python 3.13, `dev` skips the
+PNG-compression extra (`vc-flas` doesn't support 3.13 yet); install
+`gsplat[png]` separately on 3.10-3.12 if you need it.
+
+If bootstrap cannot detect `nvcc`, or to choose the CUDA-tagged Python
+dependencies (PyTorch wheel index, CuPy package) explicitly, run:
 
 ```bash
-pip install -e ".[dev]"
+./bootstrap.sh --cuda 12.8
 ```
+
+This selects binary dependencies only; it does not choose the CUDA compiler
+used by the build. Bootstrap warns when the toolkit it detects disagrees with
+the requested version.
+
+To have bootstrap create a new virtual environment, run:
+
+```bash
+./bootstrap.sh --venv /path/to/venvs/gsplat --cuda 12.8
+source /path/to/venvs/gsplat/bin/activate
+```
+
+Use `./bootstrap.sh --help` to see the Python and CUDA options.
+
+Bootstrap installs the complete development dependency set, including the
+optional PNG compression feature. It selects CuPy from the requested or
+detected dependency CUDA major, rather than from the GPU driver's maximum
+supported version. CMake separately verifies that the compiler and Torch use
+the same CUDA major. The `vc-flas` dependency currently limits these
+environments to Python 3.10 through 3.12. The base gsplat package continues to
+support Python 3.13 when the `png` and development extras are not selected.
+
+## Develop with a CMake build tree
+
+The CMake presets are organized by their intended use. Each preset creates a
+separate persistent build tree.
+
+### Development presets
+
+The development presets are intended for local C++ and CUDA work:
+
+- Use `dev-debug` by default for everyday development.
+- Use `dev-release` for optimization work, profiling, and performance
+  measurement.
+
+Both presets generate machine code only for the current GPU, avoiding the cost
+of compiling the complete production architecture set and the need for PTX JIT
+compilation at runtime. `dev-debug` enables runtime assertions and other
+debug-only checks that make bugs easier to detect, at the cost of slightly
+longer compile times. `dev-release` retains debug information.
+
+Changes should normally pass both `dev-debug` and `dev-release` before
+submission because optimization can expose issues that are not visible in a
+debug build.
+
+### Portable presets
+
+The portable presets create broadly compatible builds at relatively low build
+cost:
+
+- Use `debug` for a portable debug build.
+- Use `release` for a portable optimized build.
+
+Both presets compile only compute-80 PTX, without architecture-specific
+cubins. A compatible CUDA driver can JIT this PTX for any supported GPU with
+compute capability 8.0 or newer. Compiling a single virtual architecture keeps
+these builds relatively inexpensive. The tradeoff is deferred compilation:
+for each newly built binary, the CUDA driver JIT-compiles the PTX when its
+kernels are first loaded, adding a one-time runtime cost that is cached for
+subsequent runs.
+
+### Production preset
+
+The production preset creates distributable artifacts and validates the full
+supported GPU architecture set:
+
+- Use `full-release` for optimized distributable builds and release wheels.
+
+This preset compiles every supported architecture as well as compute-80 PTX.
+It takes longer to build, but verifies that every kernel compiles across the
+complete architecture set and produces wheels that avoid JIT compilation on
+those architectures.
+
+### Configure, build, and test
+
+By default, a preset creates its build tree under `<repo>/build/<preset>`. Pass
+`-B` while configuring to use a different directory:
+
+```bash
+cmake --preset dev-debug -B /path/to/gsplat-build
+```
+
+After choosing a preset, configure, build, and test from its build directory.
+For example, using `dev-debug` and its default directory:
+
+```bash
+cmake --preset dev-debug
+cd build/dev-debug
+ninja
+ctest --output-on-failure
+```
+
+`cmake` configures the project and creates `build/dev-debug`. From that
+directory, `ninja` compiles the C++ and CUDA code. `ctest --output-on-failure`
+is the recommended test entry point because it runs both the registered C++
+and Python tests and shows output from failures. To use another preset, replace
+`dev-debug` with its name in the first two commands.
+
+If multiple CUDA toolkits are installed and the default is not the intended
+one, select its compiler when first configuring the build tree:
+
+```bash
+cmake --preset dev-debug \
+      -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc
+```
+
+Run pytest directly only when you want the Python suite or a focused Python
+test; pytest does not execute the C++ tests:
+
+```bash
+cd build/dev-debug
+python -m pytest
+python -m pytest ../../tests/core/test_basic.py
+```
+
+### Adding source files
+
+New C++/CUDA implementation files must be registered explicitly in the source
+lists of `gsplat/cuda/csrc/CMakeLists.txt` (and the other kernel package
+`CMakeLists.txt` files); build sources are deliberately not globbed, so a file
+that is not listed is silently left out of the build. The explicit lists keep
+stray or work-in-progress files from being compiled in by mistake.
+
+### CMake cache options
+
+Pass project-specific options while configuring with `-D<name>=<value>`.
+Boolean values accept CMake's usual `ON` and `OFF` spellings. The defaults below
+apply to a top-level build unless noted otherwise; presets can override them.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `GSPLAT_BUILD_CAMERA_WRAPPERS` | value of `GSPLAT_BUILD_TESTS` | Build the Python-exposed camera-wrapper test kernels. |
+| `GSPLAT_BUILD_TESTS` | `ON` (`OFF` as a subproject) | Build and register the C++ tests; Python source-tree tests are registered independently in top-level builds. |
+| `GSPLAT_CHECK_PYTHON_DEPS` | `ON` | Check the active environment against the Python dependencies requested by the build. |
+| `GSPLAT_DEVELOPMENT_MODE` | `OFF` | Require the development Python dependencies in addition to build requirements. |
+| `GSPLAT_FAST_MATH` | `ON` | Compile CUDA kernels with fast-math intrinsics. |
+| `GSPLAT_GENERATED_DIR` | `<build>/generated` | Select the directory for generated gsplat build headers. |
+| `GSPLAT_KERNEL_FAMILIES` | empty (all) | Select a comma- or semicolon-separated subset of `2DGS`, `3DGS`, `3DGUT`, `ADAM`, `RELOC`, and `LOSSES` to compile. |
+| `GSPLAT_NUM_CHANNELS` | all supported widths | Select the comma- or semicolon-separated feature widths to instantiate; `NUM_CHANNELS` remains a compatibility alias. |
+| `GSPLAT_ENABLE_CCACHE` | `ON` | Use ccache for C++, C, and CUDA compilation when it is available. |
+| `GSPLAT_FORCE_CCACHE` | `OFF` | Fail configuration instead of warning when ccache is enabled but unavailable. |
+| `GSPLAT_CCACHE_DIR` | empty | Override ccache's cache directory; empty preserves ccache's own resolution. |
+| `GSPLAT_CCACHE_STATS` | `OFF` | Print cache statistics for this build after compilation. |
+
+The build also honors standard CMake and toolchain cache variables such as
+`CMAKE_BUILD_TYPE`, `CMAKE_CUDA_ARCHITECTURES`, `CMAKE_CUDA_COMPILER`, and
+`CMAKE_CUDA_HOST_COMPILER`. `CMAKE_COMPILE_WARNING_AS_ERROR` applies the same
+warnings-as-errors policy to both compilation and pytest. Run
+`cmake -LAH -N <build-directory>` after configuration to inspect every cache
+entry and its current value.
+
+## Build wheels
+
+Wheels are built by `pip` with scikit-build-core running a single CMake
+configure and build. `cmake.args=--preset` selects the configure preset, which
+stays the one source of the build configuration; `cmake.build-type` is emptied
+so scikit-build-core's `Release` default cannot override the preset's
+`CMAKE_BUILD_TYPE`. Clear `dist` first so every wheel there belongs to the
+current build:
+
+```bash
+rm -rf dist
+python -m pip wheel \
+    --verbose \
+    --no-build-isolation \
+    --no-deps \
+    --wheel-dir dist \
+    --config-settings=build-dir=build/full-release \
+    --config-settings=cmake.build-type= \
+    --config-settings=cmake.args=--preset=full-release \
+    .
+```
+
+For a portable development wheel, replace `full-release` with `debug` or
+`release` in both the `build-dir` and `cmake.args` settings.
 
 ### Compiled feature widths
 
-Set `NUM_CHANNELS` to a comma-separated list of positive feature widths when
-building the CUDA extensions. Each entry is forwarded to
-`GSPLAT_NUM_CHANNELS`, creating corresponding CUDA kernel specializations and
-increasing build cost.
+Set the `GSPLAT_NUM_CHANNELS` CMake cache variable to a comma- or
+semicolon-separated list of positive feature widths when configuring, for
+example `cmake --preset dev-release -DGSPLAT_NUM_CHANNELS=3,32`. Each entry
+creates corresponding CUDA kernel specializations and increases build cost.
+(`NUM_CHANNELS` is accepted as a compatibility alias.)
 
 High-level rasterizers choose the fewest compiled widths that exactly compose
 the total feature width. The largest compiled width limits one kernel launch,
@@ -47,10 +221,8 @@ chunks internally.
 
 It is recommended to commit the code into the main branch as a PR over a hard push, as the PR would protect the main branch if the code break tests but a hard push won't. Also squash the commits before merging the PR so it won't span the git history.
 
-The current tests that will be triggered by PR:
-
-- `.github/workflows/core_tests.yml`: Black formating. Pytests.
-- `.github/workflows/doc.yml`: Doc build.
+PR checks cover formatting, C++ and Python tests, documentation, and full CUDA
+architecture compilation when build inputs change.
 
 Because we check code formatting in CI, it is recommend to run the formatting
 script before committing code; with no arguments it formats the source files
@@ -84,24 +256,24 @@ working-tree copy was left as is). A commit whose staged changes were
 formatting-only is refused, since formatting reduces it to an empty commit. To
 skip the hook for one commit, use `git commit --no-verify`.
 
-Since there is no GPU supported on github workflow container, we don't test against those cuda unit tests under `tests/` in PR. So it is recommended to check test pass locally before committing:
+Run CTest locally on the hardware you are targeting before committing. Tests
+requiring unavailable hardware or external datasets skip themselves.
 
 ```bash
-pytest tests/  # check for all tests
-pytest tests/core/test_basic.py  # check for a single test file.
-pytest -sv  # mirror the GitLab GPU CI (all tests live under tests/)
+cd build/dev-debug
+ctest --output-on-failure
 ```
 
 Note that `pytest` recognizes and runs all functions named as `test_*`, so you should name the test functions in this pattern. See `test_basic.py` as an example.
 
 ## Build the Doc Locally
 
-If you want to contribute to the doc, here is the way to build it locally. The source code of the doc can be found in `docs/source` and the built doc will be in `_build/`. If you are interested in contributing with the doc, here are some examples on documentation: [viser](https://github.com/nerfstudio-project/viser/tree/main/docs/source), [nerfstudio](https://github.com/nerfstudio-project/nerfstudio/tree/main/docs), [nerfacc](https://github.com/KAIR-BAIR/nerfacc/tree/master/docs/source).
+The documentation sources live in `docs/source`. Install the documentation
+requirements in an environment containing PyTorch, then run:
 
 ```bash
-pip install -e ".[dev]"
-pip install -r docs/requirements.txt
-sphinx-build docs/source _build 
+python -m pip install -r docs/requirements.txt
+docs/render_docs.sh build/html
 ```
 
 ## Clangd setup (for Neovim)
@@ -133,42 +305,40 @@ echo "# Autogenerated, see .clangd_template\!" > .clangd && sed -e "/^#/d" -e "s
 ```
 
 **Third,** we'll need a
-[`compile_comands.json`](https://clang.llvm.org/docs/JSONCompilationDatabase.html)
+[`compile_commands.json`](https://clang.llvm.org/docs/JSONCompilationDatabase.html)
 file.
 
-If we're working on PyTorch bindings, one option is to generate this using
-[`bear`](https://github.com/rizsotto/Bear):
+CMake exports this file into each top-level build directory:
 
 ```sh
-sudo apt update
-sudo apt install bear
-
-# From the repository root, 3dgs-exercise/.
-#
-# This will save a file at 3dgs-exercise/compile_commands.json, which clangd
-# should be able to detect.
-bear -- pip install -e gsplat/
+cmake --preset dev-debug
 
 # Make sure the file is not empty!
-cat compile_commands.json
+test -s build/dev-debug/compile_commands.json
 ```
 
-Alternatively: if we're working directly in C (and don't need any PyTorch
-binding stuff), we can generate via CMake:
+Configure clangd or your LSP client with
+`--compile-commands-dir=build/dev-debug` so it reads that database without adding a
+generated file to the source root.
 
-```sh
-# From 3dgs-exercise/csrc/build.
-#
-# This will save a file at 3dgs-exercise/csrc/build/compile_commands.json, which
-# clangd should be able to detect.
-cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=on
+## Implementation details
 
-# Make sure the file is not empty!
-cat compile_commands.json
-```
+Source builds disable pip's build isolation so CMake uses PyTorch from the
+active environment. Pip still installs the selected project dependencies, but
+the build requirements declared in `pyproject.toml` must already be available.
 
-<!-- 
-**Known issues**
+`CUDACXX` selects the CUDA compiler only when a build directory is first
+configured. CMake then stores that compiler in its cache. Remove the affected
+`build/<preset>` directory before configuring it with a different CUDA toolkit.
 
-- The torch extensions include currently raises an error:
-  `In included file: use of undeclared identifier 'noinline'; did you mean 'inline'?` -->
+CMake stages an importable package under `build/<preset>`. This is what
+allows Python tests to import the newly built extension directly from a build
+tree.
+
+The pull-request checks are defined by:
+
+- `.github/workflows/core_tests.yml`: formatting plus C++ and Python tests
+  through CTest.
+- `.github/workflows/cuda_architectures.yml`: full CUDA architecture compile
+  validation for build-relevant changes.
+- `.github/workflows/doc.yml`: documentation build.

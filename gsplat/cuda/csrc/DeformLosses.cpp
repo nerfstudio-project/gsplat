@@ -15,14 +15,10 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/TensorUtils.h>
+#include <ATen/core/Tensor.h>
 
-#if GSPLAT_BUILD_LOSSES
-
-#    include <ATen/TensorUtils.h>
-#    include <ATen/core/Tensor.h>
-
-#    include "DeformLosses.h"
+#include "DeformLosses.h"
 
 namespace gsplat
 {
@@ -87,5 +83,3 @@ void deform_losses_resolve_mask_broadcast(
     stride_col = (m_cols == 1) ? 0 : 1;
 }
 } // namespace gsplat
-
-#endif

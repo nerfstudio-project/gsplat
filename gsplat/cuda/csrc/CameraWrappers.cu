@@ -20,12 +20,10 @@
  * @brief C++ camera model implementations with CUDA kernels
  */
 
-#if GSPLAT_BUILD_CAMERA_WRAPPERS
-
-#    include "CameraWrappers.h"
-#    include "TensorView.h"
-#    include "TorchUtils.h"
-#    include <c10/cuda/CUDAStream.h>
+#include "CameraWrappers.h"
+#include "TensorView.h"
+#include "TorchUtils.h"
+#include <c10/cuda/CUDAStream.h>
 
 namespace gsplat
 {
@@ -1240,5 +1238,3 @@ template class PyBaseCameraModel<FThetaCameraModel<extdist::BivariateWindshieldM
 // Lidar (always EmptyExternalDistortionModel)
 template class PyBaseCameraModel<RowOffsetStructuredSpinningLidarModel>;
 } // namespace gsplat
-
-#endif

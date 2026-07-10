@@ -16,18 +16,14 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
 
-#if GSPLAT_BUILD_3DGS
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-
-#    include "Common.h"
-#    include "Rasterization.h"
-#    include "RasterizeToPixels3DGSDevice.cuh"
+#include "Common.h"
+#include "Rasterization.h"
+#include "RasterizeToPixels3DGSDevice.cuh"
 
 namespace gsplat
 {
@@ -271,5 +267,3 @@ void launch_rasterize_to_indices_3dgs_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

@@ -2,9 +2,10 @@ include config.yaml
 
 recursive-include gsplat/cuda/csrc *
 
-# CUDA / JIT sources for the sub-packages, so that source distributions can
-# JIT-build them. test_data and tests are intentionally not shipped.
+# CUDA sources for the sub-packages. test_data and tests are intentionally not
+# shipped.
 recursive-include gsplat/geometry/kernels/cuda *
 recursive-include gsplat/sensors/kernels/cuda *
 recursive-include gsplat/scene/kernels/cuda *
 recursive-include gsplat/experimental/render/kernels/cuda *
+recursive-include third_party/googletest *

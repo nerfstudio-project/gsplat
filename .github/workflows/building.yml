@@ -3,7 +3,7 @@ name: Build Wheels
 on: [workflow_call, workflow_dispatch]
 jobs:
   build_sdist:
-    name: Build source distribution and no binary wheel
+    name: Build source distribution
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,9 +13,9 @@ jobs:
         run: |
           sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
       - name: Build sdist
-        run: BUILD_NO_CUDA=1 pipx run build --sdist
-      - name: Build wheel with no binaries
-        run: BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
+        run: |
+          python -m pip install build
+          python -m build --sdist
       - uses: actions/upload-artifact@v4
         with:
           name: pypi_packages
@@ -28,7 +28,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022]
+        # Native wheel builds currently target Linux.
+        os: [ubuntu-22.04]
         python-version: ['3.10']
         # Last 3 minor PyTorch versions aligned with pytorch.org
         torch-version: ['2.8.0', '2.9.1', '2.10.0']
@@ -44,10 +45,6 @@ jobs:
           # PyTorch 2.10.0 does not ship cu129 wheels
           - torch-version: '2.10.0'
             cuda-version: 'cu129'
-          # CUDA 12.6 is incompatible with MSVC >= 14.44 (VS 2022);
-          # the MSVC STL requires CUDA 12.8+
-          - os: windows-2022
-            cuda-version: 'cu126'
 
     steps:
       - name: Checkout repository
@@ -98,39 +95,23 @@ jobs:
         run: |
           # https://github.com/pypa/setuptools/issues/5174, pkg_resources is removed in setuptools 82 but we need it for older torch versions
           pip install --upgrade "setuptools<82"
-          pip install ninja
-        shell: bash
-
-      - name: Install main package for CPU
-        if: ${{ matrix.cuda-version == 'cpu' }}
-        run: |
-          BUILD_NO_CUDA=1 pip install .
+          pip install "cmake>=3.26" ninja scikit-build-core
         shell: bash
 
       - name: Build wheel
-        env:
-          # Step-level env so Windows Python sees CUDA_HOME (bash export does not propagate to python.exe)
-          CUDA_HOME: ${{ runner.os == 'Windows' && (matrix.cuda-version == 'cu130' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0' || matrix.cuda-version == 'cu129' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9' || matrix.cuda-version == 'cu128' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8' || 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6') || '' }}
         run: |
-          pip install wheel
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            export PATH="${CUDA_HOME}/bin:${PATH}"
-            export TORCH_CUDA_ARCH_LIST="8.0;8.6;9.0"
-          else
-            source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          fi
-          MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
+          source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+          CMAKE_ARGS="-DGSPLAT_CCACHE_STATS=ON" CMAKE_BUILD_PARALLEL_LEVEL=2 pip wheel . --no-build-isolation --no-deps --wheel-dir dist
         shell: bash
 
       - name: Test wheel
         run: |
-          cd dist
-          ls -lah
-          pip install *.whl
-          python -c "import gsplat; print('gsplat:', gsplat.__version__)"
-          pip install "$(ls *.whl)[lidar]"
-          python -c "import gsplat; print('gsplat:', gsplat.__version__); from scipy.spatial import cKDTree; print('scipy OK')"
-          cd ..
+          ls -lah dist
+          wheel_file=$(ls dist/*.whl)
+          pip install "$wheel_file"
+          (cd "$RUNNER_TEMP" && python -c "import gsplat; print('gsplat:', gsplat.__version__)")
+          pip install "${wheel_file}[lidar]"
+          (cd "$RUNNER_TEMP" && python -c "import gsplat; print('gsplat:', gsplat.__version__); from scipy.spatial import cKDTree; print('scipy OK')")
         shell: bash
 
       - uses: actions/upload-artifact@v4

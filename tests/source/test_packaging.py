@@ -16,12 +16,16 @@
 """Lightweight, CPU-safe packaging smoke tests.
 
 These tests inspect source-tree packaging metadata or installed wheel metadata
-without importing the heavy top-level ``gsplat`` package (which would JIT-build
-the native extension). They never require CUDA.
+without importing the heavy top-level ``gsplat`` package, which would import
+native-extension wrappers. They never require CUDA.
 """
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import tarfile
 from importlib import metadata
 from pathlib import Path
 
@@ -184,3 +188,54 @@ def test_experimental_published_under_gsplat_namespace():
     assert not any(
         p == "experimental" or p.startswith("experimental.") for p in packages
     ), f"bare top-level 'experimental' published: {sorted(packages)}"
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_PACKAGING_BUILD_TESTS") != "1",
+    reason="heavy sdist build test; set RUN_PACKAGING_BUILD_TESTS=1 to enable",
+)
+def test_sdist_excludes_tests_includes_cuda(tmp_path):
+    """Build an sdist and verify test files are excluded and CUDA csrc included."""
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--no-isolation",
+            "--sdist",
+            "--outdir",
+            str(tmp_path),
+        ],
+        cwd=str(REPO_ROOT),
+        check=True,
+    )
+    tarballs = list(tmp_path.glob("*.tar.gz"))
+    assert tarballs, "no sdist produced"
+    with tarfile.open(tarballs[0]) as tf:
+        names = tf.getnames()
+
+    # No test files from the sub-packages.
+    stray = [
+        n
+        for n in names
+        if "/test_" in n
+        and (
+            "/gsplat/geometry/" in n
+            or "/gsplat/sensors/" in n
+            or "/gsplat/scene/" in n
+            or "/gsplat/stage/" in n
+            or "/gsplat/experimental/" in n
+        )
+    ]
+    assert not stray, f"sdist shipped relocated test files: {stray}"
+
+    # CUDA csrc sources from the sub-packages ARE included.
+    required_substrings = [
+        *SEGMENTED_SORT_SOURCES,
+        "gsplat/scene/kernels/cuda/csrc/gaussian_scene_pack.cuh",
+        "gsplat/geometry/kernels/cuda/csrc/pose.cu",
+        "gsplat/sensors/kernels/cuda/csrc/camera_kernel.cu",
+        "gsplat/experimental/render/kernels/cuda/csrc/gaussian_inference/Projection.cu",
+    ]
+    for sub in required_substrings:
+        assert any(n.endswith(sub) for n in names), f"sdist missing CUDA source: {sub}"

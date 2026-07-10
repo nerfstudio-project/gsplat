@@ -16,20 +16,18 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_2DGS
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-
-#    include "Common.h"
-#    include "Rasterization.h"
-#    include "Utils.cuh"
-#    include "Dispatch.h"
+#include "Common.h"
+#include "Rasterization.h"
+#include "Utils.cuh"
+#include "Dispatch.h"
 
 namespace gsplat
 {
@@ -211,7 +209,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     // df/d_out for this pixel (within register)
     // FETCH COLOR GRADIENT
     float v_render_c[CDIM];
-#    pragma unroll
+#pragma unroll
     for(uint32_t k = 0; k < CDIM; ++k)
     {
         v_render_c[k] = v_render_colors[pix_id * CDIM + k];
@@ -222,7 +220,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     float v_render_n[3];
 
 // FETCH NORMAL GRADIENT (NORMALIZATION FOR 2DGS)
-#    pragma unroll
+#pragma unroll
     for(uint32_t k = 0; k < 3; ++k)
     {
         v_render_n[k] = v_render_normals[pix_id * 3 + k];
@@ -299,12 +297,12 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
             u_Ms_batch[tr] = {ray_transforms[g * 9], ray_transforms[g * 9 + 1], ray_transforms[g * 9 + 2]};
             v_Ms_batch[tr] = {ray_transforms[g * 9 + 3], ray_transforms[g * 9 + 4], ray_transforms[g * 9 + 5]};
             w_Ms_batch[tr] = {ray_transforms[g * 9 + 6], ray_transforms[g * 9 + 7], ray_transforms[g * 9 + 8]};
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 rgbs_batch[tr * CDIM + k] = colors[g * CDIM + k];
             }
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < 3; ++k)
             {
                 normals_batch[tr * 3 + k] = normals[g * 3 + k];
@@ -472,7 +470,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 // prod{1, i-1}(1 - a_j G_j) we have d(img)/d(c_i) = (a_i G_i) *
                 // T where alpha_i is a_i * G_i
                 const float fac = alpha * T;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     v_rgb_local[k] += fac * v_render_c[k];
@@ -493,7 +491,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
  */
 
 // update v_normal for this gaussian
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < 3; ++k)
                 {
                     v_normal_local[k] = fac * v_render_n[k];
@@ -517,7 +515,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 if(backgrounds != nullptr)
                 {
                     float accum = 0.f;
-#    pragma unroll
+#pragma unroll
                     for(uint32_t k = 0; k < CDIM; ++k)
                     {
                         accum += backgrounds[k] * v_render_c[k];
@@ -603,7 +601,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
  * Update the cumulative "later" gaussian contributions, used in derivatives of
  * render with respect to alphas
  */
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     buffer[k] += rgbs_batch[t * CDIM + k] * fac;
@@ -613,7 +611,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
  * Update the cumulative "later" gaussian contributions, used in derivatives of
  * output normals w.r.t. alphas
  */
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < 3; ++k)
                 {
                     buffer_normals[k] += normals_batch[t * 3 + k] * fac;
@@ -656,14 +654,14 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
             if(warp.thread_rank() == 0)
             {
                 float *v_rgb_ptr = (float *)(v_colors) + CDIM * g;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
                 float *v_normal_ptr = (float *)(v_normals) + 3 * g;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < 3; ++k)
                 {
                     gpuAtomicAdd(v_normal_ptr + k, v_normal_local[k]);
@@ -764,7 +762,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     auto launch_kernel = [&]<typename ChannelsT>()
@@ -833,5 +831,3 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 } // namespace gsplat
-
-#endif

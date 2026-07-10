@@ -16,26 +16,24 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_3DGUT
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cassert>
+#include <cuda/std/optional>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cassert>
-#    include <cuda/std/optional>
-
-#    include "Common.h"
-#    include "ExternalDistortion.cuh"
-#    include "RasterizeCSR.cuh"
-#    include "RasterizeToPixelsFromWorld3DGS.h"
-#    include "RasterizeToPixelsFromWorld3DGS.cuh"
-#    include "Cameras.cuh"
-#    include "Lidars.cuh"
-#    include "TorchUtils.h"
-#    include "Utils.cuh"
-#    include "Dispatch.h"
+#include "Common.h"
+#include "ExternalDistortion.cuh"
+#include "RasterizeCSR.cuh"
+#include "RasterizeToPixelsFromWorld3DGS.h"
+#include "RasterizeToPixelsFromWorld3DGS.cuh"
+#include "Cameras.cuh"
+#include "Lidars.cuh"
+#include "TorchUtils.h"
+#include "Utils.cuh"
+#include "Dispatch.h"
 
 namespace gsplat
 {
@@ -191,7 +189,7 @@ __global__ void
     // only until ray setup; masked tiles only need pix_id for empty outputs.
     PixelCoords pc[PIXELS_PER_THREAD];
     uint32_t done_mask = 0;
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         pc[p] = compute_pixel_coords(
@@ -222,20 +220,20 @@ __global__ void
     {
         if(masked_tile)
         {
-#    pragma unroll
+#pragma unroll
             for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
             {
                 if(pc[p].inside)
                 {
                     render_alphas[pc[p].pix_id] = 0.0f;
-#    pragma unroll
+#pragma unroll
                     for(uint32_t k = 0; k < CDIM; ++k)
                     {
                         render_colors[pc[p].pix_id * CDIM + k] = backgrounds == nullptr ? 0.0f : backgrounds[k];
                     }
                     if(render_normals != nullptr)
                     {
-#    pragma unroll
+#pragma unroll
                         for(uint32_t k = 0; k < 3; ++k)
                         {
                             render_normals[pc[p].pix_id * 3 + k] = 0.0f;
@@ -269,7 +267,7 @@ __global__ void
 
     vec3 ray_o[PIXELS_PER_THREAD] = {};
     vec3 ray_d[PIXELS_PER_THREAD] = {};
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         if(done_mask & (1u << p))
@@ -354,14 +352,14 @@ __global__ void
             == num_logical_batches
         );
     }
-#    ifndef NDEBUG
+#ifndef NDEBUG
     if(persist_batches)
     {
         const int64_t batch_end_slot = static_cast<int64_t>(batch_offsets_csr[tile_linear + 1]);
         assert(batch_end_slot >= batch_base_slot);
         assert(static_cast<uint32_t>(batch_end_slot - batch_base_slot) == num_logical_batches);
     }
-#    endif
+#endif
     // Shared memory: FETCH_SIZE (= CTA_SIZE) entries; reused across each
     // logical batch's FETCHES_PER_BATCH cooperative-fetch rounds.
     extern __shared__ int s[];
@@ -375,7 +373,7 @@ __global__ void
     int32_t cur_idx[PIXELS_PER_THREAD];
     float T[PIXELS_PER_THREAD];
     float transmittance_threshold[PIXELS_PER_THREAD];
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         cur_idx[p]                 = -1;
@@ -403,7 +401,7 @@ __global__ void
     // corresponds to the terminal state. The boundary-formula derivation is
     // documented in `RasterizeCSR.cuh`.
 
-#    pragma unroll 1
+#pragma unroll 1
     for(uint32_t lb = 0; lb < num_logical_batches; ++lb)
     {
         // Each logical batch covers LOGICAL_BATCH (= pixels_per_tile) gaussians,
@@ -499,13 +497,13 @@ __global__ void
     }
 
     // Write outputs for each in-bounds pixel
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         if(pc[p].inside)
         {
             render_alphas[pc[p].pix_id] = 1.0f - T[p];
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 render_colors[pc[p].pix_id * CDIM + k]
@@ -513,7 +511,7 @@ __global__ void
             }
             if constexpr(ReturnNormals)
             {
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < 3; ++k)
                 {
                     render_normals[pc[p].pix_id * 3 + k] = normal_out[p][k];
@@ -634,7 +632,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     TORCH_CHECK_VALUE(
@@ -834,5 +832,3 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

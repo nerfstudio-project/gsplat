@@ -16,21 +16,17 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
+#include <cub/cub.cuh>
 
-#if GSPLAT_BUILD_2DGS
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-#    include <cub/cub.cuh>
-
-#    include "Common.h"
-#    include "Projection.h"
-#    include "Projection2DGS.cuh" // Utils for 2DGS Projection
-#    include "Utils.cuh"
+#include "Common.h"
+#include "Projection.h"
+#include "Projection2DGS.cuh" // Utils for 2DGS Projection
+#include "Utils.cuh"
 
 namespace gsplat
 {
@@ -446,7 +442,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
         if(v_means != nullptr)
         {
             v_means += idx * 3;
-#    pragma unroll
+#pragma unroll
             for(uint32_t i = 0; i < 3; i++)
             {
                 v_means[i] = v_mean[i];
@@ -473,7 +469,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
             if(warp_group_g.thread_rank() == 0)
             {
                 v_means += bid * N * 3 + gid * 3;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t i = 0; i < 3; i++)
                 {
                     gpuAtomicAdd(v_means + i, v_mean[i]);
@@ -504,10 +500,10 @@ __global__ void projection_2dgs_packed_bwd_kernel(
         if(warp_group_c.thread_rank() == 0)
         {
             v_viewmats += bid * C * 16 + cid * 16;
-#    pragma unroll
+#pragma unroll
             for(uint32_t i = 0; i < 3; i++)
             {
-#    pragma unroll
+#pragma unroll
                 for(uint32_t j = 0; j < 3; j++)
                 {
                     gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
@@ -588,5 +584,3 @@ void launch_projection_2dgs_packed_bwd_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

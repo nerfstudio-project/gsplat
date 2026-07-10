@@ -427,7 +427,7 @@ class TestFusedGaussianLossesCUDA:
 def test_loss_flags_sourced_from_extension():
     """LossFlag must be read from the compiled extension (csrc/LossFlags.h via
     m.attr), not hardcoded — verifies the binding + read-through path."""
-    from gsplat.cuda._backend import _C
+    import gsplat.csrc as _C
 
     assert LossFlag is not None
     assert int(LossFlag.RGB_LABEL) == _C.LOSS_FLAG_RGB_LABEL

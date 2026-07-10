@@ -30,21 +30,13 @@ from itertools import product, chain
 from types import SimpleNamespace
 from dataclasses import dataclass
 
-if not torch.cuda.is_available():
-    pytest.skip("CUDA required for camera model tests", allow_module_level=True)
-
-from gsplat.cuda._backend import _C
-
-if _C is None:
-    pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
-
-from gsplat.cuda._wrapper import has_camera_wrappers
-
-if not has_camera_wrappers():
-    pytest.skip(
-        "Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)",
-        allow_module_level=True,
-    )
+pytestmark = [
+    pytest.mark.camera_wrappers,
+    pytest.mark.skipif(
+        not torch.cuda.is_available(),
+        reason="CUDA required for camera model tests",
+    ),
+]
 
 from gsplat._helper import expand_named_params
 from gsplat.cuda._torch_cameras import (  # PyTorch reference

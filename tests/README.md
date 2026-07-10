@@ -16,12 +16,31 @@ You update the code locally and run the tests to see the results right away.
   caching compiled objects between builds
 - **Selective Feature Building**: Configure build scope to include only
   specific features (e.g., `--3dgut`, `--3dgs --2dgs`) for faster compilation
-  and targeted testing
-- **Mounted Source Code**: Local source code mounted at the same directory as
-  on host allows immediate testing of code changes without rebuild delays,
-  and debug symbols refer to the correct source files on host. Linked Git
-  worktrees also mount their external common Git directory read-only, so
-  source-level Git checks behave the same way inside and outside the container.
+  and targeted testing. The selection applies at configure time and persists
+  in the preset's build tree: passing feature flags reconfigures the tree for
+  exactly those families, `--all` restores every family, and runs without
+  feature flags keep the tree's current selection (a fresh tree builds all
+  families).
+- **Mounted Source Code**: Local source code is mounted at the same directory as
+  on the host. The script incrementally rebuilds changed native sources, and
+  debug symbols refer to the correct host paths. Linked Git worktrees also
+  mount their external common Git directory read-only, so source-level Git
+  checks behave the same way inside and outside the container.
+- **Host-Visible Build Trees**: The container configures its CMake trees inside
+  the repository at `build/docker/<preset>`. Because the source is
+  mounted at its host path, the host sees the exact tree the container writes:
+  build artifacts, `compile_commands.json`, and CTest logs are directly
+  inspectable without entering the container. These directories belong to the
+  container toolchain — do not configure them with a host `cmake` (host-native
+  builds keep using the preset `build/<preset>` directories). Each tree records
+  the Docker image tag that configured it; after an image upgrade the script
+  reconfigures the tree from scratch automatically.
+- **Separable Steps**: `--configure`, `--build`, and `--test` (the default)
+  select how far the run goes; each step includes the previous ones, and
+  incremental re-runs are cheap.
+- **Shared ccache**: When the host has a ccache cache directory, it is mounted
+  into the container so host and container builds share one cache budget;
+  otherwise a per-host Docker volume provides the cache.
 
 ### Reproducibility
 
@@ -38,20 +57,22 @@ You update the code locally and run the tests to see the results right away.
   dependencies pre-installed; ideal for running tests under debuggers like
   `pdb`, `ipdb`, or `gdb`
 - **CUDA Debugging Support**: Run tests under CUDA compute-sanitizer
-  (`--sanitize`) to detect memory errors and race conditions
-- **Debug Mode Support**: Enable debug builds with `--debug` flag for
-  additional diagnostic information and symbol visibility
+  (`--sanitize`) to detect memory errors
+- **Debug Mode Support**: Enable debug builds with `--debug` (shorthand for
+  `--preset=dev-debug`) for additional diagnostic information and symbol
+  visibility
 - **Verbose Output Mode**: Display intermediate build information and docker
   invocation details with `--verbose` flag for troubleshooting
-- **Direct pytest Integration**: Pass pytest arguments directly to filter
-  tests, adjust verbosity, or configure test execution (`-v`, `-k`, `-x`, etc.)
+- **CTest Integration**: CTest runs both the C++ and Python suites. Pass CTest
+  arguments directly to select suites, labels, or verbosity.
 
 ### Flexibility & Configuration
 
 - **GPU Device Selection**: Specify which GPUs to use for testing
   (`--gpus=<filter>`) when multiple GPUs are available
-- **Persistent Environment Configuration**: Set test parameters once via
-  `GSPLAT_TEST_PARAMS` environment variable for repeated use
+- **Persistent Environment Configuration**: Set runner flags once via
+  `GSPLAT_TEST_PARAMS` for repeated use. Pass CTest or shell-command arguments
+  on the command line.
 - **Arbitrary Command Execution**: Run any command inside the containerized
   environment without dropping into an interactive shell
 
@@ -85,16 +106,23 @@ Here are some common usage examples:
 # Build all features and run all tests
 ./run_tests.sh
 
+# Only configure the build tree, or configure + build without testing
+./run_tests.sh --configure
+./run_tests.sh --build
+
+# Use a specific CMake configure preset instead of dev-release
+./run_tests.sh --preset=full-release --build
+
 # Build only specific features
 ./run_tests.sh --3dgut
 ./run_tests.sh --3dgs --2dgs
 
-# Run specific test files
-./run_tests.sh tests/core/test_basic.py
-./run_tests.sh --3dgut tests/core/test_rasterization.py
+# Run only the Python core suite
+./run_tests.sh -R '^python_core$'
+./run_tests.sh --3dgut -R '^python_core$'
 
-# Filter tests to be executed.
-./run_tests.sh -v -k "test_specific"
+# Show verbose CTest output for one registered suite
+./run_tests.sh -V -R '^python_sensors$'
 
 # Use the 2nd gpu in the system
 ./run_tests.sh --gpus=device=1
@@ -104,11 +132,11 @@ Here are some common usage examples:
 export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'
 ./run_tests.sh
 
-# Run a subset of tests under CUDA compute-sanitizer
-./run_tests.sh --sanitize --3dgut -k 'test_shutter_relative_frame_time'
+# Run one registered suite under CUDA compute-sanitizer
+./run_tests.sh --sanitize --3dgut -R '^python_core$'
 
 # Combine flags for detailed troubleshooting
-./run_tests.sh --debug --verbose --3dgut -k 'test_specific'
+./run_tests.sh --debug --verbose --3dgut -R '^python_core$'
 ```
 
 ## Shell Access to Dev Container
@@ -123,6 +151,7 @@ This provides a development environment with:
 - All GSplat dependencies pre-installed
 - GPU access enabled
 - Your local source code mounted at the same directory inside the container.
+- A configured and built CMake tree in `GSPLAT_BUILD_DIR`.
 - Persistent build cache at `/var/cache/ccache`
 - Ability to manually run pytest with debuggers attached.
 - Run examples and benchmark scripts.
@@ -146,8 +175,9 @@ pip list
 # Test imports
 python -c "import gsplat"
 
-# Run a test under a debugger
-python -m pdb -m pytest test_rasterization.py -k testname -s
+# Run a test under a debugger, using the generated pytest configuration
+python -m pdb -m pytest -c "$GSPLAT_BUILD_DIR/pytest.ini" \
+    tests/core/test_rasterization.py -k testname -s
 
 # Leave the container
 exit
@@ -263,10 +293,12 @@ other processes on the box need headroom:
 
 ```bash
 # Tighten to 80% of free (busy host with other GPU consumers):
-pytest --cuda-mem-fraction=0.80 -sv
+python -m pytest -c "$GSPLAT_BUILD_DIR/pytest.ini" \
+    --cuda-mem-fraction=0.80 -sv
 
 # Tighten further to 50% of free (heavily contended GPU):
-pytest --cuda-mem-fraction=0.50 -sv
+python -m pytest -c "$GSPLAT_BUILD_DIR/pytest.ini" \
+    --cuda-mem-fraction=0.50 -sv
 ```
 
 Two additional host-side knobs help without changing what is tested:
@@ -277,9 +309,12 @@ Two additional host-side knobs help without changing what is tested:
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # 2. Run the test files separately so the allocator pool resets between them.
-pytest tests/core/test_basic.py -sv
-pytest tests/core/test_rasterization.py -sv
-pytest tests/geometry/functional -sv
+python -m pytest -c "$GSPLAT_BUILD_DIR/pytest.ini" \
+    tests/core/test_basic.py -sv
+python -m pytest -c "$GSPLAT_BUILD_DIR/pytest.ini" \
+    tests/core/test_rasterization.py -sv
+python -m pytest -c "$GSPLAT_BUILD_DIR/pytest.ini" \
+    tests/geometry/functional -sv
 ```
 
 These knobs are pure runtime hygiene — they do not deselect or shrink any
@@ -293,7 +328,7 @@ When omitted, default pytest output is unchanged and the tracking fixture
 is a no-op (no sampler thread, no overhead). Pass the flag to enable it:
 
 ```bash
-pytest --mem-track -sv
+python -m pytest -c "$GSPLAT_BUILD_DIR/pytest.ini" --mem-track -sv
 ```
 
 When enabled, two peaks are recorded for every test:
@@ -328,8 +363,9 @@ Knobs (CLI flags; only meaningful when `--mem-track` is on):
 | `--mem-track-top=N` | `25` | How many tests to print in the summary. |
 | `--mem-track-csv=PATH` | unset | Path to dump full per-test peaks as CSV for offline analysis. |
 
-Run `pytest --help | grep -A1 'gsplat-mem'` to see the full list with
-descriptions.
+Run
+`python -m pytest -c "$GSPLAT_BUILD_DIR/pytest.ini" --help | grep -A1 'gsplat-mem'`
+to see the full list with descriptions.
 
 ### Live external monitoring
 

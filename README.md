@@ -35,36 +35,53 @@ Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gspla
 
 ## Installation
 
-**Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
-
-The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
+The easiest way on Linux is to install from PyPI. PyPI serves a source
+distribution:
+`pip install gsplat` builds the CUDA extension with CMake during installation.
+The build requires a CUDA toolkit on the machine; PyTorch is installed
+automatically into the isolated build environment. By default the extension is
+compiled for the GPUs detected on the installing machine (set
+`TORCH_CUDA_ARCH_LIST` to target other architectures). The isolated build
+compiles against the newest available PyTorch, and the result is supported
+only with a runtime PyTorch of that same version — pin `torch` alongside
+gsplat, or use the source install below to build against the PyTorch already
+in your environment.
 
 ```bash
 pip install gsplat
 ```
 
-Alternatively you can install gsplat from source. In this way it will build the CUDA code during installation.
+Alternatively you can install gsplat from source on Linux. This builds the CUDA
+extension with CMake during installation, so the active environment must contain
+PyTorch, a compatible CUDA toolkit, and the build tooling —
+`--no-build-isolation` skips pip's automatic build-dependency provisioning:
 
 ```bash
-pip install git+https://github.com/nerfstudio-project/gsplat.git
+pip install scikit-build-core cmake ninja
+pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git
 ```
 
-We also provide [pre-compiled wheels](https://docs.gsplat.studio/whl) for both linux and windows on certain python-torch-CUDA combinations (please check first which versions are supported). Note this way you would have to manually install [gsplat's dependencies](pyproject.toml). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can run
+We also provide [pre-compiled wheels](https://docs.gsplat.studio/whl) for certain python-torch-CUDA combinations (please check first which versions are supported). Note this way you would have to manually install [gsplat's dependencies](pyproject.toml). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can run
 ```
-pip install ninja numpy jaxtyping rich
+pip install ninja numpy jaxtyping nvtx rich
 pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
 ```
 
-To build gsplat from source on Windows, please check [this instruction](docs/INSTALL_WIN.md).
+On Windows, install a matching precompiled wheel as described in the
+[Windows installation guide](docs/INSTALL_WIN.md); the CMake source build is
+currently Linux-only.
 
 ## Evaluation
 
 This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found in the [evaluation results](https://docs.gsplat.studio/main/tests/eval.html).
 
 ```bash
-python -m pip install -e .
-cd examples
-python -m pip install -r requirements.txt
+python -m pip install -r examples/requirements.txt
+cmake --preset dev-release
+cd build/dev-release
+ninja
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+cd ../../examples
 # download mipnerf_360 benchmark data
 python datasets/download_dataset.py
 # run batch evaluation

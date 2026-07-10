@@ -420,10 +420,10 @@ def _cuda_fused_mcmc_perturb(
     gsplat/cuda/csrc/MCMCPerturbCUDA.cu for the kernel.
     """
     try:
-        from gsplat.cuda._backend import _C
+        import gsplat.csrc  # noqa: F401  # pylint: disable=unused-import,import-outside-toplevel
     except ImportError:
-        _C = None  # type: ignore[assignment]
-    if _C is None or not positions.is_cuda:
+        return False
+    if not positions.is_cuda:
         return False
     # positions is modified in-place — cannot .contiguous()-copy;
     # fall back to PyTorch if non-contiguous.

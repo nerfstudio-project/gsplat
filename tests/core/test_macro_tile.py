@@ -17,7 +17,7 @@
 
 The MT path should match the existing flat intersection path at rendered-output
 level for the standard 3DGS EWA cases covered here. Tolerances match what the
-existing `test_rasterize_to_pixels` accepts for FAST_MATH builds.
+existing `test_rasterize_to_pixels` accepts for `GSPLAT_FAST_MATH=ON` builds.
 """
 
 from __future__ import annotations
@@ -28,11 +28,9 @@ import pytest
 import torch
 
 import gsplat
-from gsplat.cuda._backend import _C
 from gsplat.cuda._wrapper import isect_tiles, isect_tiles_macro_binning
 
-if _C is None:
-    pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
+pytest.importorskip("gsplat.csrc", exc_type=ImportError)
 
 
 # --------------------------------------------------------------------------

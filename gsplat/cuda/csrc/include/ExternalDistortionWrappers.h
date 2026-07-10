@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include "GSplatBuildConfig.h"
+
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
 
 #    include <torch/extension.h>

@@ -4,3 +4,10 @@ sphinx-copybutton
 sphinx-design
 sphinxcontrib-bibtex
 sphinxcontrib-video
+
+# gsplat's import-time runtime deps, so autodoc can import gsplat from source
+# (torch is installed separately from the CPU index in the workflow).
+numpy
+jaxtyping
+nvtx
+rich>=12

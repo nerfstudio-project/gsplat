@@ -42,7 +42,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests._backend_collect import cuda_collect_ignore_glob
+from .._backend_collect import cuda_collect_ignore_glob
 
 TEST_DATA_DIR = Path(__file__).resolve().parent / "test_data"
 TEST_CAMERA_PARAMS_PATH = TEST_DATA_DIR / "test_pinhole_camera_params.json"

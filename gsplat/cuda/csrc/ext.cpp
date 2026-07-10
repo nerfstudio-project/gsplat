@@ -23,7 +23,7 @@
 
 #include "Cameras.h"
 #include "ExternalDistortion.h"
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 #include "LossFlags.h"
 #include "Null.h"
 #include "Rasterization.h"

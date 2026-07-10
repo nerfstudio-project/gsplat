@@ -2838,13 +2838,10 @@ frame; that would be N rasterizer passes and is out of scope for this design.
   output to `render_fn`, and `ComponentCollection` merges multiple member
   scenes into one shared render dispatch.
 
-**Build-cost note (JIT).** v1 depends on the geometry helper CUDA sources already
-added by the prerequisite geometry change. When the future fused
-`transform_gaussian` (and any in-kernel `layout`
-channel-indexing path) lands, its `.cu`/binding sources add to the extension build
-(`gsplat/cuda/build.py`); for anyone building via JIT
-(`torch.utils.cpp_extension`) that lengthens the cold/from-scratch first-build
-compile (warm rebuilds are cached). Keep those kernels in the existing
-geometry extension target so they share one compile/link rather than spawning a
-separate extension, and gate them behind the same JIT cache as the rest of
-`gsplat.geometry`.
+**Build-cost note.** v1 depends on the geometry helper CUDA sources already added
+by the prerequisite geometry change. When the future fused `transform_gaussian`
+(and any in-kernel `layout` channel-indexing path) lands, add its `.cu`/binding
+sources to `gsplat/geometry/kernels/cuda/CMakeLists.txt`. Those sources will
+lengthen clean builds, while incremental builds can reuse compiler-cache entries.
+Keep the kernels in the existing geometry extension target so they share one
+compile and link rather than creating a separate extension.

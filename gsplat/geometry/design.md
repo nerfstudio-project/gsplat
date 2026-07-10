@@ -17,7 +17,7 @@ this monorepo and is not independently versioned or released as a standalone pac
 ## Design Goals
 
 1. Present a clear public geometry API centered on functional operators.
-2. Keep CUDA loading, build logic, and autograd implementation details out of
+2. Keep CUDA loading, CMake build details, and autograd implementation details out of
    the primary user-facing namespace.
 3. Provide a dedicated home for reusable kernel-side helpers.
 4. Preserve stable geometry semantics, tensor conventions, and backend behavior.
@@ -67,8 +67,7 @@ gsplat/geometry/
     quaternion_ops.py
     pose_ops.py
     cuda/
-      __init__.py
-      build.py
+      CMakeLists.txt
       ext.cpp
       csrc/
         coordinate_conversions.cuh
@@ -180,14 +179,14 @@ Documentation, examples, and downstream imports should point here.
 The kernel layer is organized by implementation concern.
 
 - `kernels/__init__.py` is a namespace marker only (no curated re-exports).
-- `kernels/_backend.py` loads the native extension, preferring prebuilt import and falling back to JIT.
+- `kernels/_backend.py` lazily imports the CMake-built native extension.
 - `kernels/quaternion_ops.py` contains quaternion backend wrappers (including
   Python-level input validation on the public wrappers), autograd
   implementations, and dispatch to CUDA.
 - `kernels/pose_ops.py` contains pose and trajectory backend wrappers (including
   Python-level validation on the public wrappers), autograd implementations,
   and dispatch to CUDA.
-- `kernels/cuda/` contains build logic and native source code.
+- `kernels/cuda/` contains the module's CMake target and native source code.
 
 This layer is where explicit forward and backward kernel entrypoints are bound
 to Python.
@@ -259,8 +258,8 @@ The public API preserves:
 
 CUDA geometry tests live under `tests/geometry/functional/` next to the rest of
 the test suite, mirroring the public API they exercise (`test_quaternion.py`,
-`test_pose.py`). Root `pytest` discovery (`pytest.ini` `testpaths = tests`)
-collects them along with the rest of the suite.
+`test_pose.py`). The CMake-generated build-tree `pytest.ini` collects them
+along with the rest of the suite.
 
 The test suite covers:
 

@@ -55,8 +55,8 @@ try:
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
         f"{e.name} is not installed. The example trainers require the "
-        "scene/stage helper packages, which ship with gsplat. Install gsplat with:\n"
-        "    python -m pip install -e ."
+        "scene/stage helper packages, which ship with gsplat. Build the "
+        "checkout with CMake or install a gsplat wheel."
     ) from e
 from gsplat.strategy import DefaultStrategy
 from nerfview import CameraState, RenderTabState, apply_float_colormap

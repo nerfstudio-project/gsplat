@@ -30,7 +30,7 @@
 #include "Cameras.h"
 #include "ChannelChunks.h"
 #include "Common.h"
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 #include "DistributedCollectives.h"
 #include "Intersect.h"
 #include "Projection.h"

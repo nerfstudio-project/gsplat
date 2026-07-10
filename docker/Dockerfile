@@ -106,8 +106,8 @@ RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
     # Bake the venv at /var/cache/venv-${IMAGE_VERSION}. At runtime the caller
     # mounts a per-version volume at the same sub-path; Docker auto-populates
-    # a fresh volume from the image's content here, so editable pip installs
-    # survive --rm and image bumps coexist (each tag gets its own volume).
+    # a fresh volume from the image's content here, so runtime package state
+    # survives --rm and image bumps coexist (each tag gets its own volume).
     # The symlink is created first because python's venv module refuses to
     # initialize into a symlinked path, so we point it at the real target.
     ln -s /var/cache/venv-${IMAGE_VERSION} "$PYTHON_VENV_PATH"
@@ -132,9 +132,12 @@ COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirem
 # Main library dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
+    build_packages=(
+        "scikit-build-core==0.12.2"
+    )
+
     packages=(
         # Library deps
-        "ninja==1.13.0"
         "numpy==2.2.6"
         "jaxtyping==0.3.4"
         "nvtx==0.2.15"
@@ -144,6 +147,7 @@ RUN --mount=type=tmpfs,target=/tmp \
 
     check_gsplat_deps.sh -f /opt/dep-check/pyproject.toml:dependencies -- "${packages[@]}"
 
+    pip install "${build_packages[@]}"
     pip install "${packages[@]}"
 
     # Save list so the examples stage can reference it
@@ -152,9 +156,6 @@ RUN --mount=type=tmpfs,target=/tmp \
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
-
-# cmake — future install dependency, not yet formally declared in pyproject.toml.
-RUN pip install "cmake==4.3.2" && rm -rf $PYTHONPYCACHEPREFIX/*
 
 # Test/dev dependencies
 RUN --mount=type=tmpfs,target=/tmp \
@@ -171,6 +172,10 @@ RUN --mount=type=tmpfs,target=/tmp \
         /opt/dep-check/pyproject.toml dev --pin isort)
     test -n "$isort_version"
 
+    gersemi_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
+        /opt/dep-check/pyproject.toml dev --pin gersemi)
+    test -n "$gersemi_version"
+
     # Resolve the CuPy wheel matching this image's CUDA toolkit. The wheel
     # name depends on the local CUDA major, so it is not static pyproject
     # metadata; the build_support helper owns the selection.
@@ -178,10 +183,13 @@ RUN --mount=type=tmpfs,target=/tmp \
 
     # Dev/test deps
     packages=(
+        "cmake==4.3.4"
+        "ninja==1.13.0"
         "packaging==26.0"
         "tomli==2.4.1"
         "black==${black_version}"
         "clang-format==${clang_format_version}"
+        "gersemi==${gersemi_version}"
         "isort==${isort_version}"
         "pylint==2.13.4"
         "pytest==8.3.5"
@@ -352,7 +360,7 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
     apt-get update
 
     packages=(
-        # For JIT-build
+        # Build tools
         ninja-build curl unzip
         # generally needed
         vim less sudo
@@ -388,15 +396,6 @@ RUN <<EOS
 
     ccache --max-size=20G
 
-    for compiler in c++ g++ cpp cc gcc-13 g++-13; do
-        ln -sf /usr/local/bin/ccache /usr/local/bin/$compiler
-    done
-
-    # Run nvcc via ccache.
-    # We can't use a symlink like we did with the host compilers or else
-    # cuda sdk path detection done by setuptools won't work.
-    mv /usr/local/cuda/bin/nvcc{,-real}
-
     # Some of the profile scripts set up the config, we need
     # to do it for root
     for file in /etc/profile.d/*.sh; do
@@ -428,13 +427,6 @@ RUN <<EOS
     done
 EOS
 
-# Plain COPY (no --link) so the destination resolves through the
-# /usr/local/cuda symlink (which the base image points at the actual
-# versioned CUDA install dir) and the wrapper lands at the real bin
-# directory next to the renamed nvcc-real. With --link the COPY layer
-# creates a fresh /usr/local/cuda/ directory that shadows the symlink,
-# leaving nvcc-real unreachable at runtime.
-COPY cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
 COPY --chmod=755 entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bash", "--login"]

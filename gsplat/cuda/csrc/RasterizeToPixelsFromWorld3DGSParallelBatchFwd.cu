@@ -16,30 +16,28 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_3DGUT
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cassert>
+#include <cstdint>
+#include <cooperative_groups.h>
+#include <cuda/atomic>
+#include <cuda/std/optional>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cassert>
-#    include <cstdint>
-#    include <cooperative_groups.h>
-#    include <cuda/atomic>
-#    include <cuda/std/optional>
-
-#    include "Common.h"
-#    include "ExternalDistortion.cuh"
-#    include "PrimingChainEncoding.cuh"
-#    include "Rasterization.h"
-#    include "RasterizeCSR.cuh"
-#    include "RasterizeToPixelsFromWorld3DGS.cuh"
-#    include "Cameras.cuh"
-#    include "Lidars.cuh"
-#    include "TorchUtils.h"
-#    include "Utils.cuh"
-#    include "Dispatch.h"
+#include "Common.h"
+#include "ExternalDistortion.cuh"
+#include "PrimingChainEncoding.cuh"
+#include "Rasterization.h"
+#include "RasterizeCSR.cuh"
+#include "RasterizeToPixelsFromWorld3DGS.cuh"
+#include "Cameras.cuh"
+#include "Lidars.cuh"
+#include "TorchUtils.h"
+#include "Utils.cuh"
+#include "Dispatch.h"
 
 namespace gsplat
 {
@@ -407,7 +405,7 @@ __global__ void
     vec3 ray_d[PIXELS_PER_THREAD]       = {};
     bool valid_pixel[PIXELS_PER_THREAD] = {};
     uint32_t done_mask                  = 0u;
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         pcs[p] = compute_pixel_coords_compact<TILE_SIZE, CTA_SIZE>(
@@ -477,7 +475,7 @@ __global__ void
     vec3 normal_out[PIXELS_PER_THREAD]     = {};
     int32_t cur_idx[PIXELS_PER_THREAD];
     int32_t n_accumulated[PIXELS_PER_THREAD] = {};
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         T[p] = 1.0f;
@@ -520,7 +518,7 @@ __global__ void
 // saturation flag, and `next_batch` from tearing. A stored writer with
 // K <= b gives an upper bound on this batch's true initial T; K > b is a
 // higher-wave race and is ignored to keep the seed conservative.
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         const uint32_t bit = 1u << p;
@@ -622,7 +620,7 @@ __global__ void
         FwdPartialsMetaView<ushort2> summary_view(partials_meta, slot, pixels_per_tile, 0);
         summary_view.reset();
     }
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         const uint32_t pix_y_in_tile   = thread_y + p * ROW_STRIDE;
@@ -645,7 +643,7 @@ __global__ void
             slot_view.setT(walk_prod);
             if(!this_batch_saturated || !ForBackward)
             {
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     slot_view.setFeature(k, pix_out[p][k]);
@@ -814,7 +812,7 @@ __global__ void
     // -- Build the per-thread pixel list ------------------------------------
     // Batch-scan does not need rays; it folds summaries emitted by partials.
     PixelCoordsCompact pcs[PIXELS_PER_THREAD];
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         pcs[p] = compute_pixel_coords_compact<TILE_SIZE, CTA_SIZE>(
@@ -839,7 +837,7 @@ __global__ void
     {
         if constexpr(SAFE_MASKED_OUTPUTS)
         {
-#    pragma unroll
+#pragma unroll
             for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
             {
                 if(!pcs[p].inside)
@@ -847,7 +845,7 @@ __global__ void
                     continue;
                 }
                 const int32_t pix_id = pcs[p].pix_id;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     render_colors[pix_id * CDIM + k]
@@ -886,7 +884,7 @@ __global__ void
     // decoded c_stop values only in registers.
     uint32_t done_mask                = 0u;
     int32_t c_stop[PIXELS_PER_THREAD];
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         c_stop[p] = decode_compose_c_stop(COMPOSE_C_STOP_NONE);
@@ -928,7 +926,7 @@ __global__ void
     vec3 normal_cum[PIXELS_PER_THREAD]     = {};
     int32_t last_idx_global[PIXELS_PER_THREAD];
     int32_t n_acc_global[PIXELS_PER_THREAD] = {};
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         T_cum[p]           = 1.0f;
@@ -950,7 +948,7 @@ __global__ void
 // gaussian-by-gaussian. Pixels that are outside, invalid, or already
 // stopped simply carry their current accumulator through the slot write
 // below so bwd never observes uninitialized batch state.
-#    pragma unroll
+#pragma unroll
         for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
         {
             const uint32_t pix_y_in_tile   = thread_y + p * ROW_STRIDE;
@@ -968,7 +966,7 @@ __global__ void
 
             if(fold_this)
             {
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     const float pix_p_c = partial_slot.feature(k);
@@ -1013,7 +1011,7 @@ __global__ void
 // weighted by the already-sub-threshold T_cum so the error
 // is bounded — fwd-only render is therefore not bit-exact
 // vs the exact/backward path in this case.
-#    pragma unroll
+#pragma unroll
                     for(uint32_t k = 0; k < CDIM; ++k)
                     {
                         pix_cum[p][k] = pix_cum[p][k] + T_cum[p] * partial_slot.feature(k);
@@ -1053,7 +1051,7 @@ __global__ void
         // pre-fold batch-start state so batch-replay can seed from it.
         if constexpr(ForBackward)
         {
-#    pragma unroll
+#pragma unroll
             for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
             {
                 const uint32_t bit = 1u << p;
@@ -1067,7 +1065,7 @@ __global__ void
                     fwd_batch_state, slot, pixels_per_tile, pix_rank_in_tile
                 );
                 cumulative_slot.setT(T_cum[p]);
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     cumulative_slot.setFeature(k, pix_cum[p][k]);
@@ -1085,7 +1083,7 @@ __global__ void
 // -- Publish batch-replay handoff -----------------------------------
 // Decoded c_stop == -1 means the pixel never
 // needed gaussian-by-gaussian replay and this kernel writes its outputs.
-#    pragma unroll
+#pragma unroll
         for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
         {
             const uint32_t pix_y_in_tile   = thread_y + p * ROW_STRIDE;
@@ -1098,7 +1096,7 @@ __global__ void
 
 // -- Emit final outputs for pixels handled by batch-scan -----------------
 // Batch-replay pixels are finalized after their exact per-gaussian replay.
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         if(!pcs[p].inside || c_stop[p] >= 0)
@@ -1107,7 +1105,7 @@ __global__ void
         }
         const int32_t pix_id  = pcs[p].pix_id;
         render_alphas[pix_id] = 1.0f - T_cum[p];
-#    pragma unroll
+#pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             render_colors[pix_id * CDIM + k] = (backgrounds == nullptr)
@@ -1275,7 +1273,7 @@ __global__ void
     vec3 ray_o[PIXELS_PER_THREAD] = {};
     vec3 ray_d[PIXELS_PER_THREAD] = {};
     uint32_t valid_mask           = 0u;
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         pcs[p] = compute_pixel_coords_compact<TILE_SIZE, CTA_SIZE>(
@@ -1334,7 +1332,7 @@ __global__ void
     int32_t n_acc_global[PIXELS_PER_THREAD] = {};
     int32_t c_stop[PIXELS_PER_THREAD];
     uint32_t batch_replay_mask = 0u;
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         T_cum[p]                       = 1.0f;
@@ -1358,7 +1356,7 @@ __global__ void
             T_cum[p] = slot_view.T();
             assert(T_cum[p] > TRANSMITTANCE_THRESHOLD);
             assert(T_cum[p] <= 1.0f + 1e-5f);
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 pix_cum[p][k] = slot_view.feature(k);
@@ -1390,7 +1388,7 @@ __global__ void
     uint32_t local_done_mask = ALL_DONE & ~batch_replay_mask;
     float transmittance_threshold[PIXELS_PER_THREAD];
     float saturating_T_unused[PIXELS_PER_THREAD];
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         transmittance_threshold[p] = TRANSMITTANCE_THRESHOLD;
@@ -1437,7 +1435,7 @@ __global__ void
       local_done_mask);
 
 // -- Emit outputs and patch the backward-visible batch slot --------------
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         if((batch_replay_mask & (1u << p)) == 0u)
@@ -1447,7 +1445,7 @@ __global__ void
         const int32_t pix_id = pcs[p].pix_id;
 
         render_alphas[pix_id] = 1.0f - T_cum[p];
-#    pragma unroll
+#pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             render_colors[pix_id * CDIM + k] = (backgrounds == nullptr)
@@ -1476,7 +1474,7 @@ __global__ void
             fwd_batch_state, slot, pixels_per_tile, pix_rank_in_tile
         );
         slot_view.setT(T_cum[p]);
-#    pragma unroll
+#pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             slot_view.setFeature(k, pix_cum[p][k]);
@@ -1939,5 +1937,3 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 } // namespace gsplat
-
-#endif

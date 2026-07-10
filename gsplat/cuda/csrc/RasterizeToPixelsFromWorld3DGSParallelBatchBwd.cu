@@ -16,30 +16,28 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_3DGUT
+#include <ATen/Dispatch.h>
+#include <ATen/Functions.h>
+#include <ATen/core/Tensor.h>
+#include <ATen/cuda/Atomic.cuh>
+#include <ATen/cuda/cub.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
+#include <cstdint>
+#include <cuda/std/optional>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/Functions.h>
-#    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
-#    include <ATen/cuda/cub.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-#    include <cstdint>
-#    include <cuda/std/optional>
-
-#    include "Common.h"
-#    include "ExternalDistortion.cuh"
-#    include "RasterizeCSR.cuh"
-#    include "RasterizeToPixelsFromWorld3DGS.h"
-#    include "RasterizeToPixelsFromWorld3DGS.cuh"
-#    include "Utils.cuh"
-#    include "Cameras.cuh"
-#    include "Lidars.cuh"
-#    include "TorchUtils.h"
-#    include "Dispatch.h"
+#include "Common.h"
+#include "ExternalDistortion.cuh"
+#include "RasterizeCSR.cuh"
+#include "RasterizeToPixelsFromWorld3DGS.h"
+#include "RasterizeToPixelsFromWorld3DGS.cuh"
+#include "Utils.cuh"
+#include "Cameras.cuh"
+#include "Lidars.cuh"
+#include "TorchUtils.h"
+#include "Dispatch.h"
 
 namespace gsplat
 {
@@ -472,7 +470,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     // CDIM / vec3 dots can be fused in the same arithmetic region without
     // a second pass over v_render_c / v_render_n.
     float v_render_c[CDIM];
-#    pragma unroll
+#pragma unroll
     for(uint32_t k = 0; k < CDIM; ++k)
     {
         v_render_c[k] = pixel_valid ? v_render_colors[pix_id * CDIM + k] : 0.f;
@@ -533,7 +531,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     float render_accum_dot = 0.f;
     if(pixel_valid && !final_matches_boundary)
     {
-#    pragma unroll
+#pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             const float pix_final_k     = final_slot_view.feature(k);
@@ -561,7 +559,7 @@ __global__ void rasterize_gradient_bwd_kernel(
     float background_render_dot = 0.f;
     if(pixel_valid && backgrounds != nullptr)
     {
-#    pragma unroll
+#pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             background_render_dot += backgrounds[k] * v_render_c[k];
@@ -606,7 +604,7 @@ __global__ void rasterize_gradient_bwd_kernel(
             quat_batch[tr]        = quats[isect_bid * N + isect_gid];
             assert(glm::dot(quat_batch[tr], quat_batch[tr]) > 0.f);
             assert(scale_batch[tr][0] > 0.f && scale_batch[tr][1] > 0.f && scale_batch[tr][2] > 0.f);
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 rgbs_batch[tr * cdim_smem_stride<CDIM>() + k] = colors[isect_id * CDIM + k];
@@ -743,7 +741,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 //   slot.
                 const float fac                    = alpha * T;
                 constexpr uint32_t kRgbWriteCount  = UseHitDistance ? CDIM - 1u : CDIM;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < kRgbWriteCount; ++k)
                 {
                     v_rgb_local[k] = fac * v_render_c[k];
@@ -774,7 +772,7 @@ __global__ void rasterize_gradient_bwd_kernel(
 
                 // contribution from this pixel
                 float rgb_render_dot = 0.f;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     // For the last channel with UseHitDistance, use the per-pixel
@@ -906,7 +904,7 @@ __global__ void rasterize_gradient_bwd_kernel(
                 // int32_t isect_cid = (isect_id / N) % C;   // intersection camera index
                 int32_t isect_gid = isect_id % N; // intersection gaussian index
                 float *v_rgb_ptr  = (float *)(v_colors) + CDIM * isect_id;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
@@ -1070,7 +1068,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     const int32_t pixels_per_tile = tile_size * tile_size;
@@ -1218,5 +1216,3 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_bwd_kernel(
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 } // namespace gsplat
-
-#endif

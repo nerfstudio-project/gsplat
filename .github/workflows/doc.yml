@@ -27,10 +27,9 @@ jobs:
         run: |
           pip install -r docs/requirements.txt
           pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
-          BUILD_NO_CUDA=1 pip install .
       
-      # Get version (read from source to avoid importing gsplat; BUILD_NO_CUDA=1
-      # install does not build the extension, so full import would fail).
+      # Get version from source to avoid importing gsplat while docs build on a
+      # CPU-only runner.
       - name: Get version + subdirectory
         run: |
           VERSION=$(python -c "exec(open('gsplat/version.py').read()); print(__version__)")
@@ -50,14 +49,6 @@ jobs:
         if: github.event_name == 'push'
 
       - name: Sphinx build
-        env:
-          NUM_CHANNELS: "3"
-          BUILD_3DGUT: "0"
-          BUILD_2DGS: "0"
-          BUILD_ADAM: "0"
-          BUILD_RELOC: "0"
-          BUILD_LOSSES: "0"
-          BUILD_CAMERA_WRAPPERS: "0"
         run: |
           bash docs/render_docs.sh _build
 

@@ -1048,8 +1048,8 @@ class _FusedBgGridLosses(torch.autograd.Function):
             if g is None:
                 return 0
             # g is [B*12, D, H, W]; cells = B * D * H * W. The 12 is the fixed
-            # 3x4 affine channel count (LOSSES_GRID_NUM_CHANNELS in Config.h,
-            # which is non-overrideable so this constant can't drift from it).
+            # 3x4 affine channel count, set by the build config and not
+            # overridable, so it cannot drift.
             return (g.shape[0] // 12) * g.shape[1] * g.shape[2] * g.shape[3]
 
         numel_bg = bg_tex.numel() if bg_tex is not None else 0

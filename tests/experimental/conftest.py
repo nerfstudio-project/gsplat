@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from tests._backend_collect import cuda_collect_ignore_glob
+from .._backend_collect import cuda_collect_ignore_glob
 
 # The experimental render tests build CUDA tensors. As a defensive guard for
 # CPU-only CI we de-collect every experimental test when no GPU is available, so

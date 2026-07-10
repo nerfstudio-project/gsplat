@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from tests._backend_collect import cuda_collect_ignore_glob
+from .._backend_collect import cuda_collect_ignore_glob
 
 # Geometry ops require CUDA. Importing gsplat.geometry is lazy (no build at
 # collection), but as a defensive guard for CPU-only CI we de-collect every

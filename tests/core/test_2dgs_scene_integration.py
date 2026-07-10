@@ -15,11 +15,10 @@
 
 """Tests for GaussianScene + Stage integration with 2DGS splats.
 
-The gsplat.scene and gsplat.stage subpackages ship with gsplat and are
-installed by a normal ``pip install -e .``. On environments
-where they are not available (e.g. upstream GitHub Actions
-core_tests.yml on ubuntu-latest), this whole test module is skipped at
-collection time via ``pytest.importorskip``.
+The gsplat.scene and gsplat.stage subpackages ship with gsplat and are present
+in the package staged by a CMake build. On environments where they are not
+available (e.g. upstream GitHub Actions core_tests.yml on ubuntu-latest), this
+whole test module is skipped at collection time via ``pytest.importorskip``.
 """
 
 import torch

@@ -15,9 +15,6 @@
  * limitations under the License.
  */
 
-// Config.h is resolved via extra_include_paths set to gsplat/cuda/csrc/
-#include "Config.h"
-
 #include <ATen/core/Tensor.h>
 #include <ATen/Functions.h>
 #include <ATen/ops/empty.h>

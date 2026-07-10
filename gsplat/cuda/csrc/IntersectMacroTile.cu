@@ -23,7 +23,7 @@
 #include <limits>
 
 #include "Common.h"
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 #include "KernelUtils.cuh"
 #include "Dispatch.h"
 #include "IntersectAccuTile.cuh"

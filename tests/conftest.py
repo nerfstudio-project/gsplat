@@ -20,16 +20,33 @@ This file is automatically discovered by pytest and applies to all test files
 in this directory and subdirectories.
 """
 
+import functools
 import gc
 import os
 import socket
 import threading
 import time
+from pathlib import Path
 from typing import List, Optional
 
+import gsplat as _gsplat
 import pytest
 import torch
 import torch.distributed
+
+# The generated pytest configuration puts either the build-tree package or the
+# installed wheel ahead of the test sources. Import it before collection so
+# example modules that later prepend their own directory cannot make Python
+# switch to the unbuilt source package.
+
+# pytest's `pythonpath` setting changes only this process's sys.path. Preserve
+# the selected package for tests that launch a fresh Python interpreter by
+# forwarding its parent directory, without exposing the source or test root.
+_python_path_entries = [str(Path(_gsplat.__file__).resolve().parent.parent)]
+_inherited_python_path = os.environ.get("PYTHONPATH")
+if _inherited_python_path:
+    _python_path_entries.append(_inherited_python_path)
+os.environ["PYTHONPATH"] = os.pathsep.join(_python_path_entries)
 
 # Default fraction of *post-CUDA-context* free VRAM the test process is
 # allowed to use. Caps the PyTorch caching allocator so an over-allocation
@@ -46,22 +63,21 @@ import torch.distributed
 # Default 1.0 = use everything the driver reports as free, but no more.
 # Lower it via --cuda-mem-fraction on shared hosts that need headroom.
 _DEFAULT_CUDA_FREE_FRACTION = 1.0
+_CAMERA_WRAPPERS_SKIP_REASON = "rebuild with -DGSPLAT_BUILD_CAMERA_WRAPPERS=ON"
+
+
+@functools.lru_cache(maxsize=1)
+def _camera_wrappers_enabled():
+    """Return whether the current extension build includes camera wrappers."""
+    try:
+        import gsplat.csrc as _C
+    except ImportError:
+        return False
+
+    return bool(_C.build_config().get("camera_wrappers", False))
 
 
 def pytest_addoption(parser):
-    cpp_group = parser.getgroup("gsplat-cpp", "gsplat: native C++ tests")
-    cpp_group.addoption(
-        "--gtest_filter",
-        "--gtest-filter",
-        dest="gtest_filter",
-        default=None,
-        metavar="FILTER",
-        help=(
-            "Filter native GoogleTest tests before pytest parametrizes them. "
-            "Uses GoogleTest filter syntax, for example 'Suite.*-Suite.Slow'."
-        ),
-    )
-
     group = parser.getgroup(
         "gsplat-mem", "gsplat: GPU memory cap and per-test tracking"
     )
@@ -131,6 +147,18 @@ def pytest_addoption(parser):
             "still fail."
         ),
     )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests that need optional camera wrappers when the build omits them."""
+    del config
+    camera_wrapper_items = [
+        item for item in items if item.get_closest_marker("camera_wrappers") is not None
+    ]
+    if camera_wrapper_items and not _camera_wrappers_enabled():
+        skip = pytest.mark.skip(reason=_CAMERA_WRAPPERS_SKIP_REASON)
+        for item in camera_wrapper_items:
+            item.add_marker(skip)
 
 
 @pytest.fixture(scope="session", autouse=True)

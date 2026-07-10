@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
 #if GSPLAT_BUILD_3DGS
 

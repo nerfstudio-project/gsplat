@@ -68,10 +68,10 @@ def _repo_root() -> Path:
 
 
 def test_root_packaging_ships_scene_cuda_sources():
-    """The scene CUDA/JIT sources ship with the main ``gsplat`` package.
+    """The scene CUDA sources ship with the main ``gsplat`` package.
 
-    Packaging is driven by root ``pyproject.toml``
-    (``[tool.setuptools.package-data]``) and ``MANIFEST.in``. This test asserts
+    Packaging is driven by root ``pyproject.toml`` sdist rules and
+    ``MANIFEST.in``. This test asserts
     (a) the CUDA sources physically exist where the package expects them and
     (b) the root packaging metadata references them — without building a wheel.
     """
@@ -86,17 +86,13 @@ def test_root_packaging_ships_scene_cuda_sources():
     for source in required_sources:
         assert (scene_cuda / source).is_file(), f"missing scene CUDA source: {source}"
 
-    # pyproject.toml must declare the scene CUDA sources as package data
-    # (mirrored by MANIFEST.in for sdists). Inspect the text rather than
-    # invoking the packaging machinery.
+    # pyproject.toml and MANIFEST.in must both keep the scene CUDA sources in
+    # source distributions. Inspect text rather than invoking packaging.
     pyproject_text = (repo_root / "pyproject.toml").read_text()
     manifest_text = (repo_root / "MANIFEST.in").read_text()
     assert (
-        '"gsplat.scene"' in pyproject_text
-    ), "pyproject.toml is missing gsplat.scene package data"
-    assert (
-        "kernels/cuda/csrc/*" in pyproject_text
-    ), "pyproject.toml is missing scene csrc glob"
+        "gsplat/scene/kernels/cuda/**" in pyproject_text
+    ), "pyproject.toml is missing scene CUDA sdist sources"
     assert (
         "gsplat/scene/kernels/cuda" in manifest_text
     ), "MANIFEST.in is missing scene CUDA sources"

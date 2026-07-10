@@ -21,7 +21,6 @@ from typing import List, Optional, Sequence, Tuple
 import torch
 from torch import Tensor
 
-from gsplat.cuda._backend import _C
 from gsplat.cuda._wrapper import has_losses
 from gsplat.losses import (
     background_in_track_loss,
@@ -37,45 +36,31 @@ from gsplat.losses import (
     torch_ssim_loss,
 )
 
+try:
+    import gsplat.csrc as _C
+except ImportError:
+    # Keep the pure-PyTorch fallbacks importable from an unbuilt source tree.
+    _C = None
+
 
 def _cuda_losses_available() -> bool:
     """Check if the fused CUDA loss ops are compiled."""
-    try:
-        from gsplat.cuda._backend import _C  # noqa: F401
-
-        return hasattr(torch.ops.gsplat, "gaussian_losses_fwd")
-    except Exception:
-        return False
+    return _C is not None and hasattr(torch.ops.gsplat, "gaussian_losses_fwd")
 
 
 def _cuda_camera_losses_available() -> bool:
     """Check if the fused CUDA camera losses op is compiled."""
-    try:
-        from gsplat.cuda._backend import _C  # noqa: F401
-
-        return hasattr(torch.ops.gsplat, "camera_losses_fwd")
-    except Exception:
-        return False
+    return _C is not None and hasattr(torch.ops.gsplat, "camera_losses_fwd")
 
 
 def _cuda_lidar_losses_available() -> bool:
     """Check if the fused CUDA lidar losses op is compiled."""
-    try:
-        from gsplat.cuda._backend import _C  # noqa: F401
-
-        return hasattr(torch.ops.gsplat, "lidar_losses_fwd")
-    except Exception:
-        return False
+    return _C is not None and hasattr(torch.ops.gsplat, "lidar_losses_fwd")
 
 
 def _cuda_ssim_losses_available() -> bool:
     """Check if the fused CUDA SSIM loss op is compiled."""
-    try:
-        from gsplat.cuda._backend import _C  # noqa: F401
-
-        return hasattr(torch.ops.gsplat, "ssim_losses_fwd")
-    except Exception:
-        return False
+    return _C is not None and hasattr(torch.ops.gsplat, "ssim_losses_fwd")
 
 
 def _require_uniform_cuda(name, int_tensors, float_tensors) -> bool:
