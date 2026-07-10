@@ -5,8 +5,6 @@
 # Internal CUDA implementation
 # -----------------------------------------------------------------------------
 
-add_subdirectory(third_party)
-
 # New implementation files must be added explicitly to the source lists on
 # the target below; build sources are not globbed.
 add_library(

@@ -17,6 +17,7 @@ on:
       - gsplat/CMakeLists.txt
       - gsplat/cuda/CMakeLists.txt
       - 'gsplat/cuda/csrc/**'
+      - third_party/glm
       - 'gsplat/geometry/kernels/cuda/**'
       - 'gsplat/scene/kernels/cuda/**'
       - 'gsplat/sensors/kernels/cuda/**'
@@ -32,6 +33,7 @@ on:
       - gsplat/CMakeLists.txt
       - gsplat/cuda/CMakeLists.txt
       - 'gsplat/cuda/csrc/**'
+      - third_party/glm
       - 'gsplat/geometry/kernels/cuda/**'
       - 'gsplat/scene/kernels/cuda/**'
       - 'gsplat/sensors/kernels/cuda/**'

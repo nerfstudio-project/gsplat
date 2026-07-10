@@ -8,4 +8,5 @@ recursive-include gsplat/geometry/kernels/cuda *
 recursive-include gsplat/sensors/kernels/cuda *
 recursive-include gsplat/scene/kernels/cuda *
 recursive-include gsplat/experimental/render/kernels/cuda *
+recursive-include third_party/glm *
 recursive-include third_party/googletest *

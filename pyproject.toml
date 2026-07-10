@@ -146,6 +146,7 @@ include = [
     "gsplat/scene/kernels/cuda/**",
     "gsplat/experimental/render/kernels/cuda/**",
     "gsplat/**/CMakeLists.txt",
+    "third_party/glm/**",
     "third_party/googletest/**",
     "cmake/**",
     "/CMakeLists.txt",
