@@ -115,10 +115,11 @@ FROM python as gsplat-deps
 
 # Dependency validation: ensure Dockerfile deps stay in sync with source files.
 # Aborts the build if the Dockerfile package lists diverge from
-# setup.py (base/dev) or examples/requirements.txt (examples).
+# pyproject.toml (base/dev) or examples/requirements.txt (examples).
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
-COPY --link --from=gsplatrepo setup.py /opt/dep-check/setup.py
+COPY --link --from=gsplatrepo pyproject.toml /opt/dep-check/pyproject.toml
 COPY --link --from=gsplatrepo config.yaml /opt/dep-check/config.yaml
+COPY --link --from=gsplatrepo gsplat/build_support/pyproject_metadata.py /opt/dep-check/gsplat/build_support/pyproject_metadata.py
 COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
 COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirements.txt
 
@@ -135,7 +136,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         "torch==2.9.1"
     )
 
-    check_gsplat_deps.sh -f /opt/dep-check/setup.py:install -- "${packages[@]}"
+    check_gsplat_deps.sh -f /opt/dep-check/pyproject.toml:dependencies -- "${packages[@]}"
 
     pip install "${packages[@]}"
 
@@ -146,24 +147,12 @@ RUN --mount=type=tmpfs,target=/tmp \
     rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
 
-# cmake — future setup.py install dependency, not yet formally declared there.
+# cmake — future install dependency, not yet formally declared in pyproject.toml.
 RUN pip install "cmake==4.3.2" && rm -rf $PYTHONPYCACHEPREFIX/*
 
 # Test/dev dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    # Resolve the cupy variant matching this image's CUDA toolkit. setup.py
-    # detects the local CUDA major and exposes the wheel name (cupy-cuda12x,
-    # cupy-cuda13x, ...) via get_extras_require(); we read it and pin our
-    # version on top so the Dockerfile and source stay in sync when the base
-    # image's CUDA major changes.
-    cupy_pkg=$(cd /opt/dep-check && python3 -c '
-import setup
-pkgs = [d for d in setup.get_extras_require()["dev"] if d.startswith("cupy")]
-assert len(pkgs) == 1, f"expected one cupy entry in dev extras, got {pkgs}"
-print(pkgs[0])
-')
-
     clang_format_version=$(python3 - <<'PY'
 from pathlib import Path
 
@@ -179,6 +168,8 @@ PY
 
     # Dev/test deps
     packages=(
+        "packaging==26.0"
+        "tomli==2.4.1"
         "black[jupyter]==22.3.0"
         "clang-format==${clang_format_version}"
         "isort==5.10.1"
@@ -194,25 +185,19 @@ PY
         "pyyaml==6.0.1"
         "build==1.3.0"
         "twine==1.6.0"
-        "${cupy_pkg}==13.6.0"
+        "cupy-cuda${CUDA_VERSION%%.*}x==13.6.0"
         "nerfacc==0.5.3"
         "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
         "imageio[ffmpeg]==2.37.2"
         "torchpq==0.3.0.6"
     )
 
-    check_gsplat_deps.sh -f /opt/dep-check/setup.py:dev -- "${packages[@]}"
+    check_gsplat_deps.sh \
+        -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
+        -- "${packages[@]}"
 
-    # Tests need cupy. The prebuilt cupy-cudaXXx wheel installs without
-    # compiling against the local toolkit and relies on CUDA JIT at runtime.
-    # The CUPY_* env vars below are no-ops on the wheel path, but kept so
-    # that if _detect_cupy_requirement() ever falls back to the source
-    # `cupy` (no nvcc detected), the source build is still parallelized
-    # and targeted to a single compute capability.
-    CUPY_NUM_BUILD_JOBS=$(nproc) \
-    CUPY_NUM_NVCC_THREADS=$(nproc) \
-    CUPY_NVCC_GENERATE_CODE=arch=compute_80,code=compute_80 \
-        pip install "${packages[@]}"
+    # The CUDA-major-specific CuPy wheel avoids compiling CuPy from source.
+    pip install "${packages[@]}"
 
     # Save list so the examples stage can reference it
     printf '%s\n' "${packages[@]}" > /opt/dep-check/dev_packages.txt
@@ -259,8 +244,9 @@ RUN --mount=type=tmpfs,target=/tmp \
     )
 
     check_gsplat_deps.sh \
-        -f /opt/dep-check/setup.py:install \
-        -f /opt/dep-check/setup.py:dev \
+        -f /opt/dep-check/pyproject.toml:dependencies \
+        -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
+        -f /opt/dep-check/pyproject.toml:examples \
         -f /opt/dep-check/examples/requirements.txt \
         -- "${base_pkgs[@]}" "${dev_pkgs[@]}" "$fused_ssim" "${packages[@]}"
 

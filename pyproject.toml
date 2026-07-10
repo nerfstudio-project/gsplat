@@ -14,8 +14,9 @@
 # limitations under the License.
 
 [build-system]
+# setuptools >= 61 is required to read [project] metadata from this file.
 requires = [
-    "setuptools>=42",
+    "setuptools>=61",
     "wheel",
     "ninja",
     "torch>=2.7",
@@ -24,3 +25,120 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "gsplat"
+description = "Python package for differentiable rasterization of gaussians"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dynamic = ["version"]
+keywords = ["gaussian", "splatting", "cuda"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "ninja",
+    "numpy",
+    "jaxtyping",
+    "nvtx",
+    "rich>=12",
+    # Blackwell (sm_120) support requires PyTorch 2.7 or newer.
+    "torch>=2.7",
+]
+
+[project.optional-dependencies]
+lidar = [
+    "scipy",
+]
+examples = [
+    "Pillow",
+    "tqdm",
+    "tyro",
+    "imageio>=2.37.2",
+]
+# Shared development dependencies. Install one of the composite dev-cuda*
+# extras below so the environment contains exactly one CUDA-matched CuPy
+# distribution; dev-common is only their composition building block.
+dev-common = [
+    # Parsing the project metadata outside pip's build isolation needs these.
+    "packaging>=21.3",
+    'tomli>=1.2; python_version < "3.11"',
+    "black[jupyter]==22.3.0",
+    "clang-format==22.1.5",
+    "isort==5.10.1",
+    "pylint==2.13.4",
+    "pytest>=8.3.5",
+    "pytest-check",
+    "pytest-env",
+    "pytest-xdist==2.5.0",
+    # Test collection imports the EndoNeRF dataset and dynamic-surgical
+    # trainer, which require these example dependencies at module import time.
+    "Pillow",
+    "tqdm",
+    "typeguard>=2.13.3",
+    "pyyaml>=6.0.1",
+    "build",
+    "twine",
+    "nerfacc>=0.5.3",
+    "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git",
+    "imageio>=2.37.2",
+    "torchpq>=0.3.0.6",
+]
+dev-cuda12 = [
+    "gsplat[dev-common]",
+    "cupy-cuda12x",
+]
+dev-cuda13 = [
+    "gsplat[dev-common]",
+    "cupy-cuda13x",
+]
+
+[project.urls]
+Homepage = "https://github.com/nerfstudio-project/gsplat"
+Repository = "https://github.com/nerfstudio-project/gsplat"
+Documentation = "https://docs.gsplat.studio"
+
+[tool.setuptools]
+# MANIFEST.in stays authoritative for what lands in the sdist; the explicit
+# package-data below guarantees the per-package CUDA sources are also copied
+# into wheels.
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = { attr = "gsplat.version.__version__" }
+
+[tool.setuptools.packages.find]
+exclude = ["tests", "tests.*"]
+# find_packages() semantics: only directories with __init__.py are packages.
+namespaces = false
+
+# Ship the CUDA / JIT sources for the sub-packages so wheels can JIT-build (or
+# be inspected). Globs cover every file under each package's cuda/ tree (all
+# .cpp at the cuda/ root, and the full csrc/ subtree) rather than enumerating
+# extensions, so a future source/header isn't silently dropped from wheels.
+[tool.setuptools.package-data]
+"gsplat.geometry" = [
+    "kernels/cuda/csrc/*",
+]
+"gsplat.sensors" = [
+    "kernels/cuda/csrc/*",
+]
+"gsplat.scene" = [
+    "kernels/cuda/csrc/*",
+]
+"gsplat.experimental" = [
+    "render/kernels/cuda/csrc/*",
+    "render/kernels/cuda/csrc/gaussian_inference/*",
+]

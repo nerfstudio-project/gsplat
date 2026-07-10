@@ -12,8 +12,8 @@ Usage: ${0##*/} [-f <file>[:<section>]]... -- <pkg1> <pkg2> ...
 
 Source files (-f):
   -f requirements.txt           requirements-format file
-  -f setup.py:install           setup.py install_requires
-  -f setup.py:dev               setup.py extras_require["dev"]
+  -f pyproject.toml:dependencies [project].dependencies
+  -f pyproject.toml:dev-cuda12   CUDA 12 development dependencies
 
 Packages in the docker image (after --):
   The exact dependency strings from the docker image to check against
@@ -54,31 +54,17 @@ normalize_name()
 
 # ── Source file parsers ──────────────────────────────────────────────────
 
-# Extract dependency strings from a setup.py section.
-# Imports the setup.py as a module (its setup() call is gated on
-# __name__ == "__main__") and reads INSTALL_REQUIRES / get_extras_require()
-# directly, so the parser sees whatever the build sees — no string-shape
-# assumptions.
-extract_setup_section()
+# Extract dependency strings from a pyproject.toml section.
+#
+extract_pyproject_section()
 {
     local file=$1 section=$2
+    local support_dir
+    support_dir="$(dirname "$file")/gsplat/build_support"
 
-    python3 - "$file" "$section" <<'PY'
-import importlib.util
-import sys
-
-setup_path, section = sys.argv[1], sys.argv[2]
-spec = importlib.util.spec_from_file_location("setup", setup_path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-
-if section == "install":
-    items = module.INSTALL_REQUIRES
-else:
-    items = module.get_extras_require()[section]
-
-print("\n".join(items))
-PY
+    # Section parsing and composite-extra expansion are owned by the shared
+    # metadata helper.
+    python3 "${support_dir}/pyproject_metadata.py" "$file" "$section"
 }
 
 # Extract deps from requirements.txt (skip comments and blank lines).
@@ -290,11 +276,16 @@ version_checks=()         # batched version checks (tab-separated lines)
 # Validate file specs up front (must run in the main shell so die works)
 for file_spec in "${file_specs[@]}"; do
     if [[ $file_spec == *:* ]]; then
-        case ${file_spec##*:} in
-            install|dev)
+        file=${file_spec%:*}
+        section=${file_spec##*:}
+        if [[ $file != *.toml ]]; then
+            die "sections are only supported for pyproject.toml files: '$file_spec'"
+        fi
+        case $section in
+            dependencies|install|lidar|examples|dev-common|dev-cuda12|dev-cuda13)
                 ;;
             *)
-                die "unknown setup.py section '${file_spec##*:}' in '$file_spec'"
+                die "unknown pyproject.toml dependency section '$section' in '$file_spec'"
                 ;;
         esac
     fi
@@ -302,7 +293,7 @@ done
 
 for file_spec in "${file_specs[@]}"; do
     if [[ $file_spec == *:* ]]; then
-        readarray -t src_deps < <(extract_setup_section "${file_spec%:*}" "${file_spec##*:}")
+        readarray -t src_deps < <(extract_pyproject_section "${file_spec%:*}" "${file_spec##*:}")
     else
         readarray -t src_deps < <(extract_requirements "$file_spec")
     fi

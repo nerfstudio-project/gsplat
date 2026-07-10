@@ -27,7 +27,7 @@ import numpy as np
 import pytest
 import torch
 
-# Pillow + tqdm are `[examples]` / `[dev]` extras — skip the whole module
+# Pillow + tqdm are `[examples]` / `[dev-cuda*]` extras — skip the whole module
 # cleanly if a fresh `pip install .` doesn't pull them. Must
 # importorskip *before* we touch examples.dynamic_surgical_trainer which
 # imports tqdm at module top.

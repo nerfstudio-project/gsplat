@@ -20,7 +20,7 @@ When organizing Docker layers, use these criteria to determine what
 belongs together and what should be separated:
 
 **Put in the SAME layer if:**
-- Components change together (e.g., `setup.py` and dependency
+- Components change together (e.g., `pyproject.toml` and dependency
   installation always change together)
 - Operations are part of a single logical step (e.g., updating
   package lists and installing packages)
@@ -99,7 +99,7 @@ for more details on test options.
 **Versioning Policy:**
 - The `IMAGE_TAG` is a simple incrementing number (e.g., 42, 43, 44)
 - Increment this number for ANY change to the Docker image:
-  - Dependency updates in `setup.py`
+  - Dependency updates in `pyproject.toml`
   - Dockerfile modifications
   - Base image version changes
   - CUDA version changes
@@ -165,7 +165,7 @@ and describe the changes made, together with the changes made in GSplat code, if
 
 ```bash
 # Stage your changes
-git add ../config.yaml Dockerfile ../setup.py
+git add ../config.yaml Dockerfile ../pyproject.toml
 
 # Commit with descriptive message
 git commit -m "Upgrade CUDA to X.Y
@@ -178,4 +178,3 @@ git commit -m "Upgrade CUDA to X.Y
 # Push to GitLab
 git push origin your-branch-name
 ```
-
