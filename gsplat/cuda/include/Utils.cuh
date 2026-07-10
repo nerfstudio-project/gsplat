@@ -452,6 +452,34 @@ inline __device__ void inverse_vjp(const mat2 Minv, const mat2 v_Minv, mat2 &v_M
     v_M += -Minv * v_Minv * Minv;
 }
 
+inline __device__ float symmetric_cov2d_det(const glm::fvec3 &covar)
+{
+    // Upper-triangle layout: covar = (xx, xy, yy).
+    return covar.x * covar.z - covar.y * covar.y;
+}
+
+inline __device__ glm::fvec3 inverse_symmetric_cov2d(const glm::fvec3 &covar, const float inv_det)
+{
+    return glm::fvec3{covar.z * inv_det, -covar.y * inv_det, covar.x * inv_det};
+}
+
+inline __device__ float add_blur(const float eps2d, glm::fvec3 &covar, float &compensation)
+{
+    // Packed (xx, xy, yy) counterpart of the mat2 add_blur below: blur the
+    // diagonal, set the mip-splatting compensation, and return the blurred
+    // determinant. No small-determinant special case here -- the caller culls
+    // det_blur <= 0 before using the conic / compensation and then takes the
+    // reciprocal itself. Plain division follows whatever NVCC's fast-math flag
+    // selects, so no __FAST_MATH__ branch is needed.
+    const float y_y       = covar.y * covar.y;
+    const float det_orig  = covar.x * covar.z - y_y;
+    covar.x              += eps2d;
+    covar.z              += eps2d;
+    const float det_blur  = covar.x * covar.z - y_y;
+    compensation          = sqrtf(glm::max(MIN_COMPENSATION * MIN_COMPENSATION, det_orig / det_blur));
+    return det_blur;
+}
+
 inline __device__ float add_blur(const float eps2d, mat2 &covar, float &compensation)
 {
     float det_orig  = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];

@@ -285,11 +285,15 @@ def _gtest_sources() -> list[str]:
 
 
 def _test_sources() -> list[str]:
-    """Return project C++ test sources discovered under tests/cpp."""
+    """Return project C++/CUDA test sources discovered under tests/cpp."""
     # Keep discovery intentionally narrow for now: every file under tests/cpp is
     # part of the single native test binary surfaced through pytest. An empty
     # list is valid: pytest_generate_tests handles it before any JIT build.
-    return sorted(glob.glob(os.path.join(REPO_ROOT, "tests", "cpp", "*.cpp")))
+    test_dir = os.path.join(REPO_ROOT, "tests", "cpp")
+    return sorted(
+        glob.glob(os.path.join(test_dir, "*.cpp"))
+        + glob.glob(os.path.join(test_dir, "*.cu"))
+    )
 
 
 def _include_paths(build_params) -> list[str]:
