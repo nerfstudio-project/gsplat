@@ -228,14 +228,9 @@ RUN --mount=type=tmpfs,target=/tmp \
     mapfile -t base_pkgs < /opt/dep-check/base_packages.txt
     mapfile -t dev_pkgs < /opt/dep-check/dev_packages.txt
 
-    # fused-ssim only builds for a pre-defined set of architectures.
-    # In order to override it, and support, say, Blackwell, we need a more
-    # recent commit that allows overriding this set.
-    # Existing architectures:
-    # sm_75: Turing/GeForce tu10x
+    # Compile fused-ssim for the GPU generations supported by this image.
     # sm_80: Ampere/Tesla ga100
     # sm_89: Ada/GeForce ad102
-    # New architectures
     # sm_90: Hopper/Tesla gh100
     # sm_120: Blackwell/GeForce gb20x
     fused_ssim="git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
@@ -270,7 +265,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         -- "${base_pkgs[@]}" "${dev_pkgs[@]}" "$fused_ssim" "${packages[@]}"
 
     # Build fused_ssim first (needs special env var)
-    CUDA_ARCHITECTURES='75;80;89;90;120' \
+    CUDA_ARCHITECTURES='80;89;90;120' \
         pip install --no-build-isolation "$fused_ssim"
 
     # Needs --no-build-isolation or else fused-ssim can't be installed as
