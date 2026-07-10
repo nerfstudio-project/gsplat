@@ -162,13 +162,21 @@ RUN --mount=type=tmpfs,target=/tmp \
         /opt/dep-check/pyproject.toml dev-common --pin clang-format)
     test -n "$clang_format_version"
 
+    black_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
+        /opt/dep-check/pyproject.toml dev-common --pin black)
+    test -n "$black_version"
+
+    isort_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
+        /opt/dep-check/pyproject.toml dev-common --pin isort)
+    test -n "$isort_version"
+
     # Dev/test deps
     packages=(
         "packaging==26.0"
         "tomli==2.4.1"
-        "black==22.3.0"
+        "black==${black_version}"
         "clang-format==${clang_format_version}"
-        "isort==5.10.1"
+        "isort==${isort_version}"
         "pylint==2.13.4"
         "pytest==8.3.5"
         "pytest-check==2.8.0"
