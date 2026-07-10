@@ -158,18 +158,9 @@ RUN pip install "cmake==4.3.2" && rm -rf $PYTHONPYCACHEPREFIX/*
 # Test/dev dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    clang_format_version=$(python3 - <<'PY'
-from pathlib import Path
-
-for raw_line in Path("/opt/dep-check/config.yaml").read_text().splitlines():
-    line = raw_line.strip()
-    if line.startswith("CLANG_FORMAT_VERSION:"):
-        print(line.split(":", 1)[1].strip().strip("\"'"))
-        break
-else:
-    raise SystemExit("CLANG_FORMAT_VERSION is not set in /opt/dep-check/config.yaml")
-PY
-)
+    clang_format_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
+        /opt/dep-check/pyproject.toml dev-common --pin clang-format)
+    test -n "$clang_format_version"
 
     # Dev/test deps
     packages=(

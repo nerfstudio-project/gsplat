@@ -85,6 +85,24 @@ def test_expand_optional_group_preserves_non_composite_requirements(
     ]
 
 
+def test_extract_pin_parses_names_extras_whitespace_and_markers(
+    metadata_helper, pyproject_path
+):
+    """Pin lookup follows normalized package names instead of string matching."""
+    assert metadata_helper.extract_pin(pyproject_path, "lint", "black") == "22.3.0"
+    assert metadata_helper.extract_pin(pyproject_path, "lint", "BLACK") == "22.3.0"
+
+
+def test_extract_pin_rejects_unpinned_and_missing_requirements(
+    metadata_helper, pyproject_path
+):
+    """Pin lookup reports when a requirement has no exact pin or is absent."""
+    with pytest.raises(SystemExit, match="does not pin pytest with =="):
+        metadata_helper.extract_pin(pyproject_path, "test", "pytest")
+    with pytest.raises(SystemExit, match="no requirement for ruff"):
+        metadata_helper.extract_pin(pyproject_path, "lint", "ruff")
+
+
 def test_expand_optional_group_reports_unknown_and_cyclic_groups(
     metadata_helper, pyproject_path
 ):
@@ -112,3 +130,18 @@ def test_pyproject_metadata_command_line_interface(pyproject_path):
         "pytest>=8",
         "coverage",
     ]
+
+    pin = subprocess.run(
+        [
+            sys.executable,
+            str(METADATA_HELPER_PATH),
+            str(pyproject_path),
+            "lint",
+            "--pin",
+            "black",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert pin.stdout == "22.3.0\n"

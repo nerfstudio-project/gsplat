@@ -9,11 +9,12 @@ keeps those consumers on one implementation without importing gsplat.
 
 Also usable as a command:
 
-    python3 pyproject_metadata.py <pyproject.toml> <section>
+    python3 pyproject_metadata.py <pyproject.toml> <section> [--pin <package>]
 
 where ``section`` is ``dependencies`` (or ``install``) for the base
 dependency list, or an optional-dependency group name. Prints one
-requirement per line.
+requirement per line, or with ``--pin`` the ``==`` pinned version of one
+package in that section.
 """
 
 from __future__ import annotations
@@ -96,7 +97,31 @@ def extract_section(pyproject_path, section):
     return expand_optional_group(project, section)
 
 
+def extract_pin(pyproject_path, section, name):
+    """Return the ``==`` pinned version of ``name`` within ``section``.
+
+    Matching uses canonical distribution names, so extras, whitespace, and
+    markers in the requirement string do not affect the lookup.
+    """
+
+    wanted = canonicalize_name(name)
+    for line in extract_section(pyproject_path, section):
+        requirement = Requirement(line)
+        if canonicalize_name(requirement.name) != wanted:
+            continue
+        for specifier in requirement.specifier:
+            if specifier.operator == "==":
+                return specifier.version
+        raise SystemExit(f"'{line}' does not pin {name} with ==")
+    raise SystemExit(f"no requirement for {name} in section '{section}'")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit(f"usage: {sys.argv[0]} <pyproject.toml> <section>")
-    print("\n".join(extract_section(sys.argv[1], sys.argv[2])))
+    if len(sys.argv) == 5 and sys.argv[3] == "--pin":
+        print(extract_pin(sys.argv[1], sys.argv[2], sys.argv[4]))
+    elif len(sys.argv) == 3:
+        print("\n".join(extract_section(sys.argv[1], sys.argv[2])))
+    else:
+        raise SystemExit(
+            f"usage: {sys.argv[0]} <pyproject.toml> <section> [--pin <package>]"
+        )
