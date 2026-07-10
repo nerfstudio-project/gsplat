@@ -91,6 +91,20 @@ def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
     mp.setattr(av_trainer, "init_gaussians_from_lidar", fake_init)
     mp.setattr(av_trainer, "create_optimizers", fake_create_optimizers)
     mp.setattr(av_trainer, "render_gaussians", fake_render)
+    mp.setattr(
+        av_trainer.gsplat.losses,
+        "gaussian_scale_reg",
+        lambda *_args, **_kwargs: pytest.fail(
+            "non-MCMC training applied scale regularization"
+        ),
+    )
+    mp.setattr(
+        av_trainer.gsplat.losses,
+        "gaussian_density_reg",
+        lambda *_args, **_kwargs: pytest.fail(
+            "non-MCMC training applied opacity regularization"
+        ),
+    )
 
     losses, checkpoints = av_trainer.train(
         scene_path="unused",
@@ -108,6 +122,39 @@ def test_av_train_uses_scene_splats_for_optimizer_render_loss_and_eval(
     assert seen["optimizer"] is the_splats
     assert seen["render"] is not the_splats
     assert seen["render_count"] >= 1
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        {"radii": torch.tensor([[[1, 1], [0, 0], [2, 3]]])},
+        {
+            "gaussian_ids": torch.tensor([0, 2]),
+            "radii": torch.tensor([[1, 1], [2, 3]]),
+        },
+    ],
+)
+def test_av_mcmc_regularization_uses_projected_gaussians(info) -> None:
+    scales = torch.tensor([[1.0, 2.0, 3.0], [100.0, 100.0, 100.0], [2.0, 4.0, 6.0]])
+    opacities = torch.tensor([0.2, 100.0, 0.4])
+
+    loss = av_trainer._mcmc_regularization_loss(scales, opacities, info)
+
+    expected = 0.005 * scales[[0, 2]].mean() + 0.005 * opacities[[0, 2]].mean()
+    torch.testing.assert_close(loss, expected)
+
+
+def test_av_mcmc_regularization_is_zero_without_projected_gaussians() -> None:
+    scales = torch.ones((3, 3), requires_grad=True)
+    opacities = torch.ones(3, requires_grad=True)
+    info = {"radii": torch.zeros((1, 3, 2), dtype=torch.int32)}
+
+    loss = av_trainer._mcmc_regularization_loss(scales, opacities, info)
+    loss.backward()
+
+    assert loss.item() == 0.0
+    assert torch.count_nonzero(scales.grad) == 0
+    assert torch.count_nonzero(opacities.grad) == 0
 
 
 def test_av_checkpoint_round_trip_preserves_scene_state(tmp_path) -> None:
