@@ -22,6 +22,7 @@ native-extension wrappers. They never require CUDA.
 
 from __future__ import annotations
 
+import os
 from importlib import metadata
 from pathlib import Path
 
@@ -31,6 +32,8 @@ try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10.
     import tomli as tomllib
+
+pytestmark = [pytest.mark.wheel_smoke]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -63,8 +66,8 @@ def test_dev_extra_omits_the_dynamic_cupy_requirement():
     assert not any(dep.startswith("cupy") for dep in extras["dev"])
 
 
-def test_png_extra_is_public():
-    """Source metadata exposes the documented PNG feature name."""
+def test_feature_extras_are_public():
+    """Source metadata exposes the documented PNG and test feature names."""
 
     if not HAS_SOURCE_TREE:
         pytest.skip("pyproject.toml is only available in a source checkout")
@@ -72,7 +75,7 @@ def test_png_extra_is_public():
     with (REPO_ROOT / "pyproject.toml").open("rb") as f:
         extras = tomllib.load(f)["project"]["optional-dependencies"]
 
-    assert "png" in extras
+    assert {"png", "test"}.issubset(extras)
 
 
 def _installed_files() -> list[metadata.PackagePath]:
@@ -110,7 +113,8 @@ def _published_packages() -> list[str]:
 def test_no_test_files_in_shipped_packages():
     """No ``test_*.py`` should exist inside shipped package dirs.
 
-    Keeps test modules out of the public package directories.
+    Tests belong only in the private ``gsplat/_testdata`` tree, never beside
+    production modules in the public packages.
     """
     offenders = []
     if HAS_SOURCE_TREE:
@@ -145,20 +149,20 @@ def test_build_support_is_not_published():
 
 
 def test_segmented_sort_sources_owned_by_core_cuda():
-    """The shared segmented sort utility ships from core, not experimental."""
+    """Core owns segmented sort sources, which compiled wheels exclude."""
     if HAS_SOURCE_TREE:
         shipped_files = {
             str(path.relative_to(REPO_ROOT))
             for path in (REPO_ROOT / "gsplat").rglob("SegmentedSort.*")
         }
+        assert shipped_files == set(SEGMENTED_SORT_SOURCES)
     else:
         shipped_files = {
             str(path)
             for path in _installed_files()
             if path.name.startswith("SegmentedSort.")
         }
-
-    assert shipped_files == set(SEGMENTED_SORT_SOURCES)
+        assert not shipped_files, f"wheel shipped CUDA sources: {sorted(shipped_files)}"
 
 
 def test_experimental_published_under_gsplat_namespace():
@@ -184,3 +188,101 @@ def test_experimental_published_under_gsplat_namespace():
     assert not any(
         p == "experimental" or p.startswith("experimental.") for p in packages
     ), f"bare top-level 'experimental' published: {sorted(packages)}"
+
+
+@pytest.mark.skipif(
+    HAS_SOURCE_TREE,
+    reason="installed-wheel manifest assertion",
+)
+def test_installed_wheel_contains_test_payload():
+    """The test-enabled wheel contains every required payload category."""
+
+    installed_files = _installed_files()
+    installed_names = {path.as_posix() for path in installed_files}
+
+    # These names are runtime interfaces: pytest discovers its configuration
+    # and test-tree conftest by name, while gsplat-test invokes the C++
+    # executable by name. Other payload files are implementation details and
+    # are checked structurally below so routine renames do not change this test.
+    cpp_executable_name = "gsplat/_testdata/bin/gsplat_cpp_tests"
+    runtime_names = {
+        cpp_executable_name,
+        "gsplat/_testdata/tests/conftest.py",
+        "gsplat/_testdata/pytest.ini",
+    }
+    missing_runtime_names = sorted(runtime_names - installed_names)
+    assert (
+        not missing_runtime_names
+    ), f"wheel is missing test runtime entries: {missing_runtime_names}"
+
+    test_root = ("gsplat", "_testdata", "tests")
+    expected_suites = {"core", "examples"} | {
+        package.rsplit(".", 1)[-1] for package in SHIPPED_PACKAGES
+    }
+    installed_suites = {
+        path.parts[len(test_root)]
+        for path in installed_files
+        if path.parts[: len(test_root)] == test_root
+        and len(path.parts) > len(test_root)
+        and path.name.startswith("test_")
+        and path.suffix == ".py"
+    }
+    missing_suites = sorted(expected_suites - installed_suites)
+    assert (
+        not missing_suites
+    ), f"wheel has no Python tests for these suites: {missing_suites}"
+
+    def payload_exists(prefix, suffix=None, *, direct_child=False, excluded_names=()):
+        """Return whether an installed payload matches a structural category."""
+
+        return any(
+            path.parts[: len(prefix)] == prefix
+            and len(path.parts) > len(prefix)
+            and (not direct_child or len(path.parts) == len(prefix) + 1)
+            and (suffix is None or path.suffix == suffix)
+            and path.name not in excluded_names
+            for path in installed_files
+        )
+
+    testdata_root = ("gsplat", "_testdata")
+    payload_categories = {
+        "asset": payload_exists(testdata_root + ("assets",), direct_child=True),
+        "example module": payload_exists(
+            testdata_root + ("examples",),
+            ".py",
+            direct_child=True,
+            excluded_names={"__init__.py"},
+        ),
+        "dataset support module": payload_exists(
+            testdata_root + ("examples", "datasets"),
+            ".py",
+            direct_child=True,
+            excluded_names={"__init__.py"},
+        ),
+        "JSON fixture": payload_exists(test_root, ".json"),
+    }
+    missing_categories = [
+        label for label, is_present in payload_categories.items() if not is_present
+    ]
+    assert (
+        not missing_categories
+    ), f"wheel is missing test payload categories: {missing_categories}"
+
+    assert not any(
+        name.startswith("gsplat/_testdata/tests/source/") for name in installed_names
+    ), "source-distribution-only tests leaked into the wheel"
+
+    shared_library_suffixes = {".dll", ".dylib", ".so"}
+    assert any(
+        path.parts[:2] == ("gsplat", "lib")
+        and shared_library_suffixes.intersection(path.suffixes)
+        for path in installed_files
+    ), "wheel is missing the internal gsplat core shared library"
+
+    executable_path = next(
+        path for path in installed_files if path.as_posix() == cpp_executable_name
+    )
+    executable = metadata.distribution("gsplat").locate_file(executable_path)
+    assert executable.is_file()
+    if os.name != "nt":
+        assert os.access(executable, os.X_OK), f"not executable: {executable}"

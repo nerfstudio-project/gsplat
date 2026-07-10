@@ -29,6 +29,9 @@ jobs:
   build_wheels:
     runs-on: ${{ matrix.os }}
     environment: production
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      CMAKE_PRESET: full-release
 
     strategy:
       fail-fast: false
@@ -96,27 +99,84 @@ jobs:
           sed -i "s/$VERSION/$VERSION+$TORCH_VERSION$CUDA_VERSION/" gsplat/version.py
         shell: bash
 
-      - name: Upgrade pip
+      - name: Install build dependencies
         run: |
           # https://github.com/pypa/setuptools/issues/5174, pkg_resources is removed in setuptools 82 but we need it for older torch versions
-          pip install --upgrade "setuptools<82"
-          pip install "cmake>=3.26" ninja "scikit-build-core>=1.0"
+          python -m pip install --upgrade "setuptools<82"
+          python -m pip install build "cmake>=3.26" ninja "scikit-build-core>=1.0"
         shell: bash
 
-      - name: Build wheel
+      - name: Prepare wheel build
         run: |
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          CMAKE_ARGS="-DGSPLAT_CCACHE_STATS=ON" CMAKE_BUILD_PARALLEL_LEVEL=2 pip wheel . --no-build-isolation --no-deps --wheel-dir dist
+
+          # Make the selected toolkit available to subsequent GitHub steps.
+          printf '%s\n' \
+            "CUDA_HOME=${CUDA_HOME}" \
+            "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" \
+            >> "$GITHUB_ENV"
+          printf '%s\n' "${CUDA_HOME}/bin" >> "$GITHUB_PATH"
+
+          rm -rf dist "$RUNNER_TEMP/gsplat-sdist"
+          mkdir -p dist "$RUNNER_TEMP/gsplat-sdist"
         shell: bash
 
-      - name: Test wheel
+      - name: Build wheel from sdist
         run: |
-          ls -lah dist
-          wheel_file=$(ls dist/*.whl)
-          pip install "$wheel_file"
-          (cd "$RUNNER_TEMP" && python -c "import gsplat; print('gsplat:', gsplat.__version__)")
-          pip install "${wheel_file}[lidar]"
-          (cd "$RUNNER_TEMP" && python -c "import gsplat; print('gsplat:', gsplat.__version__); from scipy.spatial import cKDTree; print('scipy OK')")
+          python -m build --sdist --outdir dist
+          tar \
+            --extract \
+            --gzip \
+            --file dist/*.tar.gz \
+            --directory "$RUNNER_TEMP/gsplat-sdist" \
+            --strip-components=1
+
+          cd "$RUNNER_TEMP/gsplat-sdist"
+          # scikit-build-core drives the single CMake configure and build:
+          # - cmake.args=--preset keeps the preset as the one source of build
+          #   config
+          # - cmake.build-type is emptied so scikit-build-core's Release
+          #   default cannot override the preset's CMAKE_BUILD_TYPE
+          # - distribution wheels ship without the test payload; the
+          #   GPU-backed CI pipeline validates test-carrying wheels
+          python -m pip wheel \
+            --verbose \
+            --no-build-isolation \
+            --no-deps \
+            --wheel-dir dist \
+            --config-settings=build-dir="build/${CMAKE_PRESET}" \
+            --config-settings=cmake.build-type= \
+            --config-settings=cmake.args=--preset="${CMAKE_PRESET}" \
+            --config-settings=cmake.define.GSPLAT_BUILD_TESTS=OFF \
+            .
+          mv dist/*.whl "$GITHUB_WORKSPACE/dist/"
+        shell: bash
+
+      - name: Smoke-test wheel
+        run: |
+          wheel_file=$(realpath dist/*.whl)
+          test_dir="$RUNNER_TEMP/gsplat-wheel-test"
+          rm -rf "$test_dir"
+          mkdir -p "$test_dir"
+          cd "$test_dir"
+
+          if python -m pip show gsplat >/dev/null 2>&1; then
+            python -m pip uninstall --yes gsplat
+          fi
+          python -m pip install "${wheel_file}"
+          python -c "import gsplat; print('gsplat:', gsplat.__version__, gsplat.__file__)"
+
+          # Distribution wheels must not ship the test payload, while the
+          # static gsplat-test entry point stays importable without it.
+          if unzip -Z1 "$wheel_file" | grep -F _testdata; then
+              echo "distribution wheel ships test payload entries" >&2
+              exit 1
+          fi
+          python -c "import gsplat._test"
+          echo "wheel manifest: no test payload; gsplat._test importable"
+
+          python -m pip install "${wheel_file}[lidar]"
+          python -c "from scipy.spatial import cKDTree; print('scipy OK')"
         shell: bash
 
       - uses: actions/upload-artifact@v4
@@ -124,3 +184,4 @@ jobs:
           # Include unique matrix values to avoid name collisions.
           name: compiled_wheels_python${{ matrix.python-version }}-${{ matrix.os }}-${{ matrix.torch-version }}-${{ matrix.cuda-version }}
           path: dist/*.whl
+          if-no-files-found: error

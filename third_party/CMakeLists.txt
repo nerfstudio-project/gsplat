@@ -96,6 +96,11 @@ if(GSPLAT_BUILD_TESTS)
                 "GSPLAT_BUILD_TESTS=ON"
             )
 
+            # The wheel installs one standalone executable, not GoogleTest's
+            # runtime libraries. Shadow this standard CMake variable only within
+            # the block so vendored gtest remains static even when a caller
+            # configures the rest of the project with BUILD_SHARED_LIBS=ON.
+            set(BUILD_SHARED_LIBS OFF)
             # Vendored code is not held to gsplat's target-only link policy;
             # a googletest update must not fail gsplat's generate step.
             set(CMAKE_LINK_LIBRARIES_ONLY_TARGETS OFF)

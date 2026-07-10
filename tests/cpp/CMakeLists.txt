@@ -32,6 +32,21 @@ set_target_properties(
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${GSPLAT_BINARY_DIR}/bin" BUILD_RPATH_USE_ORIGIN ON
 )
 
+if(UNIX AND NOT APPLE)
+    # The executable is installed two levels below the gsplat package. The
+    # final entry reaches the virtual environment's lib directory in the
+    # conventional <venv>/lib/pythonX.Y/site-packages layout; the Python runner
+    # also augments LD_LIBRARY_PATH for layouts that differ from that pattern.
+    set_target_properties(
+        gsplat_cpp_tests
+        PROPERTIES
+            INSTALL_RPATH
+                "$ORIGIN/../../lib;$ORIGIN/../../../torch/lib;$ORIGIN/../../../nvidia/cuda_runtime/lib;$ORIGIN/../../../../.."
+    )
+endif()
+
+install(TARGETS gsplat_cpp_tests RUNTIME DESTINATION gsplat/_testdata/bin COMPONENT gsplat_tests)
+
 # A nested subproject must not inject tests into its parent's CTest.
 if(PROJECT_IS_TOP_LEVEL)
     gtest_discover_tests(gsplat_cpp_tests DISCOVERY_MODE PRE_TEST)

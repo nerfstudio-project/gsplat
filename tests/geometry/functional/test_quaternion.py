@@ -22,11 +22,14 @@ needed (autograd ``Function`` classes, reference helpers).
 
 import unittest
 
+import pytest
 import torch
 
 from gsplat._helper import assert_grad_reference_close
 import gsplat.geometry.functional as quat
 from gsplat.geometry.kernels.quaternion_ops import SLERP_SMALL_ANGLE_DOT_THRESHOLD
+
+pytestmark = [pytest.mark.wheel_smoke]
 
 
 if not torch.cuda.is_available():

@@ -40,13 +40,14 @@ source /path/to/venvs/gsplat/bin/activate
 
 Use `./bootstrap.sh --help` to see the Python and CUDA options.
 
-Bootstrap installs the complete development dependency set, including the
-optional PNG compression feature. It selects CuPy from the requested or
+Bootstrap installs the complete development and test dependency set, including
+the optional PNG compression feature. It selects CuPy from the requested or
 detected dependency CUDA major, rather than from the GPU driver's maximum
 supported version. CMake separately verifies that the compiler and Torch use
 the same CUDA major. The `vc-flas` dependency currently limits these
 environments to Python 3.10 through 3.12. The base gsplat package continues to
-support Python 3.13 when the `png` and development extras are not selected.
+support Python 3.13 when the `png`, `test`, and development extras are not
+selected.
 
 ## Develop with a CMake build tree
 
@@ -165,7 +166,7 @@ apply to a top-level build unless noted otherwise; presets can override them.
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `GSPLAT_BUILD_CAMERA_WRAPPERS` | value of `GSPLAT_BUILD_TESTS` | Build the Python-exposed camera-wrapper test kernels. |
-| `GSPLAT_BUILD_TESTS` | `ON` (`OFF` as a subproject) | Build and register the C++ tests; Python source-tree tests are registered independently in top-level builds. |
+| `GSPLAT_BUILD_TESTS` | `ON` (`OFF` as a subproject) | Build the C++ tests and install the self-contained test payload; Python source-tree tests are registered independently in top-level builds. |
 | `GSPLAT_CHECK_PYTHON_DEPS` | `ON` | Check the active environment against the Python dependencies requested by the build. |
 | `GSPLAT_DEVELOPMENT_MODE` | `OFF` | Require the development Python dependencies in addition to build requirements. |
 | `GSPLAT_ENABLE_BUILD_TRACES` | `OFF` | Record configure, build, and test traces; requires CMake 4.3 or newer. |
@@ -187,7 +188,7 @@ warnings-as-errors policy to both compilation and pytest. Run
 `cmake -LAH -N <build-directory>` after configuration to inspect every cache
 entry and its current value.
 
-## Build wheels
+## Build and test wheels
 
 Wheels are built by `pip` with scikit-build-core running a single CMake
 configure and build. `cmake.args=--preset` selects the configure preset, which
@@ -211,6 +212,28 @@ python -m pip wheel \
 
 For a portable development wheel, replace `full-release` with `debug` or
 `release` in both the `build-dir` and `cmake.args` settings.
+
+The build above includes the test payload because `GSPLAT_BUILD_TESTS` is `ON`
+by default. Install the wheel's test extra to resolve its complete test
+environment, including the CuPy distribution selected by build metadata:
+
+```bash
+wheel_file=dist/WHEEL_FILENAME.whl
+python -m pip install "${wheel_file}[test]"
+gsplat-test
+```
+
+Wheel metadata selects CuPy from build-environment Torch. Configuration rejects
+a compiler with a different CUDA major, so the selected distribution matches
+the CUDA toolkit compiled into gsplat.
+
+The runner also supports selecting one suite and forwarding its remaining
+arguments to GoogleTest or pytest:
+
+```bash
+gsplat-test cpp --gtest_filter='TorchUtils.*'
+gsplat-test python -k rasterization
+```
 
 ### Compiled feature widths
 
@@ -345,6 +368,42 @@ CMake stages an importable package under `build/<preset>`. This is what
 allows Python tests to import the newly built extension directly from a build
 tree.
 
+The `wheel_smoke` marker selects the representative Python tests used to check
+an installed wheel:
+
+```bash
+gsplat-test python -m wheel_smoke
+```
+
+For release-integrity validation, build the source distribution first and run
+the wheel build from its extracted contents. This verifies that the source
+distribution contains everything required for a wheel build:
+
+```bash
+rm -rf dist build/sdist-tree
+mkdir -p dist build/sdist-tree
+python -m build --no-isolation --sdist --outdir dist
+tar \
+    --extract \
+    --gzip \
+    --file dist/*.tar.gz \
+    --directory build/sdist-tree \
+    --strip-components=1
+(
+    cd build/sdist-tree
+    python -m pip wheel \
+        --verbose \
+        --no-build-isolation \
+        --no-deps \
+        --wheel-dir dist \
+        --config-settings=build-dir=build/full-release \
+        --config-settings=cmake.build-type= \
+        --config-settings=cmake.args=--preset=full-release \
+        .
+)
+mv build/sdist-tree/dist/*.whl dist/
+```
+
 ## Sharing ccache across worktrees
 
 Without path normalization, ccache keeps absolute source and build paths in its
@@ -391,9 +450,10 @@ Each phase archives a Google Trace file into the build directory
 in a trace viewer such as [Perfetto](https://ui.perfetto.dev) or
 [speedscope](https://www.speedscope.app) for a per-command parallelism
 flamechart. Cache hits appear as near-zero spans; disable ccache
-(`-DGSPLAT_ENABLE_CCACHE=OFF`) if you want cold-compile times. The CI
-build jobs configure with the option enabled and publish the trace files
-with their artifacts.
+(`-DGSPLAT_ENABLE_CCACHE=OFF`) if you want cold-compile times. The CI build
+jobs configure with the option enabled and publish their configure and build
+traces. Installed-wheel test jobs invoke `gsplat-test` directly instead of
+CTest, so those jobs do not create a CMake tests trace.
 
 The pull-request checks are defined by:
 

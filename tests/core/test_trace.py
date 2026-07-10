@@ -14,14 +14,14 @@
 # limitations under the License.
 
 import importlib
-from pathlib import Path
 import sys
 import types
 
 import pytest
 
+from .._package_paths import gsplat_package_file
 
-TRACE_PATH = Path(__file__).resolve().parents[2] / "gsplat" / "trace.py"
+TRACE_PATH = gsplat_package_file("trace.py")
 
 
 class _FakeDomain:

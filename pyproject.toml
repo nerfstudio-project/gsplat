@@ -72,11 +72,25 @@ png = [
     "torchpq>=0.3.0.6",
     "vc-flas>=0.1.7",
 ]
+test = [
+    "gsplat[png]",
+    "pytest>=8.3.5",
+    "pytest-check",
+    # Test collection imports the EndoNeRF dataset and dynamic-surgical
+    # trainer, which require these example dependencies at module import time.
+    "Pillow",
+    "tqdm",
+    "tyro",
+    "scipy",
+    "scikit-learn",
+    "opencv-python-headless",
+    "nerfacc>=0.5.3",
+]
 # Development dependencies. Install with `pip install gsplat[dev]`. CuPy is
 # intentionally absent: its wheel name depends on the local CUDA toolkit and
 # is resolved dynamically by gsplat/build_support/cupy_requirement.py.
 dev = [
-    'gsplat[png]; python_version < "3.13"',
+    "gsplat[test]",
     "cmake>=3.26",
     "ninja>=1.5",
     # Parsing the project metadata outside pip's build isolation needs these.
@@ -87,21 +101,16 @@ dev = [
     "gersemi==0.27.7",
     "isort==5.10.1",
     "pylint==2.13.4",
-    "pytest>=8.3.5",
-    "pytest-check",
     "pytest-env",
     "pytest-xdist==2.5.0",
-    # Test collection imports the EndoNeRF dataset and dynamic-surgical
-    # trainer, which require these example dependencies at module import time.
-    "Pillow",
-    "tqdm",
-    "opencv-python-headless",
     "typeguard>=2.13.3",
     "pyyaml>=6.0.1",
     "build",
     "twine",
-    "nerfacc>=0.5.3",
 ]
+
+[project.scripts]
+gsplat-test = "gsplat._test:main"
 
 [project.urls]
 Homepage = "https://github.com/nerfstudio-project/gsplat"
@@ -132,7 +141,7 @@ source-dir = "."
 # toolkit.
 
 [tool.scikit-build.install]
-components = ["gsplat_runtime"]
+components = ["gsplat_runtime", "gsplat_tests"]
 
 [tool.scikit-build.wheel]
 packages = ["gsplat"]

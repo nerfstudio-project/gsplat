@@ -57,7 +57,11 @@ endif()
 
 # Nested consumers get a runtime-only build; a parent project that wants
 # gsplat's tests opts in explicitly.
-option(GSPLAT_BUILD_TESTS "Build the C++ tests" ${PROJECT_IS_TOP_LEVEL})
+option(
+    GSPLAT_BUILD_TESTS
+    "Build the C++ tests and install the self-contained test payload"
+    ${PROJECT_IS_TOP_LEVEL}
+)
 
 if(PROJECT_IS_TOP_LEVEL)
     set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

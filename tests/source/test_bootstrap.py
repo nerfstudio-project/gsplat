@@ -99,12 +99,14 @@ def test_bootstrap_expands_declared_development_dependencies(tmp_path: Path) -> 
         "ninja>=1.5",
         "numpy",
         "pytest>=8.3.5",
+        "scipy",
         "black==22.3.0",
         "cupy-cuda12x",
         "torchpq>=0.3.0.6",
         "vc-flas>=0.1.7",
     }
     assert expected_requirements.issubset(dependency_command)
+    assert "gsplat[test]" not in dependency_command
     assert str(REPO_ROOT) not in dependency_command
     assert all("--disable-pip-version-check" in command for command in pip_commands)
 

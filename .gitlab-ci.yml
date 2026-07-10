@@ -56,9 +56,6 @@ code-format:
 .build-base:
   stage: build
 
-  variables:
-    VERBOSE: 1
-
   tags:
     - type/docker
     - os/linux
@@ -67,15 +64,35 @@ code-format:
   before_script:
     # Configure the persistent caches using CI_BUILDS_DIR.
     - source /etc/profile.d/00-persistent-cache.sh
+    - rm -rf dist
+    - mkdir -p dist
 
   script:
-    - cmake --preset "${CMAKE_PRESET}" -B build/ -DGSPLAT_CCACHE_STATS=ON -DGSPLAT_ENABLE_BUILD_TRACES=ON
-    - cmake --build build/
+    # scikit-build-core drives the single CMake configure and build:
+    # - cmake.args=--preset keeps the preset as the one source of build config
+    # - cmake.build-type is emptied so scikit-build-core's Release default
+    #   cannot override the preset's CMAKE_BUILD_TYPE
+    # - the second cmake.args entry records configure/build traces, published
+    #   as job artifacts next to the wheel
+    - |
+      python -m pip wheel \
+        --verbose \
+        --no-build-isolation \
+        --no-deps \
+        --wheel-dir dist \
+        --config-settings=build-dir="build/${CMAKE_PRESET}" \
+        --config-settings=build.verbose=true \
+        --config-settings=cmake.build-type= \
+        --config-settings=cmake.args=--preset="${CMAKE_PRESET}" \
+        --config-settings=cmake.args=-DGSPLAT_ENABLE_BUILD_TRACES=ON \
+        .
 
   artifacts:
-    expire_in: 1 day
+    name: "gsplat-wheel-${CI_JOB_NAME}-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 1 week
     paths:
-      - build/
+      - dist/*.whl
+      - build/${CMAKE_PRESET}/*-trace.json
 
 build-debug:
   extends: .build-base
@@ -91,6 +108,8 @@ build-release:
   stage: test
 
   variables:
+    GIT_STRATEGY: empty
+    GIT_SUBMODULE_STRATEGY: none
     # Optional pytest marker expression to narrow test selection (empty = all).
     PYTEST_MARKER_EXPR: ""
 
@@ -126,13 +145,21 @@ build-release:
       fi
 
   script:
-    - ctest --test-dir build/ --output-on-failure
+    - |
+      wheel_file=$(realpath dist/*.whl)
+      test_root="${CI_PROJECT_DIR}/build/wheel-test/${CI_JOB_NAME}"
+      rm -rf "${test_root}"
+      mkdir -p "${test_root}"
+      cd "${test_root}"
 
-  artifacts:
-    when: always
-    expire_in: 1 day
-    paths:
-      - build/tests-trace.json
+      if python -m pip show gsplat >/dev/null 2>&1; then
+        python -m pip uninstall --yes gsplat
+      fi
+      # Install the wheel and its complete test environment. Wheel metadata
+      # selected CuPy from the CUDA-enabled Torch used for this wheel build.
+      python -m pip install "${wheel_file}[test]"
+      python -c "import gsplat; print('gsplat:', gsplat.__version__, gsplat.__file__)"
+      gsplat-test
 
 test-debug:
   extends: .test-base
@@ -149,6 +176,26 @@ test-release:
   needs:
     - job: build-release
       artifacts: true
+
+# Source-tree checks need no compiled binaries and no GPU: the workflow
+# configures and runs only the tests labeled "source".
+test-source:
+  stage: test
+  needs: []
+
+  tags:
+    - type/docker
+    - os/linux
+    - arch/x86_64
+
+  before_script:
+    - source /etc/profile.d/00-persistent-cache.sh
+
+  script:
+    - |
+      cmake \
+        --workflow \
+        --preset source-checks
 
 render-docs:
   stage: docs

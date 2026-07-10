@@ -134,7 +134,7 @@ def test_flas_sort_preserves_alignment_and_seed():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_png_compression():
+def test_png_compression(tmp_path):
     from gsplat.compression import PngCompression
 
     torch.manual_seed(42)
@@ -152,14 +152,10 @@ def test_png_compression():
             "features": torch.randn(N, 128),
         }
     ).to(device)
-    compress_dir = "/tmp/gsplat/compression"
+    compress_dir = str(tmp_path / "compression")
 
     compression_method = PngCompression()
     # run compression and save the compressed files to compress_dir
     compression_method.compress(compress_dir, splats)
     # decompress the compressed files
     splats_c = compression_method.decompress(compress_dir)
-
-
-if __name__ == "__main__":
-    test_png_compression()

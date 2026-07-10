@@ -18,6 +18,10 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
+pytestmark = [pytest.mark.wheel_smoke]
+
 
 def test_top_level_import_does_not_load_functional_or_native_backend():
     code = """

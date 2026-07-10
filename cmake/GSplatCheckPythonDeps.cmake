@@ -62,14 +62,28 @@ function(gsplat_check_python_dependencies)
         "The build compiles and links against them. "
         "Install with: python3 -m pip install -e \".[${_dev_extra}]\""
     )
-    # The development extra composes the shared test and runtime dependencies.
-    if(GSPLAT_BUILD_TESTS OR GSPLAT_DEVELOPMENT_MODE)
-        _gsplat_check_dependency_section(
-            "${_dev_extra}"
-            FATAL_ERROR
-            "The enabled tests and the developer workflow rely on them; "
-            "install with: python3 -m pip install -e \".[${_dev_extra}]\""
+    # Mandatory sections first: a requirement both sections declare is then
+    # reported under the more essential one.
+    set(_fatal_sections "")
+    if(GSPLAT_BUILD_TESTS)
+        list(APPEND _fatal_sections test)
+    endif()
+    if(GSPLAT_DEVELOPMENT_MODE)
+        list(APPEND _fatal_sections "${_dev_extra}")
+    endif()
+    if(_fatal_sections STREQUAL "test")
+        set(_fatal_hint
+            "The enabled tests need them; install with: python3 -m pip "
+            "install -e \".[test]\" or configure with -DGSPLAT_BUILD_TESTS=OFF"
         )
+    else()
+        set(_fatal_hint
+            "The developer workflow relies on them; install with: "
+            "python3 -m pip install -e \".[${_dev_extra}]\""
+        )
+    endif()
+    if(NOT _fatal_sections STREQUAL "")
+        _gsplat_check_dependency_section("${_fatal_sections}" FATAL_ERROR ${_fatal_hint})
     endif()
     _gsplat_check_dependency_section(
         "dependencies"

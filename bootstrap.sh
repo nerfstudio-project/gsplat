@@ -288,7 +288,9 @@ trap cleanup EXIT
 """Emit bootstrap requirements as NUL-delimited strings.
 
 The first item is the Torch requirement. Remaining items are the union of the
-build requirements, project dependencies, and the shared development extra.
+build requirements, project dependencies, and recursively expanded shared
+development extra. Same-project extra references are expanded instead of
+emitted.
 """
 
 from __future__ import annotations

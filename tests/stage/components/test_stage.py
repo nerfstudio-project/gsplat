@@ -21,6 +21,8 @@ import torch
 from gsplat.scene import GaussianScene
 from gsplat.stage import Stage
 
+pytestmark = [pytest.mark.wheel_smoke]
+
 
 def _make_scene(n: int = 10, id: str = "scene") -> GaussianScene:
     """Create a minimal GaussianScene with n Gaussians."""

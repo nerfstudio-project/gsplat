@@ -3,9 +3,11 @@
 
 """Single owner of the project's dependency-metadata semantics.
 
-Docker dependency validation and formatter tooling need the project's
-dependency lists and pinned tool versions. Loading this module by file path
-keeps those consumers on one implementation without importing gsplat.
+Bootstrap, Docker dependency validation, and formatter tooling need the
+project dependency lists and pip's ``[project.optional-dependencies]``
+expansion, including same-project extra references such as ``gsplat[test]``
+inside ``dev``. Loading this module by file path keeps those consumers
+on one implementation without importing gsplat.
 
 Also usable as a command:
 
@@ -105,7 +107,7 @@ def extract_section(pyproject_path, section):
     """Return the requirement list for a pyproject section.
 
     ``dependencies`` / ``install`` name the base list; any other value names
-    an optional-dependency group.
+    an optional-dependency group, expanded per ``expand_optional_group``.
     """
 
     project = load_project(pyproject_path)

@@ -8,13 +8,90 @@ include("${GSPLAT_SOURCE_DIR}/cmake/GSplatPytest.cmake")
 
 gsplat_configure_pytest_ini("${GSPLAT_BINARY_DIR}/pytest.ini" "${GSPLAT_SOURCE_DIR}/tests" ".")
 
+# Keep the command implementation with the test sources, but install it as an
+# importable module so the test entry point can resolve it.
+# The runtime component keeps that static entry point valid when a wheel omits
+# the optional test payload.
+install(
+    FILES "${GSPLAT_SOURCE_DIR}/tests/gsplat-test.py"
+    DESTINATION gsplat
+    RENAME _test.py
+    COMPONENT gsplat_runtime
+)
+
 if(GSPLAT_BUILD_TESTS)
     add_subdirectory(cpp)
+
+    # Unlike the build-tree configuration, the installed test configuration
+    # must remain valid after the wheel is relocated. Both roots are relative to
+    # _testdata: ../.. names the directory holding the installed gsplat package,
+    # and examples is the packaged examples/ tree, so example modules' sibling
+    # imports (e.g. av_trainer's `from utils import ...`) resolve from the wheel.
+    gsplat_configure_pytest_ini(
+        "${CMAKE_CURRENT_BINARY_DIR}/pytest-wheel.ini"
+        "tests"
+        "../.."
+        "examples"
+    )
+
+    # Preserve the source-tree layout beneath one private root. Existing
+    # tests can therefore keep their relative paths to assets, examples,
+    # and sibling test helpers when run from an installed wheel.
+    install(
+        DIRECTORY "${GSPLAT_SOURCE_DIR}/tests/"
+        DESTINATION gsplat/_testdata/tests
+        COMPONENT gsplat_tests
+        FILES_MATCHING
+        PATTERN "*.py"
+        PATTERN "*.json"
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "cpp" EXCLUDE
+        PATTERN "gsplat-test.py" EXCLUDE
+        PATTERN "source" EXCLUDE
+    )
+
+    # The tests/ install above ships only *.py/*.json, which drops the ncore CI
+    # fixture's binary scene stores (*.zarr.itar). Ship the whole test_data tree
+    # so the ncore e2e tests can load their scene from an installed wheel.
+    install(
+        DIRECTORY "${GSPLAT_SOURCE_DIR}/tests/examples/test_data/"
+        DESTINATION gsplat/_testdata/tests/examples/test_data
+        COMPONENT gsplat_tests
+        PATTERN "__pycache__" EXCLUDE
+    )
+
+    install(
+        FILES "${CMAKE_CURRENT_BINARY_DIR}/pytest-wheel.ini"
+        DESTINATION gsplat/_testdata
+        RENAME pytest.ini
+        COMPONENT gsplat_tests
+    )
+
+    install(
+        FILES "${GSPLAT_SOURCE_DIR}/assets/test_garden.npz"
+        DESTINATION gsplat/_testdata/assets
+        COMPONENT gsplat_tests
+    )
+
+    # Ship the entire examples/ tree so an installed wheel can use it exactly as
+    # a source checkout would: scripts, data, requirements, and the Python
+    # modules that import each other (e.g. av_trainer -> utils, simple_trainer ->
+    # datasets.*), which a hand-maintained allowlist silently breaks whenever a
+    # new intra-example import is added. Resolved at install time, so files added
+    # after configure are still packaged. Tracked-exact gathering is deferred
+    # (see .claude/plans/cmake-tracked-testdata-install.md); this interim copy
+    # also picks up any untracked files present in a dirty worktree.
+    install(
+        DIRECTORY "${GSPLAT_SOURCE_DIR}/examples/"
+        DESTINATION gsplat/_testdata/examples
+        COMPONENT gsplat_tests
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "*.pyc" EXCLUDE
+    )
 endif()
 
-# Python test suite registration -- top-level only (a nested subproject must
-# not inject into the parent's CTest), but OUTSIDE the GSPLAT_BUILD_TESTS gate
-# (which controls only the C++ gtests + the googletest submodule).
+# Register Python source-tree tests independently of the optional C++ test
+# target. A nested subproject must not inject tests into its parent's CTest.
 if(PROJECT_IS_TOP_LEVEL)
     add_test(
         NAME cmake_project_info

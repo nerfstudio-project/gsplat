@@ -6,7 +6,7 @@ minversion = 8.3.5
 testpaths =
     "@_gsplat_pytest_test_path@"
 pythonpath =
-    "@_gsplat_pytest_python_path@"
+@_gsplat_pytest_python_path@
 addopts =
     --import-mode=importlib
     -p pytest_check
@@ -19,3 +19,4 @@ markers =
     camera_wrappers: requires optional camera-wrapper support in the extension
     gradcheck: numerical autograd gradcheck (slow; CUDA double-precision)
     slow: longer-running training or integration coverage
+    wheel_smoke: representative installed-wheel smoke coverage used by the wheel matrix

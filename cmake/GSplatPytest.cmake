@@ -3,9 +3,20 @@
 
 include_guard(GLOBAL)
 
-function(gsplat_configure_pytest_ini output_file test_path python_path)
+function(gsplat_configure_pytest_ini output_file test_path)
     set(_gsplat_pytest_test_path "${test_path}")
-    set(_gsplat_pytest_python_path "${python_path}")
+
+    # Import roots (ARGN): render one quoted pythonpath entry per path. The
+    # installed-wheel configuration passes both the site-packages root and the
+    # examples/ payload root (so example modules' sibling imports resolve);
+    # build-tree callers pass a single path.
+    set(_gsplat_pytest_python_path "")
+    foreach(_gsplat_python_root IN LISTS ARGN)
+        if(NOT _gsplat_pytest_python_path STREQUAL "")
+            string(APPEND _gsplat_pytest_python_path "\n")
+        endif()
+        string(APPEND _gsplat_pytest_python_path "    \"${_gsplat_python_root}\"")
+    endforeach()
 
     # Keep Python and compiled-code warning policy aligned. The template keeps
     # narrow exceptions for known third-party warnings in both modes; this

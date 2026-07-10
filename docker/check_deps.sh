@@ -62,8 +62,8 @@ extract_pyproject_section()
     local support_dir
     support_dir="$(dirname "$file")/gsplat/build_support"
 
-    # Section parsing and composite-extra expansion are owned by the shared
-    # metadata helper.
+    # Section parsing and same-project extras expansion come from the shared
+    # metadata helper invoked below.
     python3 "${support_dir}/pyproject_metadata.py" "$file" "$section"
 }
 
