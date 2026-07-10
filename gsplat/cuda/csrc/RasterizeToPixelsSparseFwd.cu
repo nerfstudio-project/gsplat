@@ -146,8 +146,14 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
             {
                 render_colors[o * CDIM + k] = backgrounds == nullptr ? 0.0f : backgrounds[k];
             }
-            render_alphas[o] = 0.0f;
-            last_ids[o]      = 0;
+            if(render_alphas != nullptr)
+            {
+                render_alphas[o] = 0.0f;
+            }
+            if(last_ids != nullptr)
+            {
+                last_ids[o] = 0;
+            }
         }
         return;
     }
@@ -234,14 +240,20 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
         {
             continue; // inactive in-tile position
         }
-        render_alphas[o] = 1.0f - T[p];
+        if(render_alphas != nullptr)
+        {
+            render_alphas[o] = 1.0f - T[p];
+        }
 #    pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             render_colors[o * CDIM + k]
                 = backgrounds == nullptr ? pix_out[p][k] : (pix_out[p][k] + T[p] * backgrounds[k]);
         }
-        last_ids[o] = static_cast<int32_t>(cur_idx[p]);
+        if(last_ids != nullptr)
+        {
+            last_ids[o] = static_cast<int32_t>(cur_idx[p]);
+        }
     }
 }
 
@@ -267,9 +279,10 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
     const at::Tensor tile_pixel_cumsum, // [AT]
     const at::Tensor pixel_map,         // [P]
     // outputs
-    at::Tensor renders, // [P, channels]
-    at::Tensor alphas,  // [P, 1]
-    at::Tensor last_ids // [P]
+    at::Tensor renders,  // [P, channels]
+    at::Tensor alphas,   // [P, 1]
+    at::Tensor last_ids, // [P]
+    bool write_pixel_metadata
 )
 {
     const uint32_t AT = active_tiles.size(0);
@@ -315,6 +328,8 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
 
             const float *bg_ptr   = backgrounds.has_value() ? backgrounds.value().const_data_ptr<float>() : nullptr;
             const bool *masks_ptr = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
+            float *alphas_ptr     = write_pixel_metadata ? alphas.data_ptr<float>() : nullptr;
+            int32_t *last_ids_ptr = write_pixel_metadata ? last_ids.data_ptr<int32_t>() : nullptr;
 
             rasterize_to_pixels_sparse_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
                 <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
@@ -336,8 +351,8 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
                     pixel_map.const_data_ptr<int64_t>(),
                     words,
                     renders.data_ptr<float>(),
-                    alphas.data_ptr<float>(),
-                    last_ids.data_ptr<int32_t>()
+                    alphas_ptr,
+                    last_ids_ptr
                 );
         };
 

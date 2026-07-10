@@ -232,9 +232,10 @@ void launch_rasterize_to_pixels_sparse_fwd_kernel(
     const at::Tensor tile_pixel_cumsum, // [AT]
     const at::Tensor pixel_map,         // [P]
     // outputs
-    at::Tensor renders, // [P, channels]
-    at::Tensor alphas,  // [P, 1]
-    at::Tensor last_ids // [P]
+    at::Tensor renders,  // [P, channels]
+    at::Tensor alphas,   // [P, 1]
+    at::Tensor last_ids, // [P]
+    bool write_pixel_metadata = true
 );
 
 void launch_rasterize_to_pixels_sparse_bwd_kernel(
