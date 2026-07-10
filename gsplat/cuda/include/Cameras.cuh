@@ -61,16 +61,17 @@ __device__ std::array<T, N> make_array(const T *ptr)
 template<typename SensorModel>
 struct ProjectionUTCodegenTraits
 {
-    static constexpr int kMinBlocks                = 1;
-    static constexpr unsigned kUTUnroll            = 2u * 3u + 1u;
+    static constexpr int kMinBlocks                = 3;
     static constexpr bool kNeedsCulling            = true;
     static constexpr bool kUseGaussianScopeSlerper = false;
 
-    template<size_t N_ROLLING_SHUTTER_ITERATIONS>
-    static constexpr auto rolling_shutter_unroll() -> unsigned
-    {
-        return N_ROLLING_SHUTTER_ITERATIONS == 0u ? 1u : N_ROLLING_SHUTTER_ITERATIONS;
-    }
+    // Sigma-point loop unroll factors. Fully unrolled on every arch by default.
+    // A sensor with a heavy per-point projection can specialize these (gated on
+    // __CUDA_ARCH__) to roll the loops on Hopper+, where inlining the projection
+    // 7x otherwise inflates registers / the instruction cache and hurts occupancy.
+    static constexpr unsigned kCoupleUnroll = UnscentedTransformParameters::D + 1u;
+    static constexpr unsigned kPointsUnroll = 2u * UnscentedTransformParameters::D + 1u;
+    static constexpr unsigned kInnerUnroll  = 2u;
 };
 
 struct RollingShutterParameters
@@ -122,6 +123,80 @@ struct RollingShutterParameters
             );
             t_end = glm::fvec3(se3_end[3], se3_end[7], se3_end[11]);
         }
+    }
+};
+
+struct SigmaPointsCouple
+{
+    glm::fvec3 points[2];
+};
+
+// Column `col` of mat3_cast(q): compact cyclic body (rolled, runtime col) or
+// operand-matched switch (unrolled, constant col). Algebraically equal to glm,
+// but FMA/ptxas/arch rounding differs -- not bit-identical to glm or each other.
+// Contract for both (production-normalized q): <= 2 ULP OR <= 2^-22 (~2.4e-7) abs
+// vs glm. The absolute bound is the portable guarantee (~1 ULP of a unit entry;
+// 2^-23 even on sm_120); the 2-ULP branch only holds on the sm_89 native sweep.
+template<bool Rolled = false>
+inline __device__ glm::fvec3 rotation_matrix_column(const glm::fquat &q, unsigned col)
+{
+    if constexpr(Rolled)
+    {
+        const float v[3]  = {q.x, q.y, q.z};
+        const float w     = q.w;
+        const unsigned i0 = col, i1 = (col + 1u) % 3u, i2 = (col + 2u) % 3u;
+        const float a = v[i0], b = v[i1], c = v[i2];
+        glm::fvec3 out;
+        out[i0] = 1.f - 2.f * (b * b + c * c);
+        out[i1] = 2.f * (a * b + w * c);
+        out[i2] = 2.f * (a * c - w * b);
+        return out;
+    }
+    else
+    {
+        const float x = q.x;
+        const float y = q.y;
+        const float z = q.z;
+        const float w = q.w;
+
+        // Same operand order as the cyclic body above:
+        // (a,b,c) = (x,y,z), (y,z,x), (z,x,y) for columns 0, 1, 2.
+        switch(col)
+        {
+        case 0:  return glm::fvec3{1.f - 2.f * (y * y + z * z), 2.f * (x * y + w * z), 2.f * (x * z - w * y)};
+        case 1:  return glm::fvec3{2.f * (y * x - w * z), 1.f - 2.f * (z * z + x * x), 2.f * (y * z + w * x)};
+        default: return glm::fvec3{2.f * (z * x + w * y), 2.f * (z * y - w * x), 1.f - 2.f * (x * x + y * y)};
+        }
+    }
+}
+
+struct SigmaPointsProvider
+{
+    glm::fquat gaussian_world_rot;
+
+    template<bool Rolled = false>
+    inline __device__ SigmaPointsCouple sigma_points_couple(
+        unsigned couple,
+        const glm::fvec3 &gaussian_world_mean,
+        const glm::fvec3 &gaussian_world_scale,
+        float sigma_scale // precomputed sqrt(D + lambda): same for every couple
+    ) const
+    {
+        if(couple == 0u)
+        {
+            return {
+                {gaussian_world_mean, gaussian_world_mean}
+            };
+        }
+
+        const auto dim = couple - 1u;
+        // With C = R * diag(scale^2) * R^T, A = sigma_scale * R * diag(scale)
+        // satisfies A * A^T = (D + lambda) * C. Couple `dim` returns mean +/- A[:, dim].
+        const auto delta
+            = sigma_scale * gaussian_world_scale[dim] * rotation_matrix_column<Rolled>(gaussian_world_rot, dim);
+        return {
+            {gaussian_world_mean + delta, gaussian_world_mean - delta}
+        };
     }
 };
 
@@ -469,6 +544,29 @@ struct BaseCameraModel
         return derived->camera_ray_to_image_point_impl(distorted_ray, margin_factor);
     }
 
+    // Return only projected coordinates for the rolling-shutter iteration.
+    // By default this runs the full projection and discards validity. Models can
+    // override this function to skip validity work during each iteration.
+    inline __device__ glm::fvec2 camera_ray_to_image_point_coords(const glm::fvec3 &cam_ray) const
+    {
+        return static_cast<const DerivedCameraModel *>(this)->camera_ray_to_image_point(cam_ray, 0.f).imagePoint;
+    }
+
+    // Validity of the converged rolling-shutter projection. Called once after the
+    // iteration, with both the converged image point (from
+    // camera_ray_to_image_point_coords) and the converged ray. The default
+    // re-projects the ray, matching the pre-existing behaviour exactly; models
+    // that already produced the projected coordinates during iteration (e.g.
+    // LiDAR) override this to reuse them and skip redoing the ray->angle work.
+    inline __device__ bool converged_projection_valid(
+        const glm::fvec2 & /*image_point*/, const glm::fvec3 &cam_ray, float margin_factor
+    ) const
+    {
+        return static_cast<const DerivedCameraModel *>(this)
+            ->camera_ray_to_image_point(cam_ray, margin_factor)
+            .valid_flag;
+    }
+
     // Undo external distortion after camera unprojection (inverse)
     inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point) const
     {
@@ -577,43 +675,49 @@ struct BaseCameraModel
             };
         }
 
-        // Do initial transformations using both start and end poses to
-        // determine all candidate points and take union of valid projections as
-        // iteration starting points
-        const auto [image_point_end, valid_end]
-            = derived->camera_ray_to_image_point(glm::rotate(q_end, world_point) + t_end, margin_factor);
-
-        // This selection prefers points at the start-of-frame pose over
-        // end-of-frame points
+        // Selection prefers the start-of-frame projection over the end-of-frame
+        // one, so the end pose is only needed to seed the iteration when the
+        // start projection is invalid. Project it lazily: the common valid-start
+        // case then skips a full end-pose projection (output-identical).
         auto init_image_point = glm::fvec2{};
         if(valid_start)
         {
             init_image_point = image_point_start;
         }
-        else if(valid_end)
-        {
-            init_image_point = image_point_end;
-        }
         else
         {
-            // No valid projection at start or finish -> mark point as invalid.
-            // Still return projection result at end of frame
-            return {
-                {image_point_end.x, image_point_end.y},
-                false
-            };
+            const auto [image_point_end, valid_end]
+                = derived->camera_ray_to_image_point(glm::rotate(q_end, world_point) + t_end, margin_factor);
+            if(!valid_end)
+            {
+                // No valid projection at start or finish -> mark point as invalid.
+                // Still return projection result at end of frame
+                return {
+                    {image_point_end.x, image_point_end.y},
+                    false
+                };
+            }
+            init_image_point = image_point_end;
+        }
+
+        if constexpr(N_ROLLING_SHUTTER_ITERATIONS == 0)
+        {
+            return {init_image_point, true};
         }
 
         // Compute the new timestamp and project again
         auto image_points_rs_prev = init_image_point;
         auto t_rs                 = glm::fvec3{};
         auto q_rs                 = glm::fquat{};
-        bool valid                = true;
 
-        constexpr unsigned kRollingShutterUnroll = ProjectionUTCodegenTraits<DerivedCameraModel>::
-            template rolling_shutter_unroll<N_ROLLING_SHUTTER_ITERATIONS>();
+        // Request projected coordinates here. LiDAR skips FOV/relative-angle
+        // checks during each iteration; the default implementation still
+        // computes and discards validity. Perform the final validity check after
+        // convergence. The converged coordinates are identical to the
+        // per-iteration form, so the once-only check stays bit-exact.
+        auto final_cam_ray = glm::rotate(q_start, world_point) + t_start;
+
         auto prev_relative_frame_time = -std::numeric_limits<float>::max();
-#pragma unroll kRollingShutterUnroll
         for(auto j = 0; j < N_ROLLING_SHUTTER_ITERATIONS; ++j)
         {
             const auto relative_frame_time = derived->shutter_relative_frame_time(image_points_rs_prev);
@@ -639,17 +743,34 @@ struct BaseCameraModel
             // pose updates, so use the precise normalization here.
             q_rs = precise_normalize(slerper(relative_frame_time));
 
-            const auto [image_point_rs, valid_rs]
-                = derived->camera_ray_to_image_point(glm::rotate(q_rs, world_point) + t_rs, margin_factor);
-
-            image_points_rs_prev = image_point_rs;
-            valid                = valid_rs;
+            final_cam_ray        = glm::rotate(q_rs, world_point) + t_rs;
+            image_points_rs_prev = derived->camera_ray_to_image_point_coords(final_cam_ray);
         }
+
+        // Single FOV check on the converged projection. The coordinates are
+        // already in image_points_rs_prev (from the loop); LiDAR reuses them to
+        // avoid recomputing the ray->angle trig, other models re-project the ray
+        // (bit-identical to the previous single post-loop projection).
+        const bool valid = derived->converged_projection_valid(image_points_rs_prev, final_cam_ray, margin_factor);
 
         return {
             {image_points_rs_prev.x, image_points_rs_prev.y},
             valid
         };
+    }
+
+    template<size_t N_ROLLING_SHUTTER_ITERATIONS = 10, bool UsePrecomputedSlerper = false>
+    inline __device__ auto world_point_to_image_point_shutter_pose(
+        const SigmaPointsCouple &sigma_points_couple,
+        unsigned couple_index,
+        const RollingShutterParameters &rolling_shutter_parameters,
+        float margin_factor,
+        QuaternionSlerper<UsePrecomputedSlerper> precomputed_slerper = {}
+    ) const -> ImagePointReturn
+    {
+        return world_point_to_image_point_shutter_pose(
+            sigma_points_couple.points[couple_index], rolling_shutter_parameters, margin_factor, precomputed_slerper
+        );
     }
 };
 
@@ -1774,11 +1895,6 @@ public:
 //
 // for references
 
-struct SigmaPoints
-{
-    std::array<glm::fvec3, 2 * UnscentedTransformParameters::D + 1> points;
-};
-
 inline __device__ auto ut_lambda(const UnscentedTransformParameters &unscented_transform_parameters) -> float
 {
     const auto &alpha2 = unscented_transform_parameters.alpha2;
@@ -1800,45 +1916,20 @@ inline __device__ auto ut_weights(const UnscentedTransformParameters &unscented_
     return {mean0, covariance0, rest};
 }
 
-inline __device__ auto world_gaussian_sigma_points(
-    const UnscentedTransformParameters &unscented_transform_parameters,
-    const glm::fvec3 &gaussian_world_mean,
-    const glm::fvec3 &gaussian_world_scale,
-    const glm::fquat &gaussian_world_rot
-) -> std::tuple<float, SigmaPoints>
+inline __device__ auto world_gaussian_sigma_points(const glm::fquat &gaussian_world_rot) -> SigmaPointsProvider
 {
-    static constexpr auto D = UnscentedTransformParameters::D;
-    const auto lambda       = ut_lambda(unscented_transform_parameters);
-
-    // Compute rotation matrix R from quaternion (scaling matrix S is diag(s_i))
-    glm::fmat3 R = glm::mat3_cast(gaussian_world_rot);
-
-    // The _factored_ Gaussian covariance parametrization C = (S * R)^T * (S *
-    // R) provides a closed form of it's SVD C = U * Σ * U^T with U = R^T and Σ
-    // = S^T*S = diag((s_i)^2).
-
-    // Use this closed form SVD to compute sigma points.
-    auto ret = SigmaPoints{};
-
-    ret.points[0] = gaussian_world_mean;
-
-#pragma unroll
-    for(auto i = 0u; i < D; ++i)
-    {
-        const auto delta      = std::sqrt(D + lambda) * gaussian_world_scale[i] * R[i];
-        // "m + sqrt((n+lambda)*C)_i"
-        ret.points[i + 1]     = gaussian_world_mean + delta;
-        // "m - sqrt((n+lambda)*C)_i"
-        ret.points[i + 1 + D] = gaussian_world_mean - delta;
-    }
-
-    return {lambda, ret};
+    // Store only the quaternion; each couple builds its covariance-factor column on demand.
+    return {gaussian_world_rot};
 }
 
 struct ImageGaussianReturn
 {
     glm::fvec2 mean;
-    glm::fmat2 covariance;
+    glm::fvec3 covariance; // symmetric 2x2 (xx, xy, yy)
+    // Explicit validity flag: a valid UT covariance can have a negative diagonal
+    // (the center weight can be very negative), so covariance.xx < 0 cannot be
+    // reused as an invalid sentinel -- it would drop valid Gaussians whose
+    // pre-blur diagonal is negative but recovers after the eps2d blur.
     bool valid;
 };
 
@@ -1852,24 +1943,34 @@ inline __device__ auto world_gaussian_to_image_gaussian_unscented_transform_shut
     const glm::fquat &gaussian_world_rot
 ) -> ImageGaussianReturn
 {
-    // Compute sigma points for input distribution
-    const auto [lambda, sigma_points] = world_gaussian_sigma_points(
-        unscented_transform_parameters, gaussian_world_mean, gaussian_world_scale, gaussian_world_rot
-    );
+    static constexpr auto D = UnscentedTransformParameters::D;
+
+    // Per-arch / per-sensor unroll factors for the sigma-point loops, taken from
+    // the sensor's codegen traits (fully unrolled by default; heavy sensors roll
+    // the loops on Hopper+ to shrink code and lift occupancy -- gated inside the
+    // trait specialization on __CUDA_ARCH__, not here).
+    constexpr unsigned kCoupleUnroll = ProjectionUTCodegenTraits<CameraModel>::kCoupleUnroll;
+    constexpr unsigned kPointsUnroll = ProjectionUTCodegenTraits<CameraModel>::kPointsUnroll;
+    constexpr unsigned kInnerUnroll  = ProjectionUTCodegenTraits<CameraModel>::kInnerUnroll;
+    // Rolled sigma loops (kCoupleUnroll==1) leave the column index runtime, so pick
+    // the compact cyclic-shifted rotation_matrix_column there; fully-unrolled keeps
+    // the switch (it constant-folds to a single column).
+    constexpr bool kRolled           = (kCoupleUnroll == 1u);
+
+    const auto lambda                = ut_lambda(unscented_transform_parameters);
+    // UT sigma-point spread sqrt(D + lambda): loop-invariant across couples, so
+    // compute the (relatively expensive) sqrt once instead of per couple.
+    const float sigma_scale          = std::sqrt(static_cast<float>(D) + lambda);
+    const auto sigma_points_provider = world_gaussian_sigma_points(gaussian_world_rot);
 
     // Transform sigma points / compute approximation of output distribution via
     // sample mean / covariance
     bool valid            = unscented_transform_parameters.require_all_sigma_points_valid;
-    auto image_points     = std::array<glm::fvec2, 2 * UnscentedTransformParameters::D + 1>{};
     auto image_mean       = glm::fvec2{0};
-    auto image_covariance = glm::fmat2{0};
+    auto image_covariance = glm::fvec3{0};
+    auto image_points     = std::array<glm::fvec2, 2 * D + 1>{};
 
-    auto [mean, covariance, rest] = ut_weights(unscented_transform_parameters, lambda);
-
-    // De-unroll the two 7-point loops only for measured wins. The fixed 7-trip
-    // camera loops are cheap enough that the LiDAR register/codegen policy is
-    // not a universal improvement.
-    constexpr unsigned kUTUnroll = ProjectionUTCodegenTraits<CameraModel>::kUTUnroll;
+    auto [mean_weight, covariance, rest_weight] = ut_weights(unscented_transform_parameters, lambda);
 
     // The rolling-shutter slerp endpoints are identical for every sigma point of
     // this Gaussian, so compute the inter-quaternion angle once here and share it
@@ -1887,12 +1988,13 @@ inline __device__ auto world_gaussian_to_image_gaussian_unscented_transform_shut
             rs_slerper = QuaternionSlerper<>(rolling_shutter_parameters.q_start, rolling_shutter_parameters.q_end);
         }
     }
-#pragma unroll kUTUnroll
-    for(auto i = 0u; i < std::size(image_points); ++i)
+
+    auto project_sigma_point
+        = [&](const SigmaPointsCouple &sigma_points_couple, unsigned couple_index, unsigned sigma_index) -> bool
     {
-        typename CameraModel::ImagePointReturn image_point_return{};
-        image_point_return = camera_model.template world_point_to_image_point_shutter_pose<>(
-            sigma_points.points[i],
+        const auto image_point_return = camera_model.template world_point_to_image_point_shutter_pose<>(
+            sigma_points_couple,
+            couple_index,
             rolling_shutter_parameters,
             unscented_transform_parameters.in_image_margin_factor,
             rs_slerper
@@ -1905,31 +2007,55 @@ inline __device__ auto world_gaussian_to_image_gaussian_unscented_transform_shut
             valid &= point_valid; // all have to be valid
             if(!point_valid)
             {
-                // Early exit if invalid
-                return {image_mean, image_covariance, false};
+                return false;
             }
         }
         else
         {
             valid |= point_valid; // any valid is sufficient
         }
-        image_points[i]  = {image_point.x, image_point.y};
-        image_mean      += mean * image_points[i];
-        mean             = rest;
+        image_points[sigma_index] = {image_point.x, image_point.y};
+        return true;
+    };
+
+    // Project sigma points: mean (couple 0) then +/- pairs per axis (7 total).
+#pragma unroll kCoupleUnroll
+    for(unsigned couple = 0u; couple <= D; ++couple)
+    {
+        const auto sigma_points_couple = sigma_points_provider.template sigma_points_couple<kRolled>(
+            couple, gaussian_world_mean, gaussian_world_scale, sigma_scale
+        );
+#pragma unroll kInnerUnroll
+        for(unsigned i = 0u; i <= (couple == 0u ? 0u : 1u); ++i)
+        {
+            const unsigned sigma_index = couple == 0u ? 0u : couple + i * D;
+            if(!project_sigma_point(sigma_points_couple, i, sigma_index))
+            {
+                return {image_mean, image_covariance, false};
+            }
+        }
     }
 
-    if(!valid)
+    if(valid)
     {
-        // Early exit if invalid
-        return {image_mean, image_covariance, false};
-    }
+        // Match baseline index order (0..2D) when forming the weighted mean.
+        auto mean_weight_running = mean_weight;
+#pragma unroll kPointsUnroll
+        for(auto i = 0u; i < std::size(image_points); ++i)
+        {
+            image_mean          += mean_weight_running * image_points[i];
+            mean_weight_running  = rest_weight;
+        }
 
-#pragma unroll kUTUnroll
-    for(auto i = 0u; i < std::size(image_points); ++i)
-    {
-        const auto image_mean_vec  = image_points[i] - image_mean;
-        image_covariance          += covariance * glm::outerProduct(image_mean_vec, image_mean_vec);
-        covariance                 = rest;
+#pragma unroll kPointsUnroll
+        for(auto i = 0u; i < std::size(image_points); ++i)
+        {
+            const auto delta    = image_points[i] - image_mean;
+            image_covariance.x += covariance * (delta.x * delta.x);
+            image_covariance.y += covariance * (delta.x * delta.y);
+            image_covariance.z += covariance * (delta.y * delta.y);
+            covariance          = rest_weight;
+        }
     }
 
     return {image_mean, image_covariance, valid};

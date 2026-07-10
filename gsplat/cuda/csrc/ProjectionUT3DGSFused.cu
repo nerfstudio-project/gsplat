@@ -40,9 +40,8 @@ namespace gsplat
 {
 namespace cg = cooperative_groups;
 
-// Cap registers to 64 (>= 4 blocks/SM) only for paths where measurement shows it
-// wins. The default min-blocks policy is 1, which keeps camera codegen close to
-// baseline without needing a separate kernel wrapper.
+// __launch_bounds__(256, kMinBlocks) caps register usage to target kMinBlocks/SM.
+// Measured on A6000: cam=3 / lidar=3 beats the old cam=1 / lidar=4 defaults.
 template<typename SensorModel, typename scalar_t>
 __global__ void
     __launch_bounds__(256, ProjectionUTCodegenTraits<SensorModel>::kMinBlocks) projection_ut_3dgs_fused_kernel(
@@ -139,11 +138,10 @@ __global__ void
     quat *= rsqrtf(quat_norm2);
 
     // projection using unscented transform
-    ImageGaussianReturn image_gaussian_return = world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
+    auto [mean2d, covar2d, valid_ut] = world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         SensorModel(sensor_model_params, bid * C + cid), rs_params, ut_params, mean, scale, quat
     );
 
-    auto [mean2d, covar2d, valid_ut] = image_gaussian_return;
     if(!valid_ut)
     {
         radii[idx * 2]     = 0;
@@ -152,13 +150,7 @@ __global__ void
     }
 
     float compensation;
-    float det = add_blur(eps2d, covar2d, compensation);
-    if(det <= 0.f)
-    {
-        radii[idx * 2]     = 0;
-        radii[idx * 2 + 1] = 0;
-        return;
-    }
+    const float det = add_blur(eps2d, covar2d, compensation);
 
     // The UT center covariance weight can be very negative (e.g. ≈ -96 with
     // default alpha=0.1).  This means the UT covariance estimate is not
@@ -166,15 +158,15 @@ __global__ void
     // when the determinant is positive.  Cull these: the UT has failed to
     // produce a valid 2D covariance for this Gaussian/camera combination, and
     // sqrtf(negative diagonal) below would produce NaN.
-    if(covar2d[0][0] < 0.f || covar2d[1][1] < 0.f)
+    if(det <= 0.f || covar2d.x < 0.f || covar2d.z < 0.f)
     {
         radii[idx * 2]     = 0;
         radii[idx * 2 + 1] = 0;
         return;
     }
 
-    // compute the inverse of the 2d covariance
-    mat2 covar2d_inv = glm::inverse(covar2d);
+    const float inv_det          = 1.f / det;
+    const glm::fvec3 covar2d_inv = inverse_symmetric_cov2d(covar2d, inv_det);
 
     float extend = GAUSSIAN_EXTEND;
     // Note: the optimizations from StopThePop (https://arxiv.org/pdf/2402.00525) give identical
@@ -202,12 +194,12 @@ __global__ void
 
     // compute tight rectangular bounding box (non differentiable)
     // https://arxiv.org/pdf/2402.00525
-    float b        = 0.5f * (covar2d[0][0] + covar2d[1][1]);
+    float b        = 0.5f * (covar2d.x + covar2d.z);
     float tmp      = sqrtf(max(0.01f, b * b - det));
     float v1       = b + tmp; // larger eigenvalue
     float r1       = extend * sqrtf(v1);
-    float radius_x = ceilf(min(extend * sqrtf(covar2d[0][0]), r1));
-    float radius_y = ceilf(min(extend * sqrtf(covar2d[1][1]), r1));
+    float radius_x = ceilf(min(extend * sqrtf(covar2d.x), r1));
+    float radius_y = ceilf(min(extend * sqrtf(covar2d.z), r1));
 
     if(radius_x <= radius_clip && radius_y <= radius_clip)
     {
@@ -244,9 +236,9 @@ __global__ void
     means2d[idx * 2]     = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx]          = depth;
-    conics[idx * 3]      = covar2d_inv[0][0];
-    conics[idx * 3 + 1]  = covar2d_inv[0][1];
-    conics[idx * 3 + 2]  = covar2d_inv[1][1];
+    conics[idx * 3]      = covar2d_inv.x;
+    conics[idx * 3 + 1]  = covar2d_inv.y;
+    conics[idx * 3 + 2]  = covar2d_inv.z;
     if(compensations != nullptr)
     {
         compensations[idx] = compensation;

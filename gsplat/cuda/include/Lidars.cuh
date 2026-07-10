@@ -51,8 +51,16 @@ struct RowOffsetStructuredSpinningLidarModelParametersExtDevice
     int2 map_dim;              // Dimensions of the map grid
     float2 map_resolution_rad; // Grid cell size in radians [.x=azimuth, .y=elevation]
 
-    // Angle to pixel scaling factor
+    // Angle to pixel scaling factor. Must stay a power of two: the LiDAR
+    // rolling-shutter trig-dedup (converged_projection_valid) recovers
+    // (azimuth, elevation) from the scaled image point by multiplying with
+    // 1 / ANGLE_TO_PIXEL_SCALING_FACTOR, which only round-trips bit-for-bit
+    // (scale * (1/scale) == 1 in IEEE float) when the scale is a power of two.
     static constexpr int ANGLE_TO_PIXEL_SCALING_FACTOR = 1024;
+    static_assert(
+        ANGLE_TO_PIXEL_SCALING_FACTOR > 0 && (ANGLE_TO_PIXEL_SCALING_FACTOR & (ANGLE_TO_PIXEL_SCALING_FACTOR - 1)) == 0,
+        "ANGLE_TO_PIXEL_SCALING_FACTOR must be a power of two so trig-dedup FOV recovery round-trips exactly"
+    );
 
     // Tiling info
     int n_bins_azimuth;
@@ -192,6 +200,62 @@ public:
         return {image_point, valid};
     }
 
+    // Coordinates-only projection for the rolling-shutter iteration: identical
+    // image-point math as camera_ray_to_image_point but without the FOV /
+    // relative_sensor_angles work (no fmod / relative-angle per iteration). The
+    // coordinates are bit-identical to the full projection's image point.
+    __device__ glm::fvec2 camera_ray_to_image_point_coords(const glm::fvec3 &cam_ray) const
+    {
+        const RowOffsetStructuredSpinningLidarModelParametersExtDevice &lidar = parameters.lidar;
+
+        const float ray_length = glm::length(cam_ray);
+        if(ray_length < 1e-6f)
+        {
+            return {0.f, 0.f};
+        }
+
+        const glm::fvec3 ray_normalized = cam_ray / ray_length;
+
+        const float elevation = std::asin(std::clamp(ray_normalized.z, -1.f, 1.f));
+        const float azimuth   = std::atan2(ray_normalized.y, ray_normalized.x);
+
+        return {azimuth * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR, elevation * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR};
+    }
+
+    // Validity of the converged rolling-shutter projection, reusing the image
+    // point that camera_ray_to_image_point_coords already produced during the
+    // iteration. Recovering (azimuth, elevation) from the scaled image point is
+    // exact (ANGLE_TO_PIXEL_SCALING_FACTOR is a power of two), so the angles are
+    // bit-identical to what camera_ray_to_image_point would derive from the same
+    // ray -- this skips the redundant asin/atan2 on the converged ray, keeping
+    // only the cheap degenerate-length guard and the FOV check.
+    __device__ bool converged_projection_valid(
+        const glm::fvec2 &image_point, const glm::fvec3 &cam_ray, float margin_factor
+    ) const
+    {
+        const RowOffsetStructuredSpinningLidarModelParametersExtDevice &lidar = parameters.lidar;
+
+        // Matches camera_ray_to_image_point's early-out for degenerate rays.
+        if(glm::length(cam_ray) < 1e-6f)
+        {
+            return false;
+        }
+
+        constexpr float kToAngle = 1.f / lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+        const float azimuth      = image_point.x * kToAngle;
+        const float elevation    = image_point.y * kToAngle;
+
+        const auto [rel_elevation, rel_azimuth] = this->relative_sensor_angles(elevation, azimuth);
+
+        const float tol_azimuth   = margin_factor * lidar.fov_horiz_rad.span;
+        const float tol_elevation = margin_factor * lidar.fov_vert_rad.span;
+
+        return rel_elevation >= -tol_elevation
+            && rel_azimuth >= -tol_azimuth
+            && rel_elevation <= lidar.fov_vert_rad.span + tol_elevation
+            && rel_azimuth <= lidar.fov_horiz_rad.span + tol_azimuth;
+    }
+
     // Convert pixel indices (j=column, i=row) to image points in scaled angle space.
     // Matches base class convention: j is the width axis (azimuth), i is the height axis (elevation).
     __device__ glm::fvec2 element_to_image_point(int j, int i) const
@@ -315,16 +379,25 @@ public:
 template<>
 struct ProjectionUTCodegenTraits<RowOffsetStructuredSpinningLidarModel>
 {
-    static constexpr int kMinBlocks                = 4;
-    static constexpr unsigned kUTUnroll            = 1u;
     static constexpr bool kNeedsCulling            = false;
     static constexpr bool kUseGaussianScopeSlerper = true;
 
-    template<size_t N_ROLLING_SHUTTER_ITERATIONS>
-    static constexpr auto rolling_shutter_unroll() -> unsigned
-    {
-        return 1u;
-    }
+    // Hopper/Blackwell: roll the UT loops (unroll factor 1) and target 4 blocks/SM
+    // (64 regs, 50% occupancy). The heavy LiDAR projection inlined 7x under full
+    // unroll bloats code/registers and regresses ~50% on sm_90; the rolled form is
+    // ~38% faster there while replayed projection outputs remain bit-identical.
+    // Ampere/Ada keep full unroll @ 3 blocks/SM.
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+    static constexpr int kMinBlocks         = 4;
+    static constexpr unsigned kCoupleUnroll = 1u;
+    static constexpr unsigned kPointsUnroll = 1u;
+    static constexpr unsigned kInnerUnroll  = 1u;
+#else
+    static constexpr int kMinBlocks         = 3;
+    static constexpr unsigned kCoupleUnroll = UnscentedTransformParameters::D + 1u;
+    static constexpr unsigned kPointsUnroll = 2u * UnscentedTransformParameters::D + 1u;
+    static constexpr unsigned kInnerUnroll  = 2u;
+#endif
 };
 
 // Type list of all lidar model types

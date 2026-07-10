@@ -7183,6 +7183,151 @@ def test_projection_ut_python_ref_no_nan(nan_test_data):
         )
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_projection_ut_negative_preblur_diag_survives_eps2d():
+    """A valid UT covariance may have a negative diagonal before blur.
+
+    This fixture was found by an independent UT/pinhole search. Before blur,
+    ``covar2d.xx`` is negative (-2.4e-4), but adding eps2d=0.3 makes the
+    covariance valid. The projection path must preserve the explicit UT-valid
+    flag and avoid treating ``covar2d.xx < 0`` as an invalid sentinel.
+    """
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+    from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
+
+    width = 1_000_000
+    height = 1_000_000
+    proj_params = dict(
+        means=torch.tensor(
+            [[-16.73026466369629, 33.509700775146484, 0.1956430971622467]],
+            device=device,
+        ),
+        quats=torch.tensor(
+            [
+                [
+                    -0.40441247820854187,
+                    0.5313093066215515,
+                    -0.4663550853729248,
+                    0.58023601770401,
+                ]
+            ],
+            device=device,
+        ),
+        scales=torch.tensor(
+            [[0.08389746397733688, 0.10447215288877487, 0.0018264513928443193]],
+            device=device,
+        ),
+        opacities=None,
+        viewmats=torch.eye(4, device=device).reshape(1, 4, 4),
+        Ks=torch.tensor(
+            [
+                [
+                    [0.01, 0.0, 0.5 * width],
+                    [0.0, 0.0107, 0.5 * height],
+                    [0.0, 0.0, 1.0],
+                ]
+            ],
+            device=device,
+        ),
+        width=width,
+        height=height,
+        eps2d=0.3,
+        calc_compensations=True,
+        ut_params=UnscentedTransformParameters(alpha=0.1, beta=2.0, kappa=0.0),
+    )
+
+    (
+        radii_gpu,
+        means2d_gpu,
+        depths_gpu,
+        conics_gpu,
+        comps_gpu,
+    ) = fully_fused_projection_with_ut(**proj_params)
+    (
+        radii_ref,
+        means2d_ref,
+        depths_ref,
+        conics_ref,
+        comps_ref,
+    ) = _fully_fused_projection_with_ut(**proj_params)
+
+    assert (radii_gpu[0, 0] > 0).all()
+    assert (radii_ref[0, 0] > 0).all()
+    assert torch.isfinite(means2d_gpu[0, 0]).all()
+    assert torch.isfinite(depths_gpu[0, 0])
+    assert torch.isfinite(conics_gpu[0, 0]).all()
+    assert torch.isfinite(comps_gpu[0, 0])
+
+    # The existing CUDA/reference UT integration check allows small radius
+    # differences because the Python reference uses torch.linalg.inv/radius math
+    # rather than the CUDA kernel's exact fp32 expression graph. This fixture
+    # pins selection and finite matching outputs for the recovered covariance.
+    #
+    # means2d here is near 5e5 (image center is width/2 = 5e5). Projecting a
+    # near-origin point onto that center subtracts large, nearly equal values, so
+    # the CUDA and reference expression graphs round differently. rtol=4e-6 allows
+    # ~4e-6 * 5e5 = 2 pixels (roughly 64 representable float32 steps at this
+    # magnitude); the tighter atol still guards small coordinates.
+    torch.testing.assert_close(means2d_gpu, means2d_ref, rtol=4e-6, atol=1e-3)
+    torch.testing.assert_close(depths_gpu, depths_ref, rtol=0, atol=0)
+
+    # CUDA directly inverts the packed float32 covariance, while the float32
+    # reference adds 1e-6 to the diagonal before calling torch.linalg.inv_ex.
+    # For this near-degenerate fixture, that regularization and the different
+    # expression graph produce ~10% off-diagonal differences, so check that the
+    # CUDA conic is finite and positive-definite rather than elementwise-close.
+    a, b, c = conics_gpu[0, 0, 0], conics_gpu[0, 0, 1], conics_gpu[0, 0, 2]
+    assert torch.isfinite(comps_gpu[0, 0]).all()
+    assert (a > 0).item() and (c > 0).item()
+    assert (a * c - b * b > 0).item()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_projection_ut_tiny_positive_det_blur_keeps_reciprocal_path():
+    """A tiny positive blurred determinant must still produce finite conics.
+
+    This pins the regression where packed covariance inversion special-cased
+    ``det_blur <= float::epsilon`` to a zero inverse. Baseline ``glm::inverse``
+    divides by every positive determinant, even tiny ones.
+    """
+    from gsplat.cuda._wrapper import fully_fused_projection_with_ut
+
+    eps2d = 1e-4
+    means = torch.tensor([[0.0, 0.0, 1.0]], device=device)
+    quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+    scales = torch.full((1, 3), 1e-5, device=device)
+    viewmats = torch.eye(4, device=device).reshape(1, 4, 4)
+    Ks = torch.tensor(
+        [[[1.0, 0.0, 8.0], [0.0, 1.0, 8.0], [0.0, 0.0, 1.0]]],
+        device=device,
+    )
+
+    radii, means2d, depths, conics, compensations = fully_fused_projection_with_ut(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=None,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=16,
+        height=16,
+        eps2d=eps2d,
+        calc_compensations=True,
+        ut_params=UnscentedTransformParameters(alpha=0.1, beta=2.0, kappa=0.0),
+    )
+
+    assert (radii[0, 0] > 0).all()
+    assert torch.isfinite(means2d[0, 0]).all()
+    assert torch.isfinite(depths[0, 0]).all()
+    assert torch.isfinite(conics[0, 0]).all()
+    assert torch.isfinite(compensations[0, 0])
+    assert conics[0, 0, 0] > 0.0
+    assert conics[0, 0, 2] > 0.0
+    assert torch.count_nonzero(conics[0, 0]).item() > 0
+
+
 # --------------------------------------------------------------------------
 # Backward stability: 1/(1-alpha) clamp when alpha -> 1
 # --------------------------------------------------------------------------
