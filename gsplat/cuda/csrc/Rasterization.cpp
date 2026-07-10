@@ -722,7 +722,7 @@ RasterizeToPixels3DGSFwdResult rasterize_to_pixels_sparse_fwd(
     render_chunks.reserve(chunk_widths.size());
 
     int start = 0;
-    for(int width: chunk_widths)
+    for(const int width: chunk_widths)
     {
         const int end           = start + width;
         at::Tensor colors_chunk = start == 0 && end == channels ? colors : colors.slice(-1, start, end).contiguous();
@@ -754,7 +754,8 @@ RasterizeToPixels3DGSFwdResult rasterize_to_pixels_sparse_fwd(
             pixel_map,
             renders_chunk,
             alphas,
-            last_ids
+            last_ids,
+            start == 0
         );
         render_chunks.push_back(renders_chunk);
         start = end;
