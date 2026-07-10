@@ -17,9 +17,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
-
-SCENE_ROOT = Path(__file__).resolve().parent
 
 
 def test_top_level_import_does_not_load_functional_or_native_backend():
@@ -60,39 +57,3 @@ if loaded:
     raise AssertionError(f"importing gsplat.scene.functional eagerly loaded: {loaded}")
 """
     subprocess.run([sys.executable, "-c", code], check=True)
-
-
-def _repo_root() -> Path:
-    # tests/scene/test_package_imports.py -> repo root is two levels up.
-    return SCENE_ROOT.parent.parent
-
-
-def test_root_packaging_ships_scene_cuda_sources():
-    """The scene CUDA sources ship with the main ``gsplat`` package.
-
-    Packaging is driven by root ``pyproject.toml`` sdist rules and
-    ``MANIFEST.in``. This test asserts
-    (a) the CUDA sources physically exist where the package expects them and
-    (b) the root packaging metadata references them — without building a wheel.
-    """
-    repo_root = _repo_root()
-    scene_cuda = repo_root / "gsplat" / "scene" / "kernels" / "cuda"
-
-    required_sources = [
-        "csrc/ext.cpp",
-        "csrc/gaussian_scene_pack.cpp",
-        "csrc/gaussian_scene_pack.cuh",
-    ]
-    for source in required_sources:
-        assert (scene_cuda / source).is_file(), f"missing scene CUDA source: {source}"
-
-    # pyproject.toml and MANIFEST.in must both keep the scene CUDA sources in
-    # source distributions. Inspect text rather than invoking packaging.
-    pyproject_text = (repo_root / "pyproject.toml").read_text()
-    manifest_text = (repo_root / "MANIFEST.in").read_text()
-    assert (
-        "gsplat/scene/kernels/cuda/**" in pyproject_text
-    ), "pyproject.toml is missing scene CUDA sdist sources"
-    assert (
-        "gsplat/scene/kernels/cuda" in manifest_text
-    ), "MANIFEST.in is missing scene CUDA sources"

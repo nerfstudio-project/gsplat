@@ -12,14 +12,19 @@ jobs:
       - name: Strip unsupported tags in README
         run: |
           sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
-      - name: Build sdist
+      - name: Prepare source distribution build
         run: |
           python -m pip install build
+          rm -rf dist
+          mkdir -p dist
+      - name: Build sdist
+        run: |
           python -m build --sdist
       - uses: actions/upload-artifact@v4
         with:
           name: pypi_packages
           path: dist/*.tar.gz
+          if-no-files-found: error
 
   build_wheels:
     runs-on: ${{ matrix.os }}
@@ -95,7 +100,7 @@ jobs:
         run: |
           # https://github.com/pypa/setuptools/issues/5174, pkg_resources is removed in setuptools 82 but we need it for older torch versions
           pip install --upgrade "setuptools<82"
-          pip install "cmake>=3.26" ninja scikit-build-core
+          pip install "cmake>=3.26" ninja "scikit-build-core>=0.12"
         shell: bash
 
       - name: Build wheel

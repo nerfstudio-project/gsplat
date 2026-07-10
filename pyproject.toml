@@ -14,8 +14,15 @@
 # limitations under the License.
 
 [build-system]
-requires = ["scikit-build-core>=1.0", "torch>=2.7"]
-build-backend = "scikit_build_core.build"
+# The backend itself imports packaging and, below Python 3.11, tomli; declare
+# them instead of relying on scikit-build-core's transitive dependencies.
+requires = [
+    "scikit-build-core>=1.0",
+    "packaging>=21.3",
+    'tomli>=1.2; python_version < "3.11"',
+]
+build-backend = "gsplat_git_sdist_backend"
+backend-path = ["gsplat/build_support"]
 
 [project]
 name = "gsplat"
@@ -102,6 +109,7 @@ Repository = "https://github.com/nerfstudio-project/gsplat"
 Documentation = "https://docs.gsplat.studio"
 
 [tool.scikit-build]
+minimum-version = "build-system.requires"
 build.verbose = false
 ninja.version = ">=1.5"
 
@@ -135,29 +143,4 @@ exclude = [
     "gsplat/sensors/kernels/cuda/**",
     "gsplat/scene/kernels/cuda/**",
     "gsplat/experimental/render/kernels/cuda/**",
-]
-
-[tool.scikit-build.sdist]
-include = [
-    "config.yaml",
-    "gsplat/cuda/csrc/**",
-    "gsplat/geometry/kernels/cuda/**",
-    "gsplat/sensors/kernels/cuda/**",
-    "gsplat/scene/kernels/cuda/**",
-    "gsplat/experimental/render/kernels/cuda/**",
-    "gsplat/**/CMakeLists.txt",
-    "third_party/glm/**",
-    "third_party/googletest/**",
-    "cmake/**",
-    "/CMakeLists.txt",
-    "/CMakePresets.json",
-]
-exclude = [
-    ".claude/**",
-    "build/**",
-    "dist/**",
-    ".torch_extensions/**",
-    "**/__pycache__/**",
-    "**/*.pyc",
-    "*.egg-info/**",
 ]
