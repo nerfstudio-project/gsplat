@@ -170,7 +170,7 @@ def get_extras_require() -> dict:
             f"clang-format=={_read_config_variable('CLANG_FORMAT_VERSION')}",
             "isort==5.10.1",
             "pylint==2.13.4",
-            "pytest",
+            "pytest>=8.3.5",
             "pytest-check",
             "pytest-env",
             "pytest-xdist==2.5.0",
