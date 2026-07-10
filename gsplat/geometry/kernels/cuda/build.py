@@ -40,7 +40,7 @@ def get_build_parameters() -> SimpleNamespace:
     name = "gsplat_geometry_cuda"
     extra_include_paths: list[str] = []
     sources = [
-        os.path.join(PATH, "ext.cpp"),
+        os.path.join(PATH, "csrc", "ext.cpp"),
         os.path.join(PATH, "csrc", "quaternion.cu"),
         os.path.join(PATH, "csrc", "pose.cu"),
     ]

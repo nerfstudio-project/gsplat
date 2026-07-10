@@ -47,12 +47,12 @@ except ImportError:
 # Directory of this build.py file (gsplat/experimental/render/kernels/cuda/)
 PATH = os.path.dirname(os.path.abspath(__file__))
 
-# Compute the path to gsplat/cuda/include/ relative to this file's location.
+# Compute the path to gsplat/cuda/csrc/include/ relative to this file's location.
 # Layout: <gsplat_pkg>/experimental/render/kernels/cuda/build.py
-#         <gsplat_pkg>/cuda/include/
+#         <gsplat_pkg>/cuda/csrc/include/
 # Walk up four levels to the gsplat package root, then descend into cuda/.
 _GSPLAT_ROOT = os.path.normpath(os.path.join(PATH, "..", "..", "..", ".."))
-_GSPLAT_INCLUDE = os.path.join(_GSPLAT_ROOT, "cuda", "include")
+_GSPLAT_INCLUDE = os.path.join(_GSPLAT_ROOT, "cuda", "csrc", "include")
 _GSPLAT_CSRC = os.path.join(_GSPLAT_ROOT, "cuda", "csrc")
 
 DEBUG = os.getenv("DEBUG", "0") == "1"
@@ -90,7 +90,7 @@ def get_build_parameters():
                     extra_include_paths.append(p)
 
     # Source files ------------------------------------
-    sources = [os.path.join(current_dir, "ext.cpp")]
+    sources = [os.path.join(current_dir, "csrc", "ext.cpp")]
     if os.path.isdir(gaussian_render_inference_dir):
         sources.append(
             os.path.join(

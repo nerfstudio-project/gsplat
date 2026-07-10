@@ -195,7 +195,7 @@ Libraries with native CUDA code should follow the same top-level extension
 structure:
 
 - `kernels/cuda/build.py`: JIT build and load logic
-- `kernels/cuda/ext.cpp`: C++ binding layer and PyBind exports
+- `kernels/cuda/csrc/ext.cpp`: C++ binding layer and PyBind exports
 - `kernels/cuda/csrc/*.cuh`: device-side helpers and per-row/per-element logic
 - `kernels/cuda/csrc/*.cu`: host launch code, `__global__` kernels, dispatch,
   and exported CUDA entrypoints

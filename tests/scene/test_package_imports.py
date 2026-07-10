@@ -79,7 +79,7 @@ def test_root_setup_ships_scene_cuda_sources():
     scene_cuda = repo_root / "gsplat" / "scene" / "kernels" / "cuda"
 
     required_sources = [
-        "ext.cpp",
+        "csrc/ext.cpp",
         "csrc/gaussian_scene_pack.cpp",
         "csrc/gaussian_scene_pack.cuh",
     ]

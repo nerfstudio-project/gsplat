@@ -27,7 +27,7 @@ namespace gsplat_sensors
 // import time that its integer values match this enum.
 //
 // Distinct from upstream gsplat's `gsplat::ShutterType` in
-// `gsplat/cuda/include/Cameras.h` (values 0..4); placed in the
+// `gsplat/cuda/csrc/include/Cameras.h` (values 0..4); placed in the
 // `gsplat_sensors` namespace so the two cannot collide.
 enum class ShutterType : int64_t
 {

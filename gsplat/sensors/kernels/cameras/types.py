@@ -45,7 +45,7 @@ def _verify_shutter_type_matches_cpp() -> None:
         raise RuntimeError(
             "Loaded gsplat_sensors_cuda extension does not expose ShutterType. "
             "Rebuild the native extension (see "
-            "gsplat/sensors/kernels/cuda/ext.cpp)."
+            "gsplat/sensors/kernels/cuda/csrc/ext.cpp)."
         )
     for member in ShutterType:
         cpp_member = getattr(cpp_enum, member.name, None)
