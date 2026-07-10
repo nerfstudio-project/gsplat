@@ -5,6 +5,8 @@
 # Internal CUDA implementation
 # -----------------------------------------------------------------------------
 
+include(GSplatTargetSourceInstances)
+
 # New implementation files must be added explicitly to the source lists on
 # the target below; build sources are not globbed.
 add_library(
@@ -43,6 +45,7 @@ add_library(
     Utils.cpp
 )
 
+set(_gsplat_instance_sources)
 if(_gsplat_final_build_2DGS)
     target_sources(
         gsplat_core
@@ -80,8 +83,14 @@ if(_gsplat_final_build_3DGUT)
             PrimingChainEncoding.cu
             ProjectionUT3DGSFused.cu
             RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu
-            RasterizeToPixelsFromWorld3DGSParallelBatchFwd.cu
-            RasterizeToPixelsFromWorld3DGSSerialBatchFwd.cu
+    )
+    # These translation units have enough channel-dependent compiler work to
+    # benefit from separate channel instantiations. Keep the longest source
+    # first so parallel build tools can begin it as early as possible.
+    list(
+        APPEND _gsplat_instance_sources
+        RasterizeToPixelsFromWorld3DGSParallelBatchFwd.cu
+        RasterizeToPixelsFromWorld3DGSSerialBatchFwd.cu
     )
 endif()
 if(_gsplat_final_build_ADAM)
@@ -109,6 +118,9 @@ if(_gsplat_final_build_camera_wrappers)
     target_sources(gsplat_core PRIVATE CameraWrappers.cu ExternalDistortionWrappers.cu)
 endif()
 
+# Instance sources also need one compilation without
+# GSPLAT_INSTANTIATE_TEMPLATE to provide their runtime dispatch functions.
+target_sources(gsplat_core PRIVATE ${_gsplat_instance_sources})
 set_target_properties(gsplat_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(
     gsplat_core
@@ -129,6 +141,16 @@ target_link_libraries(
     PUBLIC gsplat_compile_opts gsplat::ext::glm gsplat::ext::torch CUDA::cudart
     PRIVATE Python::Module
 )
+
+# Larger channel counts take longer to compile, so schedule them first without
+# changing the configured channel order.
+set(_gsplat_scheduled_channels ${_gsplat_final_num_channels})
+list(SORT _gsplat_scheduled_channels COMPARE NATURAL ORDER DESCENDING)
+foreach(_source IN LISTS _gsplat_instance_sources)
+    foreach(_channel IN LISTS _gsplat_scheduled_channels)
+        gsplat_target_add_source_instance(gsplat_core "${_source}" CHANNEL "${_channel}")
+    endforeach()
+endforeach()
 
 # -----------------------------------------------------------------------------
 # Python extension module

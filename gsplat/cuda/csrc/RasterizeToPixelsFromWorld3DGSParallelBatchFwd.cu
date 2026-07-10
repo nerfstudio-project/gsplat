@@ -45,6 +45,8 @@ using SupportedChannels                 = dispatch::IntParam<GSPLAT_NUM_CHANNELS
 using DeviceLidarParamsOpt              = cuda::std::optional<RowOffsetStructuredSpinningLidarModelParametersExtDevice>;
 using DeviceExternalDistortionParamsOpt = cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams>;
 
+#ifdef GSPLAT_INSTANTIATE_TEMPLATE
+
 namespace cg = cooperative_groups;
 
 using PixelCoordsCompact = PixelCoords;
@@ -405,7 +407,7 @@ __global__ void
     vec3 ray_d[PIXELS_PER_THREAD]       = {};
     bool valid_pixel[PIXELS_PER_THREAD] = {};
     uint32_t done_mask                  = 0u;
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         pcs[p] = compute_pixel_coords_compact<TILE_SIZE, CTA_SIZE>(
@@ -475,7 +477,7 @@ __global__ void
     vec3 normal_out[PIXELS_PER_THREAD]     = {};
     int32_t cur_idx[PIXELS_PER_THREAD];
     int32_t n_accumulated[PIXELS_PER_THREAD] = {};
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         T[p] = 1.0f;
@@ -518,7 +520,7 @@ __global__ void
 // saturation flag, and `next_batch` from tearing. A stored writer with
 // K <= b gives an upper bound on this batch's true initial T; K > b is a
 // higher-wave race and is ignored to keep the seed conservative.
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         const uint32_t bit = 1u << p;
@@ -620,7 +622,7 @@ __global__ void
         FwdPartialsMetaView<ushort2> summary_view(partials_meta, slot, pixels_per_tile, 0);
         summary_view.reset();
     }
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         const uint32_t pix_y_in_tile   = thread_y + p * ROW_STRIDE;
@@ -643,7 +645,7 @@ __global__ void
             slot_view.setT(walk_prod);
             if(!this_batch_saturated || !ForBackward)
             {
-#pragma unroll
+#    pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     slot_view.setFeature(k, pix_out[p][k]);
@@ -812,7 +814,7 @@ __global__ void
     // -- Build the per-thread pixel list ------------------------------------
     // Batch-scan does not need rays; it folds summaries emitted by partials.
     PixelCoordsCompact pcs[PIXELS_PER_THREAD];
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         pcs[p] = compute_pixel_coords_compact<TILE_SIZE, CTA_SIZE>(
@@ -837,7 +839,7 @@ __global__ void
     {
         if constexpr(SAFE_MASKED_OUTPUTS)
         {
-#pragma unroll
+#    pragma unroll
             for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
             {
                 if(!pcs[p].inside)
@@ -845,7 +847,7 @@ __global__ void
                     continue;
                 }
                 const int32_t pix_id = pcs[p].pix_id;
-#pragma unroll
+#    pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     render_colors[pix_id * CDIM + k]
@@ -884,7 +886,7 @@ __global__ void
     // decoded c_stop values only in registers.
     uint32_t done_mask                = 0u;
     int32_t c_stop[PIXELS_PER_THREAD];
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         c_stop[p] = decode_compose_c_stop(COMPOSE_C_STOP_NONE);
@@ -926,7 +928,7 @@ __global__ void
     vec3 normal_cum[PIXELS_PER_THREAD]     = {};
     int32_t last_idx_global[PIXELS_PER_THREAD];
     int32_t n_acc_global[PIXELS_PER_THREAD] = {};
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         T_cum[p]           = 1.0f;
@@ -948,7 +950,7 @@ __global__ void
 // gaussian-by-gaussian. Pixels that are outside, invalid, or already
 // stopped simply carry their current accumulator through the slot write
 // below so bwd never observes uninitialized batch state.
-#pragma unroll
+#    pragma unroll
         for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
         {
             const uint32_t pix_y_in_tile   = thread_y + p * ROW_STRIDE;
@@ -966,7 +968,7 @@ __global__ void
 
             if(fold_this)
             {
-#pragma unroll
+#    pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     const float pix_p_c = partial_slot.feature(k);
@@ -1011,7 +1013,7 @@ __global__ void
 // weighted by the already-sub-threshold T_cum so the error
 // is bounded — fwd-only render is therefore not bit-exact
 // vs the exact/backward path in this case.
-#pragma unroll
+#    pragma unroll
                     for(uint32_t k = 0; k < CDIM; ++k)
                     {
                         pix_cum[p][k] = pix_cum[p][k] + T_cum[p] * partial_slot.feature(k);
@@ -1051,7 +1053,7 @@ __global__ void
         // pre-fold batch-start state so batch-replay can seed from it.
         if constexpr(ForBackward)
         {
-#pragma unroll
+#    pragma unroll
             for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
             {
                 const uint32_t bit = 1u << p;
@@ -1065,7 +1067,7 @@ __global__ void
                     fwd_batch_state, slot, pixels_per_tile, pix_rank_in_tile
                 );
                 cumulative_slot.setT(T_cum[p]);
-#pragma unroll
+#    pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     cumulative_slot.setFeature(k, pix_cum[p][k]);
@@ -1083,7 +1085,7 @@ __global__ void
 // -- Publish batch-replay handoff -----------------------------------
 // Decoded c_stop == -1 means the pixel never
 // needed gaussian-by-gaussian replay and this kernel writes its outputs.
-#pragma unroll
+#    pragma unroll
         for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
         {
             const uint32_t pix_y_in_tile   = thread_y + p * ROW_STRIDE;
@@ -1096,7 +1098,7 @@ __global__ void
 
 // -- Emit final outputs for pixels handled by batch-scan -----------------
 // Batch-replay pixels are finalized after their exact per-gaussian replay.
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         if(!pcs[p].inside || c_stop[p] >= 0)
@@ -1105,7 +1107,7 @@ __global__ void
         }
         const int32_t pix_id  = pcs[p].pix_id;
         render_alphas[pix_id] = 1.0f - T_cum[p];
-#pragma unroll
+#    pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             render_colors[pix_id * CDIM + k] = (backgrounds == nullptr)
@@ -1273,7 +1275,7 @@ __global__ void
     vec3 ray_o[PIXELS_PER_THREAD] = {};
     vec3 ray_d[PIXELS_PER_THREAD] = {};
     uint32_t valid_mask           = 0u;
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         pcs[p] = compute_pixel_coords_compact<TILE_SIZE, CTA_SIZE>(
@@ -1332,7 +1334,7 @@ __global__ void
     int32_t n_acc_global[PIXELS_PER_THREAD] = {};
     int32_t c_stop[PIXELS_PER_THREAD];
     uint32_t batch_replay_mask = 0u;
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         T_cum[p]                       = 1.0f;
@@ -1356,7 +1358,7 @@ __global__ void
             T_cum[p] = slot_view.T();
             assert(T_cum[p] > TRANSMITTANCE_THRESHOLD);
             assert(T_cum[p] <= 1.0f + 1e-5f);
-#pragma unroll
+#    pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 pix_cum[p][k] = slot_view.feature(k);
@@ -1388,7 +1390,7 @@ __global__ void
     uint32_t local_done_mask = ALL_DONE & ~batch_replay_mask;
     float transmittance_threshold[PIXELS_PER_THREAD];
     float saturating_T_unused[PIXELS_PER_THREAD];
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         transmittance_threshold[p] = TRANSMITTANCE_THRESHOLD;
@@ -1435,7 +1437,7 @@ __global__ void
       local_done_mask);
 
 // -- Emit outputs and patch the backward-visible batch slot --------------
-#pragma unroll
+#    pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         if((batch_replay_mask & (1u << p)) == 0u)
@@ -1445,7 +1447,7 @@ __global__ void
         const int32_t pix_id = pcs[p].pix_id;
 
         render_alphas[pix_id] = 1.0f - T_cum[p];
-#pragma unroll
+#    pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             render_colors[pix_id * CDIM + k] = (backgrounds == nullptr)
@@ -1474,7 +1476,7 @@ __global__ void
             fwd_batch_state, slot, pixels_per_tile, pix_rank_in_tile
         );
         slot_view.setT(T_cum[p]);
-#pragma unroll
+#    pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             slot_view.setFeature(k, pix_cum[p][k]);
@@ -1486,57 +1488,102 @@ __global__ void
     }
 }
 
-void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
-    // Gaussian parameters
-    const at::Tensor means,                     // [..., N, 3]
-    const at::Tensor quats,                     // [..., N, 4]
-    const at::Tensor scales,                    // [..., N, 3]
-    const at::Tensor colors,                    // [..., C, N, channels] or [nnz, channels]
-    const at::Tensor opacities,                 // [..., C, N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., C, channels]
-    const at::optional<at::Tensor> masks,       // [..., C, grid_h, grid_w]
-    // image size
+#endif
+
+template<uint32_t Channels>
+struct RasterizeToPixelsFromWorld3DGSParallelBatchFwdLauncher
+{
+    static void launch(
+        const at::Tensor &means,
+        const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &colors,
+        const at::Tensor &opacities,
+        const at::optional<at::Tensor> &backgrounds,
+        const at::optional<at::Tensor> &masks,
+        const uint32_t image_width,
+        const uint32_t image_height,
+        const uint32_t tile_size,
+        const at::Tensor &viewmats0,
+        const at::optional<at::Tensor> &viewmats1,
+        const at::Tensor &Ks,
+        const CameraModelType camera_model,
+        const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+        ShutterType rs_type,
+        const at::optional<at::Tensor> &rays,
+        const at::optional<at::Tensor> &radial_coeffs,
+        const at::optional<at::Tensor> &tangential_coeffs,
+        const at::optional<at::Tensor> &thin_prism_coeffs,
+        const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+        const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+        const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+        const at::Tensor &tile_offsets,
+        const at::Tensor &flatten_ids,
+        const bool use_hit_distance,
+        const bool unsafe_masked_tile_outputs,
+        const at::Tensor &batches_per_tile,
+        const at::Tensor &batch_offsets,
+        const at::Tensor &bid_to_slot,
+        const int64_t total_batches,
+        const bool fwd_only,
+        at::Tensor &renders,
+        at::Tensor &alphas,
+        at::Tensor &last_ids,
+        at::optional<at::Tensor> &sample_counts,
+        at::optional<at::Tensor> &normals,
+        at::Tensor &fwd_batch_state,
+        at::Tensor &partials_meta,
+        at::Tensor &batch_replay_preamble,
+        at::Tensor &compose_c_stop,
+        at::Tensor &priming_state
+    );
+};
+
+#ifdef GSPLAT_INSTANTIATE_TEMPLATE
+template<uint32_t Channels>
+void RasterizeToPixelsFromWorld3DGSParallelBatchFwdLauncher<Channels>::launch(
+    const at::Tensor &means,
+    const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &colors,
+    const at::Tensor &opacities,
+    const at::optional<at::Tensor> &backgrounds,
+    const at::optional<at::Tensor> &masks,
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
-    // camera
-    const at::Tensor viewmats0,               // [..., C, 4, 4]
-    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
-    const at::Tensor Ks,                      // [..., C, 3, 3]
+    const at::Tensor &viewmats0,
+    const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks,
     const CameraModelType camera_model,
-    // unscented transform
     const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
-    const at::optional<at::Tensor> rays,              // [...., C, H, W, 6]
-    const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
-    const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
+    const at::optional<at::Tensor> &rays,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
-    // external distortion
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
-    // intersections
-    const at::Tensor tile_offsets, // [..., C, grid_h, grid_w]
-    const at::Tensor flatten_ids,  // [n_isects]
+    const at::Tensor &tile_offsets,
+    const at::Tensor &flatten_ids,
     const bool use_hit_distance,
     const bool unsafe_masked_tile_outputs,
-    // CSR batch structure (precomputed by caller, shared with bwd)
-    const at::Tensor batches_per_tile, // [num_tiles] int32
-    const at::Tensor batch_offsets,    // [num_tiles + 1] int32
-    const at::Tensor bid_to_slot,      // [total_batches] int32
-    const int64_t total_batches,       // scalar; equals batch_offsets[num_tiles]
+    const at::Tensor &batches_per_tile,
+    const at::Tensor &batch_offsets,
+    const at::Tensor &bid_to_slot,
+    const int64_t total_batches,
     const bool fwd_only,
-    // outputs
-    at::Tensor renders,                     // [..., C, image_height, image_width, channels]
-    at::Tensor alphas,                      // [..., C, image_height, image_width]
-    at::Tensor last_ids,                    // [..., C, image_height, image_width]
-    at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
-    at::optional<at::Tensor> normals,       // [..., C, image_height, image_width, 3]
-    at::Tensor fwd_batch_state,             // [total_batches, state_dim, pixels_per_tile] fp32
-    at::Tensor partials_meta,               // [total_batches, pixels_per_tile, 2] uint16
-    at::Tensor batch_replay_preamble,       // [num_tiles, pixels_per_tile, 2] int32
-    at::Tensor compose_c_stop,              // [num_tiles, pixels_per_tile] uint16
-    at::Tensor priming_state                // [..., C, image_height, image_width] int32
+    at::Tensor &renders,
+    at::Tensor &alphas,
+    at::Tensor &last_ids,
+    at::optional<at::Tensor> &sample_counts,
+    at::optional<at::Tensor> &normals,
+    at::Tensor &fwd_batch_state,
+    at::Tensor &partials_meta,
+    at::Tensor &batch_replay_preamble,
+    at::Tensor &compose_c_stop,
+    at::Tensor &priming_state
 )
 {
     // Note: quats need to be normalized before passing in.
@@ -1588,12 +1635,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     }
 
     const int32_t channels = colors.size(-1);
-    TORCH_CHECK(
-        SupportedChannels::contains(channels),
-        "Unsupported number of channels: ",
-        channels,
-        " (check GSPLAT_NUM_CHANNELS)"
-    );
+    TORCH_CHECK(channels == Channels, "Unsupported number of channels: ", channels, " (check GSPLAT_NUM_CHANNELS)");
     TORCH_CHECK(
         SupportedTileSizes::contains(tile_size), "Unsupported tile_size ", tile_size, "; supported values are {8, 16}."
     );
@@ -1602,13 +1644,9 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     // -- Dispatch the runtime options to the compiled specializations --------
-    auto launch_kernel = [&]<typename ChannelsT,
-                             typename TileSizeT,
-                             typename ReturnNormalsT,
-                             typename UseHitDistanceT,
-                             typename FwdOnlyT>()
+    auto launch_kernel = [&]<typename TileSizeT, typename ReturnNormalsT, typename UseHitDistanceT, typename FwdOnlyT>()
     {
-        constexpr uint32_t CDIM       = ChannelsT::value;
+        constexpr uint32_t CDIM       = Channels;
         constexpr bool ReturnNormals  = static_cast<bool>(ReturnNormalsT::value);
         constexpr bool UseHitDistance = static_cast<bool>(UseHitDistanceT::value);
         constexpr int64_t StateDim
@@ -1927,7 +1965,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
         }
     };
     const bool dispatched = dispatch::dispatch(
-        SupportedChannels{channels},
         SupportedTileSizes{static_cast<int>(tile_size)},
         dispatch::IntParam<0, 1>{return_normals ? 1 : 0},
         dispatch::IntParam<0, 1>{use_hit_distance ? 1 : 0},
@@ -1936,4 +1973,115 @@ void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
     );
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
+
+template struct RasterizeToPixelsFromWorld3DGSParallelBatchFwdLauncher<GSPLAT_CHANNEL_INSTANCE>;
+
+#else
+
+void launch_rasterize_to_pixels_from_world_3dgs_parallel_batch_fwd_kernel(
+    // Gaussian parameters
+    const at::Tensor means,                     // [..., N, 3]
+    const at::Tensor quats,                     // [..., N, 4]
+    const at::Tensor scales,                    // [..., N, 3]
+    const at::Tensor colors,                    // [..., C, N, channels] or [nnz, channels]
+    const at::Tensor opacities,                 // [..., C, N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [..., C, channels]
+    const at::optional<at::Tensor> masks,       // [..., C, grid_h, grid_w]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // camera
+    const at::Tensor viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                      // [..., C, 3, 3]
+    const CameraModelType camera_model,
+    // unscented transform
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    ShutterType rs_type,
+    const at::optional<at::Tensor> rays,              // [...., C, H, W, 6]
+    const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    // external distortion
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    // intersections
+    const at::Tensor tile_offsets, // [..., C, grid_h, grid_w]
+    const at::Tensor flatten_ids,  // [n_isects]
+    const bool use_hit_distance,
+    const bool unsafe_masked_tile_outputs,
+    // CSR batch structure (precomputed by caller, shared with bwd)
+    const at::Tensor batches_per_tile, // [num_tiles] int32
+    const at::Tensor batch_offsets,    // [num_tiles + 1] int32
+    const at::Tensor bid_to_slot,      // [total_batches] int32
+    const int64_t total_batches,       // scalar; equals batch_offsets[num_tiles]
+    const bool fwd_only,
+    // outputs
+    at::Tensor renders,                     // [..., C, image_height, image_width, channels]
+    at::Tensor alphas,                      // [..., C, image_height, image_width]
+    at::Tensor last_ids,                    // [..., C, image_height, image_width]
+    at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
+    at::optional<at::Tensor> normals,       // [..., C, image_height, image_width, 3]
+    at::Tensor fwd_batch_state,             // [total_batches, state_dim, pixels_per_tile] fp32
+    at::Tensor partials_meta,               // [total_batches, pixels_per_tile, 2] uint16
+    at::Tensor batch_replay_preamble,       // [num_tiles, pixels_per_tile, 2] int32
+    at::Tensor compose_c_stop,              // [num_tiles, pixels_per_tile] uint16
+    at::Tensor priming_state                // [..., C, image_height, image_width] int32
+)
+{
+    const int32_t channels = colors.size(-1);
+    auto launch            = [&]<typename ChannelsT>()
+    {
+        RasterizeToPixelsFromWorld3DGSParallelBatchFwdLauncher<ChannelsT::value>::launch(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            viewmats0,
+            viewmats1,
+            Ks,
+            camera_model,
+            ut_params,
+            rs_type,
+            rays,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            ftheta_coeffs,
+            lidar_coeffs,
+            external_distortion_params,
+            tile_offsets,
+            flatten_ids,
+            use_hit_distance,
+            unsafe_masked_tile_outputs,
+            batches_per_tile,
+            batch_offsets,
+            bid_to_slot,
+            total_batches,
+            fwd_only,
+            renders,
+            alphas,
+            last_ids,
+            sample_counts,
+            normals,
+            fwd_batch_state,
+            partials_meta,
+            batch_replay_preamble,
+            compose_c_stop,
+            priming_state
+        );
+    };
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch));
+    TORCH_CHECK(dispatched, "Unsupported number of channels: ", channels, " (check GSPLAT_NUM_CHANNELS)");
+}
+
+#endif
 } // namespace gsplat

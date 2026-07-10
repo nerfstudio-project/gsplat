@@ -11,6 +11,10 @@ include("${CMAKE_CURRENT_LIST_DIR}/GSplatCCache.cmake")
 set(GSPLAT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(GSPLAT_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
+# Static and object libraries do not link, so CMake can omit dependencies that
+# do not contribute generated sources or other required side effects.
+set(CMAKE_OPTIMIZE_DEPENDENCIES ON)
+
 option(GSPLAT_ENABLE_BUILD_TRACES "Generate configure, build, and test trace files" OFF)
 
 option(
