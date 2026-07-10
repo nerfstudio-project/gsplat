@@ -352,6 +352,34 @@ def compute_psnr(pred, gt):
     return float("inf") if mse == 0 else -10.0 * np.log10(mse)
 
 
+def _projected_gaussian_mask(info: dict, num_gaussians: int) -> torch.Tensor:
+    gaussian_ids = info.get("gaussian_ids")
+    if gaussian_ids is not None:
+        projected = torch.zeros(
+            num_gaussians,
+            dtype=torch.bool,
+            device=gaussian_ids.device,
+        )
+        projected[gaussian_ids] = True
+        return projected
+
+    radii = info["radii"]
+    return (radii > 0).all(dim=-1).reshape(-1, num_gaussians).any(dim=0)
+
+
+def _mcmc_regularization_loss(
+    scales: torch.Tensor,
+    opacities: torch.Tensor,
+    info: dict,
+) -> torch.Tensor:
+    projected = _projected_gaussian_mask(info, len(scales))
+    if not projected.any():
+        return (scales.sum() + opacities.sum()) * 0.0
+    return 0.005 * gsplat.losses.gaussian_scale_reg(scales[projected]).mean() + (
+        0.005 * gsplat.losses.gaussian_density_reg(opacities[projected]).mean()
+    )
+
+
 def get_render_params(ncore_camera_data, camera_idx, device):
     """Extract per-camera rendering params (same pattern as simple_trainer.rasterize_splats)."""
     cam = ncore_camera_data[camera_idx]
@@ -1123,9 +1151,12 @@ def train(
         )
         loss = 0.8 * l1loss + 0.2 * ssimloss
 
-        # Regularization (same as simple_trainer, using pre-computed activations)
-        loss += 0.005 * gsplat.losses.gaussian_scale_reg(act_scales).mean()
-        loss += 0.005 * gsplat.losses.gaussian_density_reg(act_opacities).mean()
+        if strategy is not None:
+            loss += _mcmc_regularization_loss(
+                act_scales,
+                act_opacities,
+                info,
+            )
 
         # Sky penalty (addition over simple_trainer)
         coverage = alphas[0, :, :, 0]
