@@ -76,7 +76,7 @@ dev-common = [
     # Parsing the project metadata outside pip's build isolation needs these.
     "packaging>=21.3",
     'tomli>=1.2; python_version < "3.11"',
-    "black[jupyter]==22.3.0",
+    "black==22.3.0",
     "clang-format==22.1.5",
     "isort==5.10.1",
     "pylint==2.13.4",

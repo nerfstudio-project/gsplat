@@ -166,7 +166,7 @@ RUN --mount=type=tmpfs,target=/tmp \
     packages=(
         "packaging==26.0"
         "tomli==2.4.1"
-        "black[jupyter]==22.3.0"
+        "black==22.3.0"
         "clang-format==${clang_format_version}"
         "isort==5.10.1"
         "pylint==2.13.4"

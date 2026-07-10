@@ -28,7 +28,10 @@ jobs:
           clang_format_version=$(python gsplat/build_support/pyproject_metadata.py \
             pyproject.toml dev-common --pin clang-format)
           test -n "$clang_format_version"
-          pip install black[jupyter]==22.3.0 "clang-format==${clang_format_version}" pytest pytest-check
+          black_version=$(python gsplat/build_support/pyproject_metadata.py \
+            pyproject.toml dev-common --pin black)
+          test -n "$black_version"
+          pip install "black==${black_version}" "clang-format==${clang_format_version}" pytest pytest-check
           pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           # tests/core/test_dataset_endonerf.py and tests/core/test_dynamic_surgical_trainer.py
           # import PIL + tqdm; install the [examples] extra so the test
