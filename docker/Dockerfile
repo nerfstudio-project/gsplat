@@ -112,6 +112,7 @@ EOS
 
 # Installs all GSplat dependencies (including dev dependencies) -----------
 FROM python as gsplat-deps
+ARG IMAGE_VERSION
 
 # Dependency validation: ensure Dockerfile deps stay in sync with source files.
 # Aborts the build if the Dockerfile package lists diverge from
@@ -283,6 +284,12 @@ RUN --mount=type=tmpfs,target=/tmp \
     pip install "${packages[@]}"
 
     rm -rf $PYTHONPYCACHEPREFIX/*
+
+    # World-writable venv, applied in this stage so the main-image COPY carries
+    # the modes without re-chmoding:
+    # - any host UID mapped into the container can install into it at runtime
+    # - dev-only image; do NOT use in production
+    chmod -R a+w /var/cache/venv-${IMAGE_VERSION}
 EOS
 
 # Test asset generation ------------------------------------------------
@@ -352,11 +359,10 @@ RUN <<EOS
     # local dev-only image; do NOT use in production/shared environments.
     chmod 777 /var/cache
 
-    # Same justification: any host UID mapped into the container needs to
-    # install editable packages (e.g. gsplat-geometry) into the venv at
-    # runtime. Make every file and directory in the venv writable by
-    # anyone. Dev-only image — do NOT use in production/shared environments.
-    chmod -R a+w "$PYTHON_VENV_PATH"
+    # The venv contents already carry a+w from the gsplat-deps stage; the
+    # COPY preserves those modes but creates the top-level directory itself
+    # as root:755, so open just the venv root here.
+    chmod a+w /var/cache/venv-${IMAGE_VERSION}
 
     ccache --max-size=20G
 
