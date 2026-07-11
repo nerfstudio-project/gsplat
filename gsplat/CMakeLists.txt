@@ -19,3 +19,7 @@ add_subdirectory(geometry)
 add_subdirectory(scene)
 add_subdirectory(sensors)
 add_subdirectory(experimental)
+
+# The wheel stages the marker from the sources; the install tree carries it
+# too so embedders consuming the install output see a typed package.
+install(FILES py.typed DESTINATION gsplat COMPONENT gsplat_runtime)
