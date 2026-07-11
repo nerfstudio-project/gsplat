@@ -188,20 +188,40 @@ PY
         "twine==1.6.0"
         "cupy-cuda${CUDA_VERSION%%.*}x==13.6.0"
         "nerfacc==0.5.3"
-        "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
         "imageio[ffmpeg]==2.37.2"
         "torchpq==0.3.0.6"
     )
+    plas_pkg="PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
 
     check_gsplat_deps.sh \
         -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
-        -- "${packages[@]}"
+        -- "${packages[@]}" "$plas_pkg"
 
     # The CUDA-major-specific CuPy wheel avoids compiling CuPy from source.
     pip install "${packages[@]}"
 
+    # Install PLAS alone, then its declared dependencies read from its own
+    # metadata — minus the GUI opencv-python, whose cv2 the pinned headless
+    # build already provides. Deriving the list keeps it in sync with PLAS.
+    pip install --no-deps "$plas_pkg"
+    python3 - <<'PY' > /tmp/plas-deps.txt
+from importlib.metadata import requires
+
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+for raw in requires("PLAS") or []:
+    requirement = Requirement(raw)
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        continue
+    if canonicalize_name(requirement.name) == "opencv-python":
+        continue
+    print(requirement)
+PY
+    pip install -r /tmp/plas-deps.txt
+
     # Save list so the examples stage can reference it
-    printf '%s\n' "${packages[@]}" > /opt/dep-check/dev_packages.txt
+    printf '%s\n' "${packages[@]}" "$plas_pkg" > /opt/dep-check/dev_packages.txt
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*

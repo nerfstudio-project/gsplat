@@ -66,6 +66,7 @@ examples = [
     "Pillow",
     "tqdm",
     "tyro",
+    "matplotlib",
     "imageio>=2.37.2",
 ]
 # Shared development dependencies. Install one of the composite dev-cuda*
