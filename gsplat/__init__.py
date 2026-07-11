@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import os
+import pkgutil
 import warnings
 from pathlib import Path
 
@@ -40,6 +41,13 @@ def _add_cmake_build_package_path() -> None:
 
 _add_cmake_build_package_path()
 del _add_cmake_build_package_path
+
+# An embedding build system may stage the compiled extension modules under a
+# second sys.path root whose gsplat/ directory carries no Python sources.
+# Merge every such root into the package __path__ so the native submodules
+# resolve regardless of which root the package was imported from; the
+# explicit GSPLAT_BUILD_DIR selection above keeps priority by prepending.
+__path__ = pkgutil.extend_path(__path__, __name__)
 
 from .color_correct import color_correct_affine, color_correct_quadratic
 from .compression import PngCompression
