@@ -3,6 +3,55 @@
 
 set(CMAKE_FOLDER third_party)
 
+# Warn or fail (per GSPLAT_STRICT_SUBMODULES) when a submodule is checked out at
+# a commit other than the one the gsplat project pins. Only a git work tree can be
+# checked; an exported source snapshot has no gitlink to compare against, so the
+# comparison is skipped there.
+function(_gsplat_check_submodule_revision source_dir name required_by)
+    find_package(Git QUIET)
+    if(NOT Git_FOUND)
+        return()
+    endif()
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --show-superproject-working-tree
+        WORKING_DIRECTORY "${source_dir}"
+        OUTPUT_VARIABLE superproject
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE rc
+        ERROR_QUIET
+    )
+    if(NOT rc EQUAL 0 OR superproject STREQUAL "")
+        return()
+    endif()
+    file(RELATIVE_PATH relpath "${superproject}" "${source_dir}")
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" submodule status "${relpath}"
+        WORKING_DIRECTORY "${superproject}"
+        OUTPUT_VARIABLE status
+        RESULT_VARIABLE rc
+        ERROR_QUIET
+    )
+    if(NOT rc EQUAL 0 OR status STREQUAL "")
+        return()
+    endif()
+    # git submodule status leads each entry with a flag: ' ' at the pinned
+    # commit, '+' a different commit, 'U' merge conflicts, '-' not initialized.
+    string(SUBSTRING "${status}" 0 1 flag)
+    if(flag STREQUAL " ")
+        return()
+    endif()
+    set(detail
+        "the ${name} submodule at '${source_dir}' is not at the commit "
+        "${required_by} pins (git submodule status flag '${flag}'); run: "
+        "git submodule update --init ${relpath}"
+    )
+    if(GSPLAT_STRICT_SUBMODULES)
+        message(FATAL_ERROR ${detail})
+    else()
+        message(WARNING ${detail})
+    endif()
+endfunction()
+
 function(_gsplat_require_third_party_submodule source_dir name required_by)
     if(NOT EXISTS "${source_dir}/CMakeLists.txt")
         message(
@@ -12,6 +61,7 @@ function(_gsplat_require_third_party_submodule source_dir name required_by)
             "git submodule update --init third_party/${name}"
         )
     endif()
+    _gsplat_check_submodule_revision("${source_dir}" "${name}" "${required_by}")
 endfunction()
 
 # GLM ========================================================================

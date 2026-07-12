@@ -14,6 +14,12 @@ set(GSPLAT_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 option(GSPLAT_ENABLE_BUILD_TRACES "Generate configure, build, and test trace files" OFF)
 
 option(
+    GSPLAT_STRICT_SUBMODULES
+    "Fail (vs warn) when a third_party submodule is not at the pinned commit"
+    ON
+)
+
+option(
     GSPLAT_CHECK_PYTHON_DEPS
     "Verify the declared Python dependencies against the active environment at configure time"
     ON

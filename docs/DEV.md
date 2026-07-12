@@ -67,6 +67,13 @@ compilation at runtime. `dev-debug` enables runtime assertions and other
 debug-only checks that make bugs easier to detect, at the cost of slightly
 longer compile times. `dev-release` retains debug information.
 
+The pinned-submodule check is enabled by default
+(`GSPLAT_STRICT_SUBMODULES=ON`): configuring fails when a `third_party`
+submodule is checked out at a commit other than the one the gsplat project
+records. Both development presets disable it, downgrading the failure to a
+warning so local work on a vendored dependency is not blocked; the portable and
+production presets keep it enabled.
+
 Changes should normally pass both `dev-debug` and `dev-release` before
 submission because optimization can expose issues that are not visible in a
 debug build.
@@ -166,6 +173,7 @@ apply to a top-level build unless noted otherwise; presets can override them.
 | `GSPLAT_GENERATED_DIR` | `<build>/generated` | Select the directory for generated gsplat build headers. |
 | `GSPLAT_KERNEL_FAMILIES` | empty (all) | Select a comma- or semicolon-separated subset of `2DGS`, `3DGS`, `3DGUT`, `ADAM`, `RELOC`, and `LOSSES` to compile. |
 | `GSPLAT_NUM_CHANNELS` | all supported widths | Select the comma- or semicolon-separated feature widths to instantiate; `NUM_CHANNELS` remains a compatibility alias. |
+| `GSPLAT_STRICT_SUBMODULES` | `ON` | Fail rather than warn when a populated `third_party` submodule differs from the commit pinned by the superproject; an absent required submodule always fails. |
 | `GSPLAT_ENABLE_CCACHE` | `ON` | Use ccache for C++, C, and CUDA compilation when it is available. |
 | `GSPLAT_FORCE_CCACHE` | `OFF` | Fail configuration instead of warning when ccache is enabled but unavailable. |
 | `GSPLAT_CCACHE_DIR` | empty | Override ccache's cache directory; empty preserves ccache's own resolution. |
