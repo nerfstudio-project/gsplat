@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7.0
 
 # Fix the base image to avoid spurious rebuilds
-ARG BASE_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d39279f2cf664fbb9b5d5f21de104b79745ea29bf2cb
+ARG BASE_IMAGE=nvidia/cuda:12.9.0-base-ubuntu24.04@sha256:48e21b10467354655f5073c05eebdeaac9818c6b40d70f334f7ad2df000463d8
 
 # Bumped on every image release (mirrors IMAGE_TAG in config.yaml). Used to
 # bake the venv at /var/cache/venv-${IMAGE_VERSION} so a per-version cache
@@ -43,6 +43,12 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
 
     apt-get update
 
+    # Derive the CUDA minor series (12.8) from the base image's CUDA_VERSION,
+    # then reassign it to the dash form (12-8) the apt package names use, so the
+    # toolkit tracks the base image without repeating the version.
+    cuda_version=${CUDA_VERSION%.*}
+    cuda_version=${cuda_version//./-}
+
     packages=(
         python3
         libpython3-dev
@@ -50,9 +56,43 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
         python-is-python3
         # For downloading some dependencies (plas)
         git
+        # CUDA toolchain subset — the -base image ships only the CUDA runtime:
+        # - cuda-nvcc: compiles gsplat and the source-built dependencies
+        # - cuda-cudart-dev + cuda-cccl: CUDA runtime headers, cub/thrust
+        # - cuda-nvrtc-dev: nvrtc as a discoverable library for torch tooling
+        # - cuda-nvtx: profiling ranges referenced through torch headers
+        # - libcu{blas,sparse,solver,rand}-dev: headers torch's CUDA runtime
+        #   pulls in; their runtime .so siblings also serve cupy, which resolves
+        #   them through the dynamic loader
+        # - libcufft: cupy runtime only, no headers needed
+        # - libnvjitlink: runtime dependency of the math libraries above
+        # - cuda-sanitizer: the test runner's sanitize mode execs
+        #   compute-sanitizer in the container
+        "cuda-nvcc-${cuda_version}"
+        "cuda-cudart-dev-${cuda_version}"
+        "cuda-cccl-${cuda_version}"
+        "cuda-nvrtc-dev-${cuda_version}"
+        "cuda-nvtx-${cuda_version}"
+        "libcublas-dev-${cuda_version}"
+        "libcusparse-dev-${cuda_version}"
+        "libcusolver-dev-${cuda_version}"
+        "libcurand-dev-${cuda_version}"
+        "libcufft-${cuda_version}"
+        "libnvjitlink-${cuda_version}"
+        "cuda-sanitizer-${cuda_version}"
     )
 
     apt-get install "${packages[@]}"
+
+    # The -dev packages drag in multi-GB static archives nothing here links;
+    # delete them in the same layer so the bytes never ship. nvcc's default
+    # static cudart and the device runtime stay.
+    # lib64 is a symlink into targets/; find does not follow it.
+    find /usr/local/cuda-${CUDA_VERSION%.*}/targets/x86_64-linux/lib \
+        -name '*_static*.a' \
+        ! -name 'libcudart_static.a' \
+        ! -name 'libcudadevrt.a' \
+        -delete
 EOS
 
 # Sets up python's virtual environment
