@@ -257,7 +257,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         "tensorly==0.9.0"
         "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
         "splines==0.3.3"
-        "ppisp @ git+https://github.com/nv-tlabs/ppisp@v1.0.0"
+        "ppisp @ https://github.com/nv-tlabs/ppisp/archive/refs/tags/v1.0.0.tar.gz"
         "opencv-python-headless==4.10.0.84"
         "tqdm==4.67.3"
         "matplotlib==3.10.8"
