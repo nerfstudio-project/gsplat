@@ -10,6 +10,10 @@ ARG BASE_IMAGE=nvidia/cuda:12.8.1-base-ubuntu24.04@sha256:133c78a0575303be34164d
 # image bumps.
 ARG IMAGE_VERSION
 
+# This project's image registry, passed in at build time so its URL is not
+# hard-coded here as well.
+ARG DOCKER_REGISTRY
+
 # Downloads and installs ccache for build acceleration --------------------------------
 FROM alpine:3.19.1 as ccache
 # We need a fairly recent ccache recent ccache with proper nvcc support.
@@ -312,18 +316,26 @@ RUN --mount=type=tmpfs,target=/tmp \
     chmod -R a+w /var/cache/venv-${IMAGE_VERSION}
 EOS
 
-# Test asset generation ------------------------------------------------
-# Runs prepare_pandaset.py at image-build time so CI test jobs get the
-# asset from the image instead of downloading from HuggingFace at runtime.
-FROM gsplat-deps AS gsplat-assets
+# Test asset ------------------------------------------------------------
+# PandaSet scene 019 (240x135) test asset, served as a prebuilt registry
+# image so the build pulls the layer instead of downloading and converting
+# the dataset at build time.
+FROM ${DOCKER_REGISTRY}/assets/pandaset:019-240x135 AS gsplat-assets
+
+# Producer for the asset image above, kept out of the main build. The scene
+# is fixed; build the pandaset-asset target and push it to the ref above to
+# (re)publish the asset.
+FROM gsplat-deps AS pandaset-asset-builder
 RUN --mount=type=tmpfs,target=/tmp \
     --mount=type=bind,from=gsplatrepo,source=examples/prepare_pandaset.py,target=/tmp/prepare_pandaset.py \
 <<EOS
-    mkdir -p /opt/gsplat-assets
     python /tmp/prepare_pandaset.py \
         --download --scene 019 --resolution 240x135 \
-        --output /opt/gsplat-assets/test_pandaset.npz
+        --output /test_pandaset.npz
 EOS
+
+FROM scratch AS pandaset-asset
+COPY --from=pandaset-asset-builder /test_pandaset.npz /test_pandaset.npz
 
 # Main image ============================================================
 # It combines the Python environment, development toolchain
@@ -338,7 +350,7 @@ ARG IMAGE_VERSION
 # leave the inherited symlink intact.
 COPY --link --from=gsplat-deps /var/cache/venv-${IMAGE_VERSION}/ /var/cache/venv-${IMAGE_VERSION}/
 COPY --link --from=gsplat-deps /opt/dep-check/ /opt/dep-check/
-COPY --link --from=gsplat-assets /opt/gsplat-assets/ /opt/gsplat-assets/
+COPY --link --from=gsplat-assets /test_pandaset.npz /opt/gsplat-assets/test_pandaset.npz
 COPY --link --from=ccache ccache /usr/local/bin/ccache
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 
