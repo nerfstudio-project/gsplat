@@ -99,8 +99,10 @@ from .losses_fused import (
     FusedCameraLosses,
     FusedGaussianLosses,
     FusedLidarLosses,
+    FusedGroundGaussiansLosses,
     FusedSSIMLosses,
     LossFlag,
+    ground_gaussians_loss,
 )
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
@@ -173,8 +175,10 @@ __all__ = [
     "FusedCameraLosses",
     "FusedGaussianLosses",
     "FusedLidarLosses",
+    "FusedGroundGaussiansLosses",
     "FusedSSIMLosses",
     "LossFlag",
+    "ground_gaussians_loss",
     "gaussian_scale_reg",
     "gaussian_density_reg",
     "gaussian_z_scale_reg",

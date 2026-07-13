@@ -38,6 +38,7 @@ void register_adam_cuda_impl(torch::Library &m);
 void register_camera_losses_cuda_impl(torch::Library &m);
 void register_external_distortion_wrappers_cuda_impl(torch::Library &m);
 void register_gaussian_losses_cuda_impl(torch::Library &m);
+void register_ground_gaussians_losses_cuda_impl(torch::Library &m);
 void register_bg_grid_losses_cuda_impl(torch::Library &m);
 void register_intersect_cuda_impl(torch::Library &m);
 void register_intersect_privateuseone_impl(torch::Library &m);
@@ -1312,6 +1313,16 @@ TORCH_LIBRARY(gsplat, m)
         "Tensor(c!) v_raydrop_pred, Tensor(d!) v_bg_pred) -> ()"
     );
     m.def(
+        "ground_gaussians_losses_fwd(Tensor positions, Tensor rotations, Tensor cam_tquat, Tensor random_values, "
+        "float min_bias, float range_bias, float grid_len, float rotation_lambda, Tensor(a!) stats, "
+        "Tensor(b!) loss) -> ()"
+    );
+    m.def(
+        "ground_gaussians_losses_bwd(Tensor positions, Tensor rotations, Tensor cam_tquat, Tensor random_values, "
+        "Tensor stats, Tensor v_loss, float min_bias, float range_bias, float grid_len, float rotation_lambda, "
+        "Tensor(a!) v_positions, Tensor(b!) v_rotations) -> ()"
+    );
+    m.def(
         "bg_grid_losses_fwd(Tensor? bg_tex, int bg_tex_depth, Tensor? grids_camera, Tensor? grids_frame, float "
         "bg_tex_factor, float grid_drift_camera_factor, float grid_drift_frame_factor, float grid_camera_tv_factor, "
         "float grid_frame_tv_factor, Tensor(a!) bg_tex_loss, Tensor(b!) grids_drift_loss, Tensor(c!) "
@@ -1368,6 +1379,7 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m)
     gsplat::register_gaussian_losses_cuda_impl(m);
     gsplat::register_camera_losses_cuda_impl(m);
     gsplat::register_lidar_losses_cuda_impl(m);
+    gsplat::register_ground_gaussians_losses_cuda_impl(m);
     gsplat::register_bg_grid_losses_cuda_impl(m);
     gsplat::register_ssim_losses_cuda_impl(m);
 #endif

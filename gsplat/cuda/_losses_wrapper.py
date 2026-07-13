@@ -352,6 +352,87 @@ class _FusedLidarLosses(torch.autograd.Function):
         )
 
 
+class _FusedGroundGaussiansLosses(torch.autograd.Function):
+    """Fused forward+backward for the ground-gaussian distortion loss.
+
+    Computes a scalar loss constraining the height (y) and roll/pitch
+    rotation variance of gaussians inside randomly placed camera-space depth
+    bins. Gradients flow to ``positions`` and ``rotations``; the camera pose
+    and the bin parameters are treated as constants.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        positions: Tensor,  # [N, 3]
+        rotations: Tensor,  # [N, 4] quaternion (x, y, z, w)
+        cam_tquat: Tensor,  # [7] camera-from-world (tx,ty,tz,qx,qy,qz,qw)
+        random_values: Tensor,  # [B] bin offsets in [0, 1)
+        min_bias: float,
+        range_bias: float,
+        grid_len: float,
+        rotation_lambda: float,
+    ) -> Tensor:
+        positions = positions.contiguous()
+        rotations = rotations.contiguous()
+        cam_tquat = cam_tquat.reshape(-1).contiguous()
+        random_values = random_values.reshape(-1).contiguous()
+
+        n_bins = random_values.shape[0]
+        # Pre-allocate the statistics buffer and scalar loss in Python so
+        # lifetimes are explicit and the caching allocator can reuse them.
+        stats = torch.zeros(n_bins, 7, dtype=positions.dtype, device=positions.device)
+        loss = torch.zeros((), dtype=positions.dtype, device=positions.device)
+
+        _make_lazy_cuda_func("ground_gaussians_losses_fwd")(
+            positions,
+            rotations,
+            cam_tquat,
+            random_values,
+            float(min_bias),
+            float(range_bias),
+            float(grid_len),
+            float(rotation_lambda),
+            stats,
+            loss,
+        )
+
+        ctx.save_for_backward(positions, rotations, cam_tquat, random_values, stats)
+        ctx.min_bias = float(min_bias)
+        ctx.range_bias = float(range_bias)
+        ctx.grid_len = float(grid_len)
+        ctx.rotation_lambda = float(rotation_lambda)
+
+        return loss
+
+    @staticmethod
+    def backward(ctx, v_loss: Tensor) -> Tuple[Optional[Tensor], ...]:
+        positions, rotations, cam_tquat, random_values, stats = ctx.saved_tensors
+
+        # Pre-allocate gradient buffers in Python (matches forward pattern).
+        v_positions = torch.zeros_like(positions)
+        v_rotations = torch.zeros_like(rotations)
+
+        _make_lazy_cuda_func("ground_gaussians_losses_bwd")(
+            positions,
+            rotations,
+            cam_tquat,
+            random_values,
+            stats,
+            v_loss.reshape(()).contiguous(),
+            ctx.min_bias,
+            ctx.range_bias,
+            ctx.grid_len,
+            ctx.rotation_lambda,
+            v_positions,
+            v_rotations,
+        )
+
+        # Gradients for: positions, rotations, cam_tquat, random_values,
+        #                 min_bias, range_bias, grid_len, rotation_lambda
+        return v_positions, v_rotations, None, None, None, None, None, None
+
+
 class _FusedBgGridLosses(torch.autograd.Function):
     """Fused forward+backward for sky-envmap TV + bilateral-grid drift + grid
     spatial TV via a single pair of CUDA kernels.

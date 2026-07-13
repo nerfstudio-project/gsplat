@@ -560,6 +560,221 @@ class FusedLidarLosses(torch.nn.Module):
         return distance_loss, intensity_loss, raydrop_loss, bg_loss
 
 
+# ---------------------------------------------------------------------------
+# Ground-gaussian distortion loss
+# ---------------------------------------------------------------------------
+
+
+def _quat_to_so3_matrix(quat: Tensor) -> Tensor:
+    """Normalized quaternion ``(..., 4)`` in ``(x, y, z, w)`` order to a
+    rotation matrix ``(..., 3, 3)``."""
+    q = quat / quat.norm(dim=-1, keepdim=True)
+    x, y, z, w = q.unbind(-1)
+    R = torch.stack(
+        [
+            1 - 2 * (y * y + z * z),
+            2 * (x * y - z * w),
+            2 * (x * z + y * w),
+            2 * (x * y + z * w),
+            1 - 2 * (x * x + z * z),
+            2 * (y * z - x * w),
+            2 * (x * z - y * w),
+            2 * (y * z + x * w),
+            1 - 2 * (x * x + y * y),
+        ],
+        dim=-1,
+    )
+    return R.reshape(*q.shape[:-1], 3, 3)
+
+
+def _so3_matrix_to_quat(R: Tensor) -> Tensor:
+    """Rotation matrix ``(3, 3)`` to a normalized quaternion ``(4,)`` in
+    ``(x, y, z, w)`` order, using the largest-element (decision-matrix) form."""
+    t0, t1, t2 = R[0, 0], R[1, 1], R[2, 2]
+    trace = t0 + t1 + t2
+    decision = torch.stack([t0, t1, t2, trace])
+    choice = int(torch.argmax(decision).item())
+
+    q = R.new_zeros(4)
+    if choice != 3:
+        i = choice
+        j = (i + 1) % 3
+        k = (j + 1) % 3
+        q[i] = 1 + R[i, i] - R[j, j] - R[k, k]
+        q[j] = R[j, i] + R[i, j]
+        q[k] = R[k, i] + R[i, k]
+        q[3] = R[k, j] - R[j, k]
+    else:
+        q[0] = R[2, 1] - R[1, 2]
+        q[1] = R[0, 2] - R[2, 0]
+        q[2] = R[1, 0] - R[0, 1]
+        q[3] = 1 + trace
+    return q / q.norm()
+
+
+def _tquat_to_se3_matrix(tquat: Tensor) -> Tensor:
+    """``[tx, ty, tz, qx, qy, qz, qw]`` to a 4x4 SE3 matrix."""
+    T = torch.eye(4, dtype=tquat.dtype, device=tquat.device)
+    T[:3, :3] = _quat_to_so3_matrix(tquat[3:])
+    T[:3, 3] = tquat[:3]
+    return T
+
+
+def _se3_matrix_inverse(T: Tensor) -> Tensor:
+    """Inverse of an SE3 matrix ``[R t; 0 1]`` as ``[R^T  -R^T t; 0 1]``."""
+    R = T[:3, :3]
+    t = T[:3, 3]
+    T_inv = torch.eye(4, dtype=T.dtype, device=T.device)
+    T_inv[:3, :3] = R.t()
+    T_inv[:3, 3] = -(R.t() @ t)
+    return T_inv
+
+
+def _quat_to_roll_pitch(quat: Tensor) -> Tuple[Tensor, Tensor]:
+    """Roll (about z) and pitch (about x) Euler angles from a batch of
+    quaternions ``(..., 4)`` in ``(x, y, z, w)`` order."""
+    x, y, z, w = quat.unbind(-1)
+    roll = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    pitch = torch.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    return roll, pitch
+
+
+def ground_gaussians_loss(
+    positions: Tensor,  # [N, 3]
+    rotations: Tensor,  # [N, 4] quaternion (x, y, z, w)
+    cam_tquat: Tensor,  # [7] camera-from-world (tx,ty,tz,qx,qy,qz,qw)
+    random_values: Tensor,  # [B] bin offsets in [0, 1)
+    min_bias: float,
+    range_bias: float,
+    grid_len: float,
+    rotation_lambda: float,
+) -> Tensor:
+    """Pure-PyTorch ground-gaussian distortion loss (the fallback reference).
+
+    Transforms each gaussian into the camera frame, then for each of ``B``
+    randomly placed depth bins along the camera z-axis accumulates the
+    standard deviation of the camera-space height (y), roll, and pitch of the
+    gaussians inside the bin. The per-bin contribution is
+    ``std(y) + rotation_lambda * (std(roll) + std(pitch))`` and the scalar loss
+    is the mean over the ``B`` bins.
+
+    Bins with one or fewer members are skipped (std is undefined). Standard
+    deviation uses the unbiased (``N - 1``) estimator.
+    """
+    T_cam_world = _tquat_to_se3_matrix(cam_tquat)
+    T_world_cam = _se3_matrix_inverse(T_cam_world)
+
+    positions_cam = positions @ T_world_cam[:3, :3].t() + T_world_cam[:3, 3]
+
+    R_world = _quat_to_so3_matrix(rotations)  # [N, 3, 3]
+    R_cam = T_cam_world[:3, :3].t() @ R_world @ T_cam_world[:3, :3]
+    rotations_cam = torch.stack(
+        [_so3_matrix_to_quat(R_cam[i]) for i in range(R_cam.shape[0])]
+    )
+
+    roll, pitch = _quat_to_roll_pitch(rotations_cam)
+    z_cam = positions_cam[:, 2]
+    y_cam = positions_cam[:, 1]
+
+    biases = min_bias + range_bias * random_values
+
+    loss = positions.new_zeros(())
+    if random_values.shape[0] == 0:
+        # No bins: return a differentiable zero connected to the inputs, matching
+        # the CUDA path (which returns a zero scalar with zero gradients for
+        # n_bins == 0) instead of dividing by zero. The empty-view sums are
+        # exactly 0 and keep the autograd edge without reading any values.
+        return loss + positions[:0].sum() + rotations[:0].sum()
+    for bias in biases:
+        mask = (bias <= z_cam) & (z_cam < (bias + grid_len))
+        if int(torch.sum(mask)) <= 1:  # std on <=1 element is undefined
+            continue
+        loss = loss + torch.std(y_cam[mask])
+        loss = loss + rotation_lambda * (torch.std(pitch[mask]) + torch.std(roll[mask]))
+
+    return loss / random_values.shape[0]
+
+
+class FusedGroundGaussiansLosses(torch.nn.Module):
+    """Fused CUDA ground-gaussian distortion loss with a pure-PyTorch fallback.
+
+    Constrains the camera-space height (y) and roll/pitch rotation variance of
+    gaussians that fall inside randomly placed depth bins along the camera
+    z-axis (HUGSIM-style ground regularization). Returns a single scalar loss;
+    gradients flow to ``positions`` and ``rotations``.
+
+    A typical use is regularizing a near-planar surface layer of a scene toward
+    local flatness -- for example, the road surface in an autonomous-driving
+    reconstruction.
+
+    Falls back to :func:`ground_gaussians_loss` when CUDA is unavailable or the
+    inputs are on CPU.
+
+    .. note::
+        The CUDA kernel dispatches on ``fp32`` and ``fp64`` only. AMP training
+        with ``fp16``/``bf16`` inputs will raise at kernel dispatch; cast to
+        ``float`` before calling, or disable AMP for this module.
+
+    Args:
+        min_bias: Lower edge of the bin-sampling range along camera z.
+        range_bias: Span of the bin-sampling range (``bin_min = min_bias +
+            range_bias * random_value``).
+        grid_len: Bin width along camera z (``bin_max = bin_min + grid_len``).
+        rotation_lambda: Weight on the roll + pitch standard-deviation terms
+            relative to the height term.
+    """
+
+    def __init__(
+        self,
+        min_bias: float,
+        range_bias: float,
+        grid_len: float,
+        rotation_lambda: float,
+    ):
+        super().__init__()
+        self.min_bias = min_bias
+        self.range_bias = range_bias
+        self.grid_len = grid_len
+        self.rotation_lambda = rotation_lambda
+        self._cuda_available = has_losses()
+
+    def forward(
+        self,
+        positions: Tensor,  # [N, 3]
+        rotations: Tensor,  # [N, 4] quaternion (x, y, z, w)
+        cam_tquat: Tensor,  # [7]
+        random_values: Tensor,  # [B]
+    ) -> Tensor:
+        """Compute the scalar ground-gaussian distortion loss."""
+        all_cuda = positions.is_cuda and all(
+            t.is_cuda for t in (rotations, cam_tquat, random_values)
+        )
+        if self._cuda_available and all_cuda:
+            from gsplat.cuda._losses_wrapper import _FusedGroundGaussiansLosses
+
+            return _FusedGroundGaussiansLosses.apply(
+                positions,
+                rotations,
+                cam_tquat,
+                random_values,
+                self.min_bias,
+                self.range_bias,
+                self.grid_len,
+                self.rotation_lambda,
+            )
+
+        return ground_gaussians_loss(
+            positions,
+            rotations,
+            cam_tquat,
+            random_values,
+            self.min_bias,
+            self.range_bias,
+            self.grid_len,
+            self.rotation_lambda,
+        )
+
+
 class FusedBgGridLosses(torch.nn.Module):
     """Fused CUDA implementation of sky-envmap TV + bilateral-grid drift +
     bilateral-grid spatial TV.
