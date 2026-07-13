@@ -12,6 +12,9 @@
 #   found (for CI that wants the cache guaranteed).
 # - GSPLAT_CCACHE_STATS (OFF): after `ninja`/`make`, print THIS build's ccache
 #   statistics (hits/misses) and clear them, via a per-build CCACHE_STATSLOG.
+# - GSPLAT_CCACHE_NORMALIZE_PATHS (ON): make cache keys portable across
+#   worktrees by expressing paths relative to the gsplat source root. The
+#   compiler prefix map is applied by GSplatCompileOptions.cmake.
 #
 # Call gsplat_configure_ccache() once, before any compilable target is defined,
 # and gsplat_finalize_ccache_stats() once, after all targets are defined.
@@ -31,6 +34,13 @@ cmake_dependent_option(
     GSPLAT_CCACHE_STATS
     "Print this build's ccache statistics after building"
     OFF
+    GSPLAT_ENABLE_CCACHE
+    OFF
+)
+cmake_dependent_option(
+    GSPLAT_CCACHE_NORMALIZE_PATHS
+    "Normalize ccache paths so objects can be reused across worktrees"
+    ON
     GSPLAT_ENABLE_CCACHE
     OFF
 )
@@ -62,6 +72,13 @@ function(gsplat_configure_ccache)
         # regardless of the invoking environment (sandboxed drivers cannot
         # export per-compiler environment themselves).
         list(APPEND _common_env "CCACHE_DIR=${GSPLAT_CCACHE_DIR}")
+    endif()
+    if(GSPLAT_CCACHE_NORMALIZE_PATHS)
+        # Each worktree has a different absolute source root. ccache rewrites
+        # paths beneath BASEDIR before hashing. The matching compiler prefix
+        # map also normalizes debug information and path-valued macros, which
+        # lets ccache safely retain its default directory hashing behavior.
+        list(APPEND _common_env "CCACHE_BASEDIR=${GSPLAT_SOURCE_DIR}")
     endif()
     if(GSPLAT_CCACHE_STATS)
         # Route ccache through `cmake -E env CCACHE_STATSLOG=...` so

@@ -169,6 +169,7 @@ apply to a top-level build unless noted otherwise; presets can override them.
 | `GSPLAT_ENABLE_CCACHE` | `ON` | Use ccache for C++, C, and CUDA compilation when it is available. |
 | `GSPLAT_FORCE_CCACHE` | `OFF` | Fail configuration instead of warning when ccache is enabled but unavailable. |
 | `GSPLAT_CCACHE_DIR` | empty | Override ccache's cache directory; empty preserves ccache's own resolution. |
+| `GSPLAT_CCACHE_NORMALIZE_PATHS` | `ON` | Normalize source paths so compatible ccache objects can be reused across worktrees. |
 | `GSPLAT_CCACHE_STATS` | `OFF` | Print cache statistics for this build after compilation. |
 
 The build also honors standard CMake and toolchain cache variables such as
@@ -335,6 +336,43 @@ configured. CMake then stores that compiler in its cache. Remove the affected
 CMake stages an importable package under `build/<preset>`. This is what
 allows Python tests to import the newly built extension directly from a build
 tree.
+
+## Sharing ccache across worktrees
+
+Without path normalization, ccache keeps absolute source and build paths in its
+cache keys. Those paths differ between Git worktrees, so equivalent
+compilations can miss the cache even when the checked-out code is substantially
+the same.
+
+Path normalization is enabled by default. Disable it when absolute path
+identity is required:
+
+```bash
+cmake --preset debug -DGSPLAT_CCACHE_NORMALIZE_PATHS=OFF
+```
+
+This sets `CCACHE_BASEDIR` to the current gsplat source root and compiles with
+`-ffile-prefix-map=<source-root>=.`. Source paths become relative to each
+worktree's root, allowing all worktrees to reuse compatible cached objects.
+Ccache's directory hashing remains enabled; the compiler mapping makes the
+recorded paths location-independent instead of asking ccache to ignore them.
+
+This optimization deliberately removes the worktree location from ccache's
+identity for a compilation. Consequently:
+
+- source paths embedded in object files or final binaries, including debug
+  information and values derived from `__FILE__`, become relative rather than
+  identifying the worktree that produced the final link;
+- compiler diagnostics and dependency files can contain rewritten relative
+  paths instead of the original absolute paths; and
+- GDB resolves the normalized paths naturally when launched from the worktree
+  root; otherwise add the source root with its `directory` command.
+
+The default assumes that worktrees have equivalent relative layouts and that
+their absolute location is not part of the desired output. In particular, logs
+or diagnostics built from `__FILE__` do not contain an absolute checkout path.
+Disable the option when absolute source provenance matters or when investigating
+dependency tracking or other path-sensitive build behavior.
 
 ## Build traces
 

@@ -51,6 +51,7 @@ function(gsplat_print_config)
     if(GSPLAT_ENABLE_CCACHE)
         message(STATUS "    GSPLAT_FORCE_CCACHE        : ${GSPLAT_FORCE_CCACHE}")
         message(STATUS "    GSPLAT_CCACHE_STATS        : ${GSPLAT_CCACHE_STATS}")
+        message(STATUS "    GSPLAT_CCACHE_NORMALIZE_PATHS : ${GSPLAT_CCACHE_NORMALIZE_PATHS}")
         if(GSPLAT_CCACHE_EXECUTABLE)
             message(STATUS "    ccache                     : ${GSPLAT_CCACHE_EXECUTABLE}")
             # GSPLAT_CCACHE_DIR, when set, is baked into the compiler launcher so

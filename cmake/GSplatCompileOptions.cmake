@@ -69,6 +69,9 @@ function(gsplat_define_compile_options)
         -diag-suppress=20281
     )
     set(_gsplat_cxx_options -Wall -Wno-unknown-pragmas)
+    set(_gsplat_normalized_source_path
+        "$<$<BOOL:${GSPLAT_CCACHE_NORMALIZE_PATHS}>:-ffile-prefix-map=${GSPLAT_SOURCE_DIR}=.>"
+    )
 
     add_library(gsplat_compile_opts INTERFACE)
     target_compile_features(gsplat_compile_opts INTERFACE cxx_std_20 cuda_std_20)
@@ -82,6 +85,8 @@ function(gsplat_define_compile_options)
         gsplat_compile_opts
         INTERFACE
             "$<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:${_gsplat_nvcc_options}>"
+            "$<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:${_gsplat_normalized_source_path}>"
             "$<$<COMPILE_LANGUAGE:CXX>:${_gsplat_cxx_options}>"
+            "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:${_gsplat_normalized_source_path}>"
     )
 endfunction()

@@ -49,6 +49,12 @@ if(PROJECT_IS_TOP_LEVEL)
     )
     set_tests_properties(cmake_pytest_config PROPERTIES LABELS "cmake;source")
 
+    add_test(
+        NAME cmake_ccache
+        COMMAND "${CMAKE_COMMAND}" -P "${GSPLAT_SOURCE_DIR}/tests/cmake/GSplatCCacheTest.cmake"
+    )
+    set_tests_properties(cmake_ccache PROPERTIES LABELS "cmake;source")
+
     function(gsplat_add_pytest name)
         set(_test_name "python_${name}")
         add_test(
