@@ -261,6 +261,7 @@ def rasterization(
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
     with_eval3d: bool = False,
+    macro_tile: bool = False,
     return_normals: bool = False,
     global_z_order: bool = True,
     rays: Optional[
@@ -453,6 +454,9 @@ def rasterization(
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
             of 2D image space. Default is False.
+        macro_tile: Whether to use the macro-tile (MT) two-level hierarchical
+            intersection path. Currently supports the unpacked classic 3DGS
+            EWA path only. Default is False.
         return_normals: Whether to compute and return accumulated normals per pixel.
             Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
             transformed by rotation, flipped if facing away from ray). Requires
@@ -640,6 +644,7 @@ def rasterization(
         renderer_config_impl,
         process_group_name,
         world_size,
+        macro_tile,
     )
 
     if absgrad and not with_eval3d:
@@ -761,9 +766,9 @@ def _rasterization(
         Compared to rasterization(), this function does not support some arguments such as
         `packed`, `sparse_grad` and `absgrad`.
     """
+    from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._torch_impl import (
-        _fully_fused_projection,
-        _rasterize_to_pixels,
+        _rasterize_to_pixels as _torch_rasterize_to_pixels,
     )
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
@@ -776,6 +781,33 @@ def _rasterization(
     tile_size = _resolve_tile_size(tile_size, with_eval3d, width, height)
 
     has_color = render_mode_has_color(render_mode)
+
+    def _rasterize_to_pixels(
+        means2d: Tensor,
+        conics: Tensor,
+        colors: Tensor,
+        opacities: Tensor,
+        image_width: int,
+        image_height: int,
+        tile_size: int,
+        isect_offsets: Tensor,
+        flatten_ids: Tensor,
+        backgrounds: Optional[Tensor] = None,
+        batch_per_iter: int = 100,
+    ) -> Tuple[Tensor, Tensor]:
+        return _torch_rasterize_to_pixels(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            batch_per_iter=batch_per_iter,
+        )
 
     _validate_3dgut_rasterize_mode(
         rasterize_mode, with_ut=with_ut, with_eval3d=with_eval3d

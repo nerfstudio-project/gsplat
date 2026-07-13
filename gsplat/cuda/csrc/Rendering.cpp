@@ -206,7 +206,8 @@ namespace
         bool global_z_order,
         bool use_hit_distance,
         bool return_normals,
-        bool distributed
+        bool distributed,
+        bool macro_tile
     )
     {
         CHECK_INPUT(means);
@@ -305,6 +306,17 @@ namespace
                     extra_signals.value().dim() == 2, "distributed=True only supports per-Gaussian extra signals"
                 );
             }
+        }
+
+        if(macro_tile)
+        {
+            TORCH_CHECK(tile_size == 16, "macro_tile=True currently supports tile_size=16 only");
+            TORCH_CHECK(!packed, "macro_tile=True does not yet support packed mode");
+            TORCH_CHECK(!sparse_grad, "macro_tile=True does not yet support sparse_grad=True");
+            TORCH_CHECK(!absgrad, "macro_tile=True does not yet support absgrad=True");
+            TORCH_CHECK(!distributed, "macro_tile=True does not yet support distributed rendering");
+            TORCH_CHECK(!with_ut && !with_eval3d, "macro_tile=True does not yet support 3DGUT (with_ut / with_eval3d)");
+            TORCH_CHECK(!lidar_coeffs.has_value(), "macro_tile=True does not yet support LiDAR rasterization");
         }
 
         const bool is_lidar_camera = camera_model == CameraModelType::LIDAR;
@@ -865,7 +877,8 @@ Rasterization3DGSResult rasterization_3dgs(
     bool return_normals,
     int64_t renderer_config,
     const at::optional<std::string> &process_group_name,
-    int64_t world_size
+    int64_t world_size,
+    bool macro_tile
 )
 {
     DEVICE_GUARD(means);
@@ -912,7 +925,8 @@ Rasterization3DGSResult rasterization_3dgs(
         global_z_order,
         use_hit_distance,
         return_normals,
-        distributed
+        distributed,
+        macro_tile
     );
 
     const int64_t batch_ndim                   = means.dim() - 2;
@@ -1383,37 +1397,60 @@ Rasterization3DGSResult rasterization_3dgs(
     at::optional<at::Tensor> kernel_gaussian_ids = contiguous_optional(gaussian_ids_opt);
     at::optional<at::Tensor> intersect_conics    = as_optional_tensor(with_ut ? at::Tensor{} : kernel_conics);
     at::optional<at::Tensor> intersect_opacities = as_optional_tensor(with_ut ? at::Tensor{} : kernel_opacities);
-    TileIntersectResult isects                   = lidar_coeffs.has_value() ? call_torch_op<&intersect_tile_lidar>(
-                                                                                  "gsplat::intersect_tile_lidar",
-                                                                                  lidar_coeffs.value(),
-                                                                                  kernel_means2d,
-                                                                                  kernel_radii,
-                                                                                  kernel_depths,
-                                                                                  kernel_image_ids,
-                                                                                  kernel_gaussian_ids,
-                                                                                  std::optional<int64_t>(I),
-                                                                                  true, // sort
-                                                                                  segmented
-                                                                              )
-                                                                            : call_torch_op<&intersect_tile>(
-                                                                                  "gsplat::intersect_tile",
-                                                                                  kernel_means2d,
-                                                                                  kernel_radii,
-                                                                                  kernel_depths,
-                                                                                  intersect_conics,
-                                                                                  intersect_opacities,
-                                                                                  kernel_image_ids,
-                                                                                  kernel_gaussian_ids,
-                                                                                  std::optional<int64_t>(I),
-                                                                                  tile_size,
-                                                                                  tile_width,
-                                                                                  tile_height,
-                                                                                  true, // sort
-                                                                                  segmented
-                                                                              );
+    TileIntersectResult isects;
+    at::Tensor isect_offsets;
+    if(macro_tile)
+    {
+        const auto opts_i32 = kernel_means2d.options().dtype(at::kInt);
 
-    at::Tensor isect_offsets
-        = call_torch_op<&intersect_offset>("gsplat::intersect_offset", isects.isect_ids, I, tile_width, tile_height);
+        isects.tiles_per_gauss                      = at::empty({0}, opts_i32);
+        isects.isect_ids                            = at::empty({0}, kernel_means2d.options().dtype(at::kLong));
+        std::tie(isect_offsets, isects.flatten_ids) = intersect_tile_macro_binning(
+            kernel_means2d.reshape({I, N, 2}),
+            kernel_radii.reshape({I, N, 2}),
+            kernel_depths.reshape({I, N}),
+            kernel_conics.reshape({I, N, 3}),
+            kernel_opacities.reshape({I, N}),
+            tile_size,
+            tile_width,
+            tile_height
+        );
+    }
+    else
+    {
+        isects = lidar_coeffs.has_value() ? call_torch_op<&intersect_tile_lidar>(
+                                                "gsplat::intersect_tile_lidar",
+                                                lidar_coeffs.value(),
+                                                kernel_means2d,
+                                                kernel_radii,
+                                                kernel_depths,
+                                                kernel_image_ids,
+                                                kernel_gaussian_ids,
+                                                std::optional<int64_t>(I),
+                                                true, // sort
+                                                segmented
+                                            )
+                                          : call_torch_op<&intersect_tile>(
+                                                "gsplat::intersect_tile",
+                                                kernel_means2d,
+                                                kernel_radii,
+                                                kernel_depths,
+                                                intersect_conics,
+                                                intersect_opacities,
+                                                kernel_image_ids,
+                                                kernel_gaussian_ids,
+                                                std::optional<int64_t>(I),
+                                                tile_size,
+                                                tile_width,
+                                                tile_height,
+                                                true, // sort
+                                                segmented
+                                            );
+
+        isect_offsets = call_torch_op<&intersect_offset>(
+            "gsplat::intersect_offset", isects.isect_ids, I, tile_width, tile_height
+        );
+    }
     std::vector<int64_t> isect_offsets_shape = batch_shape_with(means, {C, tile_height, tile_width});
     isect_offsets                            = isect_offsets.reshape(isect_offsets_shape);
 

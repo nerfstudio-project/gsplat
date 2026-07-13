@@ -35,7 +35,7 @@
 //                tree node, reading from one ping-pong buffer and writing to
 //                the other.
 
-namespace higs
+namespace gsplat
 {
 namespace seg_sort
 {
@@ -1117,4 +1117,4 @@ int SegmentedSortAsync(
 
     return 0;
 }
-} // namespace higs
+} // namespace gsplat

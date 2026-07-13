@@ -51,15 +51,15 @@ at::Tensor launch_mt_segmented_sort(
 
     auto &alloc = *::c10::cuda::CUDACachingAllocator::get();
 
-    SegmentedSortState state;
-    size_t scratch_bytes = SegmentedSortSetup(state, n_macro_tiles, (int32_t)n_macro_isects, nullptr);
+    gsplat::SegmentedSortState state;
+    size_t scratch_bytes = gsplat::SegmentedSortSetup(state, n_macro_tiles, (int32_t)n_macro_isects, nullptr);
     auto scratch         = alloc.allocate(scratch_bytes);
-    SegmentedSortSetup(state, n_macro_tiles, (int32_t)n_macro_isects, scratch.get());
+    gsplat::SegmentedSortSetup(state, n_macro_tiles, (int32_t)n_macro_isects, scratch.get());
 
     int32_t *d_keys[2]   = {d_keys_in, d_keys_out};
     int32_t *d_values[2] = {d_vals_in, d_vals_out};
 
-    int result_buf = SegmentedSortAsync(state, d_offsets, d_keys, d_values, stream);
+    int result_buf = gsplat::SegmentedSortAsync(state, d_offsets, d_keys, d_values, stream);
 
     // result_buf is the index of the buffer holding the sorted data: 0 = inout_*
     // (input), 1 = tmp_* (scratch). Return that buffer's gaussian-ids tensor as a

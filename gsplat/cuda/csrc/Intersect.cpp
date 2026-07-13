@@ -19,6 +19,7 @@
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
+#include <limits>
 #include <tuple>
 
 #include <ATen/Functions.h>
@@ -28,7 +29,9 @@
 #include "MathUtils.h"
 #include "Common.h" // where all the macros are defined
 #include "Config.h"
-#include "Intersect.h"  // where the launch function is declared
+#include "Intersect.h" // where the launch function is declared
+#include "IntersectMTConfig.h"
+#include "IntersectMacroTile.h"
 #include "TorchUtils.h" // to_torch_op, TorchArgDef
 
 namespace gsplat
@@ -688,6 +691,235 @@ std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
     return std::make_tuple(tile_offsets, flatten_ids_sorted);
 }
 
+std::tuple<at::Tensor, at::Tensor> intersect_tile_macro_binning(
+    const at::Tensor &means2d,
+    const at::Tensor &radii,
+    const at::Tensor &depths,
+    const at::Tensor &conics,
+    const at::Tensor &opacities,
+    int64_t tile_size,
+    int64_t tile_cols,
+    int64_t tile_rows
+)
+{
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(depths);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(opacities);
+
+    TORCH_CHECK(means2d.dim() == 3 && means2d.size(2) == 2, "means2d must have shape [I, N, 2], got ", means2d.sizes());
+    TORCH_CHECK(means2d.scalar_type() == at::kFloat, "means2d must be float32, got ", means2d.scalar_type());
+    const int64_t I = means2d.size(0);
+    const int64_t N = means2d.size(1);
+    TORCH_CHECK(N <= std::numeric_limits<int32_t>::max(), "N must fit in int32, got ", N);
+    TORCH_CHECK(
+        radii.dim() == 3
+            && radii.size(0) == I
+            && radii.size(1) == N
+            && radii.size(2) == 2
+            && radii.scalar_type() == at::kInt,
+        "radii must be int32 [I, N, 2], got ",
+        radii.sizes(),
+        " ",
+        radii.scalar_type()
+    );
+    TORCH_CHECK(
+        depths.dim() == 2 && depths.size(0) == I && depths.size(1) == N && depths.scalar_type() == at::kFloat,
+        "depths must be float32 [I, N], got ",
+        depths.sizes(),
+        " ",
+        depths.scalar_type()
+    );
+    TORCH_CHECK(
+        conics.dim() == 3
+            && conics.size(0) == I
+            && conics.size(1) == N
+            && conics.size(2) == 3
+            && conics.scalar_type() == at::kFloat,
+        "conics must be float32 [I, N, 3], got ",
+        conics.sizes(),
+        " ",
+        conics.scalar_type()
+    );
+    TORCH_CHECK(
+        opacities.dim() == 2
+            && opacities.size(0) == I
+            && opacities.size(1) == N
+            && opacities.scalar_type() == at::kFloat,
+        "opacities must be float32 [I, N], got ",
+        opacities.sizes(),
+        " ",
+        opacities.scalar_type()
+    );
+    TORCH_CHECK(tile_size == 8 || tile_size == 16, "tile_size must be 8 or 16, got ", tile_size);
+
+    const auto opts_i32      = means2d.options().dtype(at::kInt);
+    at::Tensor isect_offsets = at::zeros({I, tile_rows, tile_cols}, opts_i32);
+    at::Tensor flatten_ids   = at::empty({0}, opts_i32);
+
+    const int64_t n_tiles = tile_rows * tile_cols;
+    if(I == 0 || N == 0 || n_tiles == 0)
+    {
+        return std::make_tuple(isect_offsets, flatten_ids);
+    }
+
+    const int32_t macro_tile_cols = static_cast<int32_t>((tile_cols + MACRO_TILE_WIDTH - 1) / MACRO_TILE_WIDTH);
+    const int32_t macro_tile_rows = static_cast<int32_t>((tile_rows + MACRO_TILE_HEIGHT - 1) / MACRO_TILE_HEIGHT);
+    const int32_t n_macro_tiles   = macro_tile_rows * macro_tile_cols;
+    TORCH_CHECK(
+        I * static_cast<int64_t>(N) <= std::numeric_limits<int32_t>::max(),
+        "macro-tile flatten ids must fit in int32, got I * N = ",
+        I * static_cast<int64_t>(N)
+    );
+    TORCH_CHECK(
+        I * static_cast<int64_t>(n_macro_tiles) <= std::numeric_limits<int32_t>::max(),
+        "macro-tile segment count must fit in int32, got I * n_macro_tiles = ",
+        I * static_cast<int64_t>(n_macro_tiles)
+    );
+    TORCH_CHECK(
+        I * n_tiles <= std::numeric_limits<int32_t>::max(),
+        "render-tile count must fit in int32, got I * n_tiles = ",
+        I * n_tiles
+    );
+    const int32_t total_macro_tiles = static_cast<int32_t>(I) * n_macro_tiles;
+
+    // This stage implements the 3DGS EWA path. 3DGUT will use the AABB mode
+    // once the macro-tile path is extended there.
+    const IntersectionType intersection_type = IntersectionType::ELLIPSE;
+
+    at::Tensor mt_gauss_counts = at::zeros({I, n_macro_tiles}, opts_i32);
+    launch_mt_binning_count(
+        intersection_type,
+        means2d,
+        radii,
+        conics,
+        opacities,
+        static_cast<int32_t>(tile_size),
+        macro_tile_cols,
+        macro_tile_rows,
+        mt_gauss_counts
+    );
+
+    at::Tensor mt_gauss_offsets = at::zeros({total_macro_tiles + 1}, opts_i32);
+    {
+        at::Tensor mt_gauss_offsets_tail = mt_gauss_offsets.slice(0, 1, total_macro_tiles + 1);
+        at::cumsum_out(mt_gauss_offsets_tail, mt_gauss_counts.view({total_macro_tiles}), 0, at::kInt);
+    }
+    const int64_t n_macro_isects = mt_gauss_offsets[total_macro_tiles].item<int64_t>();
+    if(n_macro_isects == 0)
+    {
+        return std::make_tuple(isect_offsets, flatten_ids);
+    }
+
+    at::Tensor mt_gauss_write_cursor = at::zeros({I, n_macro_tiles}, opts_i32);
+    at::Tensor mt_depth_keys         = at::empty({n_macro_isects}, opts_i32);
+    at::Tensor mt_gauss_ids          = at::empty({n_macro_isects}, opts_i32);
+    launch_mt_binning_fill(
+        intersection_type,
+        means2d,
+        radii,
+        depths,
+        conics,
+        opacities,
+        static_cast<int32_t>(tile_size),
+        macro_tile_cols,
+        macro_tile_rows,
+        mt_gauss_offsets,
+        mt_gauss_write_cursor,
+        mt_depth_keys,
+        mt_gauss_ids
+    );
+
+    at::Tensor mt_tmp_depth_keys   = at::empty({n_macro_isects}, opts_i32);
+    at::Tensor mt_tmp_gauss_ids    = at::empty({n_macro_isects}, opts_i32);
+    at::Tensor mt_gauss_ids_sorted = launch_mt_segmented_sort(
+        n_macro_isects,
+        total_macro_tiles,
+        mt_gauss_offsets,
+        mt_depth_keys,
+        mt_gauss_ids,
+        mt_tmp_depth_keys,
+        mt_tmp_gauss_ids
+    );
+
+    at::Tensor mt_gauss_batch_offsets = at::zeros({total_macro_tiles + 1}, opts_i32);
+    launch_mt_gauss_batch_offsets(mt_gauss_offsets, mt_gauss_batch_offsets, total_macro_tiles);
+    const int32_t total_gauss_batches = mt_gauss_batch_offsets[total_macro_tiles].item<int32_t>();
+    if(total_gauss_batches == 0)
+    {
+        return std::make_tuple(isect_offsets, flatten_ids);
+    }
+
+    const int64_t n_batch_rt_slots = static_cast<int64_t>(total_gauss_batches) * (MACRO_TILE_WIDTH * MACRO_TILE_HEIGHT);
+    const int64_t n_bitmask_words  = n_batch_rt_slots * RT_MASKS_PER_GAUSS_BATCH;
+    at::Tensor rt_bitmasks         = at::empty({n_bitmask_words}, opts_i32);
+    launch_rt_gauss_batch_intersection_masks(
+        intersection_type,
+        total_gauss_batches,
+        total_macro_tiles,
+        n_macro_tiles,
+        macro_tile_cols,
+        static_cast<int32_t>(tile_size),
+        means2d,
+        conics,
+        opacities,
+        mt_gauss_offsets,
+        mt_gauss_ids_sorted,
+        mt_gauss_batch_offsets,
+        rt_bitmasks
+    );
+
+    at::Tensor rt_batch_gauss_offsets = at::empty({n_batch_rt_slots}, opts_i32);
+    at::Tensor rt_gauss_counts        = at::zeros({I * n_tiles}, opts_i32);
+    launch_rt_count_gauss_and_prefix_offsets(
+        total_macro_tiles,
+        n_macro_tiles,
+        macro_tile_cols,
+        static_cast<int32_t>(tile_size),
+        static_cast<int32_t>(tile_cols),
+        static_cast<int32_t>(tile_rows),
+        mt_gauss_batch_offsets,
+        rt_bitmasks,
+        rt_batch_gauss_offsets,
+        rt_gauss_counts
+    );
+
+    at::Tensor rt_gauss_offsets_full = at::zeros({I * n_tiles + 1}, opts_i32);
+    {
+        at::Tensor rt_gauss_offsets_tail = rt_gauss_offsets_full.slice(0, 1, I * n_tiles + 1);
+        at::cumsum_out(rt_gauss_offsets_tail, rt_gauss_counts, 0, at::kInt);
+    }
+    const int64_t n_rt_isects = rt_gauss_offsets_full[I * n_tiles].item<int64_t>();
+
+    isect_offsets = rt_gauss_offsets_full.slice(0, 0, I * n_tiles).view({I, tile_rows, tile_cols}).contiguous();
+    if(n_rt_isects == 0)
+    {
+        return std::make_tuple(isect_offsets, flatten_ids);
+    }
+
+    flatten_ids = at::empty({n_rt_isects}, opts_i32);
+    launch_rt_binning_fill(
+        total_gauss_batches,
+        total_macro_tiles,
+        n_macro_tiles,
+        macro_tile_cols,
+        static_cast<int32_t>(tile_size),
+        static_cast<int32_t>(tile_cols),
+        static_cast<int32_t>(tile_rows),
+        mt_gauss_offsets,
+        mt_gauss_ids_sorted,
+        mt_gauss_batch_offsets,
+        rt_gauss_offsets_full,
+        rt_batch_gauss_offsets,
+        rt_bitmasks,
+        flatten_ids
+    );
+
+    return std::make_tuple(isect_offsets, flatten_ids);
+}
+
 static int64_t num_words_per_tile_bitmask(int64_t tile_size)
 {
     return (tile_size * tile_size + 63) / 64;
@@ -811,6 +1043,7 @@ void register_intersect_cuda_impl(torch::Library &m)
     m.impl("intersect_tile_lidar", to_torch_op<&intersect_tile_lidar>);
     m.impl("intersect_offset", to_torch_op<&intersect_offset>);
     m.impl("intersect_tile_sparse", &intersect_tile_sparse);
+    m.impl("intersect_tile_macro_binning", &intersect_tile_macro_binning);
     m.impl("build_sparse_tile_layout", &build_sparse_tile_layout);
 }
 

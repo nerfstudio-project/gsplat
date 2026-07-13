@@ -20,7 +20,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-namespace higs
+namespace gsplat
 {
 // internal API for the segmented sort pipeline.
 //
@@ -192,4 +192,4 @@ int SegmentedSortAsync(
     int32_t *const *d_values,
     cudaStream_t s
 );
-} // namespace higs
+} // namespace gsplat

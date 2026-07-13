@@ -31,6 +31,7 @@
 
 #include "MathUtils.h"
 #include "Common.h"
+#include "IntersectAccuTile.cuh"
 #include "Intersect.h"
 #include "Utils.cuh"
 
@@ -84,24 +85,6 @@ inline __device__ TileColumnRange row_key_column_range(
     return {static_cast<int32_t>(col_start), static_cast<int32_t>(col_end), done};
 }
 
-// ============================================================
-// SNUGBOX + AccuTile helper functions
-// (ported from test_viewer/src/cuda/Intersect.cu)
-// ============================================================
-
-inline __device__ float2
-    accutile_ellipse_intersection(float A, float B, float C, float disc, float t, float2 p, bool isY, float coord)
-{
-    float p_u   = isY ? p.y : p.x;
-    float p_v   = isY ? p.x : p.y;
-    float coeff = isY ? A : C;
-
-    float h         = coord - p_u;
-    float sqrt_term = sqrtf(disc * h * h + t * coeff);
-
-    return {(-B * h - sqrt_term) / coeff + p_v, (-B * h + sqrt_term) / coeff + p_v};
-}
-
 inline __device__ uint32_t accutile_process_tiles(
     float A,
     float B,
@@ -123,7 +106,6 @@ inline __device__ uint32_t accutile_process_tiles(
     int64_t key_start,
     int64_t key_end,
     int64_t iid_enc,
-    uint32_t tile_n_bits,
     int64_t depth_id_enc,
     uint32_t flatten_idx,
     int64_t *isect_ids,
@@ -131,87 +113,42 @@ inline __device__ uint32_t accutile_process_tiles(
     int64_t *cur_idx
 )
 {
-    float BLOCK = (float)tile_size;
-
-    if(isY)
-    {
-        rect_min    = {rect_min.y, rect_min.x};
-        rect_max    = {rect_max.y, rect_max.x};
-        bbox_min    = {bbox_min.y, bbox_min.x};
-        bbox_max    = {bbox_max.y, bbox_max.x};
-        bbox_argmin = {bbox_argmin.y, bbox_argmin.x};
-        bbox_argmax = {bbox_argmax.y, bbox_argmax.x};
-    }
-
     uint32_t tiles_count = 0;
-    float2 intersect_min_line, intersect_max_line;
-    float ellipse_min, ellipse_max;
-    float min_line, max_line;
-
-    intersect_max_line = {bbox_max.y, bbox_min.y};
-
-    min_line = rect_min.x * BLOCK;
-    if(bbox_min.x <= min_line)
-    {
-        intersect_min_line = accutile_ellipse_intersection(A, B, C, disc, t, p, isY, min_line);
-    }
-    else
-    {
-        intersect_min_line = intersect_max_line;
-    }
-
-#pragma unroll 1
-    for(int u = rect_min.x; u < rect_max.x; ++u)
-    {
-        max_line = min_line + BLOCK;
-        if(max_line <= bbox_max.x)
+    accutile_walk_tile_strips(
+        A,
+        B,
+        C,
+        disc,
+        t,
+        p,
+        bbox_min,
+        bbox_max,
+        bbox_argmin,
+        bbox_argmax,
+        rect_min,
+        rect_max,
+        static_cast<int32_t>(tile_size),
+        static_cast<int32_t>(tile_size),
+        static_cast<int32_t>(tile_width),
+        isY,
+        [&](int32_t tile_id)
         {
-            intersect_max_line = accutile_ellipse_intersection(A, B, C, disc, t, p, isY, max_line);
-        }
-
-        if(min_line <= bbox_argmin.y && bbox_argmin.y < max_line)
-        {
-            ellipse_min = bbox_min.y;
-        }
-        else
-        {
-            ellipse_min = min(intersect_min_line.x, intersect_max_line.x);
-        }
-
-        if(min_line <= bbox_argmax.y && bbox_argmax.y < max_line)
-        {
-            ellipse_max = bbox_max.y;
-        }
-        else
-        {
-            ellipse_max = max(intersect_min_line.y, intersect_max_line.y);
-        }
-
-        int min_tile_v = max(rect_min.y, min(rect_max.y, (int)(ellipse_min / BLOCK)));
-        int max_tile_v = min(rect_max.y, max(rect_min.y, (int)(ellipse_max / BLOCK + 1)));
-
-#pragma unroll 1
-        for(int v = min_tile_v; v < max_tile_v; v++)
-        {
-            int64_t tile_id  = isY ? (int64_t)(u * tile_width + v) : (int64_t)(v * tile_width + u);
-            int64_t tile_key = image_id * n_tiles + tile_id;
+            const int64_t tile_id64 = static_cast<int64_t>(tile_id);
+            const int64_t tile_key  = image_id * n_tiles + tile_id64;
             if(tile_key < key_start || tile_key >= key_end)
             {
-                continue;
+                return;
             }
             ++tiles_count;
 
             if(isect_ids != nullptr)
             {
-                isect_ids[*cur_idx]   = iid_enc | (tile_id << 32) | depth_id_enc;
+                isect_ids[*cur_idx]   = iid_enc | (tile_id64 << 32) | depth_id_enc;
                 flatten_ids[*cur_idx] = static_cast<int32_t>(flatten_idx);
                 ++(*cur_idx);
             }
         }
-
-        intersect_min_line = intersect_max_line;
-        min_line           = max_line;
-    }
+    );
     return tiles_count;
 }
 
@@ -305,6 +242,16 @@ __global__ void intersect_tile_kernel(
 
         // disc = B^2 - A*C = -(det Sigma^{-1})
         float disc = B * B - A * C;
+        // A bounded inverse-covariance ellipse requires a negative disc.
+        // The negated comparison also rejects NaN before the division below.
+        if(!(disc < 0.f))
+        {
+            if(first_pass)
+            {
+                tiles_per_gauss[idx] = 0;
+            }
+            return;
+        }
 
         // Opacity-aware isocontour level: alpha = opacity * exp(-0.5 * q) >= ALPHA_THRESHOLD
         // => q <= 2 * ln(opacity / ALPHA_THRESHOLD). Cap at GAUSSIAN_EXTEND^2 (same as the gsplat radius budget).
@@ -367,7 +314,6 @@ __global__ void intersect_tile_kernel(
             key_start,
             key_end,
             iid_enc,
-            tile_n_bits,
             depth_id_enc,
             idx,
             first_pass ? nullptr : isect_ids,

@@ -761,8 +761,6 @@ class TestSourceParity:
             "Projection.cu",
             "Projection.h",
             "InferenceTypes.h",
-            "SegmentedSort.cu",
-            "SegmentedSort.h",
             "SHCommon.h",
             "SHCompression.cu",
             "SHCompression.h",
