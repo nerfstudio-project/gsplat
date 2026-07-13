@@ -22,6 +22,105 @@ install(
 if(GSPLAT_BUILD_TESTS)
     add_subdirectory(cpp)
 
+    # Derive the expected device-image census from the same concrete policy
+    # that initialized every target. Native has already been resolved here.
+    set(_gsplat_expected_real_arches "")
+    set(_gsplat_expected_virtual_arches "")
+    set(_gsplat_concrete_arch_policy TRUE)
+    foreach(_arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
+        if(_arch MATCHES "^([0-9]+[a-z]?)(-(real|virtual))?$")
+            set(_numeric_arch "${CMAKE_MATCH_1}")
+            set(_arch_kind "${CMAKE_MATCH_3}")
+            if(NOT _arch_kind STREQUAL "virtual")
+                list(APPEND _gsplat_expected_real_arches "${_numeric_arch}")
+            endif()
+            if(NOT _arch_kind STREQUAL "real")
+                list(APPEND _gsplat_expected_virtual_arches "${_numeric_arch}")
+            endif()
+        else()
+            # Special policies such as all are compiler-expanded and cannot be
+            # predicted from the CMake spelling. Their command-line coverage
+            # remains active, but skip the exact binary census below.
+            set(_gsplat_concrete_arch_policy FALSE)
+        endif()
+    endforeach()
+    foreach(_arch_list IN ITEMS _gsplat_expected_real_arches _gsplat_expected_virtual_arches)
+        list(REMOVE_DUPLICATES ${_arch_list})
+        list(SORT ${_arch_list} COMPARE NATURAL ORDER ASCENDING)
+    endforeach()
+
+    # Collect the current final artifacts with direct CUDA sources across the
+    # complete project tree. The compile-database test separately audits every
+    # CUDA object, including private object-library outputs.
+    function(_gsplat_collect_buildsystem_targets out_var directory)
+        get_property(_targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
+        get_property(_subdirectories DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+        foreach(_subdirectory IN LISTS _subdirectories)
+            _gsplat_collect_buildsystem_targets(_subdirectory_targets "${_subdirectory}")
+            list(APPEND _targets ${_subdirectory_targets})
+        endforeach()
+        set(${out_var} "${_targets}" PARENT_SCOPE)
+    endfunction()
+
+    if(PROJECT_IS_TOP_LEVEL AND _gsplat_concrete_arch_policy)
+        # CUDA container images do not always place the binary utilities next
+        # to nvcc. Prefer that stable toolkit location. The current runner's
+        # Triton package carries a compatible fallback, although that package
+        # layout is private and should not replace cuobjdump in the dev image.
+        get_filename_component(_gsplat_torch_site_packages "${TORCH_INSTALL_PREFIX}" DIRECTORY)
+        find_program(
+            _gsplat_cuobjdump
+            NAMES cuobjdump
+            HINTS
+                "${CUDAToolkit_BIN_DIR}"
+                "${_gsplat_torch_site_packages}/triton/backends/nvidia/bin"
+                NO_CACHE
+        )
+        if(NOT _gsplat_cuobjdump)
+            message(FATAL_ERROR "cuobjdump is required to validate CUDA-bearing test artifacts.")
+        endif()
+
+        _gsplat_collect_buildsystem_targets(_gsplat_buildsystem_targets "${GSPLAT_SOURCE_DIR}")
+        list(REMOVE_DUPLICATES _gsplat_buildsystem_targets)
+        foreach(_target IN LISTS _gsplat_buildsystem_targets)
+            get_target_property(_target_imported "${_target}" IMPORTED)
+            get_target_property(_target_type "${_target}" TYPE)
+            if(
+                _target_imported
+                OR NOT _target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$"
+            )
+                continue()
+            endif()
+
+            get_target_property(_target_sources "${_target}" SOURCES)
+            set(_target_has_cuda FALSE)
+            foreach(_source IN LISTS _target_sources)
+                if(_source MATCHES "\\.cu$")
+                    set(_target_has_cuda TRUE)
+                    break()
+                endif()
+            endforeach()
+            if(NOT _target_has_cuda)
+                continue()
+            endif()
+
+            string(MAKE_C_IDENTIFIER "${_target}" _test_target_id)
+            add_test(
+                NAME "cuda_arch_artifact_${_test_target_id}"
+                COMMAND
+                    "${CMAKE_COMMAND}" "-DGSPLAT_CUOBJDUMP=${_gsplat_cuobjdump}"
+                    "-DGSPLAT_ARTIFACT=$<TARGET_FILE:${_target}>"
+                    "-DGSPLAT_EXPECTED_REAL_ARCHITECTURES=${_gsplat_expected_real_arches}"
+                    "-DGSPLAT_EXPECTED_VIRTUAL_ARCHITECTURES=${_gsplat_expected_virtual_arches}" -P
+                    "${GSPLAT_SOURCE_DIR}/tests/cmake/GSplatCudaArtifactTest.cmake"
+            )
+            set_tests_properties(
+                "cuda_arch_artifact_${_test_target_id}"
+                PROPERTIES LABELS "binary;cmake;cuda"
+            )
+        endforeach()
+    endif()
+
     # Unlike the build-tree configuration, the installed test configuration
     # must remain valid after the wheel is relocated. Both roots are relative to
     # _testdata: ../.. names the directory holding the installed gsplat package,
@@ -131,6 +230,26 @@ if(PROJECT_IS_TOP_LEVEL)
         COMMAND "${CMAKE_COMMAND}" -P "${GSPLAT_SOURCE_DIR}/tests/cmake/GSplatCCacheTest.cmake"
     )
     set_tests_properties(cmake_ccache PROPERTIES LABELS "cmake;source")
+
+    add_test(
+        NAME cmake_cuda_arch
+        COMMAND
+            "${CMAKE_COMMAND}" "-DGSPLAT_CUDA_COMPILER=${CMAKE_CUDA_COMPILER}" -P
+            "${GSPLAT_SOURCE_DIR}/tests/cmake/GSplatCudaArchTest.cmake"
+    )
+    set_tests_properties(cmake_cuda_arch PROPERTIES LABELS "cmake;source")
+
+    if(GSPLAT_BUILD_TESTS AND _gsplat_concrete_arch_policy)
+        add_test(
+            NAME cmake_cuda_arch_build_tree
+            COMMAND
+                "${CMAKE_COMMAND}" "-DGSPLAT_BINARY_DIR=${GSPLAT_BINARY_DIR}"
+                "-DGSPLAT_CUOBJDUMP=${_gsplat_cuobjdump}"
+                "-DGSPLAT_EXPECTED_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}" -P
+                "${GSPLAT_SOURCE_DIR}/tests/cmake/GSplatCudaArchBuildTest.cmake"
+        )
+        set_tests_properties(cmake_cuda_arch_build_tree PROPERTIES LABELS "binary;cmake;cuda")
+    endif()
 
     function(gsplat_add_pytest name)
         set(_test_name "python_${name}")

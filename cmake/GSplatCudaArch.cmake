@@ -176,6 +176,89 @@ function(_gsplat_filter_cuda_architectures out_filtered arch_list cuda_compiler)
     set(${out_filtered} "${_filtered}" PARENT_SCOPE)
 endfunction()
 
+# CMake's CUDA compiler-ABI executable queries cudaGetDeviceCount() and
+# cudaGetDeviceProperties() once when a build tree first enables CUDA. CMake
+# stores the result in its generated compiler state as entries such as
+# "89-real;120-real". Normalize that persisted result here instead of running
+# another detector whose view of device visibility could differ from CUDA's.
+function(_gsplat_normalize_native_cuda_architectures out_var detected_arches)
+    if("${detected_arches}" STREQUAL "")
+        message(
+            FATAL_ERROR
+            "CMAKE_CUDA_ARCHITECTURES=native was requested, but CMake could "
+            "not resolve any usable architecture from the CUDA-visible GPUs."
+        )
+    endif()
+
+    set(_normalized_arches "")
+    foreach(_detected_arch IN LISTS detected_arches)
+        string(STRIP "${_detected_arch}" _detected_arch)
+        if(NOT _detected_arch MATCHES "^([1-9][0-9]+)-real$")
+            message(
+                FATAL_ERROR
+                "CMAKE_CUDA_ARCHITECTURES=native produced malformed detected "
+                "architecture '${_detected_arch}'. Expected a concrete CMake "
+                "architecture such as '89-real' or '120-real'."
+            )
+        endif()
+        list(APPEND _normalized_arches "${CMAKE_MATCH_1}-real")
+    endforeach()
+
+    # Device enumeration order is not stable across hosts or reboots. Sorting
+    # the deduplicated values makes the generated rules identical for the same
+    # visible compute-capability set. Keep -real: native means native machine
+    # code, while an unsuffixed number would additionally embed PTX.
+    list(REMOVE_DUPLICATES _normalized_arches)
+    list(SORT _normalized_arches COMPARE NATURAL ORDER ASCENDING)
+    set(${out_var} "${_normalized_arches}" PARENT_SCOPE)
+endfunction()
+
+function(_gsplat_cache_resolved_native_cuda_architectures resolved_arches)
+    # Configure presets are command-line cache inputs, so a dev preset writes
+    # "native" again on every explicit `cmake --preset` invocation even after
+    # the public cache was made concrete. Keep a hidden, project-owned record
+    # of the first successful resolution. A fresh build tree (including
+    # `cmake --fresh`) clears this record and intentionally probes again.
+    set(_GSPLAT_RESOLVED_NATIVE_CUDA_ARCHITECTURES
+        "${resolved_arches}"
+        CACHE INTERNAL
+        "Concrete CUDA architectures resolved from the build tree's native request."
+        FORCE
+    )
+    set(CMAKE_CUDA_ARCHITECTURES
+        "${resolved_arches}"
+        CACHE STRING
+        "Concrete CUDA architectures used to compile gsplat targets."
+        FORCE
+    )
+endfunction()
+
+function(_gsplat_require_native_cuda_architectures_supported arch_list cuda_compiler)
+    _gsplat_query_nvcc_architectures(
+        _supported_real_arches
+        _supported_virtual_arches
+        "${cuda_compiler}"
+    )
+
+    set(_unsupported_arches "")
+    foreach(_arch IN LISTS arch_list)
+        string(REGEX REPLACE "-real$" "" _numeric_arch "${_arch}")
+        if(NOT "${_numeric_arch}" IN_LIST _supported_real_arches)
+            list(APPEND _unsupported_arches "${_arch}")
+        endif()
+    endforeach()
+
+    if(_unsupported_arches)
+        message(
+            FATAL_ERROR
+            "CMAKE_CUDA_ARCHITECTURES=native resolved the CUDA-visible GPUs "
+            "to '${arch_list}', but ${cuda_compiler} cannot generate real "
+            "code for '${_unsupported_arches}'. Refusing to omit a visible "
+            "GPU architecture or fall back to a compiler default."
+        )
+    endif()
+endfunction()
+
 function(_gsplat_normalize_torch_cuda_arch_list out_var arch_list)
     _gsplat_split_cuda_arch_list(_tokens "${arch_list}")
 
@@ -210,15 +293,62 @@ endfunction()
 # owned policy only needs one valid bridge for Torch, not an exact second
 # representation of the CMake list.
 # Discover the toolkit, resolve the architecture policy, and enable the CUDA
-# language, in the required order (arch filtering needs nvcc before
-# enable_language(CUDA); the Torch bridge only resolves afterwards). A macro:
+# language in the required order. Architecture filtering needs nvcc before
+# enable_language(CUDA), while native resolution needs the one-time GPU result
+# produced by enable_language(CUDA). A macro is required because
 # enable_language() must run at directory scope.
 macro(gsplat_setup_cuda)
     find_package(CUDAToolkit REQUIRED)
     gsplat_initialize_cuda_architectures("${CUDAToolkit_NVCC_EXECUTABLE}")
     enable_language(CUDA)
+    gsplat_resolve_native_cuda_architectures("${CUDAToolkit_NVCC_EXECUTABLE}")
     gsplat_refine_torch_cuda_arch_bridge()
 endmacro()
+
+# Promote CMake's configure-time native-GPU probe to the concrete architecture
+# policy before any gsplat target is created. CMake persists its probe in the
+# build tree's generated compiler file, and this function persists the
+# normalized list in CMakeCache.txt. Consequently later Ninja runs reuse only
+# numbers and neither query hardware nor reinterpret nvcc's -arch=native.
+function(gsplat_resolve_native_cuda_architectures cuda_compiler)
+    if(NOT _GSPLAT_CUDA_ARCH_OWNER STREQUAL "CMAKE")
+        return()
+    endif()
+
+    string(TOLOWER "${_GSPLAT_EXACT_CUDA_ARCHITECTURES}" _exact_arches_lower)
+    if(NOT _exact_arches_lower STREQUAL "native")
+        return()
+    endif()
+
+    _gsplat_normalize_native_cuda_architectures(
+        _resolved_arches
+        "${CMAKE_CUDA_ARCHITECTURES_NATIVE}"
+    )
+    _gsplat_require_native_cuda_architectures_supported("${_resolved_arches}" "${cuda_compiler}")
+
+    # Target CUDA_ARCHITECTURES properties snapshot this variable when each
+    # target is created. Update both the current directory scope and the cache
+    # now so project libraries, private object targets, and tests all inherit
+    # exactly the same concrete list.
+    _gsplat_cache_resolved_native_cuda_architectures("${_resolved_arches}")
+    set(CMAKE_CUDA_ARCHITECTURES "${_resolved_arches}" PARENT_SCOPE)
+    set(_GSPLAT_EXACT_CUDA_ARCHITECTURES "${_resolved_arches}" PARENT_SCOPE)
+
+    # Torch only needs one temporary bridge architecture; its flags are
+    # discarded after package discovery. Derive it from the first sorted
+    # concrete value so multi-GPU configurations remain deterministic.
+    list(GET _resolved_arches 0 _torch_bridge_arch)
+    if(NOT _torch_bridge_arch MATCHES "^([0-9]+)([0-9])-real$")
+        message(
+            FATAL_ERROR
+            "Internal error: cannot convert resolved CUDA architecture "
+            "'${_torch_bridge_arch}' for PyTorch discovery."
+        )
+    endif()
+    set(TORCH_CUDA_ARCH_LIST "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}" PARENT_SCOPE)
+
+    message(STATUS "Resolved native CUDA architectures at configure time: ${_resolved_arches}")
+endfunction()
 
 function(gsplat_initialize_cuda_architectures cuda_compiler)
     set(_torch_arch_list "")
@@ -269,17 +399,31 @@ function(gsplat_initialize_cuda_architectures cuda_compiler)
 
     set(_exact_cmake_arches "")
     if(_arch_owner STREQUAL "CMAKE")
-        _gsplat_filter_cuda_architectures(
-            _filtered_cmake_arches
-            "${_cmake_arches}"
-            "${cuda_compiler}"
+        string(TOLOWER "${_cmake_arches}" _cmake_arches_lower)
+        if(
+            _cmake_arches_lower STREQUAL "native"
+            AND DEFINED _GSPLAT_RESOLVED_NATIVE_CUDA_ARCHITECTURES
+            AND NOT "${_GSPLAT_RESOLVED_NATIVE_CUDA_ARCHITECTURES}" STREQUAL ""
         )
+            # The dev presets deliberately request native on every configure.
+            # Re-promote the build tree's first concrete result before CUDA is
+            # enabled, without consulting the detector or nvcc again.
+            set(_filtered_cmake_arches "${_GSPLAT_RESOLVED_NATIVE_CUDA_ARCHITECTURES}")
+            _gsplat_cache_resolved_native_cuda_architectures("${_filtered_cmake_arches}")
+        else()
+            _gsplat_filter_cuda_architectures(
+                _filtered_cmake_arches
+                "${_cmake_arches}"
+                "${cuda_compiler}"
+            )
+        endif()
         set(_exact_cmake_arches "${_filtered_cmake_arches}")
         set(CMAKE_CUDA_ARCHITECTURES "${_exact_cmake_arches}" PARENT_SCOPE)
 
         # Torch only needs one valid bridge target because its architecture
         # flags are removed after package discovery. Prefer the first filtered
-        # numeric target; Common handles special CMake values such as native.
+        # numeric target. Common temporarily handles special CMake values;
+        # native is replaced after CMake's CUDA-visible-device probe runs.
         set(_torch_arch_list Common)
         foreach(_arch IN LISTS _exact_cmake_arches)
             string(TOLOWER "${_arch}" _arch_lower)
@@ -392,10 +536,10 @@ function(_gsplat_torch_nvcc_flags_to_cmake_architectures out_var)
     set(${out_var} "${_cmake_arches}" PARENT_SCOPE)
 endfunction()
 
-# Upgrade the Common fallback bridge to the detected numeric architecture.
-# CMAKE_CUDA_ARCHITECTURES_NATIVE only materializes when the CUDA language is
-# enabled, after gsplat_initialize_cuda_architectures() computed the bridge;
-# call this before Torch discovery so Torch reports the real target.
+# Upgrade the Common fallback bridge for special CMake policies that remain
+# after native has been made concrete. CMAKE_CUDA_ARCHITECTURES_NATIVE only
+# materializes when the CUDA language is enabled; use it when available so
+# Torch reports an actual target during package discovery.
 function(gsplat_refine_torch_cuda_arch_bridge)
     if(
         NOT _GSPLAT_CUDA_ARCH_OWNER STREQUAL "CMAKE"
