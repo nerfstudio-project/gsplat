@@ -17,14 +17,14 @@
 Validates ``rasterize_top_contributing_gaussian_ids_sparse`` against the dense
 ``rasterize_top_contributing_gaussian_ids`` gathered at the requested pixels:
 the top-K contributor ids (exact) and weights must match the dense result at
-each requested pixel. Shared scene/pixel/gather helpers live in
-``tests.sparse_test_helpers``.
+each requested pixel. Shared scene/pixel/gather helpers come from the sibling
+``sparse_test_helpers`` module.
 """
 
 import pytest
 import torch
 
-from tests.sparse_test_helpers import gather, grid, make_scene, subset_pixels
+from .sparse_test_helpers import gather, grid, make_scene, subset_pixels
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(),

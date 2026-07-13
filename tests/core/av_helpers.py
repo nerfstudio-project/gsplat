@@ -19,9 +19,8 @@
 safely importable from upstream environments (e.g. GitHub Actions
 ``core_tests.yml`` on ubuntu-latest) that do not install av_trainer's
 optional dependencies (imageio, etc.). When the import fails, ``av_trainer``
-is set to ``None`` and consuming tests are expected to skip themselves
-(see ``tests/conftest.py::av_train_env`` and
-``tests/test_av_scene_wrapper.py`` for the canonical patterns).
+is set to ``None``; consumers follow the ``av_train_env`` fixture and AV
+scene-wrapper tests by skipping when those dependencies are unavailable.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../examples"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../examples"))
 try:
     av_trainer = importlib.import_module("av_trainer")
 except ImportError:

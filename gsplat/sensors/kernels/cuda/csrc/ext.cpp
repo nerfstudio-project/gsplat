@@ -36,10 +36,10 @@
 //     are importable directly from the .so (re-exported as IntEnums from
 //     cameras/types.py).
 
-#include "csrc/camera_torch.h"
-#include "csrc/external_distortion_torch.h"
-#include "csrc/lidar_torch.h"
-#include "csrc/shutter_type.h"
+#include "camera_torch.h"
+#include "external_distortion_torch.h"
+#include "lidar_torch.h"
+#include "shutter_type.h"
 
 #include <pybind11/pybind11.h>
 #include <torch/extension.h>

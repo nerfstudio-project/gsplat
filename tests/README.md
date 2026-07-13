@@ -88,8 +88,8 @@ Here are some common usage examples:
 ./run_tests.sh --3dgs --2dgs
 
 # Run specific test files
-./run_tests.sh tests/test_basic.py
-./run_tests.sh --3dgut tests/test_rasterization.py
+./run_tests.sh tests/core/test_basic.py
+./run_tests.sh --3dgut tests/core/test_rasterization.py
 
 # Filter tests to be executed.
 ./run_tests.sh -v -k "test_specific"
@@ -275,8 +275,8 @@ Two additional host-side knobs help without changing what is tested:
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # 2. Run the test files separately so the allocator pool resets between them.
-pytest tests/test_basic.py -sv
-pytest tests/test_rasterization.py -sv
+pytest tests/core/test_basic.py -sv
+pytest tests/core/test_rasterization.py -sv
 pytest tests/geometry/functional -sv
 ```
 

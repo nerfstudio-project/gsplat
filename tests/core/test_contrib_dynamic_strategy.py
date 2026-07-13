@@ -114,8 +114,8 @@ def test_dynamic_strategy_post_backward_without_init_raises():
 
 @pytest.mark.skip(
     reason=(
-        "Activated as tests/test_dynamic_surgical_trainer.py::"
-        "test_trainer_one_step_train_no_nan (CUDA + ENDONERF_DATA_DIR-gated). "
+        "Activated by the dynamic surgical trainer integration test "
+        "(CUDA + ENDONERF_DATA_DIR-gated). "
         "Kept here as a marker so anyone scanning DynamicStrategy tests can "
         "find the integration counterpart."
     )

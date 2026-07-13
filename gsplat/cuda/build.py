@@ -101,7 +101,7 @@ def get_build_parameters():
 
     # Include paths -----------------------------------
     extra_include_paths = [
-        os.path.join(PATH, "include/"),
+        os.path.join(PATH, "csrc", "include/"),
         os.path.join(current_dir, "csrc", "third_party", "glm"),
     ]
     # Fix for CUDA 12+ in conda environment
@@ -117,10 +117,8 @@ def get_build_parameters():
                     extra_include_paths.append(p)
 
     # Source files ------------------------------------
-    sources = (
-        list(glob.glob(os.path.join(PATH, "csrc/*.cu")))
-        + list(glob.glob(os.path.join(PATH, "csrc/*.cpp")))
-        + [os.path.join(PATH, "ext.cpp")]
+    sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
+        glob.glob(os.path.join(PATH, "csrc/*.cpp"))
     )
 
     # Compiler flags ----------------------------------
@@ -486,10 +484,11 @@ def _setup_py_core_objects_for_loaded_csrc(return_build_dir=False):
 
     For an editable install (``pip install -e .``), ``csrc.so`` lives at
     ``<repo>/gsplat/csrc.so`` and the matching object files are at
-    ``<repo>/build/temp.<platform>-cpython-<tag>/gsplat/cuda/{csrc/*.o,ext.o}``.
-    ``ext.o`` is excluded for the same reason ``get_gsplat_core_objects`` skips
-    it: ``ext.cpp`` owns ``TORCH_LIBRARY(gsplat)`` registration and the gtest
-    binary calls implementation entry points directly.
+    ``<repo>/build/temp.<platform>-cpython-<tag>/gsplat/cuda/``. The binding
+    object (``ext.o``) is excluded for the same reason
+    ``get_gsplat_core_objects`` skips it: ``ext.cpp`` owns
+    ``TORCH_LIBRARY(gsplat)`` registration and the gtest binary calls
+    implementation entry points directly.
 
     Returns ``None`` if the layout doesn't match — e.g., ``csrc.so`` was
     installed from a wheel or to site-packages, so there is no local ``build``

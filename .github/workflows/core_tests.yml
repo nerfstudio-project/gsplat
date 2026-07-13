@@ -38,7 +38,7 @@ jobs:
           )
           pip install black[jupyter]==22.3.0 "clang-format==${clang_format_version}" pytest pytest-check
           pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
-          # tests/test_dataset_endonerf.py and tests/test_dynamic_surgical_trainer.py
+          # tests/core/test_dataset_endonerf.py and tests/core/test_dynamic_surgical_trainer.py
           # import PIL + tqdm; install the [examples] extra so the test
           # collection doesn't ImportError on a fresh build. The tests also
           # have `pytest.importorskip` guards as a belt-and-braces.

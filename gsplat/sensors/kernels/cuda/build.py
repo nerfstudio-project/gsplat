@@ -59,7 +59,7 @@ def get_build_parameters() -> SimpleNamespace:
     """
     name = "gsplat_sensors_cuda"
     sources = [
-        os.path.join(PATH, "ext.cpp"),
+        os.path.join(PATH, "csrc", "ext.cpp"),
         os.path.join(PATH, "csrc", "camera_torch.cpp"),
         os.path.join(PATH, "csrc", "external_distortion_torch.cpp"),
         os.path.join(PATH, "csrc", "camera_kernel.cu"),

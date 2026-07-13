@@ -17,7 +17,7 @@
 
 #include <torch/extension.h>
 
-#include "csrc/gaussian_inference/GaussianRenderInferenceScene.h"
+#include "gaussian_inference/GaussianRenderInferenceScene.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {

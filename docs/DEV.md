@@ -70,7 +70,7 @@ Since there is no GPU supported on github workflow container, we don't test agai
 
 ```bash
 pytest tests/  # check for all tests
-pytest tests/test_basic.py  # check for a single test file.
+pytest tests/core/test_basic.py  # check for a single test file.
 pytest -sv  # mirror the GitLab GPU CI (all tests live under tests/)
 ```
 

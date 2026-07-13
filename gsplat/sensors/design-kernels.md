@@ -391,7 +391,7 @@ trajectory backward path where query time is differentiable.
 | `kernels/common/pose.py` | `Pose`, `DynamicPose`, `Trajectory` dataclasses and `DynamicPose.from_static_pose` / `to_trajectory` helpers. |
 | `kernels/common/utils.py` | `wxyz_to_xyzw`, `xyzw_to_wxyz`, `poses_to_matrix`, `valid_flags_to_indices`. |
 | `kernels/cuda/build.py` | `get_build_parameters()` + `build_and_load_sensors_cuda()` JIT entry; `DEBUG` / `NVCC_FLAGS` / `VERBOSE` env handling; stale ninja lock cleanup. |
-| `kernels/cuda/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
+| `kernels/cuda/csrc/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
 | `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter iteration bounds. Forward-declared `cudaStream_t`. |
 | `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters`, `BivariateWindshieldDistortion_KernelParameters`, `DistortionSensor`, `DistortionOpFamily`, `DistortionDirection`, the policy tags, and host-safe `DistortionScratchTraits` specializations. |
 | `csrc/camera_kernel.cuh` | OpenCV pinhole parameter, policy-state, scratch-I/O, and gradient types; the two private fixed-point schedules; solver-independent pinhole projection/VJP/reduction math; rolling-shutter time helper. SLERP is delegated to `gsplat/geometry/kernels/cuda/csrc/quaternion.cuh`. |

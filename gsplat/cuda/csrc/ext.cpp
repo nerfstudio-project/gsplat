@@ -22,10 +22,10 @@
 
 #include "Cameras.h"
 #include "ExternalDistortion.h"
-#include "csrc/Config.h"
-#include "csrc/LossFlags.h"
-#include "csrc/Null.h"
-#include "csrc/Rasterization.h"
+#include "Config.h"
+#include "LossFlags.h"
+#include "Null.h"
+#include "Rasterization.h"
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
 #    include "CameraWrappers.h"

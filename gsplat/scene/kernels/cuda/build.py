@@ -37,7 +37,7 @@ VERBOSE = os.getenv("VERBOSE", "0") == "1"
 def get_build_parameters() -> SimpleNamespace:
     name = "gsplat_scene_cuda"
     sources = [
-        os.path.join(PATH, "ext.cpp"),
+        os.path.join(PATH, "csrc", "ext.cpp"),
         os.path.join(PATH, "csrc", "gaussian_scene_pack.cpp"),
     ]
     torch_include_paths = set(jit.include_paths("cpu"))

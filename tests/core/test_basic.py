@@ -94,7 +94,9 @@ def test_data():
         height,
     ) = load_test_data(
         device=device,
-        data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
+        data_path=os.path.join(
+            os.path.dirname(__file__), "../../assets/test_garden.npz"
+        ),
     )
     return {
         "means": means,  # [N, 3]
@@ -1143,7 +1145,7 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
         ANGLE_TO_PIXEL_SCALING_FACTOR,
     )
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles_lidar
-    from tests.test_cameras import parse_lidar_camera
+    from tests.core.test_cameras import parse_lidar_camera
 
     torch.manual_seed(42)
 
@@ -3467,7 +3469,7 @@ def test_rasterize_to_pixels_eval3d(
 
     # Setup lidar
     if camera_model == "lidar":
-        from tests.test_cameras import parse_lidar_camera
+        from tests.core.test_cameras import parse_lidar_camera
 
         # This test consumes randomness before lidar setup, so fix the lidar
         # param seed explicitly to keep the preprocessing cache reusable.
@@ -5885,7 +5887,7 @@ def test_rasterization_cpp_ut_projected_absgrad_matches_python_reference(
     )
 
     if camera_model == "lidar":
-        from tests.test_cameras import parse_lidar_camera
+        from tests.core.test_cameras import parse_lidar_camera
 
         base_scene["means"] = base_scene["means"].clone()
         base_scene["means"][..., 0] = base_scene["means"][..., 0].abs() + 2.2
@@ -5963,7 +5965,7 @@ def test_rasterization_cpp_ut_lidar_absgrad_forward_neutral(
     render_mode: str,
     tile_size: int,
 ):
-    from tests.test_cameras import parse_lidar_camera
+    from tests.core.test_cameras import parse_lidar_camera
 
     torch.manual_seed(41)
     scene = _make_cpp_classic_rasterization_scene(
@@ -7577,7 +7579,7 @@ def test_isect_tiles_lidar_double_depth():
     # binding), so the float64 result must match the float32 result tile-for-tile.
     from gsplat.cuda._torch_impl_lidar import ANGLE_TO_PIXEL_SCALING_FACTOR
     from gsplat.cuda._wrapper import isect_tiles_lidar
-    from tests.test_cameras import parse_lidar_camera
+    from tests.core.test_cameras import parse_lidar_camera
 
     torch.manual_seed(42)
 
@@ -7652,7 +7654,7 @@ def test_isect_tiles_packed_segmented_rejected():
 def test_isect_tiles_lidar_packed_segmented_rejected():
     # Lidar sibling of the camera packed+segmented guard.
     from gsplat.cuda._wrapper import isect_tiles_lidar
-    from tests.test_cameras import parse_lidar_camera
+    from tests.core.test_cameras import parse_lidar_camera
 
     torch.manual_seed(42)
     lidar_params, angles_to_columns_map, tiling = parse_lidar_camera(

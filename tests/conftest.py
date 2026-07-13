@@ -31,7 +31,7 @@ from typing import List, Optional
 import pytest
 import torch
 import torch.distributed
-from tests.av_helpers import av_trainer, make_av_splats, make_av_scene
+from tests.core.av_helpers import av_trainer, make_av_splats, make_av_scene
 
 # Default fraction of *post-CUDA-context* free VRAM the test process is
 # allowed to use. Caps the PyTorch caching allocator so an over-allocation

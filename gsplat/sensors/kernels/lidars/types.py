@@ -48,7 +48,7 @@ def _verify_spinning_direction_matches_cpp() -> None:
         raise RuntimeError(
             "Loaded gsplat_sensors_cuda extension does not expose SpinningDirection. "
             "Rebuild the native extension (see "
-            "gsplat/sensors/kernels/cuda/ext.cpp)."
+            "gsplat/sensors/kernels/cuda/csrc/ext.cpp)."
         )
     for member in SpinningDirection:
         cpp_member = getattr(cpp_enum, member.name, None)

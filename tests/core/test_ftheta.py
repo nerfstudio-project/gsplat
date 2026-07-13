@@ -63,7 +63,9 @@ def test_data():
         height,
     ) = load_test_data(
         device=device,
-        data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
+        data_path=os.path.join(
+            os.path.dirname(__file__), "../../assets/test_garden.npz"
+        ),
     )
     return {
         "means": means,  # [N, 3]

@@ -293,19 +293,15 @@ def _setup():
         # wheels (and matches MANIFEST.in's recursive-include breadth).
         package_data={
             "gsplat.geometry": [
-                "kernels/cuda/*.cpp",
                 "kernels/cuda/csrc/*",
             ],
             "gsplat.sensors": [
-                "kernels/cuda/*.cpp",
                 "kernels/cuda/csrc/*",
             ],
             "gsplat.scene": [
-                "kernels/cuda/*.cpp",
                 "kernels/cuda/csrc/*",
             ],
             "gsplat.experimental": [
-                "render/kernels/cuda/*.cpp",
                 "render/kernels/cuda/csrc/*",
                 "render/kernels/cuda/csrc/gaussian_inference/*",
             ],

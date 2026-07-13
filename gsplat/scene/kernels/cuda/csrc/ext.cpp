@@ -16,7 +16,7 @@
  */
 
 #include <torch/extension.h>
-#include "csrc/gaussian_scene_pack.cuh"
+#include "gaussian_scene_pack.cuh"
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> pack_gaussian_inference_scene(
     const at::Tensor &means,
