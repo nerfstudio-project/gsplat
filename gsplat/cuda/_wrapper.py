@@ -435,31 +435,57 @@ def adam(
 @trace_function("sh-fwd")
 def spherical_harmonics(
     degrees_to_use: int,
-    dirs: Tensor,  # [..., N, 3]
+    means: Tensor,  # [..., N, 3]
+    viewmats: Tensor,  # [..., C, 4, 4]
     coeffs: Tensor,  # [N, K, D]
-    masks: Optional[Tensor] = None,  # [..., N]
+    masks: Optional[Tensor] = None,  # [..., C, N] or [nnz]
+    batch_ids: Optional[Tensor] = None,  # [nnz]
+    camera_ids: Optional[Tensor] = None,  # [nnz]
+    gaussian_ids: Optional[Tensor] = None,  # [nnz]
+    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
 ) -> Tensor:
     """Computes spherical harmonics.
 
     The output channel count ``D`` is taken from the last dim of ``coeffs`` and
     can be any positive integer (e.g. 3 for RGB, 1 for scalar features).
 
-    In packed mode, callers pre-gather coeffs by ``gaussian_ids`` so ``N`` is
-    ``nnz`` and ``dirs`` has no leading dims.
+    In packed mode, callers pre-gather coefficients by ``gaussian_ids`` so the
+    first coefficient dimension is ``nnz``.
+
+    The camera position is recovered from each view matrix as ``-R^T t``. This
+    assumes that the upper-left 3x3 rotation block ``R`` is orthonormal. Results
+    are approximate when a view matrix contains scale or shear, or when a raw
+    matrix optimization does not preserve orthonormality.
 
     Args:
         degrees_to_use: SH degree to evaluate.
-        dirs: View directions. ``[..., N, 3]``; any leading shape, rank ≥ 2.
-        coeffs: SH coefficients. ``[N, K, D]``, with ``N`` matching ``dirs.shape[-2]``.
-        masks: Optional boolean masks. ``[..., N]`` matching ``dirs.shape[:-1]``.
+        means: World-space Gaussian means. ``[..., N, 3]``.
+        viewmats: Rigid world-to-camera matrices with orthonormal rotation
+            blocks. ``[..., C, 4, 4]``.
+        coeffs: SH coefficients. ``[N, K, D]`` in dense mode or
+            ``[nnz, K, D]`` in packed mode.
+        masks: Optional boolean masks. ``[..., C, N]`` or ``[nnz]``.
+        batch_ids: Batch indices in packed mode.
+        camera_ids: Camera indices in packed mode.
+        gaussian_ids: Gaussian indices in packed mode.
+        viewmats_rs: Optional rolling-shutter endpoint matrices. When provided,
+            SH uses the camera position averaged across both endpoints.
 
     Returns:
-        Spherical harmonics. ``[..., N, D]``.
+        Spherical harmonics. ``[..., C, N, D]`` or ``[nnz, D]``.
     """
     if masks is not None:
         masks = masks.contiguous()
     return _make_lazy_cuda_func("spherical_harmonics")(
-        degrees_to_use, dirs.contiguous(), coeffs.contiguous(), masks
+        degrees_to_use,
+        means.contiguous(),
+        viewmats.contiguous(),
+        coeffs.contiguous(),
+        masks,
+        None if batch_ids is None else batch_ids.contiguous(),
+        None if camera_ids is None else camera_ids.contiguous(),
+        None if gaussian_ids is None else gaussian_ids.contiguous(),
+        None if viewmats_rs is None else viewmats_rs.contiguous(),
     )
 
 
@@ -481,29 +507,52 @@ def spherical_harmonics_l0(
 @trace_function("sh-l1-plus-fwd")
 def spherical_harmonics_l1_plus(
     degrees_to_use: int,
-    dirs: Tensor,  # [..., N, 3]
+    means: Tensor,  # [..., N, 3]
+    viewmats: Tensor,  # [..., C, 4, 4]
     shN: Tensor,  # [N, K - 1, D]
-    masks: Optional[Tensor] = None,  # [..., N]
+    masks: Optional[Tensor] = None,  # [..., C, N] or [nnz]
+    batch_ids: Optional[Tensor] = None,  # [nnz]
+    camera_ids: Optional[Tensor] = None,  # [nnz]
+    gaussian_ids: Optional[Tensor] = None,  # [nnz]
+    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
 ) -> Tensor:
     """Computes the l>=1 components of spherical harmonics.
 
     Unlike :func:`spherical_harmonics`, ``shN`` starts at the degree-one SH
     basis; the degree-zero coefficient is intentionally omitted.
 
+    As in :func:`spherical_harmonics`, camera positions are computed as
+    ``-R^T t`` and therefore assume orthonormal rotation blocks. Results are
+    approximate for non-rigid view matrices.
+
     Args:
         degrees_to_use: SH degree to evaluate.
-        dirs: View directions. ``[..., N, 3]``; any leading shape, rank >= 2.
+        means: World-space Gaussian means. ``[..., N, 3]``.
+        viewmats: Rigid world-to-camera matrices with orthonormal rotation
+            blocks. ``[..., C, 4, 4]``.
         shN: SH coefficients for l>=1. ``[N, K - 1, D]``.
-        masks: Optional boolean masks. ``[..., N]`` matching
-            ``dirs.shape[:-1]``.
+        masks: Optional boolean masks. ``[..., C, N]`` or ``[nnz]``.
+        batch_ids: Batch indices in packed mode.
+        camera_ids: Camera indices in packed mode.
+        gaussian_ids: Gaussian indices in packed mode.
+        viewmats_rs: Optional rolling-shutter endpoint matrices. When provided,
+            SH uses the camera position averaged across both endpoints.
 
     Returns:
-        l>=1 features. ``[..., N, D]``.
+        l>=1 features. ``[..., C, N, D]`` or ``[nnz, D]``.
     """
     if masks is not None:
         masks = masks.contiguous()
     return _make_lazy_cuda_func("spherical_harmonics_l1_plus")(
-        degrees_to_use, dirs.contiguous(), shN.contiguous(), masks
+        degrees_to_use,
+        means.contiguous(),
+        viewmats.contiguous(),
+        shN.contiguous(),
+        masks,
+        None if batch_ids is None else batch_ids.contiguous(),
+        None if camera_ids is None else camera_ids.contiguous(),
+        None if gaussian_ids is None else gaussian_ids.contiguous(),
+        None if viewmats_rs is None else viewmats_rs.contiguous(),
     )
 
 
@@ -514,29 +563,72 @@ class RegisterSphericalHarmonics:
 
     @staticmethod
     def setup_context(ctx, inputs, output) -> None:
-        degrees_to_use, dirs, coeffs, masks = inputs
+        (
+            degrees_to_use,
+            means,
+            viewmats,
+            coeffs,
+            masks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            viewmats_rs,
+        ) = inputs
         ctx.degrees_to_use = degrees_to_use
         # save_for_backward round-trips None as None, so the optional masks save directly.
-        ctx.save_for_backward(dirs, coeffs, masks)
+        ctx.save_for_backward(
+            means,
+            viewmats,
+            coeffs,
+            masks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            viewmats_rs,
+        )
 
     @classmethod
     def backward(cls, ctx, v_colors: Tensor):
-        dirs, coeffs, masks = ctx.saved_tensors
-        # dirs is forward input index 1; its gradient is wanted only when requested.
-        compute_v_dirs = ctx.needs_input_grad[1]
-        v_coeffs, v_dirs = _make_lazy_cuda_func(f"{cls.base}_bwd")(
-            ctx.degrees_to_use,
-            dirs,
+        (
+            means,
+            viewmats,
             coeffs,
             masks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            viewmats_rs,
+        ) = ctx.saved_tensors
+        v_coeffs, v_means, v_viewmats, v_viewmats_rs = _make_lazy_cuda_func(
+            f"{cls.base}_bwd"
+        )(
+            ctx.degrees_to_use,
+            means,
+            viewmats,
+            coeffs,
+            masks,
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            viewmats_rs,
             v_colors,
-            compute_v_dirs,
+            ctx.needs_input_grad[1],
+            ctx.needs_input_grad[2],
+            # PyTorch omits trailing schema-default arguments from
+            # needs_input_grad, even though setup_context receives them after
+            # fill_defaults(). viewmats_rs is therefore absent when it is None.
+            len(ctx.needs_input_grad) > 8 and ctx.needs_input_grad[8],
         )
         return (
             None,  # degrees_to_use
-            v_dirs,
+            v_means,
+            v_viewmats,
             v_coeffs,
             None,  # masks
+            None,  # batch_ids
+            None,  # camera_ids
+            None,  # gaussian_ids
+            v_viewmats_rs,
         )
 
 
