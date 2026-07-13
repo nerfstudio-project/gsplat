@@ -31,6 +31,11 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10.
+    import tomli as tomllib
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 EXPECTED_PACKAGES = [
@@ -49,6 +54,19 @@ SEGMENTED_SORT_SOURCES = [
     "gsplat/cuda/csrc/SegmentedSort.cu",
     "gsplat/cuda/csrc/SegmentedSort.h",
 ]
+
+
+def test_cuda_dev_extras_compose_the_common_dependencies():
+    """Each supported development extra selects exactly one CuPy variant."""
+    if not HAS_SOURCE_TREE:
+        pytest.skip("pyproject.toml is only available in a source checkout")
+
+    with (REPO_ROOT / "pyproject.toml").open("rb") as f:
+        extras = tomllib.load(f)["project"]["optional-dependencies"]
+
+    assert "dev" not in extras
+    assert extras["dev-cuda12"] == ["gsplat[dev-common]", "cupy-cuda12x"]
+    assert extras["dev-cuda13"] == ["gsplat[dev-common]", "cupy-cuda13x"]
 
 
 def _installed_files() -> list[metadata.PackagePath]:
@@ -71,7 +89,8 @@ def _published_packages() -> list[str]:
             }
         )
 
-    # Mirror setup.py without importing it, which would pull in extension machinery.
+    # Mirror pyproject package discovery without importing gsplat, which would
+    # pull in extension machinery.
     from setuptools import find_packages
 
     return sorted(
@@ -111,6 +130,12 @@ def test_expected_packages_discoverable():
     packages = _published_packages()
     missing = [name for name in EXPECTED_PACKAGES if name not in packages]
     assert not missing, f"missing from package list: {missing} (got {sorted(packages)})"
+
+
+def test_build_support_is_not_published():
+    """Source-only build helpers must not expand gsplat's runtime API."""
+    packages = _published_packages()
+    assert "gsplat.build_support" not in packages
 
 
 def test_segmented_sort_sources_owned_by_core_cuda():
@@ -154,13 +179,14 @@ def test_experimental_published_under_gsplat_namespace():
         p == "experimental" or p.startswith("experimental.") for p in packages
     ), f"bare top-level 'experimental' published: {sorted(packages)}"
 
-    # setup.py must not declare a package_dir remapping for experimental.
+    # Neither pyproject.toml nor setup.py may declare a package-dir remapping
+    # for experimental. It is a normal gsplat submodule.
     if HAS_SOURCE_TREE:
+        pyproject_text = (REPO_ROOT / "pyproject.toml").read_text()
+        assert "package-dir" not in pyproject_text
+        assert "package_dir" not in pyproject_text
         setup_text = (REPO_ROOT / "setup.py").read_text()
-        assert "package_dir" not in setup_text, (
-            "setup.py must not declare a package_dir remapping; experimental is a "
-            "normal gsplat submodule"
-        )
+        assert "package_dir" not in setup_text
 
 
 @pytest.mark.skipif(

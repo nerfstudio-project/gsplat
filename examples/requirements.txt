@@ -29,4 +29,4 @@ matplotlib
 git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38
 git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16
 splines
-ppisp @ git+https://github.com/nv-tlabs/ppisp@v1.0.0
+ppisp @ https://github.com/nv-tlabs/ppisp/archive/refs/tags/v1.0.0.tar.gz

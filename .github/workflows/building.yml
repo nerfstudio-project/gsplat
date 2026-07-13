@@ -115,7 +115,7 @@ jobs:
           pip install wheel
           if [ "$RUNNER_OS" = "Windows" ]; then
             export PATH="${CUDA_HOME}/bin:${PATH}"
-            export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;9.0"
+            export TORCH_CUDA_ARCH_LIST="8.0;8.6;9.0"
           else
             source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           fi

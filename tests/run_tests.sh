@@ -265,6 +265,15 @@ run_args+=(
     --ipc=host
 )
 
+# A linked Git worktree stores its administrative directory outside the
+# worktree root. Source-level tests call Git through the worktree's `.git`
+# pointer, so expose that external common directory at the same absolute path.
+# It is metadata-only for this workflow and remains read-only in the container.
+git_common_dir=$(git -C "$REPOROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+if [[ -n $git_common_dir && $git_common_dir != "$REPOROOT/.git" ]]; then
+    run_args+=(-v "$git_common_dir:$git_common_dir:ro")
+fi
+
 for port_spec in "${port_specs[@]}"; do
     run_args+=(--publish "$port_spec")
 done

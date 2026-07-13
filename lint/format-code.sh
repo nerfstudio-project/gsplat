@@ -43,19 +43,12 @@ cpp_extensions=(
     '*.cuh'
 )
 
-read_config_value() {
-    local key="$1"
+# Read a formatter's version from its single pin in the shared dev dependencies.
+read_dev_pin() {
+    local package="$1"
 
-    awk -F ':' -v key="$key" '
-        $1 ~ "^[[:space:]]*" key "$" {
-            value = $2
-            sub(/^[[:space:]]*/, "", value)
-            sub(/[[:space:]]*$/, "", value)
-            gsub(/^"|"$/, "", value)
-            print value
-            exit
-        }
-    ' "${repo_root}/config.yaml"
+    python3 "${repo_root}/gsplat/build_support/pyproject_metadata.py" \
+        "${repo_root}/pyproject.toml" dev-common --pin "${package}"
 }
 
 usage() {
@@ -159,7 +152,7 @@ find_code_format() {
 
     if [[ "${installed_major}" != "${expected_major}" ]]; then
         echo "ERROR: clang-format major version mismatch." >&2
-        echo "Expected clang-format major version ${expected_major} from config.yaml." >&2
+        echo "Expected clang-format major version ${expected_major}." >&2
         echo "Found: ${code_format_version_output}" >&2
         echo "Install clang-format-${expected_major}, or install clang-format at version ${expected_version}." >&2
         exit 1
@@ -175,8 +168,9 @@ mapfile -d '' python_files < <(
 )
 
 if (( ${#python_files[@]} > 0 )); then
+    black_version="$(read_dev_pin black)"
     black_args+=(
-        --required-version 22.3.0
+        --required-version "${black_version}"
         --color
     )
 
@@ -192,9 +186,9 @@ mapfile -d '' cpp_files < <(
 )
 
 if (( ${#cpp_files[@]} > 0 )); then
-    clang_format_version="$(read_config_value CLANG_FORMAT_VERSION)"
+    clang_format_version="$(read_dev_pin clang-format)"
     if [[ -z "${clang_format_version}" ]]; then
-        echo "ERROR: CLANG_FORMAT_VERSION is not set in config.yaml." >&2
+        echo "ERROR: pyproject.toml's dev extra must pin clang-format==<version>." >&2
         exit 1
     fi
 

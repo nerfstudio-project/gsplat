@@ -96,11 +96,15 @@ if [[ ! -f /opt/dep-check/all_packages.txt ]]; then
     exit 1
 fi
 
-if [[ ! -f "$PWD/setup.py" ]] || ! grep -q 'gsplat' "$PWD/setup.py" 2>/dev/null; then
-    echo "WARNING: gsplat setup.py not found in $PWD — skipping dependency check." >&2
+if [[ ! -f "$PWD/pyproject.toml" ]] || ! grep -q 'name = "gsplat"' "$PWD/pyproject.toml" 2>/dev/null; then
+    echo "WARNING: gsplat pyproject.toml not found in $PWD — skipping dependency check." >&2
 else
     mapfile -t pkgs < /opt/dep-check/all_packages.txt
-    args=(-f "$PWD/setup.py:install" -f "$PWD/setup.py:dev")
+    args=(
+        -f "$PWD/pyproject.toml:dependencies"
+        -f "$PWD/pyproject.toml:dev-cuda${CUDA_VERSION%%.*}"
+        -f "$PWD/pyproject.toml:examples"
+    )
     if [[ -f "$PWD/examples/requirements.txt" ]]; then
         args+=(-f "$PWD/examples/requirements.txt")
     else

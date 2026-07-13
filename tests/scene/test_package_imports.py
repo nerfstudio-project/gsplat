@@ -67,11 +67,11 @@ def _repo_root() -> Path:
     return SCENE_ROOT.parent.parent
 
 
-def test_root_setup_ships_scene_cuda_sources():
+def test_root_packaging_ships_scene_cuda_sources():
     """The scene CUDA/JIT sources ship with the main ``gsplat`` package.
 
-    Packaging is driven by the root ``setup.py``
-    (``package_data["gsplat.scene"]``) and ``MANIFEST.in``. This test asserts
+    Packaging is driven by root ``pyproject.toml``
+    (``[tool.setuptools.package-data]``) and ``MANIFEST.in``. This test asserts
     (a) the CUDA sources physically exist where the package expects them and
     (b) the root packaging metadata references them — without building a wheel.
     """
@@ -86,15 +86,17 @@ def test_root_setup_ships_scene_cuda_sources():
     for source in required_sources:
         assert (scene_cuda / source).is_file(), f"missing scene CUDA source: {source}"
 
-    # The root setup.py must declare the scene CUDA sources as package_data
+    # pyproject.toml must declare the scene CUDA sources as package data
     # (mirrored by MANIFEST.in for sdists). Inspect the text rather than
-    # importing setup.py (which pulls in setuptools/torch machinery).
-    setup_text = (repo_root / "setup.py").read_text()
+    # invoking the packaging machinery.
+    pyproject_text = (repo_root / "pyproject.toml").read_text()
     manifest_text = (repo_root / "MANIFEST.in").read_text()
     assert (
-        '"gsplat.scene"' in setup_text
-    ), "setup.py is missing gsplat.scene package_data"
-    assert "kernels/cuda/csrc/*" in setup_text, "setup.py is missing scene csrc glob"
+        '"gsplat.scene"' in pyproject_text
+    ), "pyproject.toml is missing gsplat.scene package data"
+    assert (
+        "kernels/cuda/csrc/*" in pyproject_text
+    ), "pyproject.toml is missing scene csrc glob"
     assert (
         "gsplat/scene/kernels/cuda" in manifest_text
     ), "MANIFEST.in is missing scene CUDA sources"

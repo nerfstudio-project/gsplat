@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7.0
 
 # Fix the base image to avoid spurious rebuilds
-ARG BASE_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d39279f2cf664fbb9b5d5f21de104b79745ea29bf2cb
+ARG BASE_IMAGE=nvidia/cuda:12.8.1-base-ubuntu24.04@sha256:133c78a0575303be34164d0b90137a042172bdf60696af01a3c424ab402d86e2
 
 # Bumped on every image release (mirrors IMAGE_TAG in config.yaml). Used to
 # bake the venv at /var/cache/venv-${IMAGE_VERSION} so a per-version cache
@@ -9,6 +9,10 @@ ARG BASE_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d
 # use, and old version's venvs coexist instead of forcing --reset-cache on
 # image bumps.
 ARG IMAGE_VERSION
+
+# This project's image registry, passed in at build time so its URL is not
+# hard-coded here as well.
+ARG DOCKER_REGISTRY
 
 # Downloads and installs ccache for build acceleration --------------------------------
 FROM alpine:3.19.1 as ccache
@@ -43,6 +47,12 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
 
     apt-get update
 
+    # Derive the CUDA minor series (12.8) from the base image's CUDA_VERSION,
+    # then reassign it to the dash form (12-8) the apt package names use, so the
+    # toolkit tracks the base image without repeating the version.
+    cuda_version=${CUDA_VERSION%.*}
+    cuda_version=${cuda_version//./-}
+
     packages=(
         python3
         libpython3-dev
@@ -50,9 +60,43 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
         python-is-python3
         # For downloading some dependencies (plas)
         git
+        # CUDA toolchain subset — the -base image ships only the CUDA runtime:
+        # - cuda-nvcc: compiles gsplat and the source-built dependencies
+        # - cuda-cudart-dev + cuda-cccl: CUDA runtime headers, cub/thrust
+        # - cuda-nvrtc-dev: nvrtc as a discoverable library for torch tooling
+        # - cuda-nvtx: profiling ranges referenced through torch headers
+        # - libcu{blas,sparse,solver,rand}-dev: headers torch's CUDA runtime
+        #   pulls in; their runtime .so siblings also serve cupy, which resolves
+        #   them through the dynamic loader
+        # - libcufft: cupy runtime only, no headers needed
+        # - libnvjitlink: runtime dependency of the math libraries above
+        # - cuda-sanitizer: the test runner's sanitize mode execs
+        #   compute-sanitizer in the container
+        "cuda-nvcc-${cuda_version}"
+        "cuda-cudart-dev-${cuda_version}"
+        "cuda-cccl-${cuda_version}"
+        "cuda-nvrtc-dev-${cuda_version}"
+        "cuda-nvtx-${cuda_version}"
+        "libcublas-dev-${cuda_version}"
+        "libcusparse-dev-${cuda_version}"
+        "libcusolver-dev-${cuda_version}"
+        "libcurand-dev-${cuda_version}"
+        "libcufft-${cuda_version}"
+        "libnvjitlink-${cuda_version}"
+        "cuda-sanitizer-${cuda_version}"
     )
 
     apt-get install "${packages[@]}"
+
+    # The -dev packages drag in multi-GB static archives nothing here links;
+    # delete them in the same layer so the bytes never ship. nvcc's default
+    # static cudart and the device runtime stay.
+    # lib64 is a symlink into targets/; find does not follow it.
+    find /usr/local/cuda-${CUDA_VERSION%.*}/targets/x86_64-linux/lib \
+        -name '*_static*.a' \
+        ! -name 'libcudart_static.a' \
+        ! -name 'libcudadevrt.a' \
+        -delete
 EOS
 
 # Sets up python's virtual environment
@@ -72,13 +116,15 @@ EOS
 
 # Installs all GSplat dependencies (including dev dependencies) -----------
 FROM python as gsplat-deps
+ARG IMAGE_VERSION
 
 # Dependency validation: ensure Dockerfile deps stay in sync with source files.
 # Aborts the build if the Dockerfile package lists diverge from
-# setup.py (base/dev) or examples/requirements.txt (examples).
+# pyproject.toml (base/dev) or examples/requirements.txt (examples).
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
-COPY --link --from=gsplatrepo setup.py /opt/dep-check/setup.py
+COPY --link --from=gsplatrepo pyproject.toml /opt/dep-check/pyproject.toml
 COPY --link --from=gsplatrepo config.yaml /opt/dep-check/config.yaml
+COPY --link --from=gsplatrepo gsplat/build_support/pyproject_metadata.py /opt/dep-check/gsplat/build_support/pyproject_metadata.py
 COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
 COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirements.txt
 
@@ -93,10 +139,9 @@ RUN --mount=type=tmpfs,target=/tmp \
         "nvtx==0.2.15"
         "rich==14.3.3"
         "torch==2.9.1"
-        "typing_extensions; python_version<'3.8'"
     )
 
-    check_gsplat_deps.sh -f /opt/dep-check/setup.py:install -- "${packages[@]}"
+    check_gsplat_deps.sh -f /opt/dep-check/pyproject.toml:dependencies -- "${packages[@]}"
 
     pip install "${packages[@]}"
 
@@ -107,44 +152,33 @@ RUN --mount=type=tmpfs,target=/tmp \
     rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
 
-# cmake — future setup.py install dependency, not yet formally declared there.
+# cmake — future install dependency, not yet formally declared in pyproject.toml.
 RUN pip install "cmake==4.3.2" && rm -rf $PYTHONPYCACHEPREFIX/*
 
 # Test/dev dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    # Resolve the cupy variant matching this image's CUDA toolkit. setup.py
-    # detects the local CUDA major and exposes the wheel name (cupy-cuda12x,
-    # cupy-cuda13x, ...) via get_extras_require(); we read it and pin our
-    # version on top so the Dockerfile and source stay in sync when the base
-    # image's CUDA major changes.
-    cupy_pkg=$(cd /opt/dep-check && python3 -c '
-import setup
-pkgs = [d for d in setup.get_extras_require()["dev"] if d.startswith("cupy")]
-assert len(pkgs) == 1, f"expected one cupy entry in dev extras, got {pkgs}"
-print(pkgs[0])
-')
+    clang_format_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
+        /opt/dep-check/pyproject.toml dev-common --pin clang-format)
+    test -n "$clang_format_version"
 
-    clang_format_version=$(python3 - <<'PY'
-from pathlib import Path
+    black_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
+        /opt/dep-check/pyproject.toml dev-common --pin black)
+    test -n "$black_version"
 
-for raw_line in Path("/opt/dep-check/config.yaml").read_text().splitlines():
-    line = raw_line.strip()
-    if line.startswith("CLANG_FORMAT_VERSION:"):
-        print(line.split(":", 1)[1].strip().strip("\"'"))
-        break
-else:
-    raise SystemExit("CLANG_FORMAT_VERSION is not set in /opt/dep-check/config.yaml")
-PY
-)
+    isort_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
+        /opt/dep-check/pyproject.toml dev-common --pin isort)
+    test -n "$isort_version"
 
     # Dev/test deps
     packages=(
-        "black[jupyter]==22.3.0"
+        "packaging==26.0"
+        "tomli==2.4.1"
+        "black==${black_version}"
         "clang-format==${clang_format_version}"
-        "isort==5.10.1"
+        "isort==${isort_version}"
         "pylint==2.13.4"
-        "pytest==7.1.3"
+        "pytest==8.3.5"
         "pytest-check==2.8.0"
         "pytest-env==0.8.1"
         "pytest-xdist==2.5.0"
@@ -155,28 +189,42 @@ PY
         "pyyaml==6.0.1"
         "build==1.3.0"
         "twine==1.6.0"
-        "${cupy_pkg}==13.6.0"
+        "cupy-cuda${CUDA_VERSION%%.*}x==13.6.0"
         "nerfacc==0.5.3"
-        "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
         "imageio[ffmpeg]==2.37.2"
         "torchpq==0.3.0.6"
     )
+    plas_pkg="PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
 
-    check_gsplat_deps.sh -f /opt/dep-check/setup.py:dev -- "${packages[@]}"
+    check_gsplat_deps.sh \
+        -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
+        -- "${packages[@]}" "$plas_pkg"
 
-    # Tests need cupy. The prebuilt cupy-cudaXXx wheel installs without
-    # compiling against the local toolkit and relies on CUDA JIT at runtime.
-    # The CUPY_* env vars below are no-ops on the wheel path, but kept so
-    # that if _detect_cupy_requirement() ever falls back to the source
-    # `cupy` (no nvcc detected), the source build is still parallelized
-    # and targeted to a single compute capability.
-    CUPY_NUM_BUILD_JOBS=$(nproc) \
-    CUPY_NUM_NVCC_THREADS=$(nproc) \
-    CUPY_NVCC_GENERATE_CODE=arch=compute_80,code=compute_80 \
-        pip install "${packages[@]}"
+    # The CUDA-major-specific CuPy wheel avoids compiling CuPy from source.
+    pip install "${packages[@]}"
+
+    # Install PLAS alone, then its declared dependencies read from its own
+    # metadata — minus the GUI opencv-python, whose cv2 the pinned headless
+    # build already provides. Deriving the list keeps it in sync with PLAS.
+    pip install --no-deps "$plas_pkg"
+    python3 - <<'PY' > /tmp/plas-deps.txt
+from importlib.metadata import requires
+
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+for raw in requires("PLAS") or []:
+    requirement = Requirement(raw)
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        continue
+    if canonicalize_name(requirement.name) == "opencv-python":
+        continue
+    print(requirement)
+PY
+    pip install -r /tmp/plas-deps.txt
 
     # Save list so the examples stage can reference it
-    printf '%s\n' "${packages[@]}" > /opt/dep-check/dev_packages.txt
+    printf '%s\n' "${packages[@]}" "$plas_pkg" > /opt/dep-check/dev_packages.txt
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
@@ -189,17 +237,11 @@ RUN --mount=type=tmpfs,target=/tmp \
     mapfile -t base_pkgs < /opt/dep-check/base_packages.txt
     mapfile -t dev_pkgs < /opt/dep-check/dev_packages.txt
 
-    # fused-ssim only builds for a pre-defined set of architectures.
-    # In order to override it, and support, say, Blackwell, we need a more
-    # recent commit that allows overriding this set.
-    # Existing architectures:
-    # sm_75: Turing/GeForce tu10x
+    # Compile fused-ssim for the GPU generations supported by this image.
     # sm_80: Ampere/Tesla ga100
     # sm_89: Ada/GeForce ad102
-    # New architectures
     # sm_90: Hopper/Tesla gh100
     # sm_120: Blackwell/GeForce gb20x
-    # sm_121: Blackwell/Tesla gb20x, gb21x
     fused_ssim="git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
 
     # Examples
@@ -218,7 +260,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         "tensorly==0.9.0"
         "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
         "splines==0.3.3"
-        "ppisp @ git+https://github.com/nv-tlabs/ppisp@v1.0.0"
+        "ppisp @ https://github.com/nv-tlabs/ppisp/archive/refs/tags/v1.0.0.tar.gz"
         "opencv-python-headless==4.10.0.84"
         "tqdm==4.67.3"
         "matplotlib==3.10.8"
@@ -226,13 +268,14 @@ RUN --mount=type=tmpfs,target=/tmp \
     )
 
     check_gsplat_deps.sh \
-        -f /opt/dep-check/setup.py:install \
-        -f /opt/dep-check/setup.py:dev \
+        -f /opt/dep-check/pyproject.toml:dependencies \
+        -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
+        -f /opt/dep-check/pyproject.toml:examples \
         -f /opt/dep-check/examples/requirements.txt \
         -- "${base_pkgs[@]}" "${dev_pkgs[@]}" "$fused_ssim" "${packages[@]}"
 
     # Build fused_ssim first (needs special env var)
-    CUDA_ARCHITECTURES='75;80;89;90;120;121' \
+    CUDA_ARCHITECTURES='80;89;90;120' \
         pip install --no-build-isolation "$fused_ssim"
 
     # Needs --no-build-isolation or else fused-ssim can't be installed as
@@ -264,20 +307,34 @@ RUN --mount=type=tmpfs,target=/tmp \
     pip install "${packages[@]}"
 
     rm -rf $PYTHONPYCACHEPREFIX/*
+
+    # World-writable venv, applied in this stage so the main-image COPY carries
+    # the modes without re-chmoding:
+    # - any host UID mapped into the container can install into it at runtime
+    # - dev-only image; do NOT use in production
+    chmod -R a+w /var/cache/venv-${IMAGE_VERSION}
 EOS
 
-# Test asset generation ------------------------------------------------
-# Runs prepare_pandaset.py at image-build time so CI test jobs get the
-# asset from the image instead of downloading from HuggingFace at runtime.
-FROM gsplat-deps AS gsplat-assets
+# Test asset ------------------------------------------------------------
+# PandaSet scene 019 (240x135) test asset, served as a prebuilt registry
+# image so the build pulls the layer instead of downloading and converting
+# the dataset at build time.
+FROM ${DOCKER_REGISTRY}/assets/pandaset:019-240x135 AS gsplat-assets
+
+# Producer for the asset image above, kept out of the main build. The scene
+# is fixed; build the pandaset-asset target and push it to the ref above to
+# (re)publish the asset.
+FROM gsplat-deps AS pandaset-asset-builder
 RUN --mount=type=tmpfs,target=/tmp \
     --mount=type=bind,from=gsplatrepo,source=examples/prepare_pandaset.py,target=/tmp/prepare_pandaset.py \
 <<EOS
-    mkdir -p /opt/gsplat-assets
     python /tmp/prepare_pandaset.py \
         --download --scene 019 --resolution 240x135 \
-        --output /opt/gsplat-assets/test_pandaset.npz
+        --output /test_pandaset.npz
 EOS
+
+FROM scratch AS pandaset-asset
+COPY --from=pandaset-asset-builder /test_pandaset.npz /test_pandaset.npz
 
 # Main image ============================================================
 # It combines the Python environment, development toolchain
@@ -292,7 +349,7 @@ ARG IMAGE_VERSION
 # leave the inherited symlink intact.
 COPY --link --from=gsplat-deps /var/cache/venv-${IMAGE_VERSION}/ /var/cache/venv-${IMAGE_VERSION}/
 COPY --link --from=gsplat-deps /opt/dep-check/ /opt/dep-check/
-COPY --link --from=gsplat-assets /opt/gsplat-assets/ /opt/gsplat-assets/
+COPY --link --from=gsplat-assets /test_pandaset.npz /opt/gsplat-assets/test_pandaset.npz
 COPY --link --from=ccache ccache /usr/local/bin/ccache
 COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 
@@ -333,11 +390,10 @@ RUN <<EOS
     # local dev-only image; do NOT use in production/shared environments.
     chmod 777 /var/cache
 
-    # Same justification: any host UID mapped into the container needs to
-    # install editable packages (e.g. gsplat-geometry) into the venv at
-    # runtime. Make every file and directory in the venv writable by
-    # anyone. Dev-only image — do NOT use in production/shared environments.
-    chmod -R a+w "$PYTHON_VENV_PATH"
+    # The venv contents already carry a+w from the gsplat-deps stage; the
+    # COPY preserves those modes but creates the top-level directory itself
+    # as root:755, so open just the venv root here.
+    chmod a+w /var/cache/venv-${IMAGE_VERSION}
 
     ccache --max-size=20G
 
