@@ -174,6 +174,55 @@ def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("packed", [False, True])
+def test_projection_2dgs_batched_warp_reduction_labels(packed: bool):
+    """Warp reductions must keep identical IDs from different batches separate."""
+    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+
+    B, C, N = 2, 2, 8
+    width = height = 32
+
+    means = torch.zeros(B, N, 3, device=device)
+    means[..., 2] = 2.0
+    means.requires_grad_(True)
+    quats = torch.zeros(B, N, 4, device=device)
+    quats[..., 0] = 1.0
+    scales = torch.full((B, N, 3), 0.1, device=device)
+
+    viewmats = torch.eye(4, device=device).expand(B, C, 4, 4).clone()
+    viewmats.requires_grad_(True)
+    Ks = torch.eye(3, device=device).expand(B, C, 3, 3).clone()
+    Ks[..., 0, 0] = 20.0
+    Ks[..., 1, 1] = 20.0
+    Ks[..., 0, 2] = width / 2
+    Ks[..., 1, 2] = height / 2
+
+    outputs = fully_fused_projection_2dgs(
+        means,
+        quats,
+        scales,
+        viewmats,
+        Ks,
+        width,
+        height,
+        packed=packed,
+    )
+    depths = outputs[6] if packed else outputs[2]
+    assert depths.numel() == B * C * N
+
+    v_means, v_viewmats = torch.autograd.grad(depths.sum(), (means, viewmats))
+    expected_means = torch.zeros_like(means)
+    expected_means[..., 2] = C
+    expected_viewmats = torch.zeros_like(viewmats)
+    expected_viewmats[..., 2, 2] = 2.0 * N
+    expected_viewmats[..., 2, 3] = N
+
+    torch.testing.assert_close(v_means, expected_means, rtol=0, atol=0)
+    torch.testing.assert_close(v_viewmats, expected_viewmats, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("sparse_grad", [False])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_fully_fused_projection_packed_2dgs(
