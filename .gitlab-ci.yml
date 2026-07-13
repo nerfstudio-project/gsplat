@@ -69,7 +69,7 @@ code-format:
     - source /etc/profile.d/00-persistent-cache.sh
 
   script:
-    - cmake --preset "${CMAKE_PRESET}" -B build/ -DGSPLAT_CCACHE_STATS=ON
+    - cmake --preset "${CMAKE_PRESET}" -B build/ -DGSPLAT_CCACHE_STATS=ON -DGSPLAT_ENABLE_BUILD_TRACES=ON
     - cmake --build build/
 
   artifacts:
@@ -127,6 +127,12 @@ build-release:
 
   script:
     - ctest --test-dir build/ --output-on-failure
+
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - build/tests-trace.json
 
 test-debug:
   extends: .test-base

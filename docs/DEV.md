@@ -161,6 +161,7 @@ apply to a top-level build unless noted otherwise; presets can override them.
 | `GSPLAT_BUILD_TESTS` | `ON` (`OFF` as a subproject) | Build and register the C++ tests; Python source-tree tests are registered independently in top-level builds. |
 | `GSPLAT_CHECK_PYTHON_DEPS` | `ON` | Check the active environment against the Python dependencies requested by the build. |
 | `GSPLAT_DEVELOPMENT_MODE` | `OFF` | Require the development Python dependencies in addition to build requirements. |
+| `GSPLAT_ENABLE_BUILD_TRACES` | `OFF` | Record configure, build, and test traces; requires CMake 4.3 or newer. |
 | `GSPLAT_FAST_MATH` | `ON` | Compile CUDA kernels with fast-math intrinsics. |
 | `GSPLAT_GENERATED_DIR` | `<build>/generated` | Select the directory for generated gsplat build headers. |
 | `GSPLAT_KERNEL_FAMILIES` | empty (all) | Select a comma- or semicolon-separated subset of `2DGS`, `3DGS`, `3DGUT`, `ADAM`, `RELOC`, and `LOSSES` to compile. |
@@ -334,6 +335,19 @@ configured. CMake then stores that compiler in its cache. Remove the affected
 CMake stages an importable package under `build/<preset>`. This is what
 allows Python tests to import the newly built extension directly from a build
 tree.
+
+## Build traces
+
+Configure with `-DGSPLAT_ENABLE_BUILD_TRACES=ON` (CMake 4.3 or newer) to
+record every configure, compile, link, and test command with timings.
+Each phase archives a Google Trace file into the build directory
+(`configure-trace.json`, `build-trace.json`, `tests-trace.json`); open it
+in a trace viewer such as [Perfetto](https://ui.perfetto.dev) or
+[speedscope](https://www.speedscope.app) for a per-command parallelism
+flamechart. Cache hits appear as near-zero spans; disable ccache
+(`-DGSPLAT_ENABLE_CCACHE=OFF`) if you want cold-compile times. The CI
+build jobs configure with the option enabled and publish the trace files
+with their artifacts.
 
 The pull-request checks are defined by:
 

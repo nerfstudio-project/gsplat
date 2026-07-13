@@ -11,11 +11,39 @@ include("${CMAKE_CURRENT_LIST_DIR}/GSplatCCache.cmake")
 set(GSPLAT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(GSPLAT_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
+option(GSPLAT_ENABLE_BUILD_TRACES "Generate configure, build, and test trace files" OFF)
+
 option(
     GSPLAT_CHECK_PYTHON_DEPS
     "Verify the declared Python dependencies against the active environment at configure time"
     ON
 )
+
+if(PROJECT_IS_TOP_LEVEL AND GSPLAT_ENABLE_BUILD_TRACES)
+    if(CMAKE_VERSION VERSION_LESS 4.3)
+        message(FATAL_ERROR "GSPLAT_ENABLE_BUILD_TRACES requires CMake 4.3 or newer.")
+    endif()
+
+    set(_gsplat_instrumentation_data_version 1)
+    set(_gsplat_instrumentation_options trace)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.4)
+        set(_gsplat_instrumentation_data_version 1.1)
+        list(APPEND _gsplat_instrumentation_options captureOutput compileTrace)
+    endif()
+
+    # Archive each completed phase before the next indexing hook replaces
+    # CMake's most recent Google Trace file. Both build hooks are needed to
+    # cover direct build-tool and `cmake --build` invocations.
+    cmake_instrumentation(
+        API_VERSION 1
+        DATA_VERSION ${_gsplat_instrumentation_data_version}
+        HOOKS postGenerate postBuild postCMakeBuild postCTest
+        OPTIONS ${_gsplat_instrumentation_options}
+        CALLBACK ${CMAKE_COMMAND}
+        -P
+        "${CMAKE_CURRENT_LIST_DIR}/GSplatArchiveInstrumentation.cmake"
+    )
+endif()
 
 # Nested consumers get a runtime-only build; a parent project that wants
 # gsplat's tests opts in explicitly.
