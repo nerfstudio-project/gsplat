@@ -22,6 +22,7 @@
 
 #include "Common.h"
 #include "Cameras.cuh"
+#include "KernelUtils.cuh"
 #include "ExternalDistortion.cuh"
 #include "Lidars.cuh"
 #include "RasterizeCSR.cuh"
@@ -198,23 +199,6 @@ enum class SaturationTPolicy
     // the saturated chain state.
     KeepPreAndCapturePostSaturationT,
 };
-
-// CTA-wide barrier with the same warp-vs-block behaviour the
-// kernel uses inline. CTA_SIZE_T == 32 collapses the whole CTA
-// into one warp, so __syncwarp is sufficient (and cheaper than
-// __syncthreads); larger CTAs need a true __syncthreads.
-template<uint32_t CTA_SIZE_T>
-__device__ __forceinline__ void cta_sync()
-{
-    if constexpr(CTA_SIZE_T == 32)
-    {
-        __syncwarp();
-    }
-    else
-    {
-        __syncthreads();
-    }
-}
 
 // CTA-wide barrier + count: synchronises all threads in the CTA and
 // returns the number of threads where `predicate` is true. Behaves like

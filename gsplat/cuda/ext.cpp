@@ -1046,7 +1046,10 @@ TORCH_LIBRARY(gsplat, m)
         "Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int? n_images, bool "
         "sort, bool segmented) -> (Tensor, Tensor, Tensor)"
     );
-
+    m.def(
+        "intersect_tile_macro_binning(Tensor means2d, Tensor radii, Tensor depths, Tensor conics, Tensor opacities, "
+        "int tile_size, int tile_width, int tile_height) -> (Tensor, Tensor)"
+    );
 #if GSPLAT_BUILD_3DGS
     m.def(
         "projection_ewa_simple(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> "
@@ -1162,7 +1165,8 @@ TORCH_LIBRARY(gsplat, m)
         "__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, "
         "__torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, bool "
         "global_z_order, bool use_hit_distance, bool return_normals, int renderer_config, str? process_group_name, int "
-        "world_size) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, "
+        "world_size, bool macro_tile) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, "
+        "Tensor, Tensor, "
         "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, int)"
     );
 #endif

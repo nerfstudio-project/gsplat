@@ -106,6 +106,17 @@ std::tuple<at::Tensor, at::Tensor> intersect_tile_sparse(
     int64_t tile_height
 );
 
+std::tuple<at::Tensor, at::Tensor> intersect_tile_macro_binning(
+    const at::Tensor &means2d,   // [I, N, 2]
+    const at::Tensor &radii,     // [I, N, 2]
+    const at::Tensor &depths,    // [I, N]
+    const at::Tensor &conics,    // [I, N, 3]
+    const at::Tensor &opacities, // [I, N]
+    int64_t tile_size,
+    int64_t tile_width,
+    int64_t tile_height
+);
+
 // Build the per-active-tile layout consumed by sparse rasterization. Pixels are
 // packed: a flat [P, 2] (row, col) tensor plus a [P] image_ids tensor (the
 // per-element batch index). Returns:

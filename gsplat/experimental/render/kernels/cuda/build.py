@@ -106,11 +106,11 @@ def get_build_parameters():
                 "MacroTileIntersect.cu",
                 "MacroTileRasterize.cu",
                 "Projection.cu",
-                "SegmentedSort.cu",
                 "SHCompression.cu",
                 "SphericalHarmonics.cu",
             ]
         ]
+        sources.append(os.path.join(_GSPLAT_CSRC, "SegmentedSort.cu"))
 
     # Compiler flags ----------------------------------
     extra_cflags = []

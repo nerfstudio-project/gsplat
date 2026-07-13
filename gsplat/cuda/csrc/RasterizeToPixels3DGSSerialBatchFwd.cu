@@ -27,6 +27,7 @@
 #    include "Common.h"
 #    include "Dispatch.h"
 #    include "Prefetch.h"
+#    include "KernelUtils.cuh"
 #    include "Rasterization.h"
 #    include "RasterizeToPixels3DGSDevice.cuh"
 #    include "Utils.cuh"
@@ -208,16 +209,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
             conic_batch[tid]      = conics[g];
         }
 
-        // wait for other threads to collect the gaussians in batch. A CTA
-        // with <= 32 threads is a single warp, so a warp-level sync suffices.
-        if constexpr(CTA_SIZE <= 32)
-        {
-            __syncwarp();
-        }
-        else
-        {
-            __syncthreads();
-        }
+        cta_sync<CTA_SIZE>();
 
         // process gaussians in the current batch
         const uint32_t batch_size = min(BATCH_SIZE, (uint32_t)range_end - batch_start);

@@ -45,6 +45,10 @@ EXPECTED_PACKAGES = [
 SHIPPED_PACKAGES = EXPECTED_PACKAGES[1:]
 SHIPPED_PACKAGE_PARTS = [tuple(name.split(".")) for name in SHIPPED_PACKAGES]
 HAS_SOURCE_TREE = (REPO_ROOT / "gsplat" / "__init__.py").exists()
+SEGMENTED_SORT_SOURCES = [
+    "gsplat/cuda/csrc/SegmentedSort.cu",
+    "gsplat/cuda/csrc/SegmentedSort.h",
+]
 
 
 def _installed_files() -> list[metadata.PackagePath]:
@@ -107,6 +111,23 @@ def test_expected_packages_discoverable():
     packages = _published_packages()
     missing = [name for name in EXPECTED_PACKAGES if name not in packages]
     assert not missing, f"missing from package list: {missing} (got {sorted(packages)})"
+
+
+def test_segmented_sort_sources_owned_by_core_cuda():
+    """The shared segmented sort utility ships from core, not experimental."""
+    if HAS_SOURCE_TREE:
+        shipped_files = {
+            str(path.relative_to(REPO_ROOT))
+            for path in (REPO_ROOT / "gsplat").rglob("SegmentedSort.*")
+        }
+    else:
+        shipped_files = {
+            str(path)
+            for path in _installed_files()
+            if path.name.startswith("SegmentedSort.")
+        }
+
+    assert shipped_files == set(SEGMENTED_SORT_SOURCES)
 
 
 def test_experimental_published_under_gsplat_namespace():
@@ -177,6 +198,7 @@ def test_sdist_excludes_tests_includes_cuda(tmp_path):
 
     # CUDA csrc sources from the sub-packages ARE included.
     required_substrings = [
+        *SEGMENTED_SORT_SOURCES,
         "gsplat/scene/kernels/cuda/csrc/gaussian_scene_pack.cuh",
         "gsplat/geometry/kernels/cuda/csrc/pose.cu",
         "gsplat/sensors/kernels/cuda/csrc/camera_kernel.cu",

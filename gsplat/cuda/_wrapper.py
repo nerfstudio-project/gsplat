@@ -1256,6 +1256,65 @@ def isect_offset_encode(
 
 
 @torch.no_grad()
+@trace_function("isect-tile-macro-binning")
+def isect_tiles_macro_binning(
+    means2d: Tensor,  # [I, N, 2]
+    radii: Tensor,  # [I, N, 2]
+    depths: Tensor,  # [I, N]
+    conics: Tensor,  # [I, N, 3]
+    opacities: Tensor,  # [I, N]
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+) -> Tuple[Tensor, Tensor]:
+    """Build render-tile intersection lists using macro-tile binning.
+
+    It groups visible Gaussians by macro tile, sorts each macro-tile group by
+    depth, then expands those groups into the per-render-tile intersection
+    format consumed by rasterize_to_pixels(). Offsets are cumulative into one
+    concatenated ``flatten_ids`` tensor.
+
+    Args:
+        means2d: Projected Gaussian means, shaped [I, N, 2].
+        radii: Integer projected radii, shaped [I, N, 2]. Gaussians with
+            non-positive radii are treated as culled. Shape is [I, N, 2].
+        depths: Per-Gaussian depth values used for front-to-back ordering,
+            shaped [I, N].
+        conics: Inverse projected covariance upper-triangle values, shaped
+            [I, N, 3].
+        opacities: Per-Gaussian opacity values, shaped [I, N].
+        tile_size: Render-tile size in pixels.
+        tile_width: Number of render tiles along the image width.
+        tile_height: Number of render tiles along the image height.
+
+    Returns:
+        A tuple (isect_offsets, flatten_ids):
+
+        - isect_offsets: CSR-style start offset for each render tile, shaped
+          [I, tile_height, tile_width] with dtype int32.
+        - flatten_ids: Gaussian ids for each tile segment, shaped [n_isects]
+          with dtype int32. Batched ids are offset by image index * N.
+    """
+    assert means2d.dim() == 3 and means2d.shape[-1] == 2, means2d.shape
+    I, N = means2d.shape[:2]
+    assert radii.shape == (I, N, 2), radii.shape
+    assert depths.shape == (I, N), depths.shape
+    assert conics.shape == (I, N, 3), conics.shape
+    assert opacities.shape == (I, N), opacities.shape
+
+    return _make_lazy_cuda_func("intersect_tile_macro_binning")(
+        means2d.contiguous(),
+        radii.contiguous(),
+        depths.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        tile_size,
+        tile_width,
+        tile_height,
+    )
+
+
+@torch.no_grad()
 @trace_function("isect-sparse")
 def isect_tiles_sparse(
     means2d: Tensor,  # [I, N, 2] or [nnz, 2]

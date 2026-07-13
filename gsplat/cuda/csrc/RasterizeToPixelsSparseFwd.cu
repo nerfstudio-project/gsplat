@@ -25,6 +25,7 @@
 
 #    include "Common.h"
 #    include "Dispatch.h"
+#    include "KernelUtils.cuh"
 #    include "Rasterization.h"
 #    include "RasterizeSparseAddressing.cuh"
 #    include "RasterizeToPixels3DGSDevice.cuh"
@@ -193,14 +194,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_sparse_fwd_kerne
             conic_batch[tid]      = conics[g];
         }
 
-        if constexpr(CTA_SIZE <= 32)
-        {
-            __syncwarp();
-        }
-        else
-        {
-            __syncthreads();
-        }
+        cta_sync<CTA_SIZE>();
 
         const uint32_t batch_size = min(BATCH_SIZE, (uint32_t)range_end - batch_start);
         for(uint32_t t = 0; (t < batch_size) && (done_mask != ALL_DONE); ++t)
