@@ -3,13 +3,6 @@
 # Fix the base image to avoid spurious rebuilds
 ARG BASE_IMAGE=nvidia/cuda:12.8.1-base-ubuntu24.04@sha256:133c78a0575303be34164d0b90137a042172bdf60696af01a3c424ab402d86e2
 
-# Bumped on every image release (mirrors IMAGE_TAG in config.yaml). Used to
-# bake the venv at /var/cache/venv-${IMAGE_VERSION} so a per-version cache
-# volume mounted at the same sub-path is auto-populated by Docker on first
-# use, and old version's venvs coexist instead of forcing --reset-cache on
-# image bumps.
-ARG IMAGE_VERSION
-
 # This project's image registry, passed in at build time so its URL is not
 # hard-coded here as well.
 ARG DOCKER_REGISTRY
@@ -27,7 +20,6 @@ EOS
 
 # Base layer with Python, apt configuration, and virtual environment setup ------------
 FROM ${BASE_IMAGE} as python
-ARG IMAGE_VERSION
 SHELL ["/bin/bash", "-ex", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -104,19 +96,14 @@ ENV PYTHON_VENV_PATH=/usr/local/venv
 ENV PATH="$PYTHON_VENV_PATH/bin:$PATH"
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    # Bake the venv at /var/cache/venv-${IMAGE_VERSION}. At runtime the caller
-    # mounts a per-version volume at the same sub-path; Docker auto-populates
-    # a fresh volume from the image's content here, so runtime package state
-    # survives --rm and image bumps coexist (each tag gets its own volume).
-    # The symlink is created first because python's venv module refuses to
-    # initialize into a symlinked path, so we point it at the real target.
-    ln -s /var/cache/venv-${IMAGE_VERSION} "$PYTHON_VENV_PATH"
-    python3 -m venv /var/cache/venv-${IMAGE_VERSION}
+    # Keep the environment in the image rather than the persistent cache.
+    # Each container therefore uses exactly the dependencies baked into its
+    # image, and replacing a mutable image tag cannot reuse a stale venv.
+    python3 -m venv "$PYTHON_VENV_PATH"
 EOS
 
 # Installs all GSplat dependencies (including dev dependencies) -----------
 FROM python as gsplat-deps
-ARG IMAGE_VERSION
 
 # Dependency validation: ensure Dockerfile deps stay in sync with source files.
 # Aborts the build if the Dockerfile package lists diverge from
@@ -311,7 +298,7 @@ RUN --mount=type=tmpfs,target=/tmp \
     # the modes without re-chmoding:
     # - any host UID mapped into the container can install into it at runtime
     # - dev-only image; do NOT use in production
-    chmod -R a+w /var/cache/venv-${IMAGE_VERSION}
+    chmod -R a+w "$PYTHON_VENV_PATH"
 EOS
 
 # Test asset ------------------------------------------------------------
@@ -340,13 +327,9 @@ COPY --from=pandaset-asset-builder /test_pandaset.npz /test_pandaset.npz
 # and all gsplat dependencies into an image.
 
 FROM python as main
-ARG IMAGE_VERSION
 
-# Copy the populated venv via its real path. With --link, copying onto
-# $PYTHON_VENV_PATH/ (the symlink created in the python stage) would shadow
-# the symlink with a fresh dir layer, so we copy to the versioned path and
-# leave the inherited symlink intact.
-COPY --link --from=gsplat-deps /var/cache/venv-${IMAGE_VERSION}/ /var/cache/venv-${IMAGE_VERSION}/
+# Copy the populated, image-local environment from the dependency stage.
+COPY --link --from=gsplat-deps /usr/local/venv/ /usr/local/venv/
 COPY --link --from=gsplat-deps /opt/dep-check/ /opt/dep-check/
 COPY --link --from=gsplat-assets /test_pandaset.npz /opt/gsplat-assets/test_pandaset.npz
 COPY --link --from=ccache ccache /usr/local/bin/ccache
@@ -392,7 +375,7 @@ RUN <<EOS
     # The venv contents already carry a+w from the gsplat-deps stage; the
     # COPY preserves those modes but creates the top-level directory itself
     # as root:755, so open just the venv root here.
-    chmod a+w /var/cache/venv-${IMAGE_VERSION}
+    chmod a+w "$PYTHON_VENV_PATH"
 
     ccache --max-size=20G
 

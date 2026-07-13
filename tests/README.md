@@ -41,6 +41,9 @@ You update the code locally and run the tests to see the results right away.
 - **Shared ccache**: When the host has a ccache cache directory, it is mounted
   into the container so host and container builds share one cache budget;
   otherwise a per-host Docker volume provides the cache.
+- **Image-local Python environment**: The virtual environment is baked into
+  each image and is not mounted from persistent cache storage. Updating an
+  image therefore updates its Python dependencies as one atomic unit.
 
 ### Reproducibility
 

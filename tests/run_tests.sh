@@ -233,18 +233,10 @@ check_if_installed docker nvidia-container-runtime
 # Load config variables
 load_config "$REPOROOT/config.yaml"
 
-# Per-image-version venv volume. Docker auto-populates a fresh volume from
-# the image's /var/cache/venv-${IMAGE_TAG} on first mount, so runtime package
-# state survives --rm and image bumps coexist without forcing a cache reset.
-LOCAL_VENV_VOLUME="gsplat-venv-$IMAGE_TAG"
-
 if $do_reset_home || $do_reset_cache; then
     if $do_reset_cache; then
         echo -n "Removing container cache volume... " >&2
         docker volume rm "$LOCAL_CACHE_VOLUME" > /dev/null 2>&1 || true
-        echo "OK"
-        echo -n "Removing venv volume $LOCAL_VENV_VOLUME... " >&2
-        docker volume rm "$LOCAL_VENV_VOLUME" > /dev/null 2>&1 || true
         echo "OK"
     fi
     if $do_reset_home; then
@@ -317,8 +309,6 @@ run_args+=(
 
     -v "$LOCAL_HOME_VOLUME:$HOST_HOME"
     -v "$LOCAL_CACHE_VOLUME:/var/cache"
-    -v "$LOCAL_VENV_VOLUME:/var/cache/venv-$IMAGE_TAG"
-
     --hostname "$(hostname)-gsdev"
     --ipc=host
 )
