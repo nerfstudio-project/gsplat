@@ -78,8 +78,8 @@ In `v1.0.0`, the equivalent code is:
 Color as Spherical Harmonics
 ----------------------------
 
-In `v0.1.11`, user needs to explicitly converting spherical harmonics coefficients to RGB,
-before passing it into `rasterize_gaussians`:
+In `v0.1.11`, users need to explicitly convert spherical harmonics coefficients to RGB
+before passing them into `rasterize_gaussians`:
 
 .. code-block:: python
 
@@ -89,7 +89,42 @@ before passing it into `rasterize_gaussians`:
     sh_coeffs: Tensor = ... # [N, K, 3]
 
     viewdirs = means - camtoworld[:3, 3] # [N, 3]
-    colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]
+    colors = spherical_harmonics(sh_degree, viewdirs, sh_coeffs)  # [N, 3]
+
+.. warning::
+
+    **Breaking change on nv/main:** The public :func:`spherical_harmonics`
+    function no longer accepts precomputed view directions. Its signature is
+    now ``spherical_harmonics(degrees_to_use, means, viewmats, coeffs,
+    masks=None, batch_ids=None, camera_ids=None, gaussian_ids=None)``. Existing
+    calls using ``(sh_degree, viewdirs, sh_coeffs)`` must be updated.
+
+For a direct call to :func:`spherical_harmonics` on `nv/main`, pass world-space
+Gaussian means and world-to-camera matrices. The function computes the view
+directions internally and includes a camera dimension in its dense output:
+
+.. code-block:: python
+
+    from gsplat import spherical_harmonics
+
+    sh_degree: int = ... # the amount of bands activated
+    means: Tensor = ... # [N, 3], world-space Gaussian means
+    viewmats: Tensor = ... # [C, 4, 4], world-to-camera matrices
+    sh_coeffs: Tensor = ... # [N, K, D]
+
+    features = spherical_harmonics(
+        sh_degree, means, viewmats, sh_coeffs
+    )  # [C, N, D]
+
+With batch dimensions, the dense output shape is ``[..., C, N, D]``. Packed
+calls can additionally provide a ``[nnz]`` mask plus ``batch_ids``,
+``camera_ids``, and ``gaussian_ids``, and return ``[nnz, D]``. In dense mode,
+``masks`` has shape ``[..., C, N]``.
+
+The ``viewmats`` must be rigid world-to-camera transforms with orthonormal
+rotation blocks. Camera positions are recovered as ``-R^T t`` rather than with
+a full matrix inverse, so results are approximate if a view matrix contains
+scale or shear, or if optimizing it directly does not preserve orthonormality.
 
 In `v1.0.0`, the SH to RGB conversion is handled automatically in :func:`rasterization`. 
 The equivalent code is:
