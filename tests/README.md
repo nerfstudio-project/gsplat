@@ -19,7 +19,9 @@ You update the code locally and run the tests to see the results right away.
   and targeted testing
 - **Mounted Source Code**: Local source code mounted at the same directory as
   on host allows immediate testing of code changes without rebuild delays,
-  and debug symbols refers to the correct source files on host.
+  and debug symbols refer to the correct source files on host. Linked Git
+  worktrees also mount their external common Git directory read-only, so
+  source-level Git checks behave the same way inside and outside the container.
 
 ### Reproducibility
 
