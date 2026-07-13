@@ -1082,6 +1082,80 @@ class TestBgTrackNodeSemanticFallback:
         assert bg_grad[0] == 0.0 and bg_grad[2] == 0.0
         assert other_grad[0] == 0.0
 
+    def test_nonfinite_poisons_leave_participating_gradients_bit_identical(self):
+        """Beyond staying finite: gated-out non-finite logits must leave every
+        output and every participating gradient bit-identical to a clean run
+        (the poisoned reads are skipped entirely, not merely damped).
+
+        The poison placement is gate-aware. In the background miniature the
+        density gate is value-dependent (it excludes nan and -inf but admits
+        +inf), so index 1 only carries values the gate rejects; the semantic
+        gate (index 2) and the box gate (index 3) exclude regardless of value,
+        so the rotation runs every non-finite value through at least one
+        value-independent gate. Node-member selection is purely semantic, so
+        all three values rotate freely there.
+        """
+        for member, make_inputs, lambdas, poison_runs in (
+            (
+                "background",
+                _miniature_bg_inputs,
+                (BG_LAMBDA, DISABLED),
+                (
+                    {
+                        ("density_logits", 1): float("nan"),
+                        ("density_logits", 2): float("inf"),
+                        ("density_logits", 3): float("-inf"),
+                    },
+                    {
+                        ("density_logits", 1): float("-inf"),
+                        ("density_logits", 2): float("nan"),
+                        ("density_logits", 3): float("inf"),
+                    },
+                ),
+            ),
+            (
+                "node",
+                _miniature_node_inputs,
+                (DISABLED, NODE_LAMBDA),
+                (
+                    {
+                        ("density_logits", 0): float("nan"),
+                        ("density_logits", 2): float("inf"),
+                        ("other_density_logits", 0): float("-inf"),
+                    },
+                    {
+                        ("density_logits", 0): float("inf"),
+                        ("density_logits", 2): float("-inf"),
+                        ("other_density_logits", 0): float("nan"),
+                    },
+                ),
+            ),
+        ):
+            clean_inp, clean_leaves = _with_grad_leaves(make_inputs("cpu"))
+            clean_outputs = _call(_make_module(), clean_inp, *lambdas)
+            clean_grads = _grads_of(_objective(clean_outputs, *lambdas), clean_leaves)
+
+            for run_idx, poisons in enumerate(poison_runs):
+                tag = f"rotation {run_idx}"
+                inp = make_inputs("cpu")
+                for (key, idx), value in poisons.items():
+                    inp[key] = inp[key].clone()
+                    inp[key][idx] = value
+                inp, leaves = _with_grad_leaves(inp)
+                outputs = _call(_make_module(), inp, *lambdas)
+                for label, out, clean_out in zip(
+                    _OUTPUT_LABELS, outputs, clean_outputs
+                ):
+                    assert torch.equal(
+                        out, clean_out
+                    ), f"{member}/{tag}: output {label} differs from clean run"
+
+                grads = _grads_of(_objective(outputs, *lambdas), leaves)
+                for grad, clean_grad in zip(grads, clean_grads):
+                    assert torch.equal(
+                        grad, clean_grad
+                    ), f"{member}/{tag}: gradient differs from clean run"
+
     def test_production_scale_smoke(self):
         """The fallback stays finite and differentiable at production point
         counts."""
@@ -1335,6 +1409,85 @@ class TestBgTrackNodeSemanticCUDA:
         assert torch.isfinite(other_grad).all()
         assert bg_grad[0].item() == 0.0 and bg_grad[2].item() == 0.0
         assert other_grad[0].item() == 0.0
+
+    def test_nonfinite_poisons_leave_participating_gradients_bit_identical(self):
+        """Beyond staying finite: gated-out non-finite logits must leave every
+        output and every participating gradient bit-identical to a clean run
+        (the poisoned reads are skipped entirely, not merely damped).
+
+        The poison placement is gate-aware. In the background miniature the
+        density gate is value-dependent (it excludes nan and -inf but admits
+        +inf), so index 1 only carries values the gate rejects; the semantic
+        gate (index 2) and the box gate (index 3) exclude regardless of value,
+        so the rotation runs every non-finite value through at least one
+        value-independent gate. Node-member selection is purely semantic, so
+        all three values rotate freely there.
+        """
+        for member, make_inputs, lambdas, poison_runs in (
+            (
+                "background",
+                _miniature_bg_inputs,
+                (BG_LAMBDA, DISABLED),
+                (
+                    {
+                        ("density_logits", 1): float("nan"),
+                        ("density_logits", 2): float("inf"),
+                        ("density_logits", 3): float("-inf"),
+                    },
+                    {
+                        ("density_logits", 1): float("-inf"),
+                        ("density_logits", 2): float("nan"),
+                        ("density_logits", 3): float("inf"),
+                    },
+                ),
+            ),
+            (
+                "node",
+                _miniature_node_inputs,
+                (DISABLED, NODE_LAMBDA),
+                (
+                    {
+                        ("density_logits", 0): float("nan"),
+                        ("density_logits", 2): float("inf"),
+                        ("other_density_logits", 0): float("-inf"),
+                    },
+                    {
+                        ("density_logits", 0): float("inf"),
+                        ("density_logits", 2): float("-inf"),
+                        ("other_density_logits", 0): float("nan"),
+                    },
+                ),
+            ),
+        ):
+            clean_inp, clean_leaves = _with_grad_leaves(make_inputs("cuda"))
+            clean_outputs = _call(_make_module(), clean_inp, *lambdas)
+            clean_grads = _grads_of(_objective(clean_outputs, *lambdas), clean_leaves)
+
+            for run_idx, poisons in enumerate(poison_runs):
+                tag = f"rotation {run_idx}"
+                inp = make_inputs("cuda")
+                for (key, idx), value in poisons.items():
+                    inp[key] = inp[key].clone()
+                    inp[key][idx] = value
+                inp, leaves = _with_grad_leaves(inp)
+                outputs = _call(_make_module(), inp, *lambdas)
+                # Loss sums are atomicAdd-reduced, so clean-vs-poisoned
+                # launches may differ in summation order; the per-point
+                # gradients are direct writes and must be bit-identical.
+                for label, out, clean_out in zip(
+                    _OUTPUT_LABELS, outputs, clean_outputs
+                ):
+                    torch.testing.assert_close(
+                        out,
+                        clean_out,
+                        msg=f"{member}/{tag}: output {label} differs from clean run",
+                        **FWD_TOL,
+                    )
+                grads = _grads_of(_objective(outputs, *lambdas), leaves)
+                for grad, clean_grad in zip(grads, clean_grads):
+                    assert torch.equal(
+                        grad, clean_grad
+                    ), f"{member}/{tag}: gradient differs from clean run"
 
     def test_production_scale_matches_fallback(self):
         """Production-scale smoke: the CUDA path stays finite and agrees with
