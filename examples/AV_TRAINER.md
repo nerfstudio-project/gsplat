@@ -53,6 +53,51 @@ python examples/av_trainer.py \
     --duration 4.0 --downscale 4 --max-steps 10000
 ```
 
+#### Offline `dynamic_flag` preparation
+
+`prepare_ncore_dynamics.py` materializes a derived NCore v4 clip with per-point
+`dynamic_flag` arrays on the LiDAR store, using annotation-time LiDAR-spin
+association (same semantics as rigid-dynamic static exclusion):
+
+```bash
+python examples/prepare_ncore_dynamics.py \
+    --input ncore_data/004c2001-.../pai_004c2001-...json \
+    --output-dir ncore_data/004c2001-...-dynamic \
+    --class-ids automobile,person,heavy_truck
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--input` | (required) | NCore v4 JSON manifest |
+| `--output-dir` | (required) | New directory for the derived manifest and component stores |
+| `--class-ids` | default actor classes | Comma-separated cuboid class IDs |
+| `--lidar-id` | unset | LiDAR sensor ID; required only when the manifest has multiple LiDARs |
+
+Constraints:
+
+- `--output-dir` must not already exist (`FileExistsError` on rerun).
+- `--lidar-id` is required when the manifest has multiple LiDARs; otherwise the
+  sole LiDAR is chosen automatically.
+- The selected LiDAR must own its own component store (no mixed or multi-LiDAR
+  stores).
+
+**Producer / consumer semantics.** The prepare tool writes an offline export
+artifact (`dynamic_flag` per LiDAR return). `av_trainer.py` / `NCoreParser`
+intentionally does **not** read baked `dynamic_flag`; it recomputes static
+exclusion live from cuboid annotations when `--rigid-dynamic-track-class-ids`
+is set. A plain `av_trainer.py --scene X.json` (no rigid classes) does **not**
+drop baked-dynamic returns — exclusion only happens when rigid classes are
+requested. A runtime warning may be emitted when a flag-carrying manifest is
+loaded without rigid classes.
+
+**Disk layout.** The tool writes a full derived clip directory under
+`--output-dir`. Unchanged component stores (e.g. camera `.itar` files) are
+hard-linked into the output (falling back to symlink, then copy); only the
+rewritten LiDAR `dynamic_flag` store is newly written, so the derived clip is
+not a full duplicate of the source. Across filesystems, unchanged stores may
+still be fully copied — plan disk accordingly (~2 GB per clip on typical
+multi-camera manifests).
+
 ## Arguments
 
 | Argument | Default | Description |
