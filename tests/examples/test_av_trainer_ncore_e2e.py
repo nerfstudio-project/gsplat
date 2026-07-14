@@ -30,15 +30,17 @@ from examples.av_trainer import train
 
 
 NCORE_TEST_SCENE_ENV = "GSPLAT_NCORE_TEST_SCENE"
+DEFAULT_NCORE_TEST_SCENE = (
+    Path(__file__).parent
+    / "test_data/ncore_ci_fixture/pai_004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6.json"
+)
 
 
 def _ncore_test_scene() -> str:
-    scene = os.environ.get(NCORE_TEST_SCENE_ENV)
-    if not scene:
-        pytest.skip(f"set {NCORE_TEST_SCENE_ENV} to an NCore test-data JSON")
+    scene = os.environ.get(NCORE_TEST_SCENE_ENV, str(DEFAULT_NCORE_TEST_SCENE))
     path = Path(scene)
     if not path.exists():
-        pytest.skip(f"{NCORE_TEST_SCENE_ENV} does not exist: {path}")
+        pytest.fail(f"NCore test scene does not exist: {path}")
     pytest.importorskip("ncore")
     if not torch.cuda.is_available():
         pytest.skip("AV trainer e2e test requires CUDA")
@@ -88,6 +90,8 @@ def test_av_trainer_ncore_static_baseline_e2e_test_data(tmp_path: Path):
     assert len(losses) == 1
     assert len(checkpoints) == 1
     summary = _assert_training_outputs(result_dir)
+    assert summary["scene_path"] == scene
+    assert summary["use_mcmc"] is False
     assert summary["scene_ids"] == ["av_scene"]
     assert summary["render_scene_id"] == "av_scene"
 
@@ -125,6 +129,8 @@ def test_av_trainer_ncore_rigid_dynamic_e2e_test_data(tmp_path: Path):
     assert len(losses) == 1
     assert len(checkpoints) == 1
     summary = _assert_training_outputs(result_dir)
+    assert summary["scene_path"] == scene
+    assert summary["use_mcmc"] is False
     assert summary["scene_ids"] == ["av_static", "av_dynamic"]
     assert summary["render_scene_id"] == "av_scene"
 
@@ -177,6 +183,12 @@ def test_av_trainer_ncore_rigid_dynamic_e2e_test_data(tmp_path: Path):
         "cameras": ["camera_front_wide_120fov"],
         "duration_sec": None,
         "downscale": 1,
+        "rigid_dynamic_track_class_ids": ["automobile"],
+        "rigid_dynamic_static_baseline": False,
+        "max_dynamic_lidar_points": None,
+        "max_dynamic_lidar_points_per_track": 5_000,
+        "lidar_step_frame": 1,
+        "seed": 42,
     }
 
     from examples.sample_inference import load_stage
@@ -189,8 +201,8 @@ def test_av_trainer_ncore_rigid_dynamic_e2e_test_data(tmp_path: Path):
     assert trained_dataset == model["dataset"]
 
 
-def test_ncore_dynamic_flag_returns_split_from_static_init_test_data():
-    """Flagged moving-object returns leave static init and land in rigid tracks."""
+def test_ncore_cuboid_association_splits_returns_from_static_init_test_data():
+    """Cuboid-associated returns leave static init and land in rigid tracks."""
     scene = _ncore_test_scene()
     from examples.datasets.ncore import NCoreParser
 
@@ -206,5 +218,5 @@ def test_ncore_dynamic_flag_returns_split_from_static_init_test_data():
     # The tracked objects carry local points for the dynamic components.
     assert split.rigid_dynamic_tracks
     assert sum(len(t.points_local) for t in split.rigid_dynamic_tracks) > 0
-    # Splitting removes the dynamic-flagged returns from the static init cloud.
+    # Splitting removes returns inside padded dynamic cuboids from static init.
     assert len(split.points) < len(kept.points)

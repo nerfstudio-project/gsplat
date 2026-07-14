@@ -31,14 +31,23 @@ import ncore.sensors
 from ncore.data import PointCloudsSourceProtocol
 from ncore.impl.common.transformations import (
     bbox_pose,
-    is_within_3d_bboxes,
     se3_inverse,
     transform_point_cloud,
 )
 
 from gsplat.rendering import FThetaCameraDistortionParameters, FThetaPolynomialType
 
-from .ncore_utils import FrameConversion
+from .ncore_utils import (
+    STATIC_EXCLUSION_PADDING_M,
+    FrameConversion,
+    SpinAssociation,
+    TrackCuboids,
+    assign_observations_to_spins,
+    associate_spin_points,
+    classify_tracks,
+    load_track_cuboids,
+    normalize_class_id,
+)
 from .normalize import (
     similarity_from_cameras,
     align_principal_axes,
@@ -48,6 +57,8 @@ from .normalize import (
 
 
 logger = logging.getLogger(__name__)
+
+_POINT_CLOUD_DATA_ERRORS = (KeyError, OSError, ValueError)
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +94,23 @@ class RigidDynamicTrack:
     points_rgb: np.ndarray  # (P, 3) uint8
     frame_timestamps_us: np.ndarray  # (F,) int64, sorted — pose keyframe times
     poses_local_to_scene: np.ndarray  # (F, 4, 4) float32 — local -> scene per frame
+    dimensions_local: np.ndarray  # (3,) float32 — stable track cuboid dimensions
 
 
-def _normalize_track_class_id(class_id: Any) -> str:
-    """Normalize NCore cuboid class IDs before matching them."""
-    return str(class_id).strip().lower()
+def _warn_unmatched_spin_annotations(
+    source_id: str, diagnostics: Dict[str, int]
+) -> None:
+    unmatched = diagnostics.get("unmatched_annotations", 0)
+    if unmatched <= 0:
+        return
+    logger.warning(
+        "LiDAR spin assignment for %r dropped %d unmatched annotation(s) "
+        "(%d selected, %d shared-boundary)",
+        source_id,
+        unmatched,
+        diagnostics.get("selected_annotations", 0),
+        diagnostics.get("shared_boundary_annotations", 0),
+    )
 
 
 def frame_midpoint_timestamp_us(start_us, end_us):
@@ -186,13 +209,18 @@ class NCoreParser:
         normalize_world_space: bool = False,
         rigid_dynamic_track_class_ids: Optional[Collection[str]] = None,
         keep_dynamic_points_in_static_scene: bool = True,
+        max_dynamic_lidar_points: Optional[int] = None,
+        max_dynamic_lidar_points_per_track: int = 5_000,
+        random_seed: int = 42,
     ) -> None:
+        if lidar_step_frame <= 0:
+            raise ValueError("lidar_step_frame must be positive")
         self.test_every = test_every
         self.factor = factor
         self.normalize_world_space = normalize_world_space
         self.rigid_dynamic_track_class_ids = (
             frozenset(
-                _normalize_track_class_id(class_id)
+                normalize_class_id(class_id)
                 for class_id in rigid_dynamic_track_class_ids
             )
             if rigid_dynamic_track_class_ids is not None
@@ -211,6 +239,7 @@ class NCoreParser:
         self.open_consolidated = open_consolidated
         self.lidar_color_generic_data_name = lidar_color_generic_data_name
         self.keep_dynamic_points_in_static_scene = keep_dynamic_points_in_static_scene
+        self.rng = np.random.default_rng(random_seed)
 
         self.sequence_meta_file_path: Path = Path(meta_json_path)
         sequence_loader = self._open_sequence_loader(self.sequence_meta_file_path)
@@ -229,6 +258,7 @@ class NCoreParser:
         )
 
         self._resolve_sensor_ids(sequence_loader, camera_ids, lidar_ids)
+        self._warn_if_ignoring_baked_dynamic_flag(sequence_loader)
         self._compute_world_global_transform(sequence_loader)
 
         camera_sensors = self._load_camera_data(
@@ -240,6 +270,34 @@ class NCoreParser:
         }
         self._compute_scene_origin(camera_sensors, camera_frame_ranges)
         self._load_poses(camera_sensors, camera_frame_ranges)
+
+        self._all_rigid_track_cuboids: List[TrackCuboids] = []
+        self._dynamic_track_cuboids: List[TrackCuboids] = []
+        self._spin_association_cache: Dict[Tuple[str, int], SpinAssociation] = {}
+        if self.rigid_dynamic_track_class_ids is not None:
+            self._all_rigid_track_cuboids, available_classes = load_track_cuboids(
+                sequence_loader,
+                self.rigid_dynamic_track_class_ids,
+                self.time_range_us,
+            )
+            (
+                self._dynamic_track_cuboids,
+                stationary_tracks,
+                _,
+            ) = classify_tracks(self._all_rigid_track_cuboids)
+            requested_missing = self.rigid_dynamic_track_class_ids - set(
+                available_classes
+            )
+            if requested_missing:
+                logger.warning(
+                    "rigid dynamic tracks: requested class IDs not present: %s",
+                    sorted(requested_missing),
+                )
+            logger.info(
+                "rigid dynamic classification: %d dynamic, %d stationary",
+                len(self._dynamic_track_cuboids),
+                len(stationary_tracks),
+            )
 
         # Stub attrs for render_traj compatibility
         self.bounds = np.array([0.01, 1.0])
@@ -264,7 +322,11 @@ class NCoreParser:
             else []
         )
         if rigid_split_enabled:
-            self._sample_init_points(max_lidar_points)
+            self._sample_init_points(
+                max_lidar_points,
+                max_dynamic_lidar_points,
+                max_dynamic_lidar_points_per_track,
+            )
 
         # Normalize the world space (orient, centre, and rescale).
         if self.normalize_world_space:
@@ -694,14 +756,108 @@ class NCoreParser:
         scale = float(np.linalg.norm(transform[0, :3]))
         for track in self.rigid_dynamic_tracks:
             track.points_local = (track.points_local * scale).astype(np.float32)
+            track.dimensions_local = (track.dimensions_local * scale).astype(np.float32)
             poses = transform @ track.poses_local_to_scene.astype(np.float64)
-            rot_scale = np.linalg.norm(poses[:, 0, :3], axis=1)  # (F,) == s
+            rot_scale = np.linalg.norm(poses[:, 0, :3], axis=1)
             poses[:, :3, :3] = poses[:, :3, :3] / rot_scale[:, None, None]
             track.poses_local_to_scene = poses.astype(np.float32)
 
     # ------------------------------------------------------------------
     # Private runtime helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _point_cloud_interval_us(
+        sequence_loader: ncore.data.SequenceLoaderProtocol,
+        source_id: str,
+        source: PointCloudsSourceProtocol,
+        pc_idx: int,
+    ) -> tuple[int, int]:
+        if source_id in sequence_loader.lidar_ids:
+            timestamps = sequence_loader.get_lidar_sensor(
+                source_id
+            ).frames_timestamps_us[pc_idx]
+            return int(timestamps[0]), int(timestamps[1])
+        # Native point-cloud sources expose one reference timestamp per snapshot.
+        # A bounded midpoint bin also associates nearby cuboid annotations whose
+        # label timestamp differs from that reference timestamp.
+        return NCoreParser._native_snapshot_interval_us(source, pc_idx)
+
+    @staticmethod
+    def _native_snapshot_interval_us(
+        source: PointCloudsSourceProtocol, pc_idx: int
+    ) -> tuple[int, int]:
+        """Half-open ``(start, end]`` bin around a native snapshot timestamp.
+
+        Bin edges are the integer midpoints to the previous/next distinct
+        snapshot timestamps, so adjacent snapshots partition the timeline
+        without overlap. The first/last snapshots mirror their only neighbour's
+        half-width to stay bounded. A lone snapshot degenerates to ``[t, t]``.
+        """
+        timestamps = np.asarray(source.pc_timestamps_us, dtype=np.int64)
+        t = int(timestamps[pc_idx])
+        ordered = np.unique(timestamps)
+        pos = int(np.searchsorted(ordered, t))
+        prev_t = int(ordered[pos - 1]) if pos > 0 else None
+        next_t = int(ordered[pos + 1]) if pos + 1 < len(ordered) else None
+        if prev_t is None and next_t is None:
+            return t, t
+        lower_mid = (prev_t + t) // 2 if prev_t is not None else None
+        upper_mid = (t + next_t) // 2 if next_t is not None else None
+        if lower_mid is None:
+            lower_mid = t - (upper_mid - t)
+        if upper_mid is None:
+            upper_mid = t + (t - lower_mid)
+        return int(lower_mid), int(upper_mid)
+
+    def _warn_if_ignoring_baked_dynamic_flag(
+        self, sequence_loader: ncore.data.SequenceLoaderProtocol
+    ) -> None:
+        if self.rigid_dynamic_track_class_ids is not None:
+            return
+        for source_id in self.point_clouds_source_ids:
+            source = sequence_loader.get_point_clouds_source(source_id)
+            for pc_idx in range(source.pcs_count):
+                if source.has_pc_generic_data(pc_idx, "dynamic_flag"):
+                    logger.warning(
+                        "Point cloud source %r carries baked dynamic_flag arrays, "
+                        "but this trainer ignores them and only recomputes static "
+                        "exclusion from cuboid annotations when "
+                        "--rigid-dynamic-track-class-ids is set",
+                        source_id,
+                    )
+                    return
+
+    def _cached_spin_association(
+        self,
+        source_id: str,
+        pc_idx: int,
+        points_world: np.ndarray,
+        tracks: List[TrackCuboids],
+        sequence_loader: ncore.data.SequenceLoaderProtocol,
+        source: PointCloudsSourceProtocol,
+        spin_assignments: Optional[List[List[Tuple[int, int]]]],
+    ) -> SpinAssociation:
+        cache_key = (source_id, pc_idx)
+        cached = self._spin_association_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        start_us, end_us = self._point_cloud_interval_us(
+            sequence_loader, source_id, source, pc_idx
+        )
+        association = associate_spin_points(
+            points_world,
+            tracks,
+            start_us,
+            end_us,
+            STATIC_EXCLUSION_PADDING_M,
+            selected_observations=(
+                spin_assignments[pc_idx] if spin_assignments is not None else None
+            ),
+        )
+        if self.rigid_dynamic_track_class_ids is not None:
+            self._spin_association_cache[cache_key] = association
+        return association
 
     def _ncore_world_to_scene_poses(self, T_poses_world: np.ndarray) -> np.ndarray:
         """Transform poses from NCore world frame to scene frame."""
@@ -739,6 +895,21 @@ class NCoreParser:
                 source_id
             )
             ts = source.pc_timestamps_us
+            spin_assignments = None
+            if source_id in sequence_loader.lidar_ids:
+                frames_timestamps_us = sequence_loader.get_lidar_sensor(
+                    source_id
+                ).frames_timestamps_us
+                spin_assignments, spin_diagnostics = assign_observations_to_spins(
+                    self._dynamic_track_cuboids,
+                    frames_timestamps_us,
+                )
+                assert source.pcs_count == len(frames_timestamps_us), (
+                    f"LiDAR {source_id!r}: expected one point cloud per spin frame, "
+                    f"but pcs_count={source.pcs_count} != "
+                    f"{len(frames_timestamps_us)} spin frames"
+                )
+                _warn_unmatched_spin_annotations(source_id, spin_diagnostics)
 
             for pc_idx in range(source.pcs_count):
                 # Time filtering
@@ -752,7 +923,7 @@ class NCoreParser:
 
                 try:
                     pc = source.get_pc(pc_idx)
-                except Exception as exc:
+                except _POINT_CLOUD_DATA_ERRORS as exc:
                     logger.warning(
                         "Failed to load point cloud %d from %r: %s",
                         pc_idx,
@@ -776,19 +947,21 @@ class NCoreParser:
                     len(xyz_world),
                 )
 
-                # Dynamic-flag handling. By default NCore drops moving-object
-                # returns (dynamic_flag == 1) so they don't smear the static
-                # background. When rigid dynamic tracks are requested, callers
-                # can temporarily keep those returns for old static-only
-                # comparisons, or drop them for the split static/dynamic path.
-                point_filter = ...
+                point_filter = np.ones(len(xyz_world), dtype=bool)
                 if (
-                    self.rigid_dynamic_track_class_ids is None
-                    or not self.keep_dynamic_points_in_static_scene
-                ) and source.has_pc_generic_data(pc_idx, "dynamic_flag"):
-                    point_filter = (
-                        source.get_pc_generic_data(pc_idx, "dynamic_flag") != 1
+                    self.rigid_dynamic_track_class_ids is not None
+                    and not self.keep_dynamic_points_in_static_scene
+                ):
+                    association = self._cached_spin_association(
+                        source_id,
+                        pc_idx,
+                        xyz_world,
+                        self._dynamic_track_cuboids,
+                        sequence_loader,
+                        source,
+                        spin_assignments,
                     )
+                    point_filter = ~association.static_exclusion_mask
                 xyz_world = xyz_world[point_filter]
                 if color is not None:
                     color = color[point_filter]
@@ -807,63 +980,101 @@ class NCoreParser:
                     all_colors.append(np.full((len(xyz_scene), 3), 128, dtype=np.uint8))
 
         if not all_points:
-            logger.warning("No point cloud data loaded")
+            logger.warning("no point cloud data loaded")
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
 
         points = np.vstack(all_points)
         points_rgb = np.vstack(all_colors)
         if max_points is not None and len(points) > max_points:
-            idx = np.random.choice(len(points), max_points, replace=False)
+            idx = self.rng.choice(len(points), max_points, replace=False)
             points = points[idx]
             points_rgb = points_rgb[idx]
 
         source_names = ", ".join(f"'{s}'" for s in self.point_clouds_source_ids)
-        logger.info("Loaded %d point cloud points from %s", len(points), source_names)
+        logger.info(
+            "Loaded %d point cloud points from %s",
+            len(points),
+            source_names,
+        )
         return points, points_rgb
 
-    def _sample_init_points(self, max_points: int) -> None:
-        """Randomly cap static + rigid-dynamic init points to one total budget."""
+    def _sample_init_points(
+        self,
+        max_points: int,
+        max_dynamic_points: Optional[int] = None,
+        max_dynamic_points_per_track: int = 5_000,
+    ) -> None:
+        """Cap rigid points per track and globally, then fill with static points."""
         if max_points < 0:
             raise ValueError("max_lidar_points must be non-negative")
+        if max_dynamic_points is None:
+            max_dynamic_points = int(max_points * 0.3)
+        if not 0 <= max_dynamic_points <= max_points:
+            raise ValueError(
+                "max_dynamic_lidar_points must be between zero and max_lidar_points"
+            )
+        if max_dynamic_points_per_track < 0:
+            raise ValueError("max_dynamic_lidar_points_per_track must be non-negative")
 
-        static_count = len(self.points)
-        dynamic_counts = [
+        source_static_count = len(self.points)
+        source_dynamic_count = sum(
             len(track.points_local) for track in self.rigid_dynamic_tracks
-        ]
-        total = static_count + sum(dynamic_counts)
-        if total <= max_points:
-            return
-
-        keep_global = np.zeros(total, dtype=bool)
-        keep_global[np.random.choice(total, max_points, replace=False)] = True
-
-        static_keep = keep_global[:static_count]
-        self.points = self.points[static_keep]
-        self.points_rgb = self.points_rgb[static_keep]
-
-        offset = static_count
+        )
         kept_tracks: List[RigidDynamicTrack] = []
-        for track, count in zip(self.rigid_dynamic_tracks, dynamic_counts):
-            keep = keep_global[offset : offset + count]
-            offset += count
-            if not np.any(keep):
+        for track in self.rigid_dynamic_tracks:
+            count = len(track.points_local)
+            keep_count = min(count, max_dynamic_points_per_track)
+            if keep_count == 0:
                 continue
-            track.points_local = track.points_local[keep]
-            track.points_rgb = track.points_rgb[keep]
+            if keep_count < count:
+                keep = self.rng.choice(count, keep_count, replace=False)
+                track.points_local = track.points_local[keep]
+                track.points_rgb = track.points_rgb[keep]
             kept_tracks.append(track)
         self.rigid_dynamic_tracks = kept_tracks
 
         dynamic_count = sum(
             len(track.points_local) for track in self.rigid_dynamic_tracks
         )
-        logger.info(
-            "NCore init points: downsampled %d -> %d total "
-            "(%d static + %d rigid dynamic)",
-            total,
-            len(self.points) + dynamic_count,
-            len(self.points),
-            dynamic_count,
-        )
+        if dynamic_count > max_dynamic_points:
+            keep_global = np.zeros(dynamic_count, dtype=bool)
+            keep_global[
+                self.rng.choice(dynamic_count, max_dynamic_points, replace=False)
+            ] = True
+
+            offset = 0
+            kept_tracks = []
+            for track in self.rigid_dynamic_tracks:
+                count = len(track.points_local)
+                keep = keep_global[offset : offset + count]
+                offset += count
+                if not np.any(keep):
+                    continue
+                track.points_local = track.points_local[keep]
+                track.points_rgb = track.points_rgb[keep]
+                kept_tracks.append(track)
+            self.rigid_dynamic_tracks = kept_tracks
+            dynamic_count = max_dynamic_points
+
+        static_budget = max_points - dynamic_count
+        if len(self.points) > static_budget:
+            keep = self.rng.choice(len(self.points), static_budget, replace=False)
+            self.points = self.points[keep]
+            self.points_rgb = self.points_rgb[keep]
+
+        final_count = len(self.points) + dynamic_count
+        source_count = source_static_count + source_dynamic_count
+        if final_count != source_count:
+            logger.info(
+                "NCore init points: downsampled %d -> %d total "
+                "(%d static + %d rigid dynamic; dynamic cap=%d, per-track cap=%d)",
+                source_count,
+                final_count,
+                len(self.points),
+                dynamic_count,
+                max_dynamic_points,
+                max_dynamic_points_per_track,
+            )
 
     @staticmethod
     def _get_pc_color(
@@ -895,203 +1106,146 @@ class NCoreParser:
         sequence_loader: ncore.data.SequenceLoaderProtocol,
         step_frame: int,
     ) -> List[RigidDynamicTrack]:
-        """Load moving objects as rigid tracks for dynamic-rigid training.
-
-        Reads NCore cuboid track observations, derives a per-frame SE(3) pose for
-        each track (object-local -> scene frame), associates the ``dynamic_flag``
-        lidar points with their owning cuboid, and stores those points in each
-        object's local frame.
-
-        This reads the dynamic returns independently of ``_load_point_clouds``.
-        When ``rigid_dynamic_track_class_ids`` is provided, those returns are
-        *also* kept in the static background for now, while track-local copies
-        are exposed on ``parser.rigid_dynamic_tracks``.
-        """
-        assert self.rigid_dynamic_track_class_ids is not None
+        """Collect raw in-box points using annotation-time spin association."""
         pose_graph = sequence_loader.pose_graph
-
-        # 1) Group rigid cuboid observations by track and build per-frame world
-        # bboxes. NCore class IDs are dataset-specific strings, so callers must
-        # explicitly identify which classes they want to model as rigid.
-        all_track_obs: Dict[str, List[ncore.data.CuboidTrackObservation]] = {}
-        for obs in sequence_loader.get_cuboid_track_observations(self.time_range_us):
-            all_track_obs.setdefault(obs.track_id, []).append(obs)
-
-        skipped_by_class: Dict[str, int] = {}
-        track_obs: Dict[str, List[ncore.data.CuboidTrackObservation]] = {}
-        for track_id, obs_list in all_track_obs.items():
-            class_ids = {_normalize_track_class_id(obs.class_id) for obs in obs_list}
-            if class_ids <= self.rigid_dynamic_track_class_ids:
-                track_obs[track_id] = obs_list
-                continue
-            for class_id in sorted(class_ids - self.rigid_dynamic_track_class_ids):
-                skipped_by_class[class_id] = skipped_by_class.get(class_id, 0) + len(
-                    obs_list
-                )
-
-        if not track_obs:
-            logger.info(
-                "rigid dynamic tracks: no matching cuboid track "
-                "observations in time range"
-            )
+        tracks_world = self._dynamic_track_cuboids
+        if not tracks_world:
+            logger.info("rigid dynamic tracks: no dynamic tracks")
             return []
 
-        if skipped_by_class:
-            skipped = ", ".join(
-                f"{class_id}={count}"
-                for class_id, count in sorted(skipped_by_class.items())
-            )
-            logger.info(
-                "rigid dynamic tracks: skipped cuboid observations "
-                "outside configured class IDs: %s",
-                skipped,
-            )
-
-        tracks_world: Dict[str, Dict[str, np.ndarray]] = {}
-        for track_id, obs_list in track_obs.items():
-            # Key on reference_frame_timestamp_us: cuboids are parameterised in a
-            # sensor frame at the capture (lidar/render) timestamp, which aligns
-            # with the point-cloud frames. obs.timestamp_us is the label time and
-            # does NOT line up with frames.
-            obs_list.sort(key=lambda o: o.reference_frame_timestamp_us)
-            timestamps: List[int] = []
-            bboxes_world: List[np.ndarray] = []
-            for obs in obs_list:
-                obs_world = obs.transform(
-                    "world", obs.reference_frame_timestamp_us, pose_graph
-                )
-                timestamps.append(int(obs.reference_frame_timestamp_us))
-                bboxes_world.append(
-                    np.asarray(obs_world.bbox3.to_array(), dtype=np.float64)
-                )
-            ts = np.asarray(timestamps, dtype=np.int64)
-            bbox_world = np.stack(bboxes_world, axis=0)  # (F, 9)
-
-            # Per-frame local->world pose -> local->scene pose.
-            poses_local_world = np.stack(
-                [bbox_pose(b) for b in bbox_world], axis=0
-            ).astype(
-                np.float32
-            )  # (F, 4, 4)
-            poses_local_scene = self._ncore_world_to_scene_poses(poses_local_world)
-            if poses_local_scene.ndim == 2:
-                poses_local_scene = poses_local_scene[np.newaxis]
-
-            tracks_world[track_id] = {
-                "class_id": _normalize_track_class_id(obs_list[0].class_id),
-                "ts": ts,
-                "bbox_world": bbox_world,
-                "pose_scene": poses_local_scene.astype(np.float32),
-            }
-
-        # Match tolerance: half a frame interval. Cuboid reference timestamps align
-        # with the lidar frames, so the nearest match is normally exact; half an
-        # interval guards float/int jitter without ever matching an adjacent frame
-        # (which would associate points to the wrong, missing-this-frame keyframe).
-        all_ts = np.unique(np.concatenate([tw["ts"] for tw in tracks_world.values()]))
-        ts_tol = (
-            max(1_000, int(0.5 * np.median(np.diff(all_ts))))
-            if len(all_ts) > 1
-            else 100_000
-        )
-
-        # 2) Associate dynamic points (per pc frame) with the nearest cuboid and
-        #    accumulate them in each track's local frame.
-        local_pts: Dict[str, List[np.ndarray]] = {tid: [] for tid in tracks_world}
-        local_rgb: Dict[str, List[np.ndarray]] = {tid: [] for tid in tracks_world}
+        local_points: Dict[str, List[np.ndarray]] = {
+            track.track_id: [] for track in tracks_world
+        }
+        local_colors: Dict[str, List[np.ndarray]] = {
+            track.track_id: [] for track in tracks_world
+        }
 
         for source_id in self.point_clouds_source_ids:
-            source: PointCloudsSourceProtocol = sequence_loader.get_point_clouds_source(
-                source_id
-            )
-            pc_timestamps = source.pc_timestamps_us
+            source = sequence_loader.get_point_clouds_source(source_id)
+            spin_assignments = None
+            if source_id in sequence_loader.lidar_ids:
+                frames_timestamps_us = sequence_loader.get_lidar_sensor(
+                    source_id
+                ).frames_timestamps_us
+                spin_assignments, spin_diagnostics = assign_observations_to_spins(
+                    tracks_world,
+                    frames_timestamps_us,
+                )
+                assert source.pcs_count == len(frames_timestamps_us), (
+                    f"LiDAR {source_id!r}: expected one point cloud per spin frame, "
+                    f"but pcs_count={source.pcs_count} != "
+                    f"{len(frames_timestamps_us)} spin frames"
+                )
+                _warn_unmatched_spin_annotations(source_id, spin_diagnostics)
             for pc_idx in range(source.pcs_count):
-                pc_ts = int(pc_timestamps[pc_idx])
-                if not (self.time_range_us.start <= pc_ts < self.time_range_us.stop):
+                pc_timestamp_us = int(source.pc_timestamps_us[pc_idx])
+                if not (
+                    self.time_range_us.start
+                    <= pc_timestamp_us
+                    < self.time_range_us.stop
+                ):
                     continue
                 if pc_idx % step_frame != 0:
                     continue
-                if not source.has_pc_generic_data(pc_idx, "dynamic_flag"):
-                    continue
                 try:
-                    pc = source.get_pc(pc_idx)
-                except Exception as exc:
-                    logger.warning(
-                        "rigid dynamic tracks: failed to load point cloud %d "
-                        "from %r: %s",
-                        pc_idx,
-                        source_id,
-                        exc,
-                    )
-                    continue
+                    point_cloud = source.get_pc(pc_idx)
+                except _POINT_CLOUD_DATA_ERRORS as exc:
+                    # Rigid-dynamic init points are scarce; a missing frame must not
+                    # silently degrade the dynamic split.
+                    raise RuntimeError(
+                        "Failed to load rigid-dynamic point cloud "
+                        f"{pc_idx} from {source_id!r}"
+                    ) from exc
 
-                dyn_mask = source.get_pc_generic_data(pc_idx, "dynamic_flag") == 1
-                if not np.any(dyn_mask):
-                    continue
-
-                pc_world = pc.transform(
-                    "world", pc.reference_frame_timestamp_us, pose_graph
+                point_cloud_world = point_cloud.transform(
+                    "world",
+                    point_cloud.reference_frame_timestamp_us,
+                    pose_graph,
                 )
-                xyz_world = pc_world.xyz
-                color = self._get_pc_color(
-                    pc,
+                points_world = point_cloud_world.xyz
+                colors = self._get_pc_color(
+                    point_cloud,
                     source,
                     pc_idx,
                     self.lidar_color_generic_data_name,
-                    len(xyz_world),
+                    len(points_world),
                 )
-                xyz_world = xyz_world[dyn_mask]
-                color = color[dyn_mask] if color is not None else None
+                association = self._cached_spin_association(
+                    source_id,
+                    pc_idx,
+                    points_world,
+                    tracks_world,
+                    sequence_loader,
+                    source,
+                    spin_assignments,
+                )
 
-                # Assign each dynamic point to at most one track (first match wins).
-                remaining = np.ones(len(xyz_world), dtype=bool)
-                for track_id, tw in tracks_world.items():
-                    nearest = int(np.argmin(np.abs(tw["ts"] - pc_ts)))
-                    if abs(int(tw["ts"][nearest]) - pc_ts) > ts_tol:
+                for track_index, track in enumerate(tracks_world):
+                    track_mask = association.owner_track_indices == track_index
+                    if not np.any(track_mask):
                         continue
-                    bbox = tw["bbox_world"][nearest]
-                    inside = is_within_3d_bboxes(xyz_world, bbox[np.newaxis])[:, 0]
-                    # Points expressed in the box-local (centroid-centred) frame.
-                    local = transform_point_cloud(
-                        xyz_world, se3_inverse(bbox_pose(bbox))
-                    )
-                    sel = inside & remaining
-                    if not np.any(sel):
-                        continue
-                    local_pts[track_id].append(local[sel].astype(np.float32))
-                    if color is not None:
-                        local_rgb[track_id].append(color[sel])
-                    else:
-                        local_rgb[track_id].append(
-                            np.full((int(sel.sum()), 3), 128, dtype=np.uint8)
+                    for observation_index in np.unique(
+                        association.owner_observation_indices[track_mask]
+                    ):
+                        selection = track_mask & (
+                            association.owner_observation_indices == observation_index
                         )
-                    remaining &= ~sel
+                        bbox = track.bboxes_world[int(observation_index)]
+                        points_local = transform_point_cloud(
+                            points_world[selection], se3_inverse(bbox_pose(bbox))
+                        )
+                        local_points[track.track_id].append(
+                            points_local.astype(np.float32)
+                        )
+                        if colors is None:
+                            local_colors[track.track_id].append(
+                                np.full(
+                                    (int(selection.sum()), 3),
+                                    128,
+                                    dtype=np.uint8,
+                                )
+                            )
+                        else:
+                            local_colors[track.track_id].append(colors[selection])
 
-        # 3) Emit tracks that picked up at least one point.
         tracks: List[RigidDynamicTrack] = []
-        for track_id, tw in tracks_world.items():
-            if not local_pts[track_id]:
+        for track in tracks_world:
+            if not local_points[track.track_id]:
                 continue
+            poses, dimensions = self._track_pose_data(track)
             tracks.append(
                 RigidDynamicTrack(
-                    track_id=track_id,
-                    class_id=str(tw["class_id"]),
-                    points_local=np.vstack(local_pts[track_id]).astype(np.float32),
-                    points_rgb=np.vstack(local_rgb[track_id]).astype(np.uint8),
-                    frame_timestamps_us=tw["ts"],
-                    poses_local_to_scene=tw["pose_scene"],
+                    track_id=track.track_id,
+                    class_id=track.class_id,
+                    points_local=np.vstack(local_points[track.track_id]).astype(
+                        np.float32
+                    ),
+                    points_rgb=np.vstack(local_colors[track.track_id]).astype(np.uint8),
+                    frame_timestamps_us=track.annotation_timestamps_us.copy(),
+                    poses_local_to_scene=poses,
+                    dimensions_local=dimensions,
                 )
             )
 
-        total_pts = sum(len(t.points_local) for t in tracks)
+        total_points = sum(len(track.points_local) for track in tracks)
         logger.info(
-            "rigid dynamic tracks: %d/%d configured tracks with associated "
-            "points (%d init points)",
+            "rigid dynamic tracks: %d/%d dynamic tracks with associated points "
+            "(%d init points)",
             len(tracks),
-            len(track_obs),
-            total_pts,
+            len(tracks_world),
+            total_points,
         )
         return tracks
+
+    def _track_pose_data(self, track: TrackCuboids) -> tuple[np.ndarray, np.ndarray]:
+        poses_local_world = np.stack(
+            [bbox_pose(bbox) for bbox in track.bboxes_world], axis=0
+        ).astype(np.float32)
+        poses_local_scene = self._ncore_world_to_scene_poses(poses_local_world)
+        if poses_local_scene.ndim == 2:
+            poses_local_scene = poses_local_scene[np.newaxis]
+        dimensions = np.median(track.bboxes_world[:, 3:6], axis=0).astype(np.float32)
+        return poses_local_scene.astype(np.float32), dimensions
 
 
 # ---------------------------------------------------------------------------
@@ -1181,6 +1335,8 @@ class NCoreDataset(torch.utils.data.Dataset):
         image = sensor.get_frame_image_array(frame_idx)  # HxWx3 uint8
         if self.parser.factor != 1.0:
             image = cv2.resize(image, (width, height), interpolation=cv2.INTER_LINEAR)
+        if not image.flags.writeable:
+            image = image.copy()
 
         timestamp_start_us = int(
             sensor.frames_timestamps_us[frame_idx, ncore.data.FrameTimepoint.START]

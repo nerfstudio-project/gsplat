@@ -1,0 +1,164 @@
+{
+  "sequence_id": "pai_004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6",
+  "sequence_timestamp_interval_us": {
+    "start": 0,
+    "stop": 20000001
+  },
+  "generic_meta_data": {
+    "calibration_type": "pai-calibration",
+    "converter_version": "1.0.0",
+    "egomotion_type": "pai-egomotion",
+    "platform_class": "hyperion_8",
+    "source_clip_id": "004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6",
+    "source_commit_sha": "37de37f1ad178d25d6f604832b1ad7fa2c18bdec",
+    "source_repo_id": "nvidia/PhysicalAI-Autonomous-Vehicles",
+    "source_revision": "ncore_test",
+    "vehicle-bbox": {
+      "centroid": [
+        1.43450009822846,
+        0.0,
+        0.746999979019165
+      ],
+      "dim": [
+        5.25500011444092,
+        2.13000011444092,
+        1.49399995803833
+      ],
+      "rot": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "version": "v4",
+  "component_stores": [
+    {
+      "path": "pai_004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6.ncore4-ci_camera_front_wide_120fov.zarr.itar",
+      "md5": "727feb012c862b400d3e0df462edba65",
+      "components": {
+        "cameras": {
+          "camera_front_wide_120fov": {
+            "version": "v1",
+            "generic_meta_data": {
+              "ci_fixture_provenance": {
+                "camera_frame_indices": [
+                  123,
+                  126,
+                  129
+                ],
+                "dynamic_point_count": 1000,
+                "lidar_frame_indices": [
+                  40,
+                  41,
+                  42
+                ],
+                "source_clip_id": "004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6",
+                "source_repo_id": "nvidia/PhysicalAI-Autonomous-Vehicles",
+                "source_revision": "ncore_test",
+                "static_point_count": 9000,
+                "target_class_id": "automobile",
+                "target_track_id": "13"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "path": "pai_004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6.ncore4-ci_lidar_top_360fov.zarr.itar",
+      "md5": "0b79aff490ba34a1a56865c4391e7643",
+      "components": {
+        "lidars": {
+          "lidar_top_360fov": {
+            "version": "v1",
+            "generic_meta_data": {
+              "ci_fixture_provenance": {
+                "camera_frame_indices": [
+                  123,
+                  126,
+                  129
+                ],
+                "dynamic_point_count": 1000,
+                "lidar_frame_indices": [
+                  40,
+                  41,
+                  42
+                ],
+                "source_clip_id": "004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6",
+                "source_repo_id": "nvidia/PhysicalAI-Autonomous-Vehicles",
+                "source_revision": "ncore_test",
+                "static_point_count": 9000,
+                "target_class_id": "automobile",
+                "target_track_id": "13"
+              },
+              "dynamic_flag_derivation": {
+                "class_ids": [
+                  "automobile",
+                  "bicycle",
+                  "bicycle_with_rider",
+                  "bus",
+                  "car",
+                  "construction_vehicle",
+                  "cycle",
+                  "cyclist",
+                  "motorcycle",
+                  "motorcycle_with_rider",
+                  "pedestrian",
+                  "person",
+                  "person_group",
+                  "pickup",
+                  "rider",
+                  "stroller",
+                  "trailer",
+                  "train",
+                  "truck",
+                  "van"
+                ],
+                "dynamic_track_count": 164,
+                "method": "annotation_timestamp_lidar_spin_interval",
+                "source_manifest": "pai_004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6.json",
+                "static_exclusion_padding_m": [
+                  0.5,
+                  0.5,
+                  0.25
+                ],
+                "stationary_track_count": 12
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "path": "pai_004c2001-5fc3-43b1-a4d8-bfb0bbb9fdc6.ncore4.zarr.itar",
+      "md5": "067d3560bcf63a21dbbc4a00f184f9fa",
+      "components": {
+        "cuboids": {
+          "default": {
+            "version": "v1",
+            "generic_meta_data": {}
+          }
+        },
+        "intrinsics": {
+          "default": {
+            "version": "v1",
+            "generic_meta_data": {}
+          }
+        },
+        "masks": {
+          "default": {
+            "version": "v1",
+            "generic_meta_data": {}
+          }
+        },
+        "poses": {
+          "default": {
+            "version": "v1",
+            "generic_meta_data": {}
+          }
+        }
+      }
+    }
+  ]
+}

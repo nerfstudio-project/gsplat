@@ -233,3 +233,175 @@ def test_zero_width_spin_interval_matches_annotation_at_timestamp():
     assert lidar.static_exclusion_mask.any()
     np.testing.assert_array_equal(lidar.owner_track_indices, [0])
 
+
+# ---------------------------------------------------------------------------
+# Native point-cloud snapshot intervals (NCoreParser._point_cloud_interval_us)
+# ---------------------------------------------------------------------------
+
+
+def test_native_snapshot_intervals_partition_timeline_without_overlap():
+    """Adjacent native snapshots share a boundary but never overlap or gap."""
+    from examples.datasets.ncore import NCoreParser
+
+    source = SimpleNamespace(
+        pc_timestamps_us=np.asarray([1000, 3000, 5000], dtype=np.int64)
+    )
+    loader = SimpleNamespace(lidar_ids=set())
+
+    intervals = [
+        NCoreParser._point_cloud_interval_us(loader, "camera_pc", source, idx)
+        for idx in range(3)
+    ]
+
+    # First/last snapshots mirror their only neighbour's half-width (bounded),
+    # interior midpoints split the gap to each adjacent snapshot.
+    assert intervals == [(0, 2000), (2000, 4000), (4000, 6000)]
+    # Contiguous, non-overlapping half-open bins: each bin's end is the next
+    # bin's start, and the association layer treats the shared edge as
+    # belonging to exactly one bin (start-exclusive, end-inclusive).
+    for (_, end), (next_start, _) in zip(intervals, intervals[1:]):
+        assert end == next_start
+
+
+def test_native_snapshot_interval_associates_offset_cuboid():
+    """Cuboid time differing from the snapshot reference still associates.
+
+    A native source returns one reference timestamp per snapshot. Midpoint bins
+    let a cuboid with a different annotation timestamp still be selected, so its
+    returns are excluded from static init and owned by the rigid track.
+    """
+    from examples.datasets.ncore import NCoreParser
+
+    source = SimpleNamespace(
+        pc_timestamps_us=np.asarray([1000, 3000, 5000], dtype=np.int64)
+    )
+    loader = SimpleNamespace(lidar_ids=set())
+
+    # Snapshot 1 has reference time 3000 and owns the (2000, 4000] bin.
+    start, end = NCoreParser._point_cloud_interval_us(loader, "camera_pc", source, 1)
+    assert (start, end) == (2000, 4000)
+
+    # Cuboid annotated at 3200 (!= the 3000 snapshot reference time).
+    track = _track("vehicle", "automobile", [3200], [3000], [(0.0, 0.0, 0.0)])
+    points = np.asarray([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]], dtype=np.float64)
+
+    association = associate_spin_points(points, [track], start, end)
+
+    assert association.rigid_owned_mask.any()
+    assert association.static_exclusion_mask.any()
+    np.testing.assert_array_equal(association.owner_track_indices, [0, -1])
+
+    # An exact interval does not select an offset annotation.
+    exact = associate_spin_points(points, [track], 3000, 3000)
+    assert not exact.rigid_owned_mask.any()
+
+
+def test_single_native_snapshot_falls_back_to_exact_interval():
+    from examples.datasets.ncore import NCoreParser
+
+    source = SimpleNamespace(pc_timestamps_us=np.asarray([4200], dtype=np.int64))
+    loader = SimpleNamespace(lidar_ids=set())
+
+    assert NCoreParser._point_cloud_interval_us(loader, "camera_pc", source, 0) == (
+        4200,
+        4200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Init-point allocation policy (NCoreParser._sample_init_points)
+# ---------------------------------------------------------------------------
+
+
+def _identified_points(ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Points whose RGB is derived from a unique per-point id.
+
+    Each point carries its id in all three coordinates and ``id % 256`` in every
+    RGB channel, so any row-preserving selection keeps ``rgb == coord % 256``.
+    This lets tests detect point/color misalignment after subsampling.
+    """
+    points = np.repeat(ids.astype(np.float32)[:, None], 3, axis=1)
+    rgb = np.repeat((ids % 256).astype(np.uint8)[:, None], 3, axis=1)
+    return points, rgb
+
+
+def _points_are_aligned(points: np.ndarray, rgb: np.ndarray) -> bool:
+    return np.array_equal((points.astype(np.int64) % 256).astype(np.uint8), rgb)
+
+
+def _rigid_track(track_id: str, ids: np.ndarray):
+    from examples.datasets.ncore import RigidDynamicTrack
+
+    points_local, points_rgb = _identified_points(ids)
+    return RigidDynamicTrack(
+        track_id=track_id,
+        class_id="automobile",
+        points_local=points_local,
+        points_rgb=points_rgb,
+        frame_timestamps_us=np.asarray([0], dtype=np.int64),
+        poses_local_to_scene=np.eye(4, dtype=np.float32)[None],
+        dimensions_local=np.ones(3, dtype=np.float32),
+    )
+
+
+def _build_allocation_parser(seed: int):
+    """A bare NCoreParser carrying only the state `_sample_init_points` touches."""
+    from examples.datasets.ncore import NCoreParser
+
+    parser = object.__new__(NCoreParser)
+    parser.rng = np.random.default_rng(seed)
+    # Static ids [10_000, 12_000) — disjoint from every track's id range so the
+    # id->rgb alignment check is unambiguous across pools.
+    static_points, static_rgb = _identified_points(np.arange(10_000, 12_000))
+    parser.points = static_points
+    parser.points_rgb = static_rgb
+    parser.rigid_dynamic_tracks = [
+        _rigid_track("track_a", np.arange(0, 200)),
+        _rigid_track("track_b", np.arange(1_000, 1_200)),
+        _rigid_track("track_c", np.arange(2_000, 2_200)),
+        _rigid_track("track_empty", np.empty(0, dtype=np.int64)),
+    ]
+    return parser
+
+
+def test_sample_init_points_allocation_policy_is_deterministic_and_capped():
+    max_points = 1_000
+    max_dynamic_points = 250
+    per_track_cap = 100
+
+    parser = _build_allocation_parser(seed=123)
+    parser._sample_init_points(max_points, max_dynamic_points, per_track_cap)
+
+    tracks = parser.rigid_dynamic_tracks
+    dynamic_count = sum(len(t.points_local) for t in tracks)
+
+    # Emptied tracks (zero source points) are dropped, not retained at size 0.
+    assert [t.track_id for t in tracks] == ["track_a", "track_b", "track_c"]
+
+    # Per-track cap: no surviving track exceeds its cap.
+    assert all(len(t.points_local) <= per_track_cap for t in tracks)
+    # Global dynamic cap: three 200-point tracks capped to 100 each = 300 > 250,
+    # so the global cap binds exactly.
+    assert dynamic_count == max_dynamic_points
+
+    # Static fill: budget is whatever the dynamic pool left, up to max_points.
+    assert len(parser.points) == max_points - max_dynamic_points
+    assert len(parser.points) + dynamic_count == max_points
+
+    # Point/color alignment survives both subsampling stages.
+    assert _points_are_aligned(parser.points, parser.points_rgb)
+    for track in tracks:
+        assert len(track.points_local) == len(track.points_rgb)
+        assert _points_are_aligned(track.points_local, track.points_rgb)
+
+    # Same seed + same inputs => byte-identical selections.
+    replay = _build_allocation_parser(seed=123)
+    replay._sample_init_points(max_points, max_dynamic_points, per_track_cap)
+    assert parser.points.tobytes() == replay.points.tobytes()
+    assert parser.points_rgb.tobytes() == replay.points_rgb.tobytes()
+    assert [t.track_id for t in replay.rigid_dynamic_tracks] == [
+        t.track_id for t in tracks
+    ]
+    for got, expected in zip(replay.rigid_dynamic_tracks, tracks):
+        assert got.points_local.tobytes() == expected.points_local.tobytes()
+        assert got.points_rgb.tobytes() == expected.points_rgb.tobytes()

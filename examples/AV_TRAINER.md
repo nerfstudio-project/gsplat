@@ -109,8 +109,12 @@ multi-camera manifests).
 | `--rigid-dynamic-track-class-ids` | unset | Comma-separated NCore cuboid class IDs to load as rigid dynamic tracks in a dynamic scene |
 | `--rigid-dynamic-static-baseline` | off | Keep selected moving-object returns in the static scene instead of splitting them into rigid components |
 | `--max-lidar` | 150000 | Max initial LiDAR points; with rigid dynamics this is the total across static and dynamic scenes |
+| `--max-dynamic-lidar` | 30% of `--max-lidar` | Global cap for rigid dynamic initialization points (unset ⇒ `int(0.3 × max_lidar)`) |
+| `--max-dynamic-lidar-per-track` | 5000 | Per-track cap for rigid dynamic initialization points |
+| `--lidar-step-frame` | 1 | Load every Nth LiDAR frame for initialization |
 | `--max-steps` | 15000 | Training iterations |
 | `--lr` | 0.005 | Base learning rate |
+| `--seed` | 42 | Seed for deterministic point sampling and initialization |
 | `--mcmc` | off | Enable MCMC densification |
 | `--cap-max` | 300000 | Max Gaussians (MCMC) |
 | `--sh-degree` | 0 | SH degree (0=flat, 3=full) |
@@ -133,6 +137,20 @@ scenes and renders each NCore camera at its frame-midpoint timestamp. The
 checkpoint records the training-time camera set, clip duration, and downscale
 (the scene frame's origin depends on them), and `sample_inference.py` uses the
 recorded values by default; `--cameras`/`--duration`/`--downscale` override.
+
+NCore checkpoints and `model.pt` serialize a `dataset` object with:
+
+| Field | Description |
+|-------|-------------|
+| `cameras` | Camera IDs used during training |
+| `duration_sec` | Clip duration in seconds (`null` = full clip) |
+| `downscale` | Image downscale factor |
+| `rigid_dynamic_track_class_ids` | Cuboid class IDs for rigid tracks (`null` if unset) |
+| `rigid_dynamic_static_baseline` | Whether moving-object returns stayed in the static scene |
+| `max_dynamic_lidar_points` | Global rigid-dynamic initialization cap (`null` lets the parser derive 30% of `max_lidar` when rigid splitting is enabled) |
+| `max_dynamic_lidar_points_per_track` | Per-track rigid-dynamic initialization cap |
+| `lidar_step_frame` | LiDAR frame stride used for initialization |
+| `seed` | Random seed for deterministic initialization |
 
 ## Benchmark: NCore v4
 
