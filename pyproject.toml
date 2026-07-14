@@ -96,13 +96,14 @@ dev = [
     # Parsing the project metadata outside pip's build isolation needs these.
     "packaging>=21.3",
     'tomli>=1.2; python_version < "3.11"',
+    # Formatters define canonical source output, so their versions are exact.
     "black==22.3.0",
     "clang-format==22.1.5",
     "gersemi==0.27.7",
     "isort==5.10.1",
-    "pylint==2.13.4",
+    "pylint>=2.13.4",
     "pytest-env",
-    "pytest-xdist==2.5.0",
+    "pytest-xdist>=2.5.0",
     "typeguard>=2.13.3",
     "pyyaml>=6.0.1",
     "build",
