@@ -14,10 +14,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from PIL import Image
 
-# Pillow is an `[examples]` / `[dev]` extra dep — skip the whole module
-# cleanly if a fresh `pip install .` doesn't pull it.
-Image = pytest.importorskip("PIL.Image")
+# Pillow is a declared test dependency. Import it normally so an incomplete
+# test environment fails collection instead of silently dropping coverage.
 
 # The ``examples`` directory is a sibling of ``gsplat/`` and isn't installed.
 # Add the gsplat repo root to ``sys.path`` so ``examples.datasets.endonerf``

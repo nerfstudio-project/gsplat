@@ -26,15 +26,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from PIL import Image
 
 from tests._cuda import cuda_is_available
 
-# Pillow + tqdm are `[examples]` / `[dev]` extras — skip the whole module
-# cleanly if a fresh `pip install .` doesn't pull them. Must
-# importorskip *before* we touch examples.dynamic_surgical_trainer which
-# imports tqdm at module top.
-Image = pytest.importorskip("PIL.Image")
-pytest.importorskip("tqdm")
+# Pillow and tqdm are declared test dependencies. Import Pillow normally and
+# let the trainer import tqdm below so either missing package fails collection
+# instead of silently dropping coverage.
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
