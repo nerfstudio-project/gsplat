@@ -24,6 +24,8 @@ from the sibling ``sparse_test_helpers`` module.
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from .sparse_test_helpers import (
     all_pixels,
     gather,
@@ -33,7 +35,7 @@ from .sparse_test_helpers import (
 )
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(),
+    not cuda_is_available(),
     reason="rasterize_num_contributing_gaussians_sparse is CUDA-only",
 )
 

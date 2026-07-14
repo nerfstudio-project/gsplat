@@ -31,6 +31,8 @@ import gsplat
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat._helper import assert_grad_reference_close
 from .test_cameras import parse_lidar_camera
 from gsplat.rendering import (
@@ -164,7 +166,7 @@ def test_rasterization_rejects_parallel_renderer_config_without_eval3d():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterization_3dgut_only_build_shape():
     """Public UT/from-world rasterization must work without GSPLAT_BUILD_3DGS.
@@ -352,7 +354,7 @@ def gaussians(
     return gaussians
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
     "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed,C,N,renderer_config,execution_mode",
     [
@@ -720,7 +722,7 @@ def _make_distributed_validation_scene() -> dict:
     }
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
     "case,match",
@@ -802,7 +804,7 @@ def test_rasterization_distributed_rejects_unsupported_configs(
         gsplat.rasterization(**kwargs, distributed=True)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_external_distortion_requires_ut():
     from gsplat.cuda._wrapper import BivariateWindshieldModelParameters
@@ -815,7 +817,7 @@ def test_rasterization_external_distortion_requires_ut():
         gsplat.rasterization(**kwargs, with_ut=False)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("packed", [True, False])
 def test_rasterization_distributed_single_rank_matches_local(

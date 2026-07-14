@@ -19,8 +19,7 @@ from __future__ import annotations
 
 from .._backend_collect import cuda_collect_ignore_glob
 
-# The experimental render tests build CUDA tensors. As a defensive guard for
-# CPU-only CI we de-collect every experimental test when no GPU is available, so
-# a CUDA test that isn't individually guarded (e.g.
-# render/kernels/test_gaussian_render_inference_only_op.py) can't error.
+# The experimental render tests build CUDA tensors. Automatic-detection
+# configurations de-collect them when PyTorch reports no device; forced
+# configurations collect them so missing CUDA fails visibly.
 collect_ignore_glob = cuda_collect_ignore_glob()

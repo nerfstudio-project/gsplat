@@ -6,6 +6,12 @@
 # unrelated pytest plugins into gsplat's suite.
 include("${GSPLAT_SOURCE_DIR}/cmake/GSplatPytest.cmake")
 
+if(GSPLAT_TESTS_FORCE_CUDA)
+    set(_gsplat_tests_force_cuda 1)
+else()
+    set(_gsplat_tests_force_cuda 0)
+endif()
+
 gsplat_configure_pytest_ini("${GSPLAT_BINARY_DIR}/pytest.ini" "${GSPLAT_SOURCE_DIR}/tests" ".")
 
 # Keep the command implementation with the test sources, but install it as an
@@ -263,7 +269,8 @@ if(PROJECT_IS_TOP_LEVEL)
             PROPERTIES
                 # Keep source-path imports from creating __pycache__ entries
                 # beneath the checkout during an out-of-tree CTest run.
-                ENVIRONMENT "PYTHONPYCACHEPREFIX=${GSPLAT_BINARY_DIR}/pycache"
+                ENVIRONMENT
+                    "PYTHONPYCACHEPREFIX=${GSPLAT_BINARY_DIR}/pycache;GSPLAT_TESTS_FORCE_CUDA=${_gsplat_tests_force_cuda}"
                 LABELS "python;${name}"
         )
     endfunction()

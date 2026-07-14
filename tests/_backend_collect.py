@@ -17,13 +17,16 @@
 
 Each of tests/{geometry,sensors,experimental} sets
 ``collect_ignore_glob = cuda_collect_ignore_glob(...)`` so CUDA-only tests are
-de-collected — rather than ERRORing at import-time collection — on hosts that
-cannot run them. Centralized here so the policy lives in one place.
+de-collected when the configured CUDA policy allows automatic detection and
+PyTorch reports no CUDA device. Forced coverage instead collects the tests so
+missing CUDA or native extensions fail visibly.
 """
 
 from __future__ import annotations
 
 from typing import Callable, Optional
+
+from tests._cuda import cuda_is_available
 
 # Glob (relative to the conftest's dir) matching every test module in the tree.
 _ALL_TESTS = ["**/test_*.py"]
@@ -32,19 +35,13 @@ _ALL_TESTS = ["**/test_*.py"]
 def cuda_collect_ignore_glob(probe: Optional[Callable[[], object]] = None) -> list[str]:
     """Return the collect_ignore_glob for a CUDA-backed test directory.
 
-    De-collects all tests when CUDA is unavailable. When ``probe`` is given (for
-    packages whose test modules bind the native extension at import time, e.g.
-    sensors), it is also called to detect a GPU host that nonetheless lacks a
-    loadable/buildable extension; if the probe raises, the tests are de-collected
-    so collection skips cleanly instead of erroring on the import.
+    De-collects all tests only when the shared CUDA policy reports unavailable.
+    When ``probe`` is given for a package that binds its native extension during
+    collection, its exception deliberately propagates: a missing or broken
+    extension must fail instead of silently reducing test coverage.
     """
-    import torch
-
-    if not torch.cuda.is_available():
+    if not cuda_is_available():
         return list(_ALL_TESTS)
     if probe is not None:
-        try:
-            probe()
-        except Exception:
-            return list(_ALL_TESTS)
+        probe()
     return []

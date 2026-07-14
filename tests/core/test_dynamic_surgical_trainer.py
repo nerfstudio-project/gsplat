@@ -27,6 +27,8 @@ import numpy as np
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 # Pillow + tqdm are `[examples]` / `[dev]` extras — skip the whole module
 # cleanly if a fresh `pip install .` doesn't pull them. Must
 # importorskip *before* we touch examples.dynamic_surgical_trainer which
@@ -195,7 +197,7 @@ def test_init_means_inside_derived_hexplane_aabb(trainer_dir: Path):
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available() or _ENDONERF_DATA_DIR is None,
+    not cuda_is_available() or _ENDONERF_DATA_DIR is None,
     reason=(
         "Requires CUDA and ENDONERF_DATA_DIR env var pointing at a "
         "pulling-style EndoNeRF directory."

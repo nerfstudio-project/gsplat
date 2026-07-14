@@ -25,6 +25,8 @@ import unittest
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat._helper import assert_grad_reference_close
 import gsplat.geometry.functional as quat
 from gsplat.geometry.kernels.quaternion_ops import SLERP_SMALL_ANGLE_DOT_THRESHOLD
@@ -32,7 +34,7 @@ from gsplat.geometry.kernels.quaternion_ops import SLERP_SMALL_ANGLE_DOT_THRESHO
 pytestmark = [pytest.mark.wheel_smoke]
 
 
-if not torch.cuda.is_available():
+if not cuda_is_available():
     raise unittest.SkipTest("Geometry quaternion tests require CUDA")
 
 
@@ -163,7 +165,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_normalize_safe_autograd_gradcheck(self):
         """Backward for quat_normalize_safe matches numeric Jacobian (CUDA ext regression)."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatNormalizeSafeFunction
 
@@ -181,7 +183,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_normalize_safe_degenerate_backward_zero(self):
         """Degenerate input (near-zero norm): gradient w.r.t. quat is zero."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatNormalizeSafeFunction
 
@@ -207,7 +209,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_conjugate_autograd_gradcheck(self):
         """Backward for quat_conjugate matches numeric Jacobian (CUDA ext)."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatConjugateFunction
 
@@ -225,7 +227,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_conjugate_backward_cuda_matches_reference(self):
         """Native CUDA backward matches analytical grad (-gx,-gy,-gz,gw)."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import (
             QuatConjugateFunction,
@@ -273,7 +275,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_inverse_autograd_gradcheck(self):
         """quat_inverse follows the migrated conjugate path; gradcheck on public API."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         n = 8
         q = torch.randn(n, 4, device="cuda", dtype=torch.float64, requires_grad=True)
@@ -320,7 +322,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_multiply_autograd_gradcheck(self):
         """Backward for quat multiply matches numeric Jacobian (regression for CUDA ext)."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatMultiplyFunction
 
@@ -339,7 +341,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_rotate_vector_autograd_gradcheck(self):
         """Backward for quat_rotate_vector matches numeric Jacobian (regression for CUDA ext)."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatRotateVectorFunction
 
@@ -358,7 +360,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_to_matrix_autograd_gradcheck(self):
         """Backward for quat_to_matrix matches numeric Jacobian (regression for CUDA ext)."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatToMatrixFunction
 
@@ -441,7 +443,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_from_axis_angle_autograd_gradcheck(self):
         """Backward for quat_from_axis_angle matches numeric Jacobian."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatFromAxisAngleFunction
 
@@ -462,7 +464,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_from_axis_angle_backward_cuda_matches_pytorch_reference(self):
         """CUDA backward matches autograd on the PyTorch reference formula."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatFromAxisAngleFunction
 
@@ -516,7 +518,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_lerp_autograd_gradcheck(self):
         """Backward for quat_lerp matches numeric Jacobian."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatLerpFunction
 
@@ -536,7 +538,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_lerp_backward_cuda_matches_pytorch_reference(self):
         """CUDA quat_lerp backward matches autograd on a PyTorch reference."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatLerpFunction
 
@@ -590,7 +592,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_slerp_batched_cuda_matches_torch_reference(self):
         """CUDA forward matches differentiable torch reference (float64)."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatSlerpBatchedFunction
 
@@ -607,7 +609,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_slerp_batched_gradcheck_cuda_ext(self):
         """Gradcheck for QuatSlerpBatchedFunction on native CUDA path."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatSlerpBatchedFunction
 
@@ -627,7 +629,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_slerp_batched_backward_matches_torch_reference(self):
         """CUDA SLERP backward matches a differentiable PyTorch reference."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatSlerpBatchedFunction
 
@@ -821,7 +823,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_manifold_interp_autograd_gradcheck(self):
         """Backward for manifold interp matches numeric Jacobian (CUDA ext when loaded)."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatManifoldInterpFunction
 
@@ -847,7 +849,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_manifold_interp_autograd_gradcheck_includes_t(self):
         """gradcheck w.r.t. q1, q2, and per-row t."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatManifoldInterpFunction
 
@@ -869,7 +871,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_quat_manifold_interp_public_api_gradcheck_includes_t(self):
         """Public quat_manifold_interp autograd w.r.t. q1, q2, and tensor t."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         n = 4
         q1 = torch.randn(n, 4, device="cuda", dtype=torch.float64, requires_grad=True)
@@ -919,7 +921,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_angular_distance_autograd_gradcheck(self):
         """Backward for quat_angular_distance matches numeric Jacobian."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatAngularDistanceFunction
 
@@ -938,7 +940,7 @@ class TestQuaternionOperations(unittest.TestCase):
 
     def test_angular_distance_backward_cuda_matches_pytorch_reference(self):
         """CUDA angular_distance backward matches autograd on a PyTorch reference."""
-        if not torch.cuda.is_available():
+        if not cuda_is_available():
             self.skipTest("CUDA required")
         from gsplat.geometry.kernels.quaternion_ops import QuatAngularDistanceFunction
 

@@ -27,6 +27,8 @@ import imageio.v2 as imageio
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../examples"))
 from av_trainer import train  # noqa: E402
 
@@ -44,7 +46,7 @@ def _ncore_test_scene() -> str:
     if not path.exists():
         pytest.fail(f"NCore test scene does not exist: {path}")
     pytest.importorskip("ncore")
-    if not torch.cuda.is_available():
+    if not cuda_is_available():
         pytest.skip("AV trainer e2e test requires CUDA")
     return str(path)
 

@@ -27,9 +27,11 @@ Provides: ``sensor_device``, ``test_camera_params``, ``real_camera_record``,
 ``real_fisheye_camera_record_with_windshield``,
 ``real_fisheye_projection_with_windshield``, ``real_fisheye_windshield_distortion``.
 
-Session-scoped CUDA fixtures (``sensor_device``, ``real_camera_projection``) skip
-automatically when no GPU is available.  ``_seed_test_rng`` and
-``_cleanup_cuda_after_module`` are autouse and require no explicit request.
+Session-scoped CUDA fixtures (``sensor_device``, ``real_camera_projection``)
+skip only when automatic CUDA detection is configured and finds no device.
+Forced coverage runs them so an unavailable GPU fails visibly.
+``_seed_test_rng`` and ``_cleanup_cuda_after_module`` are autouse and require
+no explicit request.
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ from pathlib import Path
 
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 
 from .._backend_collect import cuda_collect_ignore_glob
 
@@ -82,7 +86,7 @@ def _seed_test_rng():
     """Set a fixed random seed (42) before each test for reproducibility."""
     seed = 42
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
+    if cuda_is_available():
         torch.cuda.manual_seed_all(seed)
     yield
 
@@ -92,25 +96,22 @@ def _cleanup_cuda_after_module():
     """Release CUDA memory after each test module to prevent cross-module leaks."""
     yield
     gc.collect()
-    if torch.cuda.is_available():
+    if cuda_is_available():
         torch.cuda.empty_cache()
 
 
 def _require_sensor_cuda() -> None:
-    if not torch.cuda.is_available():
+    if not cuda_is_available():
         pytest.skip("gsplat_sensors CUDA tests require CUDA")
 
 
 # gsplat.sensors binds the native extension at import time: kernels/cameras/
 # types.py evaluates ``torch.classes.gsplat_sensors.*`` at module scope, so a
-# sensor test cannot be collected unless the extension loads. De-collect every
-# sensor test when EITHER no GPU is present OR the extension can't be
-# imported/built on this host (a GPU box without the built/buildable
-# extension) -- otherwise collection ERRORs on the import instead of skipping
-# cleanly. The probe imports the binding module; if it raises, we de-collect.
-# CPU-only utility tests (e.g. ``models/common/test_utils.py``) are caught by
-# the same blanket skip; that is intentional until the library has a
-# CUDA-optional CI lane that exercises them.
+# sensor test cannot be collected unless the extension loads. Automatic CUDA
+# detection may de-collect the directory when no GPU is present. Otherwise the
+# probe imports the binding module and deliberately propagates an error if the
+# extension is unavailable, preventing a broken build from becoming a silent
+# coverage gap.
 collect_ignore_glob = cuda_collect_ignore_glob(
     probe=lambda: importlib.import_module("gsplat.sensors.kernels.cameras.types")
 )
@@ -118,7 +119,7 @@ collect_ignore_glob = cuda_collect_ignore_glob(
 
 @pytest.fixture(scope="session")
 def sensor_device() -> torch.device:
-    """Return the CUDA device for the session; skips the test suite if no GPU is found."""
+    """Return CUDA, skipping only when automatic detection finds no GPU."""
     _require_sensor_cuda()
     return torch.device("cuda")
 

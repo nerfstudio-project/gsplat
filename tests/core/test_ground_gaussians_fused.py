@@ -22,10 +22,12 @@ value and the backward gradients w.r.t. positions and rotations.
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat import has_losses
 from gsplat.losses_fused import FusedGroundGaussiansLosses, ground_gaussians_loss
 
-CUDA_AVAILABLE = torch.cuda.is_available() and has_losses()
+CUDA_AVAILABLE = cuda_is_available() and has_losses()
 
 N = 2048
 N_BINS = 16

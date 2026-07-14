@@ -55,6 +55,8 @@ import math
 
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 import torch.nn.functional as F
 
 from gsplat.losses_fused import FusedBgTrackNodeSemanticLosses
@@ -72,7 +74,7 @@ def _cuda_ops_available() -> bool:
         return False
 
 
-CUDA_AVAILABLE = torch.cuda.is_available() and _cuda_ops_available()
+CUDA_AVAILABLE = cuda_is_available() and _cuda_ops_available()
 
 DENSITY_LOGITS_MIN = -20.0
 BG_LAMBDA = 0.125

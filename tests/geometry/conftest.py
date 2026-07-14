@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from .._backend_collect import cuda_collect_ignore_glob
 
-# Geometry ops require CUDA. Importing gsplat.geometry is lazy (no build at
-# collection), but as a defensive guard for CPU-only CI we de-collect every
-# geometry test when no GPU is available so an unguarded CUDA test can't error.
+# Geometry ops require CUDA. Automatic-detection configurations de-collect this
+# directory when PyTorch reports no device; forced configurations collect it so
+# missing CUDA fails visibly instead of reducing coverage.
 collect_ignore_glob = cuda_collect_ignore_glob()

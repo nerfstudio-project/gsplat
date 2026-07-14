@@ -14,6 +14,8 @@ Usage:
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 import gsplat
 
 device = torch.device("cuda:0")
@@ -80,7 +82,7 @@ def _cuda_mcmc_perturb(
     return pos
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 class TestMCMCPerturbCUDA:
     def test_cuda_matches_pytorch(self):
@@ -237,7 +239,7 @@ class TestMCMCPerturbCUDA:
         torch.testing.assert_close(result1, result2)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 class TestMCMCPerturbFallback:
     def test_fallback_path(self):

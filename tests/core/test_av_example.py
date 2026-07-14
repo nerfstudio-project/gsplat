@@ -27,6 +27,8 @@ import tempfile
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 import gsplat
 
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -47,7 +49,7 @@ av_trainer = pytest.importorskip(
 PANDASET_PATH = os.path.join(SCRIPT_DIR, "../../assets/test_pandaset.npz")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support not built")
 class TestAVExample:
     @pytest.fixture(autouse=True)

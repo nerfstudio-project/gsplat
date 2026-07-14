@@ -36,6 +36,8 @@ deform-smoothness member in both modes.
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat import has_losses
 from gsplat.losses import (
     deform_smoothness_loss,
@@ -47,7 +49,7 @@ from gsplat.losses import (
 )
 from gsplat.losses_fused import FusedGaussianLosses
 
-CUDA_AVAILABLE = torch.cuda.is_available() and has_losses()
+CUDA_AVAILABLE = cuda_is_available() and has_losses()
 
 # Distinct, non-multiple-of-warp member counts so a shared-index or
 # shared-count bug cannot hide behind equal domains.

@@ -31,6 +31,8 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 from typing_extensions import Literal, Tuple, assert_never
 import torch.nn.functional as F
 
@@ -104,7 +106,7 @@ def test_data():
     }
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("triu", [False, True])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
@@ -199,7 +201,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int,
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
@@ -344,7 +346,7 @@ def test_proj(
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 @pytest.mark.parametrize("fused", [False, True])
@@ -498,7 +500,7 @@ def test_projection(
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("packed", [False, True])
 def test_projection_batched_warp_reduction_labels(packed: bool):
@@ -551,7 +553,7 @@ def test_projection_batched_warp_reduction_labels(packed: bool):
     torch.testing.assert_close(v_viewmats, expected_viewmats, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("sparse_grad", [False])
@@ -751,9 +753,7 @@ def test_fully_fused_projection_packed(
         )
 
 
-@pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for UT projection"
-)
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required for UT projection")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho"])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
@@ -1083,9 +1083,7 @@ def test_fully_fused_projection_ut(
         )
 
 
-@pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for UT projection"
-)
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required for UT projection")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_fully_fused_projection_ut_ortho_rejects_radial_coeffs(test_data):
     from gsplat.cuda._wrapper import fully_fused_projection_with_ut
@@ -1131,7 +1129,7 @@ def test_fully_fused_projection_ut_ortho_rejects_radial_coeffs(test_data):
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -1182,7 +1180,7 @@ def test_isect(test_data, dtype: torch.dtype, batch_dims: Tuple[int, ...]):
     torch.testing.assert_close(isect_offsets, _isect_offsets)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize("lidar_model", ["pandar128", "at128"])
@@ -1504,7 +1502,7 @@ def gaussian_param(lidar_param, gauss_start_pos, gauss_end_pos):
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
     # Verifies that isect_tiles_lidar (CUDA) and _isect_tiles_lidar (Python ref)
     # agree on the number of tiles intersected by a single Gaussian at the
@@ -2394,7 +2392,7 @@ def test_isect_lidar_corner_cases(
         assert flatten_ids.numel() == 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("channels", [3, 32])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
@@ -2548,7 +2546,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 def test_rasterize_num_contributing_gaussians(tile_size: int):
@@ -2732,7 +2730,7 @@ def _assert_top_contributors_are_largest_weights(
         assert bool((present | ~valid).all().item())
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 @pytest.mark.parametrize("packed", [False, True])
@@ -2852,7 +2850,7 @@ def test_rasterize_contributing_gaussian_ids(tile_size: int, packed: bool):
     _assert_contributor_ids_are_depth_ordered(actual_ids, depths, packed)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 def test_rasterize_contributing_gaussian_ids_early_termination(tile_size: int):
@@ -2908,7 +2906,7 @@ def test_rasterize_contributing_gaussian_ids_early_termination(tile_size: int):
     assert int(num_contributing[0, 4, 4].item()) < N
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 def test_rasterize_contributing_gaussian_ids_empty_counts(tile_size: int):
@@ -2947,7 +2945,7 @@ def test_rasterize_contributing_gaussian_ids_empty_counts(tile_size: int):
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 @pytest.mark.parametrize("num_depth_samples", [1, 3])
@@ -3098,7 +3096,7 @@ def test_rasterize_top_contributing_gaussian_ids(
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("tile_size", [4, 16])
 def test_rasterize_top_contributing_gaussian_ids_early_termination(tile_size: int):
@@ -3237,7 +3235,7 @@ def _pixel_ray_dir_pinhole(
     return d / torch.linalg.norm(d)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "means_list,quats_choice,scales_list,pixel_dx,pixel_dy",
@@ -3399,7 +3397,7 @@ def test_rasterize_to_pixels_hit_distance_principal_axis(
 
 # Since we have comprehensive camera model tests, we don't need to add
 # a camera model axis to this test. We use perfect pinhole model instead.
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "channels,batch_dims,rs_type,use_hit_distance,use_rays,return_normals,camera_model,tile_size",
@@ -4195,7 +4193,7 @@ def test_rasterize_to_pixels_eval3d(
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
 @pytest.mark.parametrize(
@@ -4294,7 +4292,7 @@ def test_eval3d_masked_tile_writes_safe_defaults(tile_size, renderer_config):
     torch.testing.assert_close(sample_counts, torch.zeros_like(sample_counts))
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
 @pytest.mark.parametrize(
@@ -4527,7 +4525,7 @@ def _call_rasterize_eval3d_extra(
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "renderer_config",
@@ -4617,7 +4615,7 @@ def test_rasterize_eval3d_grad_modes_save_backward_state(
         assert outputs[3] is None
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "renderer_config",
@@ -4651,7 +4649,7 @@ def test_rasterize_eval3d_autograd_tracks_any_tensor_input(
         assert inputs[name].grad is None
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterize_eval3d_parallel_batch_no_t_underflow_across_batches():
     """ParallelBatch fwd transmittance must not underflow across batches."""
@@ -4744,7 +4742,7 @@ def test_rasterize_eval3d_parallel_batch_no_t_underflow_across_batches():
     torch.testing.assert_close(rc, _rc, rtol=3e-3, atol=1e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterize_eval3d_parallel_batch_backward_accepts_unused_normals():
     from gsplat.cuda._wrapper import (
@@ -4823,7 +4821,7 @@ def test_rasterize_eval3d_parallel_batch_backward_accepts_unused_normals():
         assert torch.isfinite(grad).all()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "renderer_config_name",
@@ -4958,7 +4956,7 @@ def test_fwd_last_ids_match_ref_under_saturation(renderer_config_name):
     torch.testing.assert_close(rc, _rc, rtol=3e-3, atol=1e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_parallel_batch_fwd_only_omits_debug_metadata():
     """Fwd-only ParallelBatch should match exact output without metadata."""
@@ -5155,7 +5153,7 @@ def _ghost_lobe_rays(_ghost_lobe_scene):
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterize_eval3d_no_behind_camera_ghost_lobe(
     _ghost_lobe_scene, _ghost_lobe_isect, _ghost_lobe_rays
@@ -5328,7 +5326,7 @@ def _make_cpp_classic_rasterization_scene(
     }
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
     "batch_dims,packed,render_mode,rasterize_mode,n_channels,use_color_sh,use_extra_signals,use_extra_sh",
@@ -5403,7 +5401,7 @@ def test_rasterization_cpp_classic_matches_python_reference(
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_cpp_classic_absgrad_is_optional():
     torch.manual_seed(13)
@@ -5498,7 +5496,7 @@ def _classic_rasterization_loss_terms(colors: torch.Tensor, alphas: torch.Tensor
     return torch.randn_like(colors), torch.randn_like(alphas)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
     "packed,n_channels,backgrounds",
@@ -5563,7 +5561,7 @@ def test_rasterization_cpp_classic_backward_matches_python_reference(
         _assert_public_rasterization_grad_close(actual, expected, name=name)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("packed", [True, False])
 def test_rasterization_cpp_classic_sh_backward_matches_python_reference(packed: bool):
@@ -5612,7 +5610,7 @@ def test_rasterization_cpp_classic_sh_backward_matches_python_reference(packed: 
         _assert_public_rasterization_grad_close(actual, expected, name=name)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_cpp_classic_sparse_grad_layout():
     torch.manual_seed(19)
@@ -5645,7 +5643,7 @@ def test_rasterization_cpp_classic_sparse_grad_layout():
         assert grad.abs().sum() > 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_cpp_classic_covars_input_path():
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci
@@ -5678,7 +5676,7 @@ def test_rasterization_cpp_classic_covars_input_path():
     torch.testing.assert_close(covar_alphas, quat_alphas, rtol=1e-4, atol=5e-5)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "n_channels,render_mode,use_extra_signals,return_normals,absgrad",
@@ -5755,7 +5753,7 @@ def test_rasterization_cpp_eval3d_matches_python_reference(
         assert not hasattr(ref_meta["means2d"], "absgrad")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "renderer_config",
@@ -5805,7 +5803,7 @@ def test_rasterization_cpp_eval3d_multichunk_hit_distance_is_final_only(
     assert torch.isfinite(rgb_hit[..., -1]).all()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterization_cpp_eval3d_backward_matches_python_reference():
     from gsplat.rendering import _rasterization
@@ -5854,7 +5852,7 @@ def test_rasterization_cpp_eval3d_backward_matches_python_reference():
         _assert_public_rasterization_grad_close(actual, expected, name=name)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "with_eval3d,render_mode,return_normals,tile_size",
@@ -5905,7 +5903,7 @@ def test_rasterization_cpp_ut_camera_absgrad_forward_neutral(
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("camera_model", ["pinhole", "lidar"])
 def test_rasterization_cpp_ut_projected_absgrad_matches_python_reference(
@@ -5989,7 +5987,7 @@ def test_rasterization_cpp_ut_projected_absgrad_matches_python_reference(
         assert public_meta["means2d"].absgrad.abs().sum() > 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "with_eval3d,render_mode,tile_size",
@@ -6056,7 +6054,7 @@ def test_rasterization_cpp_ut_lidar_absgrad_forward_neutral(
     assert cpp_meta["tile_height"] == lidar_coeffs.tiling.n_bins_elevation
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "width,height,expected_tile_size",
@@ -6126,7 +6124,7 @@ def test_rasterization_auto_tile_size_dispatch_3dgut(
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "width,height,explicit_tile_size",
@@ -6181,7 +6179,7 @@ def test_rasterization_explicit_tile_size_overrides_auto_3dgut(
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterization_eval3d_accepts_broadcastable_rays_shape():
     torch.manual_seed(30)
@@ -6257,7 +6255,7 @@ def test_rasterization_eval3d_accepts_broadcastable_rays_shape():
     torch.testing.assert_close(broadcast_alphas, exact_alphas, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize("packed", [False, True])
@@ -6339,7 +6337,7 @@ def test_sh(sh_degree: int, batch_dims: Tuple[int, ...], packed: bool, D: int):
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("batch_dims", [(), (2,)])
 @pytest.mark.parametrize("packed", [False, True])
@@ -6424,7 +6422,7 @@ def test_sh_split_invariant(
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_sh_split_invariant_trainer_layout_fp16():
     """Trainer-layout FP16 split evaluation matches the K=16 RGB path."""
     from gsplat.cuda._wrapper import (
@@ -6486,7 +6484,7 @@ def test_sh_split_invariant_trainer_layout_fp16():
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_sh_split_l0_accepts_empty_shn():
     from gsplat.cuda._wrapper import (
         spherical_harmonics,
@@ -6512,7 +6510,7 @@ def test_sh_split_l0_accepts_empty_shn():
     torch.testing.assert_close(v_dirs, torch.zeros_like(dirs))
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_sh_backward_accepts_strided_output_grad():
     """SH backward should accept channel-slice gradients from downstream cats."""
     from gsplat.cuda._wrapper import spherical_harmonics
@@ -6534,7 +6532,7 @@ def test_sh_backward_accepts_strided_output_grad():
     assert torch.isfinite(v_dirs).all()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_sh_zero_channels():
     """Test that an error is thrown when D = 0 (i.e. empty per-Gaussian feature)"""
     from gsplat.cuda._wrapper import spherical_harmonics
@@ -6547,7 +6545,7 @@ def test_sh_zero_channels():
         spherical_harmonics(0, dirs, coeffs)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("kernel_path", ["generic", "specialized"])
 def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
@@ -6663,7 +6661,7 @@ def test_sh_fp16_coeffs(sh_degree: int, kernel_path: str):
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
     "dtype, sh_degree, storage_offset",
     [
@@ -6810,7 +6808,7 @@ def nan_test_data():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_ut_params_invalid_kappa_rejected():
     """kappa < -D makes sqrt(D + lambda) produce NaN.  The constructor must reject it."""
@@ -6818,7 +6816,7 @@ def test_ut_params_invalid_kappa_rejected():
         UnscentedTransformParameters(alpha=0.1, kappa=-4.0)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_ut_params_valid_accepted():
     """Default and typical UT parameters must be accepted without error."""
@@ -6832,7 +6830,7 @@ def test_ut_params_valid_accepted():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_projection_ut_zero_quaternion(nan_test_data):
     """A zero-quaternion Gaussian must be culled (radii=0).
@@ -6933,7 +6931,7 @@ def test_projection_ut_zero_quaternion(nan_test_data):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_projection_ut_zero_scale_single_axis(nan_test_data):
     """A Gaussian with a single zero-scale axis must be culled (radii=0).
@@ -7031,7 +7029,7 @@ def test_projection_ut_zero_scale_single_axis(nan_test_data):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
 def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data, tile_size):
@@ -7162,7 +7160,7 @@ def test_rasterize_eval3d_degenerate_gaussians_culled(nan_test_data, tile_size):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_projection_ut_python_ref_no_nan(nan_test_data):
     """CUDA and Python ref must agree on degenerate inputs, with no NaN.
@@ -7226,7 +7224,7 @@ def test_projection_ut_python_ref_no_nan(nan_test_data):
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_projection_ut_negative_preblur_diag_survives_eps2d():
     """A valid UT covariance may have a negative diagonal before blur.
@@ -7326,7 +7324,7 @@ def test_projection_ut_negative_preblur_diag_survives_eps2d():
     assert (a * c - b * b > 0).item()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_projection_ut_tiny_positive_det_blur_keeps_reciprocal_path():
     """A tiny positive blurred determinant must still produce finite conics.
@@ -7376,7 +7374,7 @@ def test_projection_ut_tiny_positive_det_blur_keeps_reciprocal_path():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("tile_size", [8, 16], ids=["tile8", "tile16"])
 def test_backward_high_opacity_no_nan(tile_size):
@@ -7535,7 +7533,7 @@ def test_backward_high_opacity_no_nan(tile_size):
         ).all(), f"NaN/Inf in {name}.grad (max={param.grad.abs().max().item():.2e})"
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("packed", [False, True])
 @pytest.mark.parametrize("I", [1, 2])
@@ -7610,7 +7608,7 @@ def test_rasterize_to_pixels_3dgs_masked_tile_outputs_initialized(packed: bool, 
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 def test_isect_tiles_lidar_double_depth():
     # intersect_tile_lidar_kernel narrows the depth sort key to float32. With
@@ -7654,7 +7652,7 @@ def test_isect_tiles_lidar_double_depth():
     torch.testing.assert_close(fid64, fid32)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 def test_isect_tiles_packed_segmented_rejected():
     # In packed mode tiles_per_gauss is 1-D [nnz], so the per-image segment
@@ -7690,7 +7688,7 @@ def test_isect_tiles_packed_segmented_rejected():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 def test_isect_tiles_lidar_packed_segmented_rejected():
     # Lidar sibling of the camera packed+segmented guard.
@@ -7729,7 +7727,7 @@ def test_isect_tiles_lidar_packed_segmented_rejected():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("C", [1, 3])
 def test_fully_fused_projection_packed_empty(C):
@@ -7782,7 +7780,7 @@ def test_fully_fused_projection_packed_empty(C):
     assert means.grad.shape == means.shape
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support isn't built in")
 @pytest.mark.parametrize("C", [1, 3])
 def test_fully_fused_projection_2dgs_packed_empty(C):
@@ -7834,7 +7832,7 @@ def test_fully_fused_projection_2dgs_packed_empty(C):
     assert means.grad.shape == means.shape
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_fully_fused_projection_packed_grid_y_limit():
     # The packed forward launcher maps B*C onto grid.y, which CUDA caps at
@@ -7864,7 +7862,7 @@ def test_fully_fused_projection_packed_grid_y_limit():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT/Lidar support isn't built in")
 @pytest.mark.parametrize("tile_width,tile_height", [(2, 2), (4, 4), (8, 4)])
 def test_isect_offset_power_of_two_tiles(tile_width: int, tile_height: int):
@@ -7910,7 +7908,7 @@ def test_isect_offset_power_of_two_tiles(tile_width: int, tile_height: int):
     torch.testing.assert_close(isect_offsets, _isect_offsets)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterize_to_indices_in_range_empty():
     # rasterize_to_indices_3dgs computed the image count as numel/(2*N) before
@@ -7947,7 +7945,7 @@ def test_rasterize_to_indices_in_range_empty():
     assert image_ids.numel() == 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterize_to_pixels_eval3d_empty():
     # The world-space rasterizer computed the batch count as numel/(N*3) before

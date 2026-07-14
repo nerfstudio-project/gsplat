@@ -24,10 +24,12 @@ each requested pixel. Shared scene/pixel/gather helpers come from the sibling
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from .sparse_test_helpers import gather, grid, make_scene, subset_pixels
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(),
+    not cuda_is_available(),
     reason="rasterize_top_contributing_gaussian_ids_sparse is CUDA-only",
 )
 

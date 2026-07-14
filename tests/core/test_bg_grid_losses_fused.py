@@ -26,10 +26,12 @@ forward values and backward gradients across five fused sub-losses:
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat import has_losses
 from gsplat.losses_fused import FusedBgGridLosses, _bg_grid_losses_pytorch
 
-CUDA_AVAILABLE = torch.cuda.is_available() and has_losses()
+CUDA_AVAILABLE = cuda_is_available() and has_losses()
 
 # Small default shapes — plenty to exercise boundary conditions without
 # being slow.

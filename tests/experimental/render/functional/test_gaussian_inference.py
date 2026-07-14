@@ -24,13 +24,13 @@ Path Unification plan.  All tests use the ``gsplat.experimental`` surface
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 pytestmark = [pytest.mark.wheel_smoke]
 
 device = torch.device("cuda:0")
 
-_skip_no_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="No CUDA device"
-)
+_skip_no_cuda = pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 
 
 # ---------------------------------------------------------------------------

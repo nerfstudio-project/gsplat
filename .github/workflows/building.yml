@@ -148,6 +148,7 @@ jobs:
             --config-settings=cmake.build-type= \
             --config-settings=cmake.args=--preset="${CMAKE_PRESET}" \
             --config-settings=cmake.define.GSPLAT_BUILD_TESTS=OFF \
+            --config-settings=cmake.define.GSPLAT_TESTS_FORCE_CUDA=OFF \
             .
           mv dist/*.whl "$GITHUB_WORKSPACE/dist/"
         shell: bash

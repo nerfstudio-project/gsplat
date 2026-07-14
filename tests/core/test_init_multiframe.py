@@ -15,6 +15,8 @@ Seed is set to 42 by the autouse fixture in ``conftest.py``.
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat.init_utils import knn_scale_init, multi_frame_depth_unprojection
 
 
@@ -183,7 +185,7 @@ def test_knn_scale_init_uniform_grid_constant_scale():
     assert torch.allclose(result, expected, atol=1e-6)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+@pytest.mark.skipif(not cuda_is_available(), reason="needs CUDA")
 def test_knn_scale_init_large_n_peak_memory_bounded():
     """Regression test pinning the chunked KNN memory contract.
 

@@ -63,6 +63,12 @@ option(
     ${PROJECT_IS_TOP_LEVEL}
 )
 
+option(
+    GSPLAT_TESTS_FORCE_CUDA
+    "Require CUDA-backed pytest coverage instead of skipping when CUDA detection fails"
+    ON
+)
+
 if(PROJECT_IS_TOP_LEVEL)
     set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
     include(CTest)

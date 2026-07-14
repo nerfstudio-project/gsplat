@@ -36,7 +36,7 @@ jobs:
         run: |
           source .github/workflows/cuda/Linux-env.sh cu126
           # Tests need only one portable architecture and the reduced CI channel set.
-          cmake --preset ci-release -B build/
+          cmake --preset ci-release -B build/ -DGSPLAT_TESTS_FORCE_CUDA=OFF
           cmake --build build/
       - name: Run CTest Tests
         run: ctest --test-dir build/ --output-on-failure

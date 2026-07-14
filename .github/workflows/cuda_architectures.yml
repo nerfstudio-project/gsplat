@@ -122,6 +122,7 @@ jobs:
           cmake \
             --preset full-release \
             -DGSPLAT_BUILD_TESTS=OFF \
+            -DGSPLAT_TESTS_FORCE_CUDA=OFF \
             -DGSPLAT_FORCE_CCACHE=ON
           cmake \
             --build \

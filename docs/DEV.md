@@ -171,6 +171,7 @@ apply to a top-level build unless noted otherwise; presets can override them.
 | `GSPLAT_DEVELOPMENT_MODE` | `OFF` | Require the development Python dependencies in addition to build requirements. |
 | `GSPLAT_ENABLE_BUILD_TRACES` | `OFF` | Record configure, build, and test traces; requires CMake 4.3 or newer. |
 | `GSPLAT_FAST_MATH` | `ON` | Compile CUDA kernels with fast-math intrinsics. |
+| `GSPLAT_TESTS_FORCE_CUDA` | `ON` | Require CUDA-backed pytest coverage without consulting PyTorch's availability probe. Disable it only on runners where CUDA tests should be skipped when `torch.cuda.is_available()` is false. |
 | `GSPLAT_GENERATED_DIR` | `<build>/generated` | Select the directory for generated gsplat build headers. |
 | `GSPLAT_KERNEL_FAMILIES` | empty (all) | Select a comma- or semicolon-separated subset of `2DGS`, `3DGS`, `3DGUT`, `ADAM`, `RELOC`, and `LOSSES` to compile. |
 | `GSPLAT_NUM_CHANNELS` | all supported widths | Select the comma- or semicolon-separated feature widths to instantiate; `NUM_CHANNELS` remains a compatibility alias. |

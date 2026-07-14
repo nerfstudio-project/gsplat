@@ -32,6 +32,8 @@ from typing import List, Optional
 import gsplat as _gsplat
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 import torch.distributed
 
 # The generated pytest configuration puts either the build-tree package or the
@@ -170,7 +172,7 @@ def _cap_cuda_memory_fraction(request):
     announcement is only printed under --mem-track so default pytest
     output is unchanged.
     """
-    if not torch.cuda.is_available():
+    if not cuda_is_available():
         yield
         return
 
@@ -267,7 +269,7 @@ class _CudaMemSampler:
 
 @pytest.fixture(autouse=True)
 def _track_cuda_memory_peak(request):
-    if not torch.cuda.is_available() or not request.config.getoption("--mem-track"):
+    if not cuda_is_available() or not request.config.getoption("--mem-track"):
         yield
         return
 
@@ -359,7 +361,7 @@ def setup_test_environment():
 
     # Set seed based on test name for reproducibility
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
+    if cuda_is_available():
         torch.cuda.manual_seed_all(seed)
         # Sync first so any pending kernels from the previous test release
         # their tensors before we ask the allocator to free unreferenced blocks.
@@ -368,16 +370,16 @@ def setup_test_environment():
     # Run garbage collection (drops Python-side refs before empty_cache).
     gc.collect()
 
-    if torch.cuda.is_available():
+    if cuda_is_available():
         torch.cuda.empty_cache()
 
     # Yield to run the test
     yield
 
-    if torch.cuda.is_available():
+    if cuda_is_available():
         torch.cuda.synchronize()
     gc.collect()
-    if torch.cuda.is_available():
+    if cuda_is_available():
         torch.cuda.empty_cache()
 
 
@@ -399,7 +401,7 @@ def dist_init():
     With world_size=1 the all-gather / all-to-all ops become identity operations,
     but the code path inside ``rasterization(distributed=True)`` is still exercised.
     """
-    if not torch.cuda.is_available():
+    if not cuda_is_available():
         yield
         return
 

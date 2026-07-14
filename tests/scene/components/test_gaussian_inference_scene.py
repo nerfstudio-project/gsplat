@@ -24,6 +24,8 @@ import pytest
 import warnings
 import torch
 
+from tests._cuda import cuda_is_available
+
 _scene = pytest.importorskip("gsplat.scene")
 SHCompressionMode = _scene.SHCompressionMode
 
@@ -146,7 +148,7 @@ def _pack_scene_python(
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_pack_op_smoke():
     """pack_gaussian_inference_scene op is callable via gsplat_scene_cuda and produces no grad_fn."""
     from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
@@ -186,7 +188,7 @@ _PARITY_PACK_CASES = [
 ]
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.parametrize("sh_degree,sh_compression", _PARITY_PACK_CASES)
 def test_pack_op_parity_with_python(sh_degree, sh_compression):
     """C++ pack op must be bit-exact with Python packing (when values in fp16 range)."""
@@ -224,7 +226,7 @@ def test_pack_op_parity_with_python(sh_degree, sh_compression):
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_detach_no_grad_no_warning():
     """All inputs grad-free: no RuntimeWarning, packed tensors grad-free."""
     from gsplat.scene import GaussianInferenceScene
@@ -249,7 +251,7 @@ def test_detach_no_grad_no_warning():
     assert not scene.colors_packed.requires_grad
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_detach_with_grad_warns():
     """Some inputs grad=True: single RuntimeWarning naming affected tensors."""
     from gsplat.scene import GaussianInferenceScene
@@ -302,7 +304,7 @@ def test_detach_with_grad_warns():
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_pack_op_with_grad_no_grad_fn():
     """Direct pack op with grad-tracked input: no grad_fn on outputs."""
     from gsplat.scene.kernels._backend import _SCENE_CUDA  # noqa: F401
@@ -322,7 +324,7 @@ def test_pack_op_with_grad_no_grad_fn():
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_distributed_rejection_from_gaussian_scene():
     """from_gaussian_scene raises RuntimeError when world_size > 1."""
     from gsplat.scene import GaussianInferenceScene
@@ -375,7 +377,7 @@ def test_distributed_rejection_from_gaussian_scene():
             os.environ.pop(key, None)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_from_gaussian_tensors_no_distributed_check():
     """from_gaussian_tensors has no distributed check."""
     from gsplat.scene import GaussianInferenceScene
@@ -401,7 +403,7 @@ def test_from_gaussian_tensors_no_distributed_check():
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_fp16_all_safe_no_warning():
     """All-safe: no warning, packed values bit-exact to simple fp16 cast."""
     from gsplat.scene import GaussianInferenceScene
@@ -425,7 +427,7 @@ def test_fp16_all_safe_no_warning():
     assert len(runtime_warns) == 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_fp16_one_lane_exceeds():
     """One lane > fp16 max: single RuntimeWarning, packed value = fp16 max."""
     from gsplat.scene import GaussianInferenceScene
@@ -461,7 +463,7 @@ def test_fp16_one_lane_exceeds():
     assert packed_scale_0 == pytest.approx(fp16_max, rel=1e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_fp16_many_lanes_exceed():
     """Many lanes > fp16 max: warning still single-shot, count accurate."""
     from gsplat.scene import GaussianInferenceScene
@@ -497,7 +499,7 @@ def test_fp16_many_lanes_exceed():
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_activation_non_positive_scales():
     """Non-positive scales: ValueError."""
     from gsplat.scene import GaussianInferenceScene
@@ -518,7 +520,7 @@ def test_activation_non_positive_scales():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_activation_opacities_out_of_range():
     """Opacities outside [0,1]: ValueError."""
     from gsplat.scene import GaussianInferenceScene
@@ -539,7 +541,7 @@ def test_activation_opacities_out_of_range():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_activation_nan_inf():
     """NaN/Inf in tensor: ValueError."""
     from gsplat.scene import GaussianInferenceScene
@@ -575,7 +577,7 @@ def test_activation_nan_inf():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_activation_nan_inf_non_contiguous_tensor():
     """Activation validation should report non-finite values in non-contiguous tensors."""
     from gsplat.scene import GaussianInferenceScene
@@ -598,7 +600,7 @@ def test_activation_nan_inf_non_contiguous_tensor():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_activation_invalid_sh_compression():
     """Invalid sh_compression: ValueError."""
     from gsplat.scene import GaussianInferenceScene
@@ -618,7 +620,7 @@ def test_activation_invalid_sh_compression():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_from_gaussian_scene_skips_activation_checks():
     """from_gaussian_scene not affected by activation checks (raw negative scales ok)."""
     from gsplat.scene import GaussianInferenceScene
@@ -634,7 +636,7 @@ def test_from_gaussian_scene_skips_activation_checks():
         assert not inference_scene.is_empty()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_from_gaussian_scene_rgb_uses_safe_default_compression():
     """RGB scenes should convert without explicitly overriding sh_compression."""
     from gsplat.scene import GaussianInferenceScene
@@ -651,7 +653,7 @@ def test_from_gaussian_scene_rgb_uses_safe_default_compression():
     assert inference_scene.colors_packed.dtype == torch.float16
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_from_gaussian_scene_concatenates_sh0_shn():
     """GaussianScene with sh0/shN but no colors should preserve all SH coefficients."""
     from gsplat.scene import GaussianInferenceScene, GaussianScene
@@ -686,7 +688,7 @@ def test_from_gaussian_scene_concatenates_sh0_shn():
     torch.testing.assert_close(inference_scene.colors_packed, colors, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_from_gaussian_scene_normalizes_non_unit_quats():
     """Raw GaussianScene quaternions need not already be unit length."""
     from gsplat.scene import GaussianInferenceScene
@@ -710,7 +712,7 @@ def test_from_gaussian_scene_normalizes_non_unit_quats():
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_put_duplicate_name():
     """Duplicate put() name: ValueError."""
     from gsplat.scene import GaussianInferenceScene
@@ -736,7 +738,7 @@ def test_put_duplicate_name():
         scene.put("comp1", component)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_put_empty_name():
     """Empty put() name: ValueError."""
     from gsplat.scene import GaussianInferenceScene
@@ -746,7 +748,7 @@ def test_put_empty_name():
         scene.put("", {"means_planar": None})
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_put_rejects_non_contiguous_packed_tensors():
     """Packed scene tensors must satisfy the render-time layout contract."""
     from gsplat.scene import GaussianInferenceScene
@@ -766,7 +768,7 @@ def test_put_rejects_non_contiguous_packed_tensors():
         scene.put("comp", component)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.parametrize(
     "case,match",
     [
@@ -804,7 +806,7 @@ def test_put_rejects_bad_packed_tensor_invariants(case, match):
         scene.put("comp", component)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_get_unknown_component():
     """Unknown get() component: KeyError."""
     from gsplat.scene import GaussianInferenceScene
@@ -834,7 +836,7 @@ def test_get_unknown_component():
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_classmethod_parity():
     """from_gaussian_scene and from_gaussian_tensors with manual activation must be bit-exact."""
     from gsplat.scene import GaussianInferenceScene
@@ -891,7 +893,7 @@ def test_classmethod_parity():
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_classmethod_parity_sh3():
     """from_gaussian_scene and from_gaussian_tensors parity with SH degree 3."""
     from gsplat.scene import GaussianInferenceScene
@@ -934,7 +936,7 @@ def test_classmethod_parity_sh3():
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.parametrize(
     "sh_compression,expected_mode,expected_dtype,expected_shape",
     [
@@ -985,7 +987,7 @@ def test_sh3_compression_metadata_layout_and_values(
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_is_empty_and_release():
     """After construction: not empty. After release: empty. Release is idempotent."""
     from gsplat.scene import GaussianInferenceScene
@@ -1055,7 +1057,7 @@ _RENDER_PARITY_CASES = [
 
 
 @pytest.mark.skip(reason="experimental.render not available in this repo")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.parametrize("sh_degree,sh_compression", _RENDER_PARITY_CASES)
 def test_render_parity_cpp_packed_vs_python_packed(sh_degree, sh_compression):
     """Pack with C++ op, render via gaussian_render_inference_only, compare with Python packing."""
@@ -1133,7 +1135,7 @@ def test_render_parity_cpp_packed_vs_python_packed(sh_degree, sh_compression):
 # ======================================================================
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_multi_component_put_get():
     """Multiple components can be put and retrieved correctly."""
     from gsplat.scene import GaussianInferenceScene
@@ -1190,7 +1192,7 @@ def test_multi_component_put_get():
     torch.testing.assert_close(comp_b["qso_packed"], qso_packed2, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_from_gaussian_scene_rejects_app_opt():
     """from_gaussian_scene raises ValueError for scenes with 'features'."""
     from gsplat.scene import GaussianInferenceScene, GaussianScene
@@ -1220,7 +1222,7 @@ def test_from_gaussian_scene_rejects_app_opt():
         GaussianInferenceScene.from_gaussian_scene(scene, id="test")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_activation_non_unit_quats():
     """Non-unit-norm quaternions: ValueError."""
     from gsplat.scene import GaussianInferenceScene
@@ -1241,7 +1243,7 @@ def test_activation_non_unit_quats():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_from_gaussian_scene_nan_input_raises():
     """from_gaussian_scene raises ValueError when activation produces Inf."""
     from gsplat.scene import GaussianInferenceScene, GaussianScene
@@ -1269,7 +1271,7 @@ def test_from_gaussian_scene_nan_input_raises():
         GaussianInferenceScene.from_gaussian_scene(scene, id="test")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_quat_column_order_wxyz():
     """Packed qso quaternion columns preserve wxyz input order."""
     from gsplat.scene import GaussianInferenceScene
@@ -1304,7 +1306,7 @@ def test_quat_column_order_wxyz():
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_from_gaussian_scene_rejects_multi_component():
     """from_gaussian_scene raises ValueError for multi-component scenes."""
     from gsplat.scene import GaussianInferenceScene, GaussianScene

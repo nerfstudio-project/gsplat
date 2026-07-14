@@ -16,6 +16,8 @@
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat.distributed import (
     all_gather_int32,
     all_gather_tensor_list,
@@ -39,7 +41,7 @@ def _main_all_gather_int32(local_rank: int, world_rank: int, world_size: int, _)
         assert collected[i] == torch.tensor(i, device=device, dtype=torch.int)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_all_gather_int32():
     cli(_main_all_gather_int32, None, verbose=True)
 
@@ -58,7 +60,7 @@ def _main_all_to_all_int32(local_rank: int, world_rank: int, world_size: int, _)
         assert collected[i] == torch.tensor(world_rank, device=device, dtype=torch.int)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_all_to_all_int32():
     cli(_main_all_to_all_int32, None, verbose=True)
 
@@ -82,7 +84,7 @@ def _main_all_gather_tensor_list(local_rank: int, world_rank: int, world_size: i
         assert torch.equal(tensor, target)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_all_gather_tensor_list():
     cli(_main_all_gather_tensor_list, None, verbose=True)
 
@@ -117,7 +119,7 @@ def _main_all_to_all_tensor_list(local_rank: int, world_rank: int, world_size: i
         assert torch.equal(tensor, target)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_all_to_all_tensor_list():
     cli(_main_all_to_all_tensor_list, None, verbose=True)
 

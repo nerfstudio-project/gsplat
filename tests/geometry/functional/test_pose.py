@@ -30,6 +30,8 @@ import warnings
 
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat._helper import expect_grad_reference_close
 import gsplat.geometry.functional as geom
 from gsplat.geometry.kernels.pose_ops import (
@@ -46,7 +48,7 @@ from gsplat.geometry.kernels.pose_ops import (
     frame_transform_poses_tquat,
 )
 
-if not torch.cuda.is_available():
+if not cuda_is_available():
     raise unittest.SkipTest("Geometry pose tests require CUDA")
 
 quat_multiply = geom.quat_multiply

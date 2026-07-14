@@ -27,6 +27,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 device = torch.device("cuda:0")
 
 
@@ -133,7 +135,7 @@ def test_flas_sort_preserves_alignment_and_seed():
         torch.testing.assert_close(results[0][name], results[1][name])
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 def test_png_compression(tmp_path):
     from gsplat.compression import PngCompression
 
