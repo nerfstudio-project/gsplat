@@ -15,6 +15,7 @@
 
 import dataclasses
 import json
+import logging
 from pathlib import Path
 from typing import Any, Collection, Dict, List, Optional, Tuple
 
@@ -44,6 +45,9 @@ from .normalize import (
     transform_cameras,
     transform_points,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -273,10 +277,14 @@ class NCoreParser:
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
         self.scene_scale = float(np.max(dists))
 
-        print(
-            f"[NCoreParser] Loaded sequence '{self.sequence_id}': "
-            f"{len(self.frame_list)} frames across {self.num_cameras} cameras, "
-            f"{len(self.points)} lidar init points, scene_scale={self.scene_scale:.3f}"
+        logger.info(
+            "Loaded sequence '%s': %d frames across %d cameras, "
+            "%d lidar init points, scene_scale=%.3f",
+            self.sequence_id,
+            len(self.frame_list),
+            self.num_cameras,
+            len(self.points),
+            self.scene_scale,
         )
 
     # ------------------------------------------------------------------
@@ -327,7 +335,7 @@ class NCoreParser:
                     f" specification of a (subset) of camera sensors required to avoid ambiguity: {camera_ids}"
                 )
 
-            print(f"[NCoreParser] Auto-detected cameras: {camera_ids}")
+            logger.info("Auto-detected cameras: %s", camera_ids)
         if not lidar_ids:
             point_clouds_source_ids = list(sequence_loader.lidar_ids) + list(
                 sequence_loader.point_clouds_ids
@@ -339,7 +347,7 @@ class NCoreParser:
                     f" specification of a (subset) of sources required to avoid ambiguity: {lidar_ids}"
                 )
 
-            print(f"[NCoreParser] Auto-detected point cloud sources: {lidar_ids}")
+            logger.info("Auto-detected point cloud sources: %s", lidar_ids)
         else:
             point_clouds_source_ids = lidar_ids
 
@@ -358,10 +366,8 @@ class NCoreParser:
         self.point_clouds_source_ids: List[str] = list(point_clouds_source_ids)
         self.num_cameras: int = len(self.camera_ids)
 
-        print(f"[NCoreParser] Using cameras: {self.camera_ids}")
-        print(
-            f"[NCoreParser] Using point cloud sources: {self.point_clouds_source_ids}"
-        )
+        logger.info("Using cameras: %s", self.camera_ids)
+        logger.info("Using point cloud sources: %s", self.point_clouds_source_ids)
 
     def _compute_world_global_transform(
         self, sequence_loader: ncore.data.SequenceLoaderProtocol
@@ -399,10 +405,12 @@ class NCoreParser:
                 try:
                     model_params = model_params.transform(image_domain_scale=factor)
                 except (AssertionError, ValueError) as e:
-                    print(
-                        f"[NCoreParser] Error: factor={factor} produces non-integer "
-                        f"resolution for {camera_id}; using factor=1.0 (full resolution). "
-                        "Pass --data-factor 1 to suppress this error."
+                    logger.error(
+                        "factor=%s produces non-integer resolution for %s; "
+                        "using factor=1.0 (full resolution). "
+                        "Pass --data-factor 1 to suppress this error.",
+                        factor,
+                        camera_id,
                     )
                     raise e
 
@@ -440,7 +448,7 @@ class NCoreParser:
                     tangential_coeffs=None,
                     thin_prism_coeffs=None,
                 )
-                print(f"[NCoreParser] {camera_id}: {width}x{height} (ftheta)")
+                logger.info("%s: %dx%d (ftheta)", camera_id, width, height)
             elif isinstance(
                 model_params, ncore.data.OpenCVFisheyeCameraModelParameters
             ):
@@ -454,7 +462,7 @@ class NCoreParser:
                     tangential_coeffs=None,
                     thin_prism_coeffs=None,
                 )
-                print(f"[NCoreParser] {camera_id}: {width}x{height} (opencv_fisheye)")
+                logger.info("%s: %dx%d (opencv_fisheye)", camera_id, width, height)
             elif isinstance(
                 model_params, ncore.data.OpenCVPinholeCameraModelParameters
             ):
@@ -472,11 +480,14 @@ class NCoreParser:
                         getattr(model_params, "thin_prism_coeffs", None)
                     ),
                 )
-                print(f"[NCoreParser] {camera_id}: {width}x{height} (opencv_pinhole)")
+                logger.info("%s: %dx%d (opencv_pinhole)", camera_id, width, height)
             else:
                 # Unknown camera type: synthesize K from resolution, treat as perfect pinhole.
-                print(
-                    f"[NCoreParser] {camera_id}: {width}x{height} (unknown, synthesizing K from resolution)"
+                logger.info(
+                    "%s: %dx%d (unknown, synthesizing K from resolution)",
+                    camera_id,
+                    width,
+                    height,
                 )
                 self.Ks_dict[camera_id] = np.array(
                     [
@@ -709,8 +720,8 @@ class NCoreParser:
         point clouds) via the unified ``get_point_clouds_source()`` API.
         """
         if not self.point_clouds_source_ids:
-            print(
-                "[NCoreParser] No point cloud sources available; using empty init point cloud"
+            logger.warning(
+                "No point cloud sources available; using empty init point cloud"
             )
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
 
@@ -742,9 +753,11 @@ class NCoreParser:
                 try:
                     pc = source.get_pc(pc_idx)
                 except Exception as exc:
-                    print(
-                        f"[NCoreParser] Warning: failed to load point cloud "
-                        f"{pc_idx} from '{source_id}': {exc}"
+                    logger.warning(
+                        "Failed to load point cloud %d from %r: %s",
+                        pc_idx,
+                        source_id,
+                        exc,
                     )
                     continue
 
@@ -794,7 +807,7 @@ class NCoreParser:
                     all_colors.append(np.full((len(xyz_scene), 3), 128, dtype=np.uint8))
 
         if not all_points:
-            print("[NCoreParser] Warning: no point cloud data loaded")
+            logger.warning("No point cloud data loaded")
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
 
         points = np.vstack(all_points)
@@ -805,9 +818,7 @@ class NCoreParser:
             points_rgb = points_rgb[idx]
 
         source_names = ", ".join(f"'{s}'" for s in self.point_clouds_source_ids)
-        print(
-            f"[NCoreParser] Loaded {len(points)} point cloud points from {source_names}"
-        )
+        logger.info("Loaded %d point cloud points from %s", len(points), source_names)
         return points, points_rgb
 
     def _sample_init_points(self, max_points: int) -> None:
@@ -845,10 +856,13 @@ class NCoreParser:
         dynamic_count = sum(
             len(track.points_local) for track in self.rigid_dynamic_tracks
         )
-        print(
-            f"[NCoreParser] NCore init points: downsampled {total} -> "
-            f"{len(self.points) + dynamic_count} total "
-            f"({len(self.points)} static + {dynamic_count} rigid dynamic)"
+        logger.info(
+            "NCore init points: downsampled %d -> %d total "
+            "(%d static + %d rigid dynamic)",
+            total,
+            len(self.points) + dynamic_count,
+            len(self.points),
+            dynamic_count,
         )
 
     @staticmethod
@@ -916,8 +930,8 @@ class NCoreParser:
                 )
 
         if not track_obs:
-            print(
-                "[NCoreParser] rigid dynamic tracks: no matching cuboid track "
+            logger.info(
+                "rigid dynamic tracks: no matching cuboid track "
                 "observations in time range"
             )
             return []
@@ -927,9 +941,10 @@ class NCoreParser:
                 f"{class_id}={count}"
                 for class_id, count in sorted(skipped_by_class.items())
             )
-            print(
-                "[NCoreParser] rigid dynamic tracks: skipped cuboid observations "
-                f"outside configured class IDs: {skipped}"
+            logger.info(
+                "rigid dynamic tracks: skipped cuboid observations "
+                "outside configured class IDs: %s",
+                skipped,
             )
 
         tracks_world: Dict[str, Dict[str, np.ndarray]] = {}
@@ -1001,9 +1016,12 @@ class NCoreParser:
                 try:
                     pc = source.get_pc(pc_idx)
                 except Exception as exc:
-                    print(
-                        f"[NCoreParser] rigid dynamic tracks: failed to load "
-                        f"point cloud {pc_idx} from '{source_id}': {exc}"
+                    logger.warning(
+                        "rigid dynamic tracks: failed to load point cloud %d "
+                        "from %r: %s",
+                        pc_idx,
+                        source_id,
+                        exc,
                     )
                     continue
 
@@ -1066,9 +1084,12 @@ class NCoreParser:
             )
 
         total_pts = sum(len(t.points_local) for t in tracks)
-        print(
-            f"[NCoreParser] rigid dynamic tracks: {len(tracks)}/{len(track_obs)} "
-            f"configured tracks with associated points ({total_pts} init points)"
+        logger.info(
+            "rigid dynamic tracks: %d/%d configured tracks with associated "
+            "points (%d init points)",
+            len(tracks),
+            len(track_obs),
+            total_pts,
         )
         return tracks
 
