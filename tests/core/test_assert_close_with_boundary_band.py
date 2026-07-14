@@ -154,6 +154,15 @@ def _band_inputs(n_band, n_flip, *, signs=None):
     return actual, expected
 
 
+def _add_matching_interior(actual, expected):
+    """Append one matching value outside the boundary band."""
+    actual = torch.cat((actual, torch.zeros_like(actual[:1])))
+    expected = torch.cat((expected, torch.zeros_like(expected[:1])))
+    boundary_mask = torch.ones(actual.shape, dtype=torch.bool)
+    boundary_mask[-1] = False
+    return actual, expected, boundary_mask
+
+
 def _case_band_no_flip():
     a, e = _band_inputs(n_band=10, n_flip=0)
     return dict(
@@ -193,10 +202,11 @@ def _case_band_flip_within_budget_symmetric():
 def _case_band_flip_exceeds_budget():
     # 4 flips out of 10 = 40% > 10% budget.
     a, e = _band_inputs(n_band=10, n_flip=4, signs=[+1, -1, +1, -1])
+    a, e, mask = _add_matching_interior(a, e)
     return dict(
         actual=a,
         expected=e,
-        boundary_mask=torch.ones(10, dtype=torch.bool),
+        boundary_mask=mask,
         interior_atol=0.0,
         interior_rtol=0.0,
         boundary_max_flip_ratio=0.1,
@@ -210,10 +220,11 @@ def _case_band_flip_exceeds_budget():
 def _case_band_symmetry_violated_float():
     # All 4 flips have the same sign -> sign_mean = 1.0 > 0.5.
     a, e = _band_inputs(n_band=10, n_flip=4, signs=[+1, +1, +1, +1])
+    a, e, mask = _add_matching_interior(a, e)
     return dict(
         actual=a,
         expected=e,
-        boundary_mask=torch.ones(10, dtype=torch.bool),
+        boundary_mask=mask,
         interior_atol=0.0,
         interior_rtol=0.0,
         boundary_max_flip_ratio=1.0,  # cap disabled
@@ -257,10 +268,11 @@ def _case_band_symmetry_bool_violated():
     # bool dtype: 4 a_only + 0 r_only -> asym = 1.0 > 0.0.
     actual = torch.tensor([True, True, True, True, False])
     expected = torch.tensor([False, False, False, False, False])
+    actual, expected, mask = _add_matching_interior(actual, expected)
     return dict(
         actual=actual,
         expected=expected,
-        boundary_mask=torch.ones(5, dtype=torch.bool),
+        boundary_mask=mask,
         interior_atol=0.0,
         interior_rtol=0.0,
         boundary_max_flip_ratio=1.0,
@@ -289,10 +301,11 @@ def _case_flip_predicate_suppresses():
 def _case_flip_predicate_amplifies():
     # 0 nominal flips; predicate marks all 10 as flips -> 100% > 10% budget.
     a, e = _band_inputs(n_band=10, n_flip=0)
+    a, e, mask = _add_matching_interior(a, e)
     return dict(
         actual=a,
         expected=e,
-        boundary_mask=torch.ones(10, dtype=torch.bool),
+        boundary_mask=mask,
         interior_atol=0.0,
         interior_rtol=0.0,
         boundary_max_flip_ratio=0.1,
@@ -325,7 +338,7 @@ def _case_cross_predicate_all_crosses():
 def _case_cross_predicate_one_non_cross():
     # 4 flips; predicate marks exactly one as a non-cross.
     a, e = _band_inputs(n_band=10, n_flip=4, signs=[+1, -1, +1, -1])
-    mask = torch.ones(10, dtype=torch.bool)
+    a, e, mask = _add_matching_interior(a, e)
 
     def cross_pred(m):
         out = torch.ones(int(m.sum().item()), dtype=torch.bool)
@@ -346,7 +359,7 @@ def _case_cross_predicate_one_non_cross():
 
 def _case_cross_predicate_shape_mismatch():
     a, e = _band_inputs(n_band=10, n_flip=4)
-    mask = torch.ones(10, dtype=torch.bool)
+    a, e, mask = _add_matching_interior(a, e)
     return dict(
         actual=a,
         expected=e,
@@ -684,11 +697,12 @@ def test_assert_close_with_boundary_band(case_factory, expected):
 def test_band_bool_error_message_attributes_a_only():
     actual = torch.tensor([True, True, True, True, False])
     expected = torch.tensor([False, False, False, False, False])
+    actual, expected, boundary_mask = _add_matching_interior(actual, expected)
     with pytest.raises(AssertionError) as exc_info:
         assert_close_with_boundary_band(
             actual=actual,
             expected=expected,
-            boundary_mask=torch.ones(5, dtype=torch.bool),
+            boundary_mask=boundary_mask,
             interior_atol=0.0,
             interior_rtol=0.0,
             boundary_max_flip_ratio=1.0,
@@ -704,11 +718,12 @@ def test_band_float_error_reports_negative_sign_mean_when_actual_smaller():
     actual = torch.zeros(10)
     expected = torch.zeros(10)
     expected[:4] = 1.0  # a=0, e=1 -> sign(a-e)=-1
+    actual, expected, boundary_mask = _add_matching_interior(actual, expected)
     with pytest.raises(AssertionError, match=r"directional asymmetry") as exc_info:
         assert_close_with_boundary_band(
             actual=actual,
             expected=expected,
-            boundary_mask=torch.ones(10, dtype=torch.bool),
+            boundary_mask=boundary_mask,
             interior_atol=0.0,
             interior_rtol=0.0,
             boundary_max_flip_ratio=1.0,
