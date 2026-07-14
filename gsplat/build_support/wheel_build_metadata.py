@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from importlib import metadata
 from typing import Any
+
+from packaging.version import Version
 
 
 _WHEEL_METADATA_STATES = frozenset(
@@ -40,7 +43,7 @@ def cupy_requirement_for_cuda(cuda_version: object) -> str:
 
 
 class WheelBuildMetadataProvider:
-    """Add a build-CUDA-matched CuPy dependency to wheel metadata."""
+    """Add build-compatible Torch and CuPy dependencies to wheel metadata."""
 
     def __init__(self) -> None:
         self._build_state: str | None = None
@@ -68,15 +71,25 @@ class WheelBuildMetadataProvider:
         if self._build_state is None:
             raise RuntimeError("scikit-build-core did not provide the build state")
 
-        # An sdist must remain portable across CUDA majors. Its wheel metadata
-        # is resolved later, inside the actual wheel build environment.
+        # An sdist keeps the broad static Torch floor and remains portable
+        # across CUDA majors. Wheel metadata is resolved later, inside the
+        # actual build environment.
         if self._build_state == "sdist":
             return {"dependencies": []}
         if self._build_state not in _WHEEL_METADATA_STATES:
             raise RuntimeError(f"unsupported build state: {self._build_state}")
 
+        # CUDA variants use PEP 440 local labels such as +cu130. The public
+        # release is the ABI identity the wheel matrix promises; leaving the
+        # local label out lets a matching CUDA variant satisfy this pin.
+        public_torch_version = Version(metadata.version("torch")).public
         cupy_requirement = cupy_requirement_for_cuda(_build_torch_cuda_version())
-        return {"dependencies": [f'{cupy_requirement}; extra == "png"']}
+        return {
+            "dependencies": [
+                f"torch=={public_torch_version}",
+                f'{cupy_requirement}; extra == "png"',
+            ]
+        }
 
     @staticmethod
     def dynamic_wheel(settings: Mapping[str, Any]) -> dict[str, bool]:

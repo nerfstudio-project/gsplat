@@ -120,7 +120,7 @@ COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirem
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
     build_packages=(
-        "scikit-build-core==0.12.2"
+        "scikit-build-core==1.0.1"
     )
 
     packages=(

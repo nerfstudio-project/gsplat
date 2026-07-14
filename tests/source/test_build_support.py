@@ -15,27 +15,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 METADATA_HELPER_PATH = REPO_ROOT / "gsplat/build_support/pyproject_metadata.py"
 CUPY_REQUIREMENT_HELPER_PATH = REPO_ROOT / "gsplat/build_support/cupy_requirement.py"
-WHEEL_METADATA_PROVIDER_PATH = (
-    REPO_ROOT / "gsplat/build_support/wheel_build_metadata.py"
-)
 
 
 def _load_metadata_helper():
     """Load the metadata helper without importing the top-level gsplat package."""
     spec = importlib.util.spec_from_file_location(
         "gsplat_pyproject_metadata", METADATA_HELPER_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_wheel_metadata_provider():
-    """Load the wheel metadata provider without importing gsplat."""
-
-    spec = importlib.util.spec_from_file_location(
-        "_gsplat_wheel_build_metadata", WHEEL_METADATA_PROVIDER_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -189,23 +174,6 @@ def test_pyproject_metadata_command_line_interface(pyproject_path):
         text=True,
     )
     assert pin.stdout == "22.3.0\n"
-
-
-def test_wheel_metadata_selects_build_cuda_cupy(monkeypatch):
-    """Wheels select CuPy from build Torch while sdists remain portable."""
-
-    provider_module = _load_wheel_metadata_provider()
-    monkeypatch.setattr(provider_module, "_build_torch_cuda_version", lambda: "12.8")
-    provider = provider_module.WheelBuildMetadataProvider()
-
-    provider.build_state("wheel")
-    assert provider.dynamic_metadata({}, {}) == {
-        "dependencies": ['cupy-cuda12x; extra == "png"']
-    }
-
-    provider.build_state("sdist")
-    assert provider.dynamic_metadata({}, {}) == {"dependencies": []}
-    assert provider.dynamic_wheel({}) == {"dependencies": True}
 
 
 def test_cupy_requirement_env_override_wins(monkeypatch):

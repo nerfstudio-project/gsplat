@@ -57,7 +57,7 @@ PyTorch, a compatible CUDA toolkit, and the build tooling —
 `--no-build-isolation` skips pip's automatic build-dependency provisioning:
 
 ```bash
-pip install scikit-build-core cmake ninja
+pip install "scikit-build-core>=1.0" cmake ninja
 pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git
 ```
 

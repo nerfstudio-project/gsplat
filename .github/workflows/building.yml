@@ -100,7 +100,7 @@ jobs:
         run: |
           # https://github.com/pypa/setuptools/issues/5174, pkg_resources is removed in setuptools 82 but we need it for older torch versions
           pip install --upgrade "setuptools<82"
-          pip install "cmake>=3.26" ninja "scikit-build-core>=0.12"
+          pip install "cmake>=3.26" ninja "scikit-build-core>=1.0"
         shell: bash
 
       - name: Build wheel

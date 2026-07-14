@@ -94,7 +94,7 @@ def test_bootstrap_expands_declared_development_dependencies(tmp_path: Path) -> 
     assert "--force-reinstall" not in torch_command
 
     expected_requirements = {
-        "scikit-build-core>=0.12",
+        "scikit-build-core>=1.0",
         "cmake>=3.26",
         "ninja>=1.5",
         "numpy",

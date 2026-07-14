@@ -48,8 +48,31 @@ function(gsplat_read_project_info out_name_var out_version_var)
     foreach(_line IN LISTS _pyproject_lines)
         string(STRIP "${_line}" _line)
 
-        if(_line MATCHES "^\\[([^]]+)\\]$")
-            set(_section "${CMAKE_MATCH_1}")
+        # Capture the section name before evaluating another regular
+        # expression: every MATCHES operation replaces CMAKE_MATCH_1, including
+        # a failed match. Separate branches therefore matter for array tables.
+        unset(_next_section)
+        if(_line MATCHES "^\\[\\[([^]]+)\\]\\]$")
+            set(_next_section "${CMAKE_MATCH_1}")
+        elseif(_line MATCHES "^\\[([^]]+)\\]$")
+            set(_next_section "${CMAKE_MATCH_1}")
+        endif()
+
+        # Finish the preceding standard dynamic-metadata entry before moving
+        # to another TOML table. Remembering both values makes their key order
+        # irrelevant.
+        if(DEFINED _next_section)
+            if(
+                _section STREQUAL "tool.dynamic-metadata"
+                AND _dynamic_metadata_field STREQUAL "version"
+                AND DEFINED _dynamic_metadata_input
+            )
+                set(_version_input "${_dynamic_metadata_input}")
+            endif()
+
+            set(_section "${_next_section}")
+            unset(_dynamic_metadata_field)
+            unset(_dynamic_metadata_input)
             continue()
         endif()
 
@@ -68,8 +91,24 @@ function(gsplat_read_project_info out_name_var out_version_var)
             if(_line MATCHES "^input[ \t]*=[ \t]*[\"']([^\"']+)[\"']")
                 set(_version_input "${CMAKE_MATCH_1}")
             endif()
+        elseif(_section STREQUAL "tool.dynamic-metadata")
+            if(_line MATCHES "^field[ \t]*=[ \t]*[\"']([^\"']+)[\"']")
+                set(_dynamic_metadata_field "${CMAKE_MATCH_1}")
+            elseif(_line MATCHES "^input[ \t]*=[ \t]*[\"']([^\"']+)[\"']")
+                set(_dynamic_metadata_input "${CMAKE_MATCH_1}")
+            endif()
         endif()
     endforeach()
+
+    # The last dynamic-metadata entry has no following table header to trigger
+    # the in-loop finalization above.
+    if(
+        _section STREQUAL "tool.dynamic-metadata"
+        AND _dynamic_metadata_field STREQUAL "version"
+        AND DEFINED _dynamic_metadata_input
+    )
+        set(_version_input "${_dynamic_metadata_input}")
+    endif()
 
     if(NOT DEFINED _project_name)
         message(FATAL_ERROR "pyproject.toml must define [project].name")
@@ -81,7 +120,7 @@ function(gsplat_read_project_info out_name_var out_version_var)
             message(
                 FATAL_ERROR
                 "pyproject.toml declares dynamic version but does not define "
-                "[tool.scikit-build.metadata.version].input"
+                "a dynamic version provider input"
             )
         endif()
 
