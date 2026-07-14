@@ -28,9 +28,11 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10.
     import tomli as tomllib  # type: ignore[import-not-found]
 
 try:
+    from packaging.markers import Marker
     from packaging.requirements import Requirement
     from packaging.utils import canonicalize_name
 except ImportError:  # pragma: no cover - minimal environments ship pip only.
+    from pip._vendor.packaging.markers import Marker
     from pip._vendor.packaging.requirements import Requirement
     from pip._vendor.packaging.utils import canonicalize_name
 
@@ -73,14 +75,29 @@ def expand_optional_group(project, group, _parents=()):
             and requirement.extras
             and not requirement.specifier
             and requirement.url is None
-            and requirement.marker is None
         )
         if not is_composite_group:
             expanded.append(line)
             continue
 
+        # A marker on the self-reference (e.g. 'gsplat[png]; python_version <
+        # "3.13"') still composes the referenced group, but the condition must
+        # carry over onto every requirement that group expands to — otherwise
+        # the expanded list loses the restriction the marker existed for.
         for extra in sorted(requirement.extras):
-            expanded.extend(expand_optional_group(project, extra, (*_parents, group)))
+            for expanded_line in expand_optional_group(
+                project, extra, (*_parents, group)
+            ):
+                if requirement.marker is None:
+                    expanded.append(expanded_line)
+                    continue
+                sub_requirement = Requirement(expanded_line)
+                sub_requirement.marker = (
+                    Marker(f"({sub_requirement.marker}) and ({requirement.marker})")
+                    if sub_requirement.marker is not None
+                    else requirement.marker
+                )
+                expanded.append(str(sub_requirement))
     return expanded
 
 

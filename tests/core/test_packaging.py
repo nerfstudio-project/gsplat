@@ -67,6 +67,18 @@ def test_dev_extra_omits_the_dynamic_cupy_requirement():
     assert not any(dep.startswith("cupy") for dep in extras["dev"])
 
 
+def test_png_extra_is_public():
+    """Source metadata exposes the documented PNG feature name."""
+
+    if not HAS_SOURCE_TREE:
+        pytest.skip("pyproject.toml is only available in a source checkout")
+
+    with (REPO_ROOT / "pyproject.toml").open("rb") as f:
+        extras = tomllib.load(f)["project"]["optional-dependencies"]
+
+    assert "png" in extras
+
+
 def _installed_files() -> list[metadata.PackagePath]:
     """Return installed package files without importing gsplat."""
     try:

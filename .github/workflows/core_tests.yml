@@ -37,7 +37,7 @@ jobs:
           # import PIL + tqdm; install the [examples] extra so the test
           # collection doesn't ImportError on a fresh build. The tests also
           # have `pytest.importorskip` guards as a belt-and-braces.
-          BUILD_NO_CUDA=1 pip install .[examples]
+          BUILD_NO_CUDA=1 pip install ".[examples,png]"
       - name: Code Formatting Check
         run: lint/format-code.sh --check --full
       - name: Run Tests.

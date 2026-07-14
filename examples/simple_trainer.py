@@ -56,6 +56,7 @@ from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_rand
 
 from gsplat import export_splats
 from gsplat.compression import PngCompression
+from gsplat.compression.png_compression import validate_png_dependencies
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization, RasterizeMode
@@ -1593,17 +1594,9 @@ if __name__ == "__main__":
         import torch_dgx  # noqa: F401
     cfg.adjust_steps(cfg.steps_scaler)
 
-    # try import extra dependencies
+    # Validate optional dependencies before starting a potentially long run.
     if cfg.compression == "png":
-        try:
-            import plas
-            import torchpq
-        except:
-            raise ImportError(
-                "To use PNG compression, you need to install "
-                "torchpq (instruction at https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install) "
-                "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
-            )
+        validate_png_dependencies()
 
     if cfg.with_ut and cfg.with_eval3d:
         print(

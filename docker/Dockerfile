@@ -58,7 +58,7 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
         libpython3-dev
         python3-venv
         python-is-python3
-        # For downloading some dependencies (plas)
+        # For dependencies installed from Git repositories.
         git
         # CUDA toolchain subset — the -base image ships only the CUDA runtime:
         # - cuda-nvcc: compiles gsplat and the source-built dependencies
@@ -191,6 +191,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         # endonerf / dynamic-surgical test collection imports these at module top
         "Pillow==12.1.1"
         "tqdm==4.67.3"
+        "opencv-python-headless==5.0.0.93"
         "typeguard==4.5.1"
         "pyyaml==6.0.1"
         "build==1.3.0"
@@ -199,8 +200,8 @@ RUN --mount=type=tmpfs,target=/tmp \
         "nerfacc==0.5.3"
         "imageio[ffmpeg]==2.37.2"
         "torchpq==0.3.0.6"
+        "vc-flas==0.1.7"
     )
-    plas_pkg="PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
 
     # The image provisions dependencies before a gsplat wheel exists, so keep
     # the helper-derived dynamic CuPy requirement as an explicit check source.
@@ -208,33 +209,13 @@ RUN --mount=type=tmpfs,target=/tmp \
     check_gsplat_deps.sh \
         -f /opt/dep-check/pyproject.toml:dev \
         -f /opt/dep-check/cupy_requirement.txt \
-        -- "${packages[@]}" "$plas_pkg"
+        -- "${packages[@]}"
 
     # The CUDA-major-specific CuPy wheel avoids compiling CuPy from source.
     pip install "${packages[@]}"
 
-    # Install PLAS alone, then its declared dependencies read from its own
-    # metadata — minus the GUI opencv-python, whose cv2 the pinned headless
-    # build already provides. Deriving the list keeps it in sync with PLAS.
-    pip install --no-deps "$plas_pkg"
-    python3 - <<'PY' > /tmp/plas-deps.txt
-from importlib.metadata import requires
-
-from packaging.requirements import Requirement
-from packaging.utils import canonicalize_name
-
-for raw in requires("PLAS") or []:
-    requirement = Requirement(raw)
-    if requirement.marker is not None and not requirement.marker.evaluate():
-        continue
-    if canonicalize_name(requirement.name) == "opencv-python":
-        continue
-    print(requirement)
-PY
-    pip install -r /tmp/plas-deps.txt
-
     # Save list so the examples stage can reference it
-    printf '%s\n' "${packages[@]}" "$plas_pkg" > /opt/dep-check/dev_packages.txt
+    printf '%s\n' "${packages[@]}" > /opt/dep-check/dev_packages.txt
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
@@ -271,7 +252,6 @@ RUN --mount=type=tmpfs,target=/tmp \
         "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
         "splines==0.3.3"
         "ppisp @ https://github.com/nv-tlabs/ppisp/archive/refs/tags/v1.0.0.tar.gz"
-        "opencv-python-headless==4.10.0.84"
         "tqdm==4.67.3"
         "matplotlib==3.10.8"
         "Pillow==12.1.1"

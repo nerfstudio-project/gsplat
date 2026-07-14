@@ -15,7 +15,9 @@ you modify your cuda code so it is much faster than re-compile through pip. Note
 the JIT compiled library can be found under `~/.cache/torch_extensions/py*-cu*/`.
 
 Install the development extra. The CuPy wheel matching the local CUDA toolkit
-is selected automatically.
+is selected automatically. On Python 3.13, `dev` skips the PNG-compression
+extra (`vc-flas` doesn't support 3.13 yet); install `gsplat[png]` separately on
+3.10-3.12 if you need it.
 
 ```bash
 BUILD_NO_CUDA=1 pip install -e ".[dev]"

@@ -22,6 +22,19 @@ import re
 import subprocess
 import warnings
 
+# Keep this regex in sync with the inline parser in gsplat/cuda/build.py's
+# _cuda_major_for_build — build_support isn't shipped in the wheel, so the two
+# intentionally duplicate rather than import. Anchored to 'release' rather than
+# requiring a following '.' so a toolkit reporting a bare major (e.g. "release
+# 14") still parses.
+_NVCC_RELEASE_RE = re.compile(r"\brelease\s+(\d+)(?:\.\d+)?")
+
+
+def parse_nvcc_major(version_output: str) -> int | None:
+    """Extract the CUDA major from ``nvcc --version`` output, or ``None``."""
+    match = _NVCC_RELEASE_RE.search(version_output)
+    return int(match.group(1)) if match else None
+
 
 def detect_cupy_requirement() -> str:
     """Pick a CuPy distribution that matches the local CUDA toolkit.
@@ -51,9 +64,9 @@ def detect_cupy_requirement() -> str:
             )
         except (FileNotFoundError, subprocess.CalledProcessError, OSError):
             continue
-        m = re.search(r"release (\d+)\.", out)
-        if m:
-            return f"cupy-cuda{m.group(1)}x"
+        major = parse_nvcc_major(out)
+        if major is not None:
+            return f"cupy-cuda{major}x"
         # nvcc ran but its --version output didn't match. That's distinct from
         # the "nvcc not found" case (silently skipped above) — it usually
         # signals a broken shim (ccache wrapper, non-NVIDIA stub) rather than

@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import Dict
 
 import torch
@@ -20,11 +21,14 @@ from torch import Tensor
 
 
 def sort_splats(splats: Dict[str, Tensor], verbose: bool = True) -> Dict[str, Tensor]:
-    """Sort splats with Parallel Linear Assignment Sorting from the paper `Compact 3D Scene Representation via
-    Self-Organizing Gaussian Grids <https://arxiv.org/pdf/2312.13299>`_.
+    """Arrange splats on a similarity-preserving 2D grid with FLAS.
+
+    Fast Linear Assignment Sorting is described in `Improved Evaluation and
+    Generation of Grid Layouts using Distance Preservation Quality and Linear
+    Assignment Sorting <https://doi.org/10.1111/cgf.14718>`_.
 
     .. warning::
-        PLAS must installed to use sorting.
+        A CUDA-matched PNG extra must be installed to use PNG compression.
 
     Args:
         splats (Dict[str, Tensor]): splats
@@ -33,16 +37,12 @@ def sort_splats(splats: Dict[str, Tensor], verbose: bool = True) -> Dict[str, Te
     Returns:
         Dict[str, Tensor]: sorted splats
     """
-    try:
-        from plas import sort_with_plas
-    except:
-        raise ImportError(
-            "Please install PLAS with 'pip install git+https://github.com/fraunhoferhhi/PLAS.git' to use sorting"
-        )
-
     n_gs = len(splats["means"])
-    n_sidelen = int(n_gs**0.5)
-    assert n_sidelen**2 == n_gs, "Must be a perfect square"
+    n_sidelen = math.isqrt(n_gs)
+    if n_sidelen**2 != n_gs:
+        raise ValueError("The number of splats must be a perfect square")
+
+    import vc_flas
 
     sort_keys = ["means", "quats", "scales", "opacities"]
     if "sh0" in splats:
@@ -53,12 +53,41 @@ def sort_splats(splats: Dict[str, Tensor], verbose: bool = True) -> Dict[str, Te
         params_to_sort.shape[0], device=params_to_sort.device
     )
     params_to_sort = params_to_sort[shuffled_indices]
-    grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
-    _, sorted_indices = sort_with_plas(
-        grid.permute(2, 0, 1), improvement_break=1e-4, verbose=verbose
+
+    # FLAS runs on the CPU. Only the sort keys cross into NumPy; the resulting
+    # permutation is applied to every original field on its existing device.
+    grid_features = (
+        params_to_sort.detach()
+        .to(device="cpu", dtype=torch.float32)
+        .reshape(n_sidelen, n_sidelen, -1)
+        .contiguous()
+        .numpy()
     )
-    sorted_indices = sorted_indices.squeeze().flatten()
+    # Draw the native solver's seed from Torch so torch.manual_seed controls
+    # the complete operation, including the initial shuffle above.
+    flas_seed = torch.randint(
+        torch.iinfo(torch.int32).max,
+        (),
+        device=params_to_sort.device,
+    ).item()
+
+    if verbose:
+        print(f"Sorting {n_gs:,} splats with FLAS...")
+
+    arrangement = vc_flas.flas(
+        vc_flas.Grid.from_grid_features(grid_features),
+        wrap=False,
+        # These settings were selected by comparing compression size and
+        # runtime against the previous PLAS implementation on real splats.
+        radius_decay=0.90,
+        max_swap_positions=16,
+        seed=flas_seed,
+    )
+    sorted_indices = torch.from_numpy(arrangement.sorting.reshape(-1).copy()).to(
+        device=params_to_sort.device, dtype=torch.long
+    )
     sorted_indices = shuffled_indices[sorted_indices]
+
     for k, v in splats.items():
         splats[k] = v[sorted_indices]
     return splats
