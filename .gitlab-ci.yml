@@ -83,6 +83,11 @@ code-format:
     - CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1)
     - echo "Determined CUDA Architecture ${CUDA_ARCH}"
 
+    # Persist ccache in the per-runner .ci-keep cache — unset otherwise, so
+    # every CI build cold-recompiles. Inherited by all jobs extending .test-base.
+    - export CCACHE_DIR="${CI_BUILDS_DIR}/.ci-keep/ccache"
+    - mkdir -p "$CCACHE_DIR"
+
   script:
     # Load some envvars that depend on gitlab variables
     - source ~/.profile
