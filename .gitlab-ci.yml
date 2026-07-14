@@ -59,6 +59,8 @@ code-format:
   variables:
     VERBOSE: 1
     CCACHE_STATSLOG: $CI_BUILDS_DIR/ccache_stats.log
+    # Optional marker expression to narrow test selection (empty = run all).
+    PYTEST_MARKER_EXPR: ""
 
   tags:
     - type/docker
@@ -82,6 +84,18 @@ code-format:
     # (only log result, not used to tweak build / test settings)
     - CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1)
     - echo "Determined CUDA Architecture ${CUDA_ARCH}"
+
+    # Persist ccache in the per-runner .ci-keep cache — unset otherwise, so
+    # every CI build cold-recompiles. Inherited by all jobs extending .test-base.
+    - export CCACHE_DIR="${CI_BUILDS_DIR}/.ci-keep/ccache"
+    - mkdir -p "$CCACHE_DIR"
+
+    # Apply the optional marker (PYTEST_MARKER_EXPR) via PYTEST_ADDOPTS, which
+    # pytest shlex-parses so the quoted expression survives.
+    - |
+      if [ -n "${PYTEST_MARKER_EXPR}" ]; then
+        export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -m '${PYTEST_MARKER_EXPR}'"
+      fi
 
   script:
     # Load some envvars that depend on gitlab variables
@@ -154,6 +168,9 @@ jit-test-debug:
     - code-format
   variables:
     DEBUG: 1
+    # gradcheck is build-mode-independent and jit-test-release runs it in full,
+    # so re-running it under the -O0 debug build adds no coverage.
+    PYTEST_MARKER_EXPR: "not gradcheck"
 
 aot-build-debug:
   extends: .aot-build-base
