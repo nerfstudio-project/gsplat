@@ -163,24 +163,46 @@ Pass project-specific options while configuring with `-D<name>=<value>`.
 Boolean values accept CMake's usual `ON` and `OFF` spellings. The defaults below
 apply to a top-level build unless noted otherwise; presets can override them.
 
+#### Build content
+
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `GSPLAT_BUILD_CAMERA_WRAPPERS` | value of `GSPLAT_BUILD_TESTS` | Build the Python-exposed camera-wrapper test kernels. |
-| `GSPLAT_BUILD_TESTS` | `ON` (`OFF` as a subproject) | Build the C++ tests and install the self-contained test payload; Python source-tree tests are registered independently in top-level builds. |
-| `GSPLAT_CHECK_PYTHON_DEPS` | `ON` | Check the active environment against the Python dependencies requested by the build. |
-| `GSPLAT_DEVELOPMENT_MODE` | `OFF` | Require the development Python dependencies in addition to build requirements. |
-| `GSPLAT_ENABLE_BUILD_TRACES` | `OFF` | Record configure, build, and test traces; requires CMake 4.3 or newer. |
-| `GSPLAT_FAST_MATH` | `ON` | Compile CUDA kernels with fast-math intrinsics. |
-| `GSPLAT_TESTS_FORCE_CUDA` | `ON` | Require CUDA-backed pytest coverage without consulting PyTorch's availability probe. Disable it only on runners where CUDA tests should be skipped when `torch.cuda.is_available()` is false. |
-| `GSPLAT_GENERATED_DIR` | `<build>/generated` | Select the directory for generated gsplat build headers. |
 | `GSPLAT_KERNEL_FAMILIES` | empty (all) | Select a comma- or semicolon-separated subset of `2DGS`, `3DGS`, `3DGUT`, `ADAM`, `RELOC`, and `LOSSES` to compile. |
 | `GSPLAT_NUM_CHANNELS` | all supported widths | Select the comma- or semicolon-separated feature widths to instantiate; `NUM_CHANNELS` remains a compatibility alias. |
+| `GSPLAT_FAST_MATH` | `ON` | Compile CUDA kernels with fast-math intrinsics. |
+| `GSPLAT_GENERATED_DIR` | `<build>/generated` | Select the directory for generated gsplat build headers. |
+
+#### Tests
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `GSPLAT_BUILD_TESTS` | `ON` (`OFF` as a subproject) | Build the C++ tests and install the self-contained test payload; Python source-tree tests are registered independently in top-level builds. |
+| `GSPLAT_BUILD_CAMERA_WRAPPERS` | value of `GSPLAT_BUILD_TESTS` | Build the Python-exposed camera-wrapper test kernels. |
+| `GSPLAT_TESTS_FORCE_CUDA` | `ON` | Require CUDA-backed pytest coverage without consulting PyTorch's availability probe. Disable it only on runners where CUDA tests should be skipped when `torch.cuda.is_available()` is false. |
+
+#### Dependencies
+
+| Option | Default | Purpose |
+| --- | --- | --- |
 | `GSPLAT_STRICT_SUBMODULES` | `ON` | Fail rather than warn when a populated `third_party` submodule differs from the commit pinned by the superproject; an absent required submodule always fails. |
+| `GSPLAT_CHECK_PYTHON_DEPS` | `ON` | Check the active environment against the Python dependencies requested by the build. |
+| `GSPLAT_DEVELOPMENT_MODE` | `OFF` | Require the development Python dependencies in addition to build requirements. |
+
+#### Compile caching (ccache)
+
+| Option | Default | Purpose |
+| --- | --- | --- |
 | `GSPLAT_ENABLE_CCACHE` | `ON` | Use ccache for C++, C, and CUDA compilation when it is available. |
 | `GSPLAT_FORCE_CCACHE` | `OFF` | Fail configuration instead of warning when ccache is enabled but unavailable. |
 | `GSPLAT_CCACHE_DIR` | empty | Override ccache's cache directory; empty preserves ccache's own resolution. |
 | `GSPLAT_CCACHE_NORMALIZE_PATHS` | `ON` | Normalize source paths so compatible ccache objects can be reused across worktrees. |
 | `GSPLAT_CCACHE_STATS` | `OFF` | Print cache statistics for this build after compilation. |
+
+#### Build diagnostics
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `GSPLAT_ENABLE_BUILD_TRACES` | `OFF` | Record configure, build, and test traces; requires CMake 4.3 or newer. |
 
 The build also honors standard CMake and toolchain cache variables such as
 `CMAKE_BUILD_TYPE`, `CMAKE_CUDA_ARCHITECTURES`, `CMAKE_CUDA_COMPILER`, and
