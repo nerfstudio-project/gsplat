@@ -46,7 +46,7 @@ def expand_optional_group(project, group, _parents=()):
     """Return an optional-dependency group with composite groups expanded.
 
     A requirement on this project with extras, such as
-    ``gsplat[dev-common]``, composes another optional-dependency group. Expand
+    ``gsplat[dev]``, composes another optional-dependency group. Expand
     those references so metadata consumers such as Docker dependency checks
     see the concrete requirements that pip would install.
     """

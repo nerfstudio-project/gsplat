@@ -26,10 +26,10 @@ jobs:
         run: |
           python -m pip install 'tomli>=1.2'
           clang_format_version=$(python gsplat/build_support/pyproject_metadata.py \
-            pyproject.toml dev-common --pin clang-format)
+            pyproject.toml dev --pin clang-format)
           test -n "$clang_format_version"
           black_version=$(python gsplat/build_support/pyproject_metadata.py \
-            pyproject.toml dev-common --pin black)
+            pyproject.toml dev --pin black)
           test -n "$black_version"
           pip install "black==${black_version}" "clang-format==${clang_format_version}" pytest pytest-check
           pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu

@@ -125,6 +125,7 @@ COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 COPY --link --from=gsplatrepo pyproject.toml /opt/dep-check/pyproject.toml
 COPY --link --from=gsplatrepo config.yaml /opt/dep-check/config.yaml
 COPY --link --from=gsplatrepo gsplat/build_support/pyproject_metadata.py /opt/dep-check/gsplat/build_support/pyproject_metadata.py
+COPY --link --from=gsplatrepo gsplat/build_support/cupy_requirement.py /opt/dep-check/gsplat/build_support/cupy_requirement.py
 COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
 COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirements.txt
 
@@ -159,16 +160,21 @@ RUN pip install "cmake==4.3.2" && rm -rf $PYTHONPYCACHEPREFIX/*
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
     clang_format_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
-        /opt/dep-check/pyproject.toml dev-common --pin clang-format)
+        /opt/dep-check/pyproject.toml dev --pin clang-format)
     test -n "$clang_format_version"
 
     black_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
-        /opt/dep-check/pyproject.toml dev-common --pin black)
+        /opt/dep-check/pyproject.toml dev --pin black)
     test -n "$black_version"
 
     isort_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
-        /opt/dep-check/pyproject.toml dev-common --pin isort)
+        /opt/dep-check/pyproject.toml dev --pin isort)
     test -n "$isort_version"
+
+    # Resolve the CuPy wheel matching this image's CUDA toolkit. The wheel
+    # name depends on the local CUDA major, so it is not static pyproject
+    # metadata; the build_support helper owns the selection.
+    cupy_pkg=$(python3 /opt/dep-check/gsplat/build_support/cupy_requirement.py)
 
     # Dev/test deps
     packages=(
@@ -189,15 +195,19 @@ RUN --mount=type=tmpfs,target=/tmp \
         "pyyaml==6.0.1"
         "build==1.3.0"
         "twine==1.6.0"
-        "cupy-cuda${CUDA_VERSION%%.*}x==13.6.0"
+        "${cupy_pkg}==13.6.0"
         "nerfacc==0.5.3"
         "imageio[ffmpeg]==2.37.2"
         "torchpq==0.3.0.6"
     )
     plas_pkg="PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
 
+    # The image provisions dependencies before a gsplat wheel exists, so keep
+    # the helper-derived dynamic CuPy requirement as an explicit check source.
+    printf '%s\n' "${cupy_pkg}" > /opt/dep-check/cupy_requirement.txt
     check_gsplat_deps.sh \
-        -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
+        -f /opt/dep-check/pyproject.toml:dev \
+        -f /opt/dep-check/cupy_requirement.txt \
         -- "${packages[@]}" "$plas_pkg"
 
     # The CUDA-major-specific CuPy wheel avoids compiling CuPy from source.
@@ -269,7 +279,8 @@ RUN --mount=type=tmpfs,target=/tmp \
 
     check_gsplat_deps.sh \
         -f /opt/dep-check/pyproject.toml:dependencies \
-        -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
+        -f /opt/dep-check/pyproject.toml:dev \
+        -f /opt/dep-check/cupy_requirement.txt \
         -f /opt/dep-check/pyproject.toml:examples \
         -f /opt/dep-check/examples/requirements.txt \
         -- "${base_pkgs[@]}" "${dev_pkgs[@]}" "$fused_ssim" "${packages[@]}"

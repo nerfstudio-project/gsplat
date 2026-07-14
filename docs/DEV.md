@@ -14,17 +14,17 @@ first run. The benefit of JIT compiling is that it does incremental compiling as
 you modify your cuda code so it is much faster than re-compile through pip. Note
 the JIT compiled library can be found under `~/.cache/torch_extensions/py*-cu*/`.
 
-Choose the development extra matching the local CUDA toolkit. CUDA 12 is the
-default shown below; use `dev-cuda13` instead when developing with CUDA 13.
+Install the development extra. The CuPy wheel matching the local CUDA toolkit
+is selected automatically.
 
 ```bash
-BUILD_NO_CUDA=1 pip install -e ".[dev-cuda12]"
+BUILD_NO_CUDA=1 pip install -e ".[dev]"
 ```
 
 If you won't touch the underlying CUDA code, you can just install with compiling:
 
 ```bash
-pip install -e ".[dev-cuda12]"
+pip install -e ".[dev]"
 ```
 
 ### Compiled feature widths
@@ -84,7 +84,7 @@ Note that `pytest` recognizes and runs all functions named as `test_*`, so you s
 If you want to contribute to the doc, here is the way to build it locally. The source code of the doc can be found in `docs/source` and the built doc will be in `_build/`. If you are interested in contributing with the doc, here are some examples on documentation: [viser](https://github.com/nerfstudio-project/viser/tree/main/docs/source), [nerfstudio](https://github.com/nerfstudio-project/nerfstudio/tree/main/docs), [nerfacc](https://github.com/KAIR-BAIR/nerfacc/tree/master/docs/source).
 
 ```bash
-pip install -e ".[dev-cuda12]"
+pip install -e ".[dev]"
 pip install -r docs/requirements.txt
 sphinx-build docs/source _build 
 ```

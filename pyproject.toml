@@ -69,10 +69,10 @@ examples = [
     "matplotlib",
     "imageio>=2.37.2",
 ]
-# Shared development dependencies. Install one of the composite dev-cuda*
-# extras below so the environment contains exactly one CUDA-matched CuPy
-# distribution; dev-common is only their composition building block.
-dev-common = [
+# Development dependencies. Install with `pip install gsplat[dev]`. CuPy is
+# intentionally absent: its wheel name depends on the local CUDA toolkit and
+# is resolved dynamically by gsplat/build_support/cupy_requirement.py.
+dev = [
     # Parsing the project metadata outside pip's build isolation needs these.
     "packaging>=21.3",
     'tomli>=1.2; python_version < "3.11"',
@@ -96,14 +96,6 @@ dev-common = [
     "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git",
     "imageio>=2.37.2",
     "torchpq>=0.3.0.6",
-]
-dev-cuda12 = [
-    "gsplat[dev-common]",
-    "cupy-cuda12x",
-]
-dev-cuda13 = [
-    "gsplat[dev-common]",
-    "cupy-cuda13x",
 ]
 
 [project.urls]

@@ -48,7 +48,7 @@ read_dev_pin() {
     local package="$1"
 
     python3 "${repo_root}/gsplat/build_support/pyproject_metadata.py" \
-        "${repo_root}/pyproject.toml" dev-common --pin "${package}"
+        "${repo_root}/pyproject.toml" dev --pin "${package}"
 }
 
 usage() {

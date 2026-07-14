@@ -56,17 +56,15 @@ SEGMENTED_SORT_SOURCES = [
 ]
 
 
-def test_cuda_dev_extras_compose_the_common_dependencies():
-    """Each supported development extra selects exactly one CuPy variant."""
+def test_dev_extra_omits_the_dynamic_cupy_requirement():
+    """The dev extra is CUDA-agnostic; CuPy is resolved dynamically."""
     if not HAS_SOURCE_TREE:
         pytest.skip("pyproject.toml is only available in a source checkout")
 
     with (REPO_ROOT / "pyproject.toml").open("rb") as f:
         extras = tomllib.load(f)["project"]["optional-dependencies"]
 
-    assert "dev" not in extras
-    assert extras["dev-cuda12"] == ["gsplat[dev-common]", "cupy-cuda12x"]
-    assert extras["dev-cuda13"] == ["gsplat[dev-common]", "cupy-cuda13x"]
+    assert not any(dep.startswith("cupy") for dep in extras["dev"])
 
 
 def _installed_files() -> list[metadata.PackagePath]:

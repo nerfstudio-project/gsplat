@@ -102,7 +102,8 @@ else
     mapfile -t pkgs < /opt/dep-check/all_packages.txt
     args=(
         -f "$PWD/pyproject.toml:dependencies"
-        -f "$PWD/pyproject.toml:dev-cuda${CUDA_VERSION%%.*}"
+        -f "$PWD/pyproject.toml:dev"
+        -f /opt/dep-check/cupy_requirement.txt
         -f "$PWD/pyproject.toml:examples"
     )
     if [[ -f "$PWD/examples/requirements.txt" ]]; then
