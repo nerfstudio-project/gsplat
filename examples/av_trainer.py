@@ -1282,10 +1282,11 @@ def train(
                 f"{max(1, step) / elapsed:.0f} it/s | {mem_peak:.0f} MB"
             )
 
-        # Evaluation
+        # Schedule periodic evaluations by completed-step count.
+        completed_step = step + 1
         if (
-            eval_every > 0 and step > 0 and step % eval_every == 0
-        ) or step == max_steps - 1:
+            eval_every > 0 and completed_step % eval_every == 0
+        ) or completed_step == max_steps:
             is_last = step == max_steps - 1
             psnrs = []
             with torch.no_grad():

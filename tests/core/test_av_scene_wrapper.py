@@ -252,3 +252,24 @@ def test_av_train_writes_checkpoint_at_eval_step(av_train_env) -> None:
     assert payload["step"] == 1
     assert payload["scene_path"] == "assets/test_pandaset.npz"
     assert set(payload.keys()) == {"step", "scene_path", "scene_id", "splats"}
+
+
+def test_av_train_evaluates_at_completed_step_boundaries(av_train_env) -> None:
+    env = av_train_env
+
+    losses, checkpoints = av_trainer.train(
+        scene_path="assets/test_pandaset.npz",
+        max_steps=3,
+        lr=1e-3,
+        log_every=1,
+        eval_every=2,
+        result_dir=env.result_dir,
+    )
+
+    assert len(losses) == 3
+    assert [checkpoint["step"] for checkpoint in checkpoints] == [2, 3]
+    assert [
+        os.path.basename(checkpoint["checkpoint_path"]) for checkpoint in checkpoints
+    ] == ["ckpt_00002.pt", "ckpt_00003.pt"]
+    assert os.path.exists(os.path.join(env.result_dir, "stats", "step00002.json"))
+    assert os.path.exists(os.path.join(env.result_dir, "stats", "step00003.json"))

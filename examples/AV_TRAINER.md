@@ -125,3 +125,12 @@ python examples/av_trainer.py $COMMON --mcmc --sh-degree 3 --result-dir results/
 # 4. + LiDAR rendering
 python examples/av_trainer.py $COMMON --mcmc --sh-degree 3 --lidar-render --result-dir results/4_lidar
 ```
+
+Periodic evaluations run after completed training steps `k * eval_every` and at
+`max_steps`. Artifact names and checkpoint metadata use the same completed-step
+number, so a step boundary produces matching `stats/stepNNNNN.json` and
+`ckpts/ckpt_NNNNN.pt` artifacts.
+
+Each stats file records the evaluation `mean_psnr`, and `summary.json` includes
+that value in its `checkpoints` entries. Final evaluation renders are written
+under `renders/`.
