@@ -13,13 +13,15 @@ optional-dependency group name, optionally restricted to named packages as
 satisfied requirement on stdout and one line per unmet requirement on stderr,
 exiting non-zero when any requirement is unmet. A requirement repeated by a
 later section (for example through a same-project extra such as
-``gsplat[test]`` inside ``dev``) is checked once, under the first
-section that declares it.
+``gsplat[test]`` inside ``dev``) is checked once, under the first section that
+declares it. Additional build-dependent requirements may be passed as
+``--require <requirement>``.
 Only reports — never installs.
 """
 
 from __future__ import annotations
 
+import argparse
 import importlib.metadata
 import pathlib
 import sys
@@ -35,49 +37,80 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from pyproject_metadata import extract_section  # noqa: E402
 
 
-def check_requirements(pyproject_path, section, seen, only=None):
-    """Yield a ``(satisfied, message)`` pair per applicable ``section`` requirement.
+def check_requirement(requirement_text, section, seen, only=None):
+    """Yield the result for one applicable requirement.
 
     ``seen`` carries the requirement lines already checked by earlier sections;
     ``only`` optionally restricts the check to the named packages.
     """
 
-    for line in extract_section(pyproject_path, section):
-        if line in seen:
-            continue
-        seen.add(line)
-        requirement = Requirement(line)
-        if only is not None and canonicalize_name(requirement.name) not in only:
-            continue
-        if requirement.marker is not None and not requirement.marker.evaluate():
-            continue
-        try:
-            installed = importlib.metadata.version(requirement.name)
-        except importlib.metadata.PackageNotFoundError:
-            yield False, f"[{section}] '{line}' is not installed"
-            continue
-        # Direct-URL requirements pin a source, not a version; presence is all
-        # the environment can be checked for.
-        if requirement.url is None and not requirement.specifier.contains(
-            installed, prereleases=True
-        ):
-            yield False, f"[{section}] '{line}' is unmet by the installed version {installed}"
-        else:
-            constraint = (
-                f" ({requirement.specifier})" if str(requirement.specifier) else ""
-            )
-            yield True, f"{requirement.name} {installed}{constraint}"
+    if requirement_text in seen:
+        return
+    seen.add(requirement_text)
+    requirement = Requirement(requirement_text)
+    if only is not None and canonicalize_name(requirement.name) not in only:
+        return
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        return
+    try:
+        installed = importlib.metadata.version(requirement.name)
+    except importlib.metadata.PackageNotFoundError:
+        yield False, f"[{section}] '{requirement_text}' is not installed"
+        return
+    # Direct-URL requirements pin a source, not a version; presence is all the
+    # environment can be checked for.
+    if requirement.url is None and not requirement.specifier.contains(
+        installed, prereleases=True
+    ):
+        yield (
+            False,
+            f"[{section}] '{requirement_text}' is unmet by the installed version "
+            f"{installed}",
+        )
+    else:
+        constraint = f" ({requirement.specifier})" if str(requirement.specifier) else ""
+        yield True, f"{requirement.name} {installed}{constraint}"
+
+
+def check_requirements(pyproject_path, section, seen, only=None):
+    """Yield results for the requirements declared by ``section``."""
+
+    for requirement_text in extract_section(pyproject_path, section):
+        yield from check_requirement(requirement_text, section, seen, only)
 
 
 def main(argv):
-    if len(argv) < 3:
-        raise SystemExit(f"usage: {argv[0]} <pyproject.toml> <section>...")
+    parser = argparse.ArgumentParser(
+        prog=argv[0],
+        description="verify declared and build-dependent Python requirements",
+    )
+    parser.add_argument("pyproject_path")
+    parser.add_argument("sections", nargs="*")
+    parser.add_argument(
+        "--require",
+        dest="build_requirements",
+        action="append",
+        default=[],
+        help="additional build-dependent requirement to verify",
+    )
+    arguments = parser.parse_args(argv[1:])
+    if not arguments.sections and not arguments.build_requirements:
+        parser.error("at least one section or --require is required")
+
     unmet = 0
     seen = set()
-    for spec in argv[2:]:
+    for spec in arguments.sections:
         section, _, names = spec.partition(":")
         only = {canonicalize_name(n) for n in names.split(",")} if names else None
-        for satisfied, message in check_requirements(argv[1], section, seen, only):
+        for satisfied, message in check_requirements(
+            arguments.pyproject_path, section, seen, only
+        ):
+            print(message, file=sys.stdout if satisfied else sys.stderr)
+            unmet += not satisfied
+    for requirement_text in arguments.build_requirements:
+        for satisfied, message in check_requirement(
+            requirement_text, "build metadata", seen
+        ):
             print(message, file=sys.stdout if satisfied else sys.stderr)
             unmet += not satisfied
     return 1 if unmet else 0

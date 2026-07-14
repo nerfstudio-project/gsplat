@@ -63,7 +63,7 @@ class PngCompression:
         This class requires the `imageio <https://pypi.org/project/imageio/>`_,
         `vc-flas <https://pypi.org/project/vc-flas/>`_,
         and `torchpq <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_ packages to be installed.
-        Install them with ``pip install "gsplat[png]"``. Build metadata selects
+        Install them with ``pip install "gsplat[png]"``. Wheel metadata selects
         the CuPy distribution matching the CUDA major used to build gsplat.
 
     .. warning::

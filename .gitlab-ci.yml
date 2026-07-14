@@ -155,8 +155,6 @@ build-release:
       if python -m pip show gsplat >/dev/null 2>&1; then
         python -m pip uninstall --yes gsplat
       fi
-      # Install the wheel and its complete test environment. Wheel metadata
-      # selected CuPy from the CUDA-enabled Torch used for this wheel build.
       python -m pip install "${wheel_file}[test]"
       python -c "import gsplat; print('gsplat:', gsplat.__version__, gsplat.__file__)"
       gsplat-test

@@ -270,7 +270,10 @@ torch_cuda_tag="cu${cuda_version/./}"
 torch_index_url="https://download.pytorch.org/whl/${torch_cuda_tag}"
 
 cuda_major=${cuda_version%%.*}
-cupy_requirement=${CUPY_PACKAGE:-"cupy-cuda${cuda_major}x"}
+cupy_requirement=$("${metadata_python}" -B \
+    "${repo_root}/gsplat/build_support/wheel_build_metadata.py" \
+    --cupy-requirement "${cuda_version}") \
+    || die "could not select CuPy for CUDA ${cuda_version}"
 
 # -----------------------------------------------------------------------------
 # Dependency metadata
@@ -288,9 +291,8 @@ trap cleanup EXIT
 """Emit bootstrap requirements as NUL-delimited strings.
 
 The first item is the Torch requirement. Remaining items are the union of the
-build requirements, project dependencies, and recursively expanded shared
-development extra. Same-project extra references are expanded instead of
-emitted.
+build requirements, project dependencies, and recursively expanded development
+extra. Same-project extra references are expanded instead of emitted.
 """
 
 from __future__ import annotations
@@ -349,8 +351,9 @@ requirements = [
     *build_requirements,
     *project_requirements,
     *_metadata.expand_optional_group(project, "dev"),
-    # torchpq imports CuPy without declaring it. Bootstrap already selected
-    # nvcc, so choose the corresponding CUDA-major wheel deterministically.
+    # torchpq imports CuPy without declaring it. Choose the CUDA-major wheel
+    # from bootstrap's selected dependency version; bootstrap validates Torch
+    # against it below, and CMake later validates the compiler against Torch.
     cupy_requirement,
 ]
 

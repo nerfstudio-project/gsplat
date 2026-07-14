@@ -61,7 +61,6 @@ def test_png_dependency_failures_are_atomic(monkeypatch, tmp_path, cupy_state):
         error = "requires a CUDA-matched CuPy"
     else:
         cupy_cuda_major = cuda_major + 1
-        monkeypatch.setattr(torch.version, "cuda", f"{cupy_cuda_major}.0")
         monkeypatch.setitem(
             sys.modules,
             "cupy",

@@ -86,9 +86,6 @@ test = [
     "opencv-python-headless",
     "nerfacc>=0.5.3",
 ]
-# Development dependencies. Install with `pip install gsplat[dev]`. CuPy is
-# intentionally absent: its wheel name depends on the local CUDA toolkit and
-# is resolved dynamically by gsplat/build_support/cupy_requirement.py.
 dev = [
     "gsplat[test]",
     "cmake>=3.26",

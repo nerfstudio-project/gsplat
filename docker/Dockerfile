@@ -112,7 +112,7 @@ COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 COPY --link --from=gsplatrepo pyproject.toml /opt/dep-check/pyproject.toml
 COPY --link --from=gsplatrepo config.yaml /opt/dep-check/config.yaml
 COPY --link --from=gsplatrepo gsplat/build_support/pyproject_metadata.py /opt/dep-check/gsplat/build_support/pyproject_metadata.py
-COPY --link --from=gsplatrepo gsplat/build_support/cupy_requirement.py /opt/dep-check/gsplat/build_support/cupy_requirement.py
+COPY --link --from=gsplatrepo gsplat/build_support/wheel_build_metadata.py /opt/dep-check/gsplat/build_support/wheel_build_metadata.py
 COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
 COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirements.txt
 
@@ -163,10 +163,8 @@ RUN --mount=type=tmpfs,target=/tmp \
         /opt/dep-check/pyproject.toml dev --pin gersemi)
     test -n "$gersemi_version"
 
-    # Resolve the CuPy wheel matching this image's CUDA toolkit. The wheel
-    # name depends on the local CUDA major, so it is not static pyproject
-    # metadata; the build_support helper owns the selection.
-    cupy_pkg=$(python3 /opt/dep-check/gsplat/build_support/cupy_requirement.py)
+    cupy_package=$(python3 /opt/dep-check/gsplat/build_support/wheel_build_metadata.py \
+        --cupy-requirement-for-build-torch)
 
     # Dev/test deps
     packages=(
@@ -194,7 +192,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         "pyyaml==6.0.1"
         "build==1.3.0"
         "twine==1.6.0"
-        "${cupy_pkg}==13.6.0"
+        "${cupy_package}==13.6.0"
         "nerfacc==0.5.3"
         "imageio[ffmpeg]==2.37.2"
         "torchpq==0.3.0.6"
@@ -202,8 +200,8 @@ RUN --mount=type=tmpfs,target=/tmp \
     )
 
     # The image provisions dependencies before a gsplat wheel exists, so keep
-    # the helper-derived dynamic CuPy requirement as an explicit check source.
-    printf '%s\n' "${cupy_pkg}" > /opt/dep-check/cupy_requirement.txt
+    # the provider-derived dynamic requirement as an explicit check source.
+    printf '%s\n' "${cupy_package}" > /opt/dep-check/cupy_requirement.txt
     check_gsplat_deps.sh \
         -f /opt/dep-check/pyproject.toml:dev \
         -f /opt/dep-check/cupy_requirement.txt \

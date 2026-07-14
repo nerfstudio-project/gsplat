@@ -14,7 +14,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 METADATA_HELPER_PATH = REPO_ROOT / "gsplat/build_support/pyproject_metadata.py"
-CUPY_REQUIREMENT_HELPER_PATH = REPO_ROOT / "gsplat/build_support/cupy_requirement.py"
+ENVIRONMENT_CHECK_PATH = REPO_ROOT / "gsplat/build_support/environment_check.py"
 
 
 def _load_metadata_helper():
@@ -24,19 +24,6 @@ def _load_metadata_helper():
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_cupy_requirement_helper():
-    """Load the CuPy-selection helper without importing gsplat."""
-
-    spec = importlib.util.spec_from_file_location(
-        "_gsplat_cupy_requirement", CUPY_REQUIREMENT_HELPER_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -176,69 +163,41 @@ def test_pyproject_metadata_command_line_interface(pyproject_path):
     assert pin.stdout == "22.3.0\n"
 
 
-def test_cupy_requirement_env_override_wins(monkeypatch):
-    """CUPY_PACKAGE short-circuits detection entirely."""
-
-    cupy_requirement = _load_cupy_requirement_helper()
-    monkeypatch.setenv("CUPY_PACKAGE", "cupy-cuda99x")
-
-    assert cupy_requirement.detect_cupy_requirement() == "cupy-cuda99x"
-
-
-def test_cupy_requirement_detected_from_nvcc_version_output(monkeypatch):
-    """A parseable ``nvcc --version`` selects the matching CuPy wheel."""
-
-    cupy_requirement = _load_cupy_requirement_helper()
-    monkeypatch.delenv("CUPY_PACKAGE", raising=False)
-    monkeypatch.setattr(
-        cupy_requirement.subprocess,
-        "check_output",
-        lambda *args, **kwargs: "Cuda compilation tools, release 12.4, V12.4.99",
-    )
-
-    assert cupy_requirement.detect_cupy_requirement() == "cupy-cuda12x"
-
-
-def test_cupy_requirement_falls_back_to_cuda_h_when_nvcc_output_unparseable(
-    monkeypatch, tmp_path
+def test_environment_check_combines_declared_and_build_dependent_requirements(
+    pyproject_path,
 ):
-    """An unparseable ``nvcc`` output falls back to ``cuda.h``'s CUDA_VERSION."""
+    """The checker combines pyproject sections with dynamic requirements."""
 
-    cupy_requirement = _load_cupy_requirement_helper()
-    monkeypatch.delenv("CUPY_PACKAGE", raising=False)
-    monkeypatch.setattr(
-        cupy_requirement.subprocess,
-        "check_output",
-        lambda *args, **kwargs: "not a recognizable nvcc banner",
+    satisfied = subprocess.run(
+        [
+            sys.executable,
+            str(ENVIRONMENT_CHECK_PATH),
+            str(pyproject_path),
+            "test",
+            "--require",
+            "packaging>=21.3",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
     )
+    assert satisfied.returncode == 0
+    assert "pytest " in satisfied.stdout
+    assert "packaging " in satisfied.stdout
 
-    cuda_home = tmp_path / "cuda"
-    (cuda_home / "include").mkdir(parents=True)
-    (cuda_home / "include" / "cuda.h").write_text("#define CUDA_VERSION 12040\n")
-    monkeypatch.setenv("CUDA_HOME", str(cuda_home))
-    monkeypatch.delenv("CUDA_PATH", raising=False)
-
-    with pytest.warns(UserWarning, match="unparseable"):
-        assert cupy_requirement.detect_cupy_requirement() == "cupy-cuda12x"
-
-
-def test_cupy_requirement_defaults_to_bare_cupy_when_nothing_detected(
-    monkeypatch, tmp_path
-):
-    """No override, no readable ``nvcc``, no readable ``cuda.h`` -> bare ``cupy``."""
-
-    cupy_requirement = _load_cupy_requirement_helper()
-    monkeypatch.delenv("CUPY_PACKAGE", raising=False)
-
-    def _nvcc_not_found(*_args, **_kwargs):
-        raise FileNotFoundError("nvcc")
-
-    def _cuda_h_not_found(*_args, **_kwargs):
-        raise FileNotFoundError("cuda.h")
-
-    monkeypatch.setattr(cupy_requirement.subprocess, "check_output", _nvcc_not_found)
-    monkeypatch.setattr(cupy_requirement, "open", _cuda_h_not_found, raising=False)
-    monkeypatch.setenv("CUDA_HOME", str(tmp_path / "does-not-exist"))
-    monkeypatch.delenv("CUDA_PATH", raising=False)
-
-    assert cupy_requirement.detect_cupy_requirement() == "cupy"
+    missing_name = "gsplat-build-dependent-package-that-does-not-exist"
+    missing = subprocess.run(
+        [
+            sys.executable,
+            str(ENVIRONMENT_CHECK_PATH),
+            str(pyproject_path),
+            "test",
+            "--require",
+            missing_name,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode == 1
+    assert f"[build metadata] '{missing_name}' is not installed" in missing.stderr

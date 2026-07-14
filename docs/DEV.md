@@ -43,10 +43,10 @@ Use `./bootstrap.sh --help` to see the Python and CUDA options.
 Bootstrap installs the complete development and test dependency set, including
 the optional PNG compression feature. It selects CuPy from the requested or
 detected dependency CUDA major, rather than from the GPU driver's maximum
-supported version. CMake separately verifies that the compiler and Torch use
-the same CUDA major. The `vc-flas` dependency currently limits these
-environments to Python 3.10 through 3.12. The base gsplat package continues to
-support Python 3.13 when the `png`, `test`, and development extras are not
+supported version. A later CMake configuration verifies that the build
+compiler and Torch use the same CUDA major. The `vc-flas` dependency currently
+limits these environments to Python 3.10 through 3.12. The base gsplat package
+continues to support Python 3.13 when the `png`, `test`, and `dev` extras are not
 selected.
 
 ## Develop with a CMake build tree
@@ -215,8 +215,8 @@ For a portable development wheel, replace `full-release` with `debug` or
 `release` in both the `build-dir` and `cmake.args` settings.
 
 The build above includes the test payload because `GSPLAT_BUILD_TESTS` is `ON`
-by default. Install the wheel's test extra to resolve its complete test
-environment, including the CuPy distribution selected by build metadata:
+by default. Install its test extra to resolve the complete test environment,
+including the CuPy distribution selected by the wheel's build metadata:
 
 ```bash
 wheel_file=dist/WHEEL_FILENAME.whl
@@ -224,9 +224,11 @@ python -m pip install "${wheel_file}[test]"
 gsplat-test
 ```
 
-Wheel metadata selects CuPy from build-environment Torch. Configuration rejects
-a compiler with a different CUDA major, so the selected distribution matches
-the CUDA toolkit compiled into gsplat.
+Wheel metadata selects CuPy from the CUDA toolkit reported by the build
+environment's Torch. Configuration rejects a CUDA compiler with a different
+major, so every successful wheel selects the major compiled into gsplat. The
+PNG compression entry point verifies that invariant again at runtime, catching
+an environment where CuPy or gsplat was replaced after installation.
 
 The runner also supports selecting one suite and forwarding its remaining
 arguments to GoogleTest or pytest:

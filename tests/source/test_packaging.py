@@ -55,19 +55,8 @@ SEGMENTED_SORT_SOURCES = [
 ]
 
 
-def test_dev_extra_omits_the_dynamic_cupy_requirement():
-    """The dev extra is CUDA-agnostic; CuPy is resolved dynamically."""
-    if not HAS_SOURCE_TREE:
-        pytest.skip("pyproject.toml is only available in a source checkout")
-
-    with (REPO_ROOT / "pyproject.toml").open("rb") as f:
-        extras = tomllib.load(f)["project"]["optional-dependencies"]
-
-    assert not any(dep.startswith("cupy") for dep in extras["dev"])
-
-
 def test_feature_extras_are_public():
-    """Source metadata exposes the documented PNG and test feature names."""
+    """Source metadata exposes the documented public feature names."""
 
     if not HAS_SOURCE_TREE:
         pytest.skip("pyproject.toml is only available in a source checkout")
@@ -75,7 +64,7 @@ def test_feature_extras_are_public():
     with (REPO_ROOT / "pyproject.toml").open("rb") as f:
         extras = tomllib.load(f)["project"]["optional-dependencies"]
 
-    assert {"png", "test"}.issubset(extras)
+    assert {"png", "test", "dev"}.issubset(extras)
 
 
 def _installed_files() -> list[metadata.PackagePath]:

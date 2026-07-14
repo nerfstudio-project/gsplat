@@ -145,7 +145,7 @@ def test_cmake_build_requirements_include_project_torch(monkeypatch, hook_name):
 def test_wheel_metadata_selects_build_torch_and_cupy(
     monkeypatch, build_state, cuda_version, cupy_requirement
 ):
-    """Every wheel state records build-compatible Torch and CuPy requirements."""
+    """Every wheel state records the build Torch ABI and CUDA-matched CuPy."""
 
     provider_module = _load_wheel_metadata_provider()
     queried_packages = []
@@ -194,6 +194,35 @@ def test_sdist_metadata_keeps_the_static_torch_compatibility_floor(monkeypatch):
     assert provider.dynamic_wheel({}) == {"dependencies": True}
 
 
+@pytest.mark.parametrize("cuda_version", [None, "", "cpu", "12", "12.x", 12.8])
+def test_cupy_requirement_rejects_missing_or_malformed_cuda(cuda_version):
+    """CPU-only and malformed CUDA identities fail instead of guessing a wheel."""
+
+    provider_module = _load_wheel_metadata_provider()
+
+    with pytest.raises(RuntimeError, match="cannot select CuPy"):
+        provider_module.cupy_requirement_for_cuda(cuda_version)
+
+
+def test_build_torch_cupy_command_uses_torch_cuda(monkeypatch, capsys):
+    """Configure-time dependency checks share wheel metadata's Torch selector."""
+
+    provider_module = _load_wheel_metadata_provider()
+    monkeypatch.setattr(
+        provider_module,
+        "cupy_requirement_for_build_torch",
+        lambda: "cupy-cuda13x",
+    )
+
+    assert (
+        provider_module._main(
+            ["wheel_build_metadata.py", "--cupy-requirement-for-build-torch"]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "cupy-cuda13x\n"
+
+
 def test_wheel_metadata_provider_rejects_invalid_protocol_inputs():
     """Missing state, unknown state, and unsupported settings fail clearly."""
 
@@ -214,7 +243,7 @@ def test_wheel_metadata_provider_rejects_invalid_protocol_inputs():
 
 
 def test_prepared_wheel_metadata_selects_build_torch_and_cupy(monkeypatch, tmp_path):
-    """The real backend merges build-compatible Torch and CuPy metadata."""
+    """The real backend merges the build-dependent Torch and CuPy metadata."""
 
     backend = _load_build_backend()
     # CTest runs source tests from the build tree. PEP 517 hooks, however,
@@ -231,7 +260,7 @@ def test_prepared_wheel_metadata_selects_build_torch_and_cupy(monkeypatch, tmp_p
     ]
 
     # Derive the expected name independently from the provider under test.
-    # CMake enforces this Torch CUDA major against the selected compiler.
+    # CMake later enforces this Torch CUDA major against the selected compiler.
     import torch
 
     assert torch.version.cuda is not None
@@ -248,6 +277,7 @@ def test_prepared_wheel_metadata_selects_build_torch_and_cupy(monkeypatch, tmp_p
     assert cupy_requirements[0].marker is not None
     assert cupy_requirements[0].marker.evaluate({"extra": "png"})
     assert not cupy_requirements[0].marker.evaluate({"extra": ""})
+    assert {"png", "test", "dev"}.issubset(wheel_metadata.get_all("Provides-Extra"))
     assert not wheel_metadata.get_all("Dynamic", [])
 
 
@@ -292,6 +322,10 @@ def test_sdist_matches_recursive_git_manifest(tmp_path):
     relative_names = {name.split("/", 1)[1] for name in names if "/" in name}
 
     assert _direct_torch_requirements(sdist_metadata) == [_project_torch_requirement()]
+    assert not any(
+        canonicalize_name(Requirement(requirement).name).startswith("cupy-cuda")
+        for requirement in sdist_metadata.get_all("Requires-Dist", [])
+    )
     assert "Requires-Dist" in sdist_metadata.get_all("Dynamic", [])
 
     # scikit-build-core adds the generated core metadata; every other member

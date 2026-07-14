@@ -101,7 +101,6 @@ if [[ -f "$PWD/pyproject.toml" ]] && grep -q 'name = "gsplat"' "$PWD/pyproject.t
     args=(
         -f "$PWD/pyproject.toml:dependencies"
         -f "$PWD/pyproject.toml:dev"
-        -f /opt/dep-check/cupy_requirement.txt
         -f "$PWD/pyproject.toml:examples"
     )
     if [[ -f "$PWD/examples/requirements.txt" ]]; then
@@ -109,7 +108,32 @@ if [[ -f "$PWD/pyproject.toml" ]] && grep -q 'name = "gsplat"' "$PWD/pyproject.t
     else
         echo "WARNING: $PWD/examples/requirements.txt not found — skipping examples dependency check." >&2
     fi
-    check_gsplat_deps.sh "${args[@]}" -- "${pkgs[@]}" || true
+
+    check_checkout_dependencies()
+    {
+        local cupy_requirements_file=$1
+        check_gsplat_deps.sh \
+            "${args[@]}" \
+            -f "${cupy_requirements_file}" \
+            -- "${pkgs[@]}" \
+            || true
+    }
+
+    # Prefer the checked-out selector so this drift check notices dependency
+    # policy changes. The baked requirement remains a compatibility fallback
+    # for source trees that predate the provider.
+    metadata_provider="$PWD/gsplat/build_support/wheel_build_metadata.py"
+    if [[ -f "${metadata_provider}" ]]; then
+        if source_cupy_requirement=$(python3 -B "${metadata_provider}" \
+            --cupy-requirement-for-build-torch); then
+            check_checkout_dependencies <(printf '%s\n' "${source_cupy_requirement}")
+        else
+            echo "WARNING: could not resolve the checkout's CuPy dependency." >&2
+            check_checkout_dependencies /opt/dep-check/cupy_requirement.txt
+        fi
+    else
+        check_checkout_dependencies /opt/dep-check/cupy_requirement.txt
+    fi
 fi
 
 # Run the command as RUN_AS user
