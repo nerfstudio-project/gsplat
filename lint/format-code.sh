@@ -231,38 +231,36 @@ fi
 find_code_format() {
     local expected_version="$1"
     local expected_major="${expected_version%%.*}"
-    local code_format=""
-    local code_format_version_output=""
-    local installed_major=""
+    local candidate=""
+    local version_output=""
+    local installed_version=""
+    local -a found_versions=()
 
-    if command -v "clang-format-${expected_major}" >/dev/null 2>&1; then
-        code_format="clang-format-${expected_major}"
-    elif command -v clang-format >/dev/null 2>&1; then
-        code_format="clang-format"
-    else
-        echo "ERROR: clang-format is required to format C/C++/CUDA files." >&2
-        echo "Install clang-format-${expected_major}, or install clang-format at version ${expected_version}." >&2
-        exit 1
+    # The pip package exposes clang-format, while distribution packages often
+    # expose clang-format-<major>. Try both, but accept only the exact version
+    # that defines the repository's canonical formatting output.
+    for candidate in clang-format "clang-format-${expected_major}"; do
+        if ! command -v "${candidate}" >/dev/null 2>&1; then
+            continue
+        fi
+
+        version_output="$("${candidate}" --version)"
+        found_versions+=("${candidate}: ${version_output}")
+        if [[ "${version_output}" =~ version[[:space:]]+([^[:space:]]+) ]]; then
+            installed_version="${BASH_REMATCH[1]}"
+            if [[ "${installed_version}" == "${expected_version}" ]]; then
+                printf '%s\n' "${candidate}"
+                return
+            fi
+        fi
+    done
+
+    echo "ERROR: clang-format ${expected_version} is required to format C/C++/CUDA files." >&2
+    if (( ${#found_versions[@]} > 0 )); then
+        printf 'Found %s\n' "${found_versions[@]}" >&2
     fi
-
-    code_format_version_output="$("${code_format}" --version)"
-    if [[ "${code_format_version_output}" =~ version[[:space:]]+([0-9]+)([.[:space:]]|$) ]]; then
-        installed_major="${BASH_REMATCH[1]}"
-    else
-        echo "ERROR: Could not determine ${code_format} major version." >&2
-        echo "Found: ${code_format_version_output}" >&2
-        exit 1
-    fi
-
-    if [[ "${installed_major}" != "${expected_major}" ]]; then
-        echo "ERROR: clang-format major version mismatch." >&2
-        echo "Expected clang-format major version ${expected_major}." >&2
-        echo "Found: ${code_format_version_output}" >&2
-        echo "Install clang-format-${expected_major}, or install clang-format at version ${expected_version}." >&2
-        exit 1
-    fi
-
-    printf '%s\n' "${code_format}"
+    echo "Install it with 'pip install clang-format==${expected_version}'." >&2
+    exit 1
 }
 
 # Run the pinned formatters over the given files. ACTION is "format" (rewrite in
