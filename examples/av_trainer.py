@@ -291,14 +291,21 @@ def init_gaussians(
     sh_degree: int = 0,
 ) -> torch.nn.ParameterDict:
     """Initialize Gaussians from point cloud (LiDAR or SfM)."""
+    from gsplat.init_utils import knn_scale_init
+
     N = points.shape[0]
+    if N > 1:
+        log_scales = knn_scale_init(points, k=min(3, N - 1))
+        scales = log_scales[:, None].expand(-1, 3).clone()
+    else:
+        scales = torch.full((N, 3), -5.0, device=device)
+    quats = torch.zeros(N, 4, device=device)
+    quats[:, 0] = 1.0
     params = torch.nn.ParameterDict(
         {
             "means": torch.nn.Parameter(points.clone()),
-            "scales": torch.nn.Parameter(torch.full((N, 3), -5.0, device=device)),
-            "quats": torch.nn.Parameter(
-                F.normalize(torch.randn(N, 4, device=device), dim=-1)
-            ),
+            "scales": torch.nn.Parameter(scales),
+            "quats": torch.nn.Parameter(quats),
             "opacities": torch.nn.Parameter(
                 torch.logit(torch.full((N,), 0.1, device=device))
             ),
