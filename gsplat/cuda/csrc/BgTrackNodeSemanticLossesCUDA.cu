@@ -1692,6 +1692,15 @@ namespace
         auto *const workspace_ptr
             = reinterpret_cast<BgTrackNodeSemanticWorkspace<scalar_t> *>(workspace.data_ptr<int32_t>());
         C10_CUDA_CHECK(cudaMemsetAsync(workspace_ptr, 0, sizeof(BgTrackNodeSemanticWorkspace<scalar_t>), stream));
+        // Defensively zero the selection buffer like the generic launcher does:
+        // backward reads every selection byte, so correctness must not depend on
+        // the caller pre-zeroing the buffer or on every mask-word launch below
+        // covering every byte (a future all-zero-mask-word skip would otherwise
+        // leave stale selection bytes behind).
+        if(selection_bits.numel() > 0)
+        {
+            C10_CUDA_CHECK(cudaMemsetAsync(selection_bits.data_ptr<uint8_t>(), 0, selection_bits.numel(), stream));
+        }
 
         const dim3 threads(BLOCK_THREADS);
         if(background_in_track_enabled && n_tracks > 0)

@@ -1781,6 +1781,43 @@ class TestBgTrackNodeSemanticCUDA:
                         grad, clean_grad
                     ), f"{member}/{tag}: gradient differs from clean run"
 
+    def test_joint_forward_tolerates_prefilled_selection_buffer(self):
+        """Regression: the joint launcher must zero the selection buffer itself
+        (like the generic launcher) rather than relying on the wrapper's
+        zero-allocation plus full mask-word coverage — backward reads every
+        selection byte, so stale bytes would silently corrupt gradients."""
+        import unittest.mock as mock
+
+        inp, bg_lambda, node_lambda, _, _ = _scenario_joint_shared_primary()
+        inp = _move_inputs(inp, "cuda")
+
+        clean_inp, clean_leaves = _with_grad_leaves(inp)
+        clean_outputs = _call(_make_module(), clean_inp, bg_lambda, node_lambda)
+        clean_grads = _grads_of(
+            _objective(clean_outputs, bg_lambda, node_lambda), clean_leaves
+        )
+
+        real_zeros = torch.zeros
+
+        def poisoned_zeros(*args, **kwargs):
+            out = real_zeros(*args, **kwargs)
+            if kwargs.get("dtype") is torch.uint8:
+                out.fill_(255)  # garbage selection bytes: bits 0/1 both set
+            return out
+
+        dirty_inp, dirty_leaves = _with_grad_leaves(inp)
+        with mock.patch("gsplat.cuda._losses_wrapper.torch.zeros", poisoned_zeros):
+            dirty_outputs = _call(_make_module(), dirty_inp, bg_lambda, node_lambda)
+            dirty_grads = _grads_of(
+                _objective(dirty_outputs, bg_lambda, node_lambda), dirty_leaves
+            )
+
+        _assert_outputs_match(dirty_outputs, clean_outputs, dict(rtol=0.0, atol=0.0))
+        for clean_grad, dirty_grad in zip(clean_grads, dirty_grads):
+            assert torch.equal(
+                dirty_grad, clean_grad
+            ), "gradients depend on the selection buffer's initial contents"
+
     def test_production_scale_matches_fallback(self):
         """Production-scale smoke: the CUDA path stays finite and agrees with
         the fallback at real point counts (many blocks per launch)."""
