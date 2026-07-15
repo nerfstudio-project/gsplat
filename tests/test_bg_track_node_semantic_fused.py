@@ -468,6 +468,21 @@ def _scenario_node_only_use_exclude():
     return inp, DISABLED, NODE_LAMBDA, False, True
 
 
+def _scenario_node_only_populated_tracks():
+    """(2b) Node-semantic alone with POPULATED tracks and points inside
+    them: the disabled background member must not leak selection, loss, or
+    gradients (the mirror of the background-only dispatch case)."""
+    inp, _, node_lambda, _, expect_node = _scenario_node_only_use_exclude()
+    packinfo, poses, timestamps, dims = _make_tracks()
+    inp.update(
+        tracks_packinfo=packinfo,
+        tracks_poses=poses,
+        tracks_timestamps_us=timestamps,
+        cuboids_dims=dims,
+    )
+    return inp, DISABLED, node_lambda, False, expect_node
+
+
 def _scenario_joint_shared_primary():
     """(3) Joint mode: bg-in-track on the shared primary domain plus
     node-semantic on primary (exclude road) and the road node (use road).
@@ -557,6 +572,16 @@ def _scenario_packed_unfiltered():
     return inp, BG_LAMBDA, NODE_LAMBDA, True, True
 
 
+def _scenario_packed_empty_ids_polarities():
+    """(6b) Packed other segments with empty class-id tuples in both
+    polarities: ``((), False)`` selects every in-range point (select-all)
+    and ``((), True)`` selects none. The packed-other masking loop is
+    separate from the primary predicate, so both pins live here too."""
+    inp, bg_lambda, node_lambda, _, _ = _scenario_packed_unfiltered()
+    inp["other_segments"] = ((400, (), False), (N_OTHER, (), True))
+    return inp, bg_lambda, node_lambda, True, True
+
+
 def _scenario_empty_tracks():
     """(7a) T == 0: the background member must produce a hard zero."""
     inp, bg_lambda, node_lambda, _, _ = _scenario_bg_only_filtered()
@@ -603,11 +628,13 @@ def _scenario_production_scale():
 _SCENARIOS = {
     "bg_only_filtered": _scenario_bg_only_filtered,
     "node_only_use_exclude": _scenario_node_only_use_exclude,
+    "node_only_populated_tracks": _scenario_node_only_populated_tracks,
     "joint_shared_primary": _scenario_joint_shared_primary,
     "select_none_pin": _scenario_select_none_pin,
     "select_all_pin": _scenario_select_all_pin,
     "select_all_pin_multiword": _scenario_select_all_pin_multiword,
     "packed_unfiltered": _scenario_packed_unfiltered,
+    "packed_empty_ids_polarities": _scenario_packed_empty_ids_polarities,
     "empty_tracks": _scenario_empty_tracks,
     "zero_points": _scenario_zero_points,
     "joint_empty_other": _scenario_joint_empty_other,
@@ -1657,16 +1684,87 @@ class TestBgTrackNodeSemanticCUDA:
         assert outputs[0].reshape(()).item() == 0.0
         assert torch.isfinite(outputs[0].reshape(()))
 
+    def test_disabled_background_with_populated_tracks_is_hard_zero(self):
+        """background_lambda < 0 with real track boxes and points inside
+        them: the background outputs stay exact zeros and every gradient
+        matches the fallback — no leaked background selection or loss when
+        the member is off (mirror of the background-only dispatch case)."""
+        inp, bg_lambda, node_lambda, _, _ = _SCENARIOS["node_only_populated_tracks"]()
+        inp = _move_inputs(inp, "cuda")
+
+        cuda_inp, cuda_leaves = _with_grad_leaves(inp)
+        outputs = _call(_make_module(), cuda_inp, bg_lambda, node_lambda)
+        assert outputs[0].reshape(()).item() == 0.0
+        assert outputs[1].reshape(()).item() == 0.0
+        cuda_grads = _grads_of(_objective(outputs, bg_lambda, node_lambda), cuda_leaves)
+
+        fallback_inp, fallback_leaves = _with_grad_leaves(inp)
+        fallback_grads = _grads_of(
+            _objective(
+                _call(_fallback_module(), fallback_inp, bg_lambda, node_lambda),
+                bg_lambda,
+                node_lambda,
+            ),
+            fallback_leaves,
+        )
+        for cuda_grad, fallback_grad in zip(cuda_grads, fallback_grads):
+            torch.testing.assert_close(cuda_grad, fallback_grad, **GRAD_TOL)
+
+    @pytest.mark.parametrize("grad_input", ("density_logits", "other_density_logits"))
+    def test_partial_requires_grad_exercises_null_grad_buffers(self, grad_input):
+        """Only one density input requiring grad drives the wrapper's
+        needs_background / needs_other partial-grad branches, which hand the
+        native bwd op a null buffer for the other input. The produced
+        gradient must match the fallback under the identical setup, and the
+        frozen input must receive no gradient at all."""
+        frozen_input = (
+            "other_density_logits"
+            if grad_input == "density_logits"
+            else "density_logits"
+        )
+
+        def run(module):
+            inp, bg_lambda, node_lambda, _, _ = _scenario_joint_shared_primary()
+            inp = _move_inputs(inp, "cuda")
+            out = dict(inp)
+            leaf = out[grad_input].detach().clone().requires_grad_(True)
+            out[grad_input] = leaf
+            frozen = out[frozen_input].detach().clone()
+            out[frozen_input] = frozen
+            outputs = _call(module, out, bg_lambda, node_lambda)
+            _objective(outputs, bg_lambda, node_lambda).backward()
+            assert frozen.grad is None
+            assert leaf.grad is not None
+            return leaf.grad.clone()
+
+        torch.testing.assert_close(
+            run(_make_module()), run(_fallback_module()), **GRAD_TOL
+        )
+
     @pytest.mark.parametrize(
-        "scenario", ("bg_only_filtered", "joint_shared_primary", "packed_unfiltered")
+        "scenario",
+        (
+            "bg_only_filtered",
+            "node_only_use_exclude",
+            "joint_shared_primary",
+            "select_none_pin",
+            "select_all_pin",
+            "packed_unfiltered",
+        ),
     )
     def test_fp64_parity(self, scenario):
-        """The kernels are templated over fp64 as well as fp32."""
+        """The kernels are templated over fp64 as well as fp32. The fp64
+        reduction uses the wider workspace layout, so the outputs are pinned
+        against the independent reference too — a fp64-specific count or
+        mask bug shared by both module paths cannot hide behind the
+        fallback comparison."""
         inp, bg_lambda, node_lambda, _, _ = _SCENARIOS[scenario]()
         inp = _move_inputs(inp, "cuda", dtype=torch.float64)
 
         cuda_inp, cuda_leaves = _with_grad_leaves(inp)
         cuda_outputs = _call(_make_module(), cuda_inp, bg_lambda, node_lambda)
+        reference = _reference(inp, bg_lambda, node_lambda)
+        _assert_outputs_match(cuda_outputs, reference["outputs"], FP64_TOL)
         fallback_inp, fallback_leaves = _with_grad_leaves(inp)
         fallback_outputs = _call(
             _fallback_module(), fallback_inp, bg_lambda, node_lambda
