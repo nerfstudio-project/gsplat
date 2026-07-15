@@ -65,11 +65,21 @@ To check formatting without modifying files, use:
 lint/format-code.sh --check
 ```
 
-After cloning the repository, run the bootstrap script to initialize it for development, including the pre-commit formatting hook:
+After cloning the repository, run the bootstrap script; it installs the
+pre-commit formatting hook:
 
 ```bash
 ./bootstrap.sh
 ```
+
+The hook formats each commit automatically: it formats the staged content and
+re-stages it, so the commit always lands formatted. For a partially-staged
+file only the staged content is formatted; your unstaged edits are never
+touched (when they overlap or sit right next to the formatting, the hook
+prints a note that the
+working-tree copy was left as is). A commit whose staged changes were
+formatting-only is refused, since formatting reduces it to an empty commit. To
+skip the hook for one commit, use `git commit --no-verify`.
 
 Since there is no GPU supported on github workflow container, we don't test against those cuda unit tests under `tests/` in PR. So it is recommended to check test pass locally before committing:
 

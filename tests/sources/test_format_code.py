@@ -178,6 +178,28 @@ def _commit_file(repo, name, content):
     _git(["commit", "-qm", name], repo)
 
 
+# --- CLI contract (no formatter needed) -----------------------------------
+
+
+def test_help_advertises_precommit(repo):
+    # The installed hook detects --precommit as an indented options-list entry
+    # (leading space, then the flag); a bare mention would not satisfy it, so
+    # --help must list it that way.
+    import re
+
+    result = _run(repo, "--help")
+    assert result.returncode == 0
+    assert re.search(r"(?m)^[ \t]+--precommit(\s|$)", result.stdout)
+
+
+def test_precommit_implies_staged_mode(repo):
+    # --precommit expands to --staged; combining it with --full must be rejected
+    # as a mode conflict -- proving the expansion without running a formatter.
+    result = _run(repo, "--precommit", "--full")
+    assert result.returncode != 0
+    assert "combined" in result.stderr.lower()
+
+
 # --- --staged perform mode ------------------------------------------------
 
 
@@ -557,6 +579,16 @@ def test_staged_symlink_is_left_alone(repo):
     assert _git(["show", ":link.cu"], repo).stdout == "tgt  t.cu"  # blob untouched
     assert (repo / "link.cu").is_symlink()
     assert not (repo / "tgt  t.cu").exists()  # nothing written through the link
+
+
+def test_precommit_formats_and_restages(repo):
+    # --precommit must perform (format + re-stage), not merely check: a revert to
+    # --staged --check would leave the staged blob unformatted and exit non-zero.
+    _commit_file(repo, "pc.cu", "int p;\n")
+    (repo / "pc.cu").write_text("int  q;\n")
+    _git(["add", "pc.cu"], repo)
+    assert _run(repo, "--precommit").returncode == 0
+    assert _git(["show", ":pc.cu"], repo).stdout == "int q;\n"
 
 
 # --- selection modes -------------------------------------------------------

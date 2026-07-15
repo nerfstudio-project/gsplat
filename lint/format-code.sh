@@ -59,7 +59,7 @@ usage() {
     cat <<EOF
 Format code in the gsplat repository.
 
-Usage: ${script_name} [--check] [--full | --changed <ref> | --staged] [--help|-h]
+Usage: ${script_name} [--check] [--full | --changed <ref> | --staged] [--precommit] [--help|-h]
 
 Options:
   --check          Check formatting without modifying files.
@@ -67,6 +67,7 @@ Options:
   --changed <ref>  Format only source files changed since <ref> (e.g. for CI).
   --staged         Format the staged content and re-stage it (with --check,
                    check it instead of modifying anything).
+  --precommit      Run what the installed pre-commit hook needs.
   --help, -h       Show this help message.
 
 --full, --changed, and --staged select what to act on and are mutually
@@ -93,6 +94,14 @@ set_mode() {
 # Command line argument processing
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --precommit)
+            # Stable entry point for the installed pre-commit hook. The name must
+            # never change and usage() must keep it as an options-list entry --
+            # the hook greps --help for that entry to learn it can be run; only
+            # the expansion below may change.
+            set -- --staged "${@:2}"
+            continue
+            ;;
         --check)
             check_mode=true
             shift
