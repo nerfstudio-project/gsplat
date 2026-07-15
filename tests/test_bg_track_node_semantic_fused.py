@@ -885,9 +885,24 @@ def _slerp_cases():
 
     * ``sign_flip``: raw pose quaternions with a negative dot product pin
       the shortest-arc flip.
+    * ``sign_flip_off_mid``: same coaxial negative-dot pair sampled at
+      ``alpha = 0.25``. This one actually FAILS if the flip is removed:
+      at ``alpha = 0.5`` the long-way result is off by exactly 180 deg
+      about the box's own z axis, and a cuboid is symmetric under that,
+      so containment cannot tell — off-midpoint the error becomes a
+      90 deg local-z rotation, which swaps the unequal x/y half extents.
+    * ``sign_flip_skew_axes``: negative dot with distinct rotation axes
+      at ``alpha = 0.3``, so the long-way result is not related to the
+      correct one by any box symmetry.
     * ``near_parallel_lerp``: ``cos(omega) > 1 - 1e-3`` pins the kernel's
       normalized-lerp branch, at ``alpha = 0.25`` where lerp and slerp are
       not trivially identical (they are at 0.5).
+    * ``nlerp_threshold_band``: ``cos(omega)`` inside ``(1 - 1e-2,
+      1 - 1e-3)`` with a tightened probe margin, so widening the
+      normalized-lerp acceptance by an order of magnitude (or more)
+      routes this case through nlerp and moves the faces past the
+      probes. Together with ``near_parallel_lerp`` this pins the branch
+      threshold from both sides.
     * ``generic_mid_interval``: distinct rotation axes at ``alpha = 0.3``
       pin the generic ``sin``-path.
     * ``three_pose_second_interval``: a three-pose track whose camera
@@ -908,6 +923,32 @@ def _slerp_cases():
             bracket=(0, 1),
             branch="negative_dot",
         ),
+        "sign_flip_off_mid": dict(
+            poses=(
+                ((0.0, 0.0, 0.0), _axis_angle_quat((0.0, 0.0, 1.0), 40.0)),
+                (
+                    (0.4, -0.2, 0.6),
+                    _quat_neg(_axis_angle_quat((0.0, 0.0, 1.0), 100.0)),
+                ),
+            ),
+            timestamps_us=(0, 12),
+            camera_startend_us=(2, 4),  # midpoint 3 -> alpha 0.25
+            bracket=(0, 1),
+            branch="negative_dot",
+        ),
+        "sign_flip_skew_axes": dict(
+            poses=(
+                ((0.0, 0.0, 0.0), _axis_angle_quat((1.0, 2.0, 3.0), 50.0)),
+                (
+                    (0.5, -0.4, 0.3),
+                    _quat_neg(_axis_angle_quat((-2.0, 1.0, 1.0), 120.0)),
+                ),
+            ),
+            timestamps_us=(0, 10),
+            camera_startend_us=(2, 4),  # midpoint 3 -> alpha 0.3
+            bracket=(0, 1),
+            branch="negative_dot",
+        ),
         "near_parallel_lerp": dict(
             poses=(
                 ((0.0, 0.0, 0.0), _axis_angle_quat((0.0, 0.0, 1.0), 10.0)),
@@ -917,6 +958,22 @@ def _slerp_cases():
             camera_startend_us=(2, 4),  # midpoint 3 -> alpha 0.25
             bracket=(0, 1),
             branch="near_parallel",
+        ),
+        "nlerp_threshold_band": dict(
+            poses=(
+                ((0.0, 0.0, 0.0), _axis_angle_quat((0.0, 0.0, 1.0), 15.0)),
+                ((0.6, 0.3, -0.2), _axis_angle_quat((0.0, 0.0, 1.0), 27.0)),
+            ),
+            timestamps_us=(0, 12),
+            camera_startend_us=(2, 4),  # midpoint 3 -> alpha 0.25
+            bracket=(0, 1),
+            branch="threshold_band",
+            # nlerp-vs-slerp face displacement here is ~4e-5 (quat dot
+            # cos(6 deg) ~ 0.9945, alpha 0.25, ~1 m lever), so the default
+            # 1e-4 margin would not notice a widened nlerp acceptance;
+            # 1e-5 does, while staying orders of magnitude above the
+            # correct slerp path's fp64 divergence from the reference.
+            probe_margin=1e-5,
         ),
         "generic_mid_interval": dict(
             poses=(
@@ -969,6 +1026,8 @@ def _slerp_case_inputs(case):
         assert dot < 0.0 and -dot < 1.0 - 1e-3, "must pin the sign flip"
     elif case["branch"] == "near_parallel":
         assert dot > 1.0 - 1e-3, "must pin the normalized-lerp branch"
+    elif case["branch"] == "threshold_band":
+        assert 1.0 - 1e-2 < dot < 1.0 - 1e-3, "must sit just below the cutoff"
     else:
         assert 0.0 < dot < 1.0 - 1e-3, "must pin the generic sin branch"
 
@@ -978,13 +1037,14 @@ def _slerp_case_inputs(case):
     rot = _quat_rotmat_rows(q_ref)
     half = tuple(0.5 * d for d in _SLERP_BOX_DIMS)
 
+    margin = case.get("probe_margin", _SLERP_PROBE_MARGIN)
     positions = []
     expected_inside = []
     for axis in range(3):
         for sign in (1.0, -1.0):
             for factor, inside in (
-                (1.0 - _SLERP_PROBE_MARGIN, True),
-                (1.0 + _SLERP_PROBE_MARGIN, False),
+                (1.0 - margin, True),
+                (1.0 + margin, False),
             ):
                 local = [0.0, 0.0, 0.0]
                 local[axis] = sign * factor * half[axis]
@@ -997,7 +1057,7 @@ def _slerp_case_inputs(case):
                 )
                 expected_inside.append(inside)
     # Corner probes: inside on every axis / outside on every axis.
-    for factor, inside in ((0.99, True), (1.0 + _SLERP_PROBE_MARGIN, False)):
+    for factor, inside in ((0.99, True), (1.0 + margin, False)):
         local = [factor * h for h in half]
         positions.append(
             tuple(
@@ -1006,6 +1066,28 @@ def _slerp_case_inputs(case):
             )
         )
         expected_inside.append(inside)
+    # All-sign corner probes at (1 -/+ margin). Face-center probes move
+    # tangentially under a small rotation error (first-order invisible to
+    # containment), while a corner picks up a first-order perpendicular
+    # component on the neighboring axes — these are what actually pin
+    # small-angle errors such as a widened normalized-lerp acceptance.
+    for factor, inside in ((1.0 - margin, True), (1.0 + margin, False)):
+        for sx in (1.0, -1.0):
+            for sy in (1.0, -1.0):
+                for sz in (1.0, -1.0):
+                    local = [
+                        sx * factor * half[0],
+                        sy * factor * half[1],
+                        sz * factor * half[2],
+                    ]
+                    positions.append(
+                        tuple(
+                            center[row]
+                            + sum(rot[row][col] * local[col] for col in range(3))
+                            for row in range(3)
+                        )
+                    )
+                    expected_inside.append(inside)
 
     n_probes = len(positions)
     density_logits = [0.4 + 0.15 * i for i in range(n_probes)]
