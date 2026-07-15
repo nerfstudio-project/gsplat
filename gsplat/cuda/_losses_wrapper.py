@@ -470,13 +470,13 @@ class _FusedBgTrackNodeSemantic(torch.autograd.Function):
             Tensor[] background_semantic_logits,
             int[] background_segment_ends,
             int[] background_segment_class_ids,
-            int[] background_segment_class_offsets,
+            int[] background_segment_class_id_ends,
             Tensor other_density_logits,
             Tensor[] other_semantic_logits,
             int[] other_segment_ends,
             int[] other_segment_class_ids,
-            int[] other_segment_class_offsets,
-            bool[] other_segment_select_matches,
+            int[] other_segment_class_id_ends,
+            int[] other_segment_select_matches,
             Tensor camera_timestamps_startend_us, Tensor tracks_packinfo,
             Tensor tracks_poses, Tensor tracks_timestamps_us,
             Tensor cuboids_dims,
@@ -484,7 +484,7 @@ class _FusedBgTrackNodeSemantic(torch.autograd.Function):
             int[]? node_primary_class_ids, bool node_primary_select_matches,
             float density_logits_min,
             float background_lambda, float node_lambda,
-            Tensor(a!) track_boxes, Tensor(b!) selection_bits,
+            Tensor(a!) track_boxes, Tensor(b!) selection,
             Tensor(c!) workspace,
             Tensor(d!) background_unweighted_loss,
             Tensor(e!) background_weighted_loss,
@@ -493,20 +493,21 @@ class _FusedBgTrackNodeSemantic(torch.autograd.Function):
 
         bg_track_node_semantic_losses_bwd(
             Tensor background_density_logits, Tensor other_density_logits,
-            Tensor selection_bits, Tensor workspace,
-            Tensor grad_background_unweighted,
-            Tensor grad_background_weighted,
-            Tensor grad_node_unweighted, Tensor grad_node_weighted,
+            Tensor selection, Tensor workspace,
+            Tensor? grad_background_unweighted,
+            Tensor? grad_background_weighted,
+            Tensor? grad_node_unweighted, Tensor? grad_node_weighted,
             float background_lambda, float node_lambda,
             Tensor(a!)? grad_background_density_logits,
-            Tensor(b!)? grad_other_node_density_logits) -> ()
+            Tensor(b!)? grad_other_density_logits) -> ()
 
     Boundary conventions (all caller-allocated, written by the op):
 
     - Ragged per-segment class-id lists cross as a flat ``int[]`` plus a
-      ``len(segments) + 1`` prefix-offset ``int[]`` (segment *i* owns
-      ``class_ids[offsets[i]:offsets[i+1]]``); segment ends are exclusive
-      and nondecreasing. ``node_primary_class_ids is None`` means "no
+      ``len(segments)`` exclusive-end ``int[]`` with no leading zero
+      (segment *i* owns ``class_ids[ends[i-1]:ends[i]]``, the first segment
+      starting at 0); segment ends are exclusive and nondecreasing, and the
+      select flags cross as 0/1 ``int[]`` (checked host-side). ``node_primary_class_ids is None`` means "no
       predicate" (only legal when the joint mode is not selected).
     - ``semantic_logits`` is only read in joint mode; other modes pass an
       empty ``[0, 1]`` placeholder.
