@@ -59,12 +59,19 @@ function(gsplat_check_python_dependencies)
         return()
     endif()
 
+    # Point unmet dependencies at bootstrap, which provisions the whole set
+    # (build, test, runtime, CuPy). Target the venv when Python runs in one.
+    set(_bootstrap "./bootstrap.sh")
+    cmake_path(GET Python_EXECUTABLE PARENT_PATH _gsplat_python_bindir)
+    cmake_path(GET _gsplat_python_bindir PARENT_PATH _gsplat_python_prefix)
+    if(EXISTS "${_gsplat_python_prefix}/pyvenv.cfg")
+        set(_bootstrap "./bootstrap.sh --venv ${_gsplat_python_prefix}")
+    endif()
+
     _gsplat_check_dependency_section(
         "dependencies:torch"
         FATAL_ERROR
-        HINT
-            "The build compiles and links against them. Install with: "
-            "python3 -m pip install -e \".[dev]\""
+        HINT "The build compiles and links against them. Provision with: ${_bootstrap}"
     )
     # Mandatory sections first: a requirement both sections declare is then
     # reported under the more essential one.
@@ -78,14 +85,13 @@ function(gsplat_check_python_dependencies)
     if(_fatal_sections STREQUAL "test")
         string(
             CONCAT _fatal_hint
-            "The enabled tests need them; install with: python3 -m pip "
-            "install -e \".[test]\" or configure with -DGSPLAT_BUILD_TESTS=OFF"
+            "The enabled tests need them; provision with: ${_bootstrap} "
+            "or configure with -DGSPLAT_BUILD_TESTS=OFF"
         )
     else()
         string(
             CONCAT _fatal_hint
-            "The developer workflow relies on them; install with: "
-            "python3 -m pip install -e \".[dev]\""
+            "The developer workflow relies on them; provision with: ${_bootstrap}"
         )
     endif()
     if(NOT _fatal_sections STREQUAL "")
@@ -121,6 +127,6 @@ function(gsplat_check_python_dependencies)
         WARNING
         HINT
             "The build does not need them, but importing the built package "
-            "will fail until they are installed."
+            "will fail until they are installed. Provision with: ${_bootstrap}"
     )
 endfunction()
