@@ -210,6 +210,10 @@ aot-build-release:
 
 aot-test-release:
   extends: .aot-test-base
+  # Re-enabled (the shared .aot-base rule disables the AOT jobs) so the release
+  # suite runs against the built wheel instead of a per-job JIT build.
+  rules:
+    - when: on_success
   needs:
     - job: aot-build-release
       artifacts: true
