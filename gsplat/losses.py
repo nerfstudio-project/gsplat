@@ -35,7 +35,7 @@ import warnings
 import torch
 import torch.nn.functional as F
 
-from .constants import SLERP_SMALL_ANGLE_DOT_THRESHOLD
+from ._quat_math import quat_slerp_batched
 from torch import Tensor
 
 # When True, loss functions validate input domains (value ranges,
@@ -1198,11 +1198,6 @@ def bilateral_grid_drift_loss(
 # ---------------------------------------------------------------------------
 
 
-# The nearby-quaternion cutoff of gsplat_geometry::quat_slerp_pair_fwd, from
-# the extension-free mirror module (the compiled geometry extension verifies
-# the same value at import time).
-_SLERP_SMALL_ANGLE_DOT_THRESHOLD = SLERP_SMALL_ANGLE_DOT_THRESHOLD
-
 # Mirrors gsplat_geometry::QuatNormEps (squared-norm threshold below which the
 # safe normalize maps the quaternion to identity).
 _QUAT_NORM_EPS = {torch.float32: 1e-7, torch.float64: 1e-12}
@@ -1235,26 +1230,12 @@ def _quat_xyzw_to_rotmat(quat: Tensor) -> Tensor:
 def _unitquat_slerp(q0: Tensor, q1: Tensor, alpha: float) -> Tensor:
     """Shortest-arc slerp between unit quaternions ``[4]``.
 
-    Mirrors ``gsplat_geometry::quat_slerp_pair_fwd``: negates ``q1`` when the
-    dot product is negative, clamps the dot into ``[-1, 1]``, uses a
-    normalized linear blend for nearby quaternions
-    (``dot > _SLERP_SMALL_ANGLE_DOT_THRESHOLD``), and exact ``sin``-ratio
-    weights (normalized by ``sin(omega)``, no renormalization) otherwise.
+    Delegates to the shared extension-free geometry-convention
+    implementation (:mod:`gsplat._quat_math`), which mirrors
+    ``gsplat_geometry::quat_slerp_pair_fwd`` — the same helper the CUDA
+    track-box kernel calls — so the fallback and the kernel cannot drift.
     """
-    cos_omega = (q0 * q1).sum()
-    sign = 1.0 - 2.0 * (cos_omega < 0).to(q0.dtype)
-    q1 = q1 * sign
-    cos_omega = (cos_omega * sign).clamp(min=-1.0, max=1.0)
-    nearby = cos_omega > _SLERP_SMALL_ANGLE_DOT_THRESHOLD
-    omega = torch.acos(cos_omega)
-    alpha_t = q0.new_tensor(alpha)
-    a = torch.where(nearby, 1.0 - alpha_t, torch.sin((1.0 - alpha_t) * omega))
-    b = torch.where(nearby, alpha_t, torch.sin(alpha_t * omega))
-    quat = a * q0 + b * q1
-    # The nearby (lerp) branch renormalizes; the sin path's weights already
-    # produce a unit quaternion, dividing by sin(omega) like the helper.
-    denom = torch.where(nearby, quat.norm(), torch.sin(omega))
-    return quat / denom
+    return quat_slerp_batched(q0, q1, alpha)
 
 
 def _interpolate_track_boxes(
