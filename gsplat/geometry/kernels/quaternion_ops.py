@@ -33,7 +33,7 @@ from . import _backend
 from ...constants import (
     SLERP_SMALL_ANGLE_DOT_THRESHOLD as _MIRRORED_SLERP_SMALL_ANGLE_DOT_THRESHOLD,
 )
-from ..._quat_math import quat_slerp_batched as _shared_quat_slerp_batched
+from ..._quat_math import quat_slerp_batched
 
 SLERP_SMALL_ANGLE_DOT_THRESHOLD = float(
     _backend._GEOMETRY_CUDA.SLERP_SMALL_ANGLE_DOT_THRESHOLD
@@ -186,12 +186,6 @@ def _quat_lerp_backward_reference(
     return grad_q1, grad_q2
 
 
-# The differentiable batched SLERP reference lives in gsplat/_quat_math.py
-# (extension-free), shared with the losses CPU fallback so the two Python
-# mirrors of gsplat_geometry::quat_slerp_pair_fwd cannot drift apart.
-_quat_slerp_batched_forward_reference = _shared_quat_slerp_batched
-
-
 def _quat_slerp_batched_backward_reference(
     q1: Tensor, q2: Tensor, t: Tensor, grad_out: Tensor
 ) -> tuple[Tensor, Tensor, Tensor]:
@@ -200,7 +194,10 @@ def _quat_slerp_batched_backward_reference(
         q1n = q1.detach().requires_grad_(True)
         q2n = q2.detach().requires_grad_(True)
         tn = t.detach().requires_grad_(True)
-        y = _quat_slerp_batched_forward_reference(q1n, q2n, tn)
+        # The differentiable SLERP reference lives in gsplat/_quat_math.py
+        # (extension-free), shared with the losses CPU fallback so the two
+        # Python mirrors of gsplat_geometry::quat_slerp_pair_fwd cannot drift.
+        y = quat_slerp_batched(q1n, q2n, tn)
         grad_q1, grad_q2, grad_t = torch.autograd.grad(
             y,
             (q1n, q2n, tn),
