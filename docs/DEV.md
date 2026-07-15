@@ -53,11 +53,14 @@ The current tests that will be triggered by PR:
 - `.github/workflows/doc.yml`: Doc build.
 
 Because we check code formatting in CI, it is recommend to run the formatting
-script before committing code:
+script before committing code; with no arguments it formats the source files
+you have changed (staged or unstaged):
 
 ```bash
 lint/format-code.sh
 ```
+
+To format every tracked source file instead, pass `--full`.
 
 To check formatting without modifying files, use:
 

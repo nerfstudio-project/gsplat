@@ -22,10 +22,10 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 script_name="$(basename "${BASH_SOURCE[0]}")"
 script_rel="${script_path#"${repo_root}/"}"
 
-# Selection mode: full | changed | staged. `mode_flag` records the explicit
-# flag that set it so a second, different mode flag is a hard error rather
-# than a silent last-wins.
-mode="full"
+# Selection mode: local (default) | full | changed | staged. `mode_flag` records
+# the explicit flag that set a non-default mode, so a second, different mode
+# flag is a hard error rather than a silent last-wins.
+mode="local"
 mode_flag=""
 changed_base=""
 check_mode=false
@@ -63,15 +63,16 @@ Usage: ${script_name} [--check] [--full | --changed <ref> | --staged] [--precomm
 
 Options:
   --check          Check formatting without modifying files.
-  --full           Format all tracked source files (default).
+  --full           Format all tracked source files.
   --changed <ref>  Format only source files changed since <ref> (e.g. for CI).
   --staged         Format the staged content and re-stage it (with --check,
                    check it instead of modifying anything).
   --precommit      Run what the installed pre-commit hook needs.
   --help, -h       Show this help message.
 
---full, --changed, and --staged select what to act on and are mutually
-exclusive.
+With no mode flag, format the source files with local changes (staged or
+unstaged). --full, --changed, and --staged select what to act on instead and
+are mutually exclusive.
 EOF
 }
 
@@ -130,7 +131,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# The tree the staged index is diffed against — HEAD normally, the empty tree
+# The base tree that changes are diffed against — HEAD normally, the empty tree
 # for the very first commit (no HEAD yet).
 staged_base() {
     if git -C "${repo_root}" rev-parse --verify -q HEAD >/dev/null; then
@@ -144,6 +145,14 @@ find_repo_files() {
     local git_diff_args=()
 
     case "${mode}" in
+        local)
+            # Files that differ from HEAD in the working tree, so both staged
+            # and unstaged edits are covered.
+            git_diff_args=(
+                --diff-filter=ACMR
+                "$(staged_base)"
+            )
+            ;;
         staged)
             # Exactly the files this commit records, index vs HEAD.
             git_diff_args=(

@@ -640,6 +640,20 @@ def test_black_failure_propagates(repo):
     assert _run(repo, "--check", "--full").returncode != 0
 
 
+def test_local_mode_checks_only_changed_files(repo):
+    # With no mode flag the default is local: only files that differ from HEAD
+    # are considered. clean.cu is committed unformatted, so a whole-tree default
+    # would flag it -- local must not even look at it.
+    _commit_file(repo, "clean.cu", "int  c;\n")
+    _commit_file(repo, "dirty.cu", "int d;\n")
+    (repo / "dirty.cu").write_text("int  d;\n")  # local change, unformatted
+    result = _run(repo, "--check")  # no mode flag -> local
+    assert result.returncode != 0  # dirty.cu is unformatted
+    out = result.stdout + result.stderr
+    assert "dirty.cu" in out
+    assert "clean.cu" not in out  # an unchanged file is never inspected
+
+
 def test_changed_selects_files_since_ref(repo):
     # --changed <ref> selects only files changed since <ref>. old.cu is committed
     # unformatted before the ref, so over-selection would flag it.
