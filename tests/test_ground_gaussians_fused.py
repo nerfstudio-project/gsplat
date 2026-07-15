@@ -43,25 +43,25 @@ def _normalize(q):
     return q / q.norm(dim=-1, keepdim=True)
 
 
-def _make_inputs(device, n=N, n_bins=N_BINS, requires_grad=False):
+def _make_inputs(device, n=N, n_bins=N_BINS, requires_grad=False, dtype=torch.float32):
     """Create random world-frame gaussians, a camera pose, and bin samples."""
     torch.manual_seed(7)
     # Spread points along a ground-like volume so bins are populated.
-    positions = torch.empty(n, 3, device=device, dtype=torch.float32)
-    positions[:, 0] = (torch.rand(n, device=device) - 0.5) * 8.0  # lateral
-    positions[:, 1] = (torch.rand(n, device=device) - 0.5) * 1.0  # height
-    positions[:, 2] = torch.rand(n, device=device) * 24.0  # depth
-    rotations = _normalize(torch.randn(n, 4, device=device, dtype=torch.float32))
+    positions = torch.empty(n, 3, device=device, dtype=dtype)
+    positions[:, 0] = (torch.rand(n, device=device, dtype=dtype) - 0.5) * 8.0  # lateral
+    positions[:, 1] = (torch.rand(n, device=device, dtype=dtype) - 0.5) * 1.0  # height
+    positions[:, 2] = torch.rand(n, device=device, dtype=dtype) * 24.0  # depth
+    rotations = _normalize(torch.randn(n, 4, device=device, dtype=dtype))
 
     # Camera-from-world pose: small translation + a modest rotation.
     cam_tquat = torch.tensor(
         [0.2, -0.1, 0.5, 0.05, 0.02, -0.03, 0.998],
         device=device,
-        dtype=torch.float32,
+        dtype=dtype,
     )
     cam_tquat = torch.cat([cam_tquat[:3], _normalize(cam_tquat[3:])])
 
-    random_values = torch.rand(n_bins, device=device, dtype=torch.float32)
+    random_values = torch.rand(n_bins, device=device, dtype=dtype)
 
     if requires_grad:
         positions.requires_grad_(True)
@@ -76,6 +76,52 @@ def _module(device):
         grid_len=GRID_LEN,
         rotation_lambda=ROTATION_LAMBDA,
     )
+
+
+def _assert_cuda_matches_reference(
+    positions,
+    rotations,
+    cam_tquat,
+    random_values,
+    min_bias,
+    range_bias,
+    grid_len,
+):
+    p_ref = positions.detach().clone().requires_grad_(True)
+    r_ref = rotations.detach().clone().requires_grad_(True)
+    ref = ground_gaussians_loss(
+        p_ref,
+        r_ref,
+        cam_tquat,
+        random_values,
+        min_bias,
+        range_bias,
+        grid_len,
+        ROTATION_LAMBDA,
+    )
+    if ref.requires_grad:
+        ref.backward()
+
+    p_cuda = positions.detach().clone().requires_grad_(True)
+    r_cuda = rotations.detach().clone().requires_grad_(True)
+    module = FusedGroundGaussiansLosses(
+        min_bias=min_bias,
+        range_bias=range_bias,
+        grid_len=grid_len,
+        rotation_lambda=ROTATION_LAMBDA,
+    )
+    loss = module(p_cuda, r_cuda, cam_tquat, random_values)
+    loss.backward()
+
+    assert torch.allclose(loss, ref, rtol=1e-5, atol=1e-5)
+    if ref.requires_grad:
+        assert torch.allclose(p_cuda.grad, p_ref.grad, rtol=1e-4, atol=1e-4)
+        assert torch.allclose(r_cuda.grad, r_ref.grad, rtol=1e-4, atol=1e-4)
+    else:
+        assert ref.item() == 0.0
+        assert torch.count_nonzero(p_cuda.grad) == 0
+        assert torch.count_nonzero(r_cuda.grad) == 0
+    return loss
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +305,67 @@ class TestFusedGroundGaussiansLossesCUDA:
         assert torch.isfinite(loss)
         assert positions.grad is not None
         assert rotations.grad is not None
+
+    @pytest.mark.parametrize("n", [1, 31, 32, 33, 255, 257])
+    def test_warp_and_block_boundaries_match_reference(self, n):
+        """Tail lanes around warp/block boundaries preserve reference parity."""
+        device = torch.device("cuda")
+        positions, rotations, cam_tquat, _ = _make_inputs(device, n=n)
+        random_values = torch.zeros(1, device=device, dtype=torch.float32)
+        _assert_cuda_matches_reference(
+            positions,
+            rotations,
+            cam_tquat,
+            random_values,
+            min_bias=-100.0,
+            range_bias=0.0,
+            grid_len=200.0,
+        )
+
+    def test_float64_partial_block_matches_reference(self):
+        """The retained float64 path preserves forward and gradient parity."""
+        device = torch.device("cuda")
+        positions, rotations, cam_tquat, _ = _make_inputs(
+            device, n=257, dtype=torch.float64
+        )
+        random_values = torch.zeros(1, device=device, dtype=torch.float64)
+        _assert_cuda_matches_reference(
+            positions,
+            rotations,
+            cam_tquat,
+            random_values,
+            min_bias=-100.0,
+            range_bias=0.0,
+            grid_len=200.0,
+        )
+
+    def test_partial_warp_non_leader_hits_match_reference(self):
+        """A tail warp is reduced when only non-leader lanes hit the bin."""
+        device = torch.device("cuda")
+        n = 35
+        positions = torch.zeros(n, 3, device=device, dtype=torch.float32)
+        positions[:, 2] = 2.0
+        positions[-2:, 1] = torch.tensor([0.0, 1.0], device=device)
+        positions[-2:, 2] = 0.5
+        rotations = torch.zeros(n, 4, device=device, dtype=torch.float32)
+        rotations[:, 3] = 1.0
+        cam_tquat = torch.tensor(
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            device=device,
+            dtype=torch.float32,
+        )
+        random_values = torch.zeros(1, device=device, dtype=torch.float32)
+
+        loss = _assert_cuda_matches_reference(
+            positions,
+            rotations,
+            cam_tquat,
+            random_values,
+            min_bias=0.0,
+            range_bias=0.0,
+            grid_len=1.0,
+        )
+        assert loss.item() > 0.0
 
     def test_disable_cuda_uses_fallback(self):
         """When the module's CUDA flag is off, CUDA inputs route through the
