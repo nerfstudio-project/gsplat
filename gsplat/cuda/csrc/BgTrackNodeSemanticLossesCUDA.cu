@@ -24,6 +24,7 @@
 #    include <c10/cuda/CUDAException.h>
 #    include <c10/cuda/CUDAGuard.h>
 #    include <c10/cuda/CUDAStream.h>
+#    include <c10/macros/Macros.h>
 
 #    include <algorithm>
 #    include <cstdint>
@@ -265,6 +266,7 @@ namespace
     template<typename scalar_t>
     __global__ void interpolate_track_boxes_kernel(
         const int n_tracks,
+        const int n_total_poses,
         const int64_t *__restrict__ camera_timestamps_startend_us,
         const int32_t *__restrict__ tracks_packinfo,
         const scalar_t *__restrict__ tracks_poses,
@@ -285,7 +287,9 @@ namespace
             box[12] = box[13] = box[14] = box[15] = scalar_t(0);
         };
 
-        // Match torch.mean([start, end], float64).to(int64) for positive
+        // Only row 0 of camera_timestamps_startend_us (the reference camera)
+        // is consumed; the host validation guarantees B >= 1. The midpoint
+        // matches torch.mean([start, end], float64).to(int64) for positive
         // microsecond Unix timestamps, without a GPU mean/cast launch.
         const int64_t timestamp_start = camera_timestamps_startend_us[0];
         const int64_t timestamp_end   = camera_timestamps_startend_us[1];
@@ -293,6 +297,15 @@ namespace
 
         const int32_t track_start_idx = tracks_packinfo[track_idx * 2];
         const int32_t n_track_poses   = tracks_packinfo[track_idx * 2 + 1];
+        // tracks_packinfo contents live on the device and are consumed as
+        // gather indices without host validation (see the trusted-input note
+        // at the launch sites); this guard turns a corrupt pack table into a
+        // loud device-side assert instead of an out-of-bounds read.
+        CUDA_KERNEL_ASSERT(
+            track_start_idx >= 0
+            && n_track_poses >= 0
+            && static_cast<int64_t>(track_start_idx) + n_track_poses <= n_total_poses
+        );
         if(n_track_poses <= 1)
         {
             invalidate();
@@ -911,9 +924,11 @@ namespace
 
     // Multi-word semantic class masks: SEMANTIC_CLASS_BITS = 5, so class IDs
     // beyond 31 land in subsequent uint32 mask words. Out-of-range IDs are
-    // ignored.
+    // ignored. class_ids is a non-owning view into the op's argument storage
+    // (see the segment aliases in BgTrackNodeSemanticLosses.h); it is fully
+    // consumed here, synchronously on the host, before any launch returns.
     std::vector<uint32_t> make_semantic_class_masks(
-        const std::vector<int64_t> &class_ids, const int n_semantic_classes, const size_t mask_word_count
+        const at::IntArrayRef class_ids, const int n_semantic_classes, const size_t mask_word_count
     )
     {
         std::vector<uint32_t> class_masks(mask_word_count, uint32_t{0});
@@ -1036,11 +1051,16 @@ namespace
             semantic_logits.size() == semantic_segments.size(),
             "semantic tensors and segments must have the same length"
         );
+        // Only row 0 (the reference camera) is consumed by the interpolation
+        // kernel; extra rows are accepted for caller convenience but ignored,
+        // matching the pure-PyTorch fallback. B == 0 would make the kernel
+        // read out of bounds, so reject it loudly here.
         TORCH_CHECK(
             camera_timestamps_startend_us.dim() == 2
-                && camera_timestamps_startend_us.size(0) > 0
+                && camera_timestamps_startend_us.size(0) >= 1
                 && camera_timestamps_startend_us.size(1) == 2,
-            "camera timestamps must have shape [B,2], B>0"
+            "camera_timestamps_startend_us must have shape [B,2] with B >= 1 "
+            "(B == 0 is rejected); only row 0 (the reference camera) is read"
         );
         TORCH_CHECK(
             tracks_timestamps_us.dim() == 1 && tracks_timestamps_us.size(0) == n_total_poses,
@@ -1120,8 +1140,14 @@ namespace
 
         const dim3 threads(BLOCK_THREADS);
         const dim3 track_blocks(div_round_up(n_tracks, BLOCK_THREADS));
+        // tracks_packinfo is trusted input: its shape/dtype are validated
+        // above, but its (start, count) contents are device-resident gather
+        // indices — checking them here would need a synchronizing D2H copy.
+        // The kernel instead range-guards every row with CUDA_KERNEL_ASSERT
+        // (start >= 0 && start + count <= P).
         interpolate_track_boxes_kernel<scalar_t><<<track_blocks, threads, 0, stream>>>(
             n_tracks,
+            n_total_poses,
             camera_timestamps_startend_us.data_ptr<int64_t>(),
             tracks_packinfo.data_ptr<int32_t>(),
             tracks_poses.data_ptr<scalar_t>(),
@@ -1232,7 +1258,15 @@ namespace
         check_workspace<scalar_t>(workspace);
         TORCH_CHECK(grad_density_logits.scalar_type() == dtype, "grad_density_logits must match density_logits dtype");
         TORCH_CHECK(density_logits.dim() == 1, "density_logits must be 1-D");
-        TORCH_CHECK(selection_bits.sizes() == density_logits.sizes(), "selection_bits must match density_logits");
+        // Mirror the generic forward's windowed acceptance (>= N, background
+        // bits in the leading N entries): the autograd wrapper allocates one
+        // shared uint8 buffer sized Nbackground + Nother even when only the
+        // background member is enabled, and that buffer must round-trip into
+        // this backward unchanged.
+        TORCH_CHECK(
+            selection_bits.dim() == 1 && selection_bits.size(0) >= density_logits.numel(),
+            "selection_bits must have at least N elements"
+        );
         TORCH_CHECK(
             grad_density_logits.sizes() == density_logits.sizes(), "grad_density_logits must match density_logits"
         );
@@ -1446,8 +1480,8 @@ namespace
         const at::Tensor &tracks_poses,
         const at::Tensor &tracks_timestamps_us,
         const at::Tensor &cuboids_dims,
-        const std::vector<int64_t> &bg_allowed_class_ids,
-        const std::vector<int64_t> &node_primary_class_ids,
+        const at::IntArrayRef bg_allowed_class_ids,
+        const at::IntArrayRef node_primary_class_ids,
         const bool node_primary_select,
         const scalar_t density_logits_min,
         const scalar_t bg_lambda,
@@ -1556,11 +1590,14 @@ namespace
         TORCH_CHECK(
             other_point_begin == other_density_logits.numel(), "other node segments must cover every packed density row"
         );
+        // Row-0 (reference camera) semantics; see the matching check in
+        // background_in_track_loss_forward_generic.
         TORCH_CHECK(
             camera_timestamps_startend_us.dim() == 2
-                && camera_timestamps_startend_us.size(0) > 0
+                && camera_timestamps_startend_us.size(0) >= 1
                 && camera_timestamps_startend_us.size(1) == 2,
-            "camera_timestamps_startend_us must have shape [B,2], B>0"
+            "camera_timestamps_startend_us must have shape [B,2] with B >= 1 "
+            "(B == 0 is rejected); only row 0 (the reference camera) is read"
         );
         TORCH_CHECK(
             tracks_packinfo.dim() == 2 && tracks_packinfo.size(1) == 2, "tracks_packinfo must have shape [T,2]"
@@ -1635,9 +1672,8 @@ namespace
             = make_semantic_class_masks(bg_allowed_class_ids, n_background_semantic_classes, mask_word_count);
         const std::vector<uint32_t> node_primary_class_masks
             = make_semantic_class_masks(node_primary_class_ids, n_background_semantic_classes, mask_word_count);
-        const std::vector<int64_t> empty_class_ids;
-        const std::vector<int64_t> &first_other_class_ids
-            = other_segments.empty() ? empty_class_ids : std::get<1>(other_segments.front());
+        const at::IntArrayRef first_other_class_ids
+            = other_segments.empty() ? at::IntArrayRef{} : std::get<1>(other_segments.front());
         const bool first_other_select = !other_segments.empty() && std::get<2>(other_segments.front());
         const std::vector<uint32_t> first_other_class_masks
             = make_semantic_class_masks(first_other_class_ids, n_first_other_semantic_classes, mask_word_count);
@@ -1661,8 +1697,12 @@ namespace
         if(background_in_track_enabled && n_tracks > 0)
         {
             const dim3 track_blocks(div_round_up(n_tracks, BLOCK_THREADS));
+            // tracks_packinfo contents are trusted device-side gather indices;
+            // the kernel range-guards them (see the note at the generic-path
+            // launch site).
             interpolate_track_boxes_kernel<scalar_t><<<track_blocks, threads, 0, stream>>>(
                 n_tracks,
+                static_cast<int>(tracks_poses.size(0)),
                 camera_timestamps_startend_us.data_ptr<int64_t>(),
                 tracks_packinfo.data_ptr<int32_t>(),
                 tracks_poses.data_ptr<scalar_t>(),
@@ -1966,7 +2006,7 @@ void launch_bg_track_node_semantic_losses_fwd_kernel(
     const at::Tensor &tracks_poses,
     const at::Tensor &tracks_timestamps_us,
     const at::Tensor &cuboids_dims,
-    const std::vector<int64_t> &background_allowed_class_ids,
+    const at::IntArrayRef background_allowed_class_ids,
     const std::optional<NodeSemanticPredicate> &node_primary_predicate,
     const double background_lambda,
     const double node_lambda,
@@ -1993,8 +2033,8 @@ void launch_bg_track_node_semantic_losses_fwd_kernel(
             "pass (class_ids, select_matches): empty ids with select_matches=true penalize "
             "no primary point, with select_matches=false they penalize all of them"
         );
-        const std::vector<int64_t> &node_primary_class_ids = node_primary_predicate->first;
-        const bool node_primary_select                     = node_primary_predicate->second;
+        const at::IntArrayRef node_primary_class_ids = node_primary_predicate->first;
+        const bool node_primary_select               = node_primary_predicate->second;
         AT_DISPATCH_FLOATING_TYPES(
             density_logits.scalar_type(),
             "bg_track_node_semantic_losses_fwd_joint",

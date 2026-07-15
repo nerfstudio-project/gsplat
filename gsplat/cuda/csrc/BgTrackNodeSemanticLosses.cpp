@@ -41,14 +41,22 @@ namespace gsplat
 // per-segment exclusive point ends, one packed class-ID list, and per-segment
 // exclusive ends into that packed list (node segments additionally carry a
 // 0/1 select_matches flag per segment). This file re-inflates them into the
-// per-segment structures the launchers consume; all tensor validation lives
-// with the launch code in BgTrackNodeSemanticLossesCUDA.cu.
+// per-segment structures the launchers consume; each segment's class-id list
+// is a non-owning at::IntArrayRef slice of the packed argument (valid for the
+// whole op call, consumed synchronously on the host — see the alias notes in
+// BgTrackNodeSemanticLosses.h). All tensor validation lives with the launch
+// code in BgTrackNodeSemanticLossesCUDA.cu.
 
 namespace
 {
-    std::vector<int64_t> slice_class_ids(const at::IntArrayRef class_ids, const int64_t begin, const int64_t end)
+    // Non-owning view into the op's packed class-id argument (kept alive by
+    // the dispatcher for the duration of the call). Safe because the launch
+    // consumes every id synchronously on the host — packed into uint32 class
+    // masks before any kernel launch returns — and nothing retains the view
+    // past the op call (see the alias notes in BgTrackNodeSemanticLosses.h).
+    at::IntArrayRef slice_class_ids(const at::IntArrayRef class_ids, const int64_t begin, const int64_t end)
     {
-        return std::vector<int64_t>(class_ids.begin() + begin, class_ids.begin() + end);
+        return class_ids.slice(begin, end - begin);
     }
 
     std::vector<BackgroundInTrackSemanticSegment> unpack_background_segments(
@@ -163,7 +171,7 @@ void bg_track_node_semantic_losses_fwd(
     std::optional<NodeSemanticPredicate> node_primary_predicate;
     if(node_primary_class_ids.has_value())
     {
-        node_primary_predicate.emplace(node_primary_class_ids->vec(), node_primary_select_matches);
+        node_primary_predicate.emplace(*node_primary_class_ids, node_primary_select_matches);
     }
 
     launch_bg_track_node_semantic_losses_fwd_kernel(
@@ -182,7 +190,7 @@ void bg_track_node_semantic_losses_fwd(
         tracks_poses,
         tracks_timestamps_us,
         cuboids_dims,
-        background_allowed_class_ids.vec(),
+        background_allowed_class_ids,
         node_primary_predicate,
         background_lambda,
         node_lambda,

@@ -1328,10 +1328,15 @@ TORCH_LIBRARY(gsplat, m)
     // enables a member. A missing n_semantic_points selects the joint
     // shared-primary-domain path, which requires node_primary_class_ids to be
     // passed explicitly (an empty list is valid; the polarity comes from
-    // node_primary_select_matches). track_boxes ([T, 16]), selection (uint8)
-    // and workspace (16-byte-aligned int32[8]) are caller-allocated scratch
-    // written by fwd and consumed by bwd; the four loss outputs are scalars
-    // (raw and lambda-weighted per member).
+    // node_primary_select_matches). camera_timestamps_startend_us is [B, 2]
+    // int64 with B >= 1; only row 0 (the reference camera) is read.
+    // track_boxes ([T, 16]), selection (uint8) and workspace (16-byte-aligned
+    // int32[8]) are caller-allocated scratch written by fwd and consumed by
+    // bwd; the four loss outputs are scalars (raw and lambda-weighted per
+    // member). fwd->bwd contract: the selection bits and the workspace's
+    // selected counts (bwd's divisors) are written only by fwd — the exact
+    // instances fwd filled must reach bwd unmodified; re-zeroing or pooling
+    // them between the passes silently corrupts gradients.
     m.def(
         "bg_track_node_semantic_losses_fwd(Tensor positions, Tensor density_logits, Tensor semantic_logits, "
         "int? n_semantic_points, Tensor[] background_semantic_logits, int[] background_segment_ends, "

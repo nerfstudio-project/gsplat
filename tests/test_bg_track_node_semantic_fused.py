@@ -813,6 +813,262 @@ def _miniature_node_inputs(device, predicate=((CLS_PERSON,), False), with_other=
 
 
 # ---------------------------------------------------------------------------
+# Track-box slerp interpolation: nontrivially different pose quaternions,
+# pinned by a torch/scipy-free pure-Python fp64 reference
+# ---------------------------------------------------------------------------
+
+
+def _axis_angle_quat(axis, angle_deg):
+    """Unit quaternion ``(x, y, z, w)`` from axis + angle, pure Python."""
+    norm = math.sqrt(sum(a * a for a in axis))
+    half = 0.5 * math.radians(angle_deg)
+    s = math.sin(half) / norm
+    return (axis[0] * s, axis[1] * s, axis[2] * s, math.cos(half))
+
+
+def _quat_neg(q):
+    return tuple(-c for c in q)
+
+
+def _quat_dot(q0, q1):
+    return sum(a * b for a, b in zip(q0, q1))
+
+
+def _slerp_reference(q0, q1, t):
+    """Textbook shortest-arc slerp in pure-Python fp64.
+
+    Independent of the kernel's formulation: exact ``sin`` ratio weights
+    with a normalized-lerp fallback only for numerically degenerate
+    ``sin(omega)``. The kernel's renormalized-sum form and its wider
+    normalized-lerp branch (``cos(omega) > 1 - 1e-3``) agree with this
+    reference far below the probe margins used by the tests.
+    """
+    dot = _quat_dot(q0, q1)
+    if dot < 0.0:
+        q1 = _quat_neg(q1)
+        dot = -dot
+    dot = min(dot, 1.0)
+    omega = math.acos(dot)
+    sin_omega = math.sin(omega)
+    if sin_omega < 1e-9:
+        w0, w1 = 1.0 - t, t
+    else:
+        w0 = math.sin((1.0 - t) * omega) / sin_omega
+        w1 = math.sin(t * omega) / sin_omega
+    out = tuple(w0 * a + w1 * b for a, b in zip(q0, q1))
+    norm = math.sqrt(sum(c * c for c in out))
+    return tuple(c / norm for c in out)
+
+
+def _quat_rotmat_rows(q):
+    """Row-major local-to-world rotation ``R(q)``, pure-Python fp64."""
+    x, y, z, w = q
+    return (
+        (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+        (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+        (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
+    )
+
+
+# Probe margin around the interpolated box faces. Far above every acceptable
+# numerical divergence between implementations (renormalized-sum vs sin-ratio
+# slerp, nlerp branch: <= ~1e-9 here) and far below any real math error
+# (wrong branch, missing flip, wrong bracket: >= ~1e-2).
+_SLERP_PROBE_MARGIN = 1e-4
+
+# Non-cubic half dims so every rotation error is observable on some face.
+_SLERP_BOX_DIMS = (2.0, 1.2, 0.6)
+
+
+def _slerp_cases():
+    """Track fixtures exercising every slerp branch nontrivially.
+
+    * ``sign_flip``: raw pose quaternions with a negative dot product pin
+      the shortest-arc flip.
+    * ``near_parallel_lerp``: ``cos(omega) > 1 - 1e-3`` pins the kernel's
+      normalized-lerp branch, at ``alpha = 0.25`` where lerp and slerp are
+      not trivially identical (they are at 0.5).
+    * ``generic_mid_interval``: distinct rotation axes at ``alpha = 0.3``
+      pin the generic ``sin``-path.
+    * ``three_pose_second_interval``: a three-pose track whose camera
+      midpoint falls in the second interval pins the bracketing binary
+      search together with a nontrivial slerp.
+    """
+    return {
+        "sign_flip": dict(
+            poses=(
+                ((0.0, 0.0, 0.0), _axis_angle_quat((0.0, 0.0, 1.0), 40.0)),
+                (
+                    (0.4, -0.2, 0.6),
+                    _quat_neg(_axis_angle_quat((0.0, 0.0, 1.0), 100.0)),
+                ),
+            ),
+            timestamps_us=(0, 10),
+            camera_startend_us=(4, 6),  # midpoint 5 -> alpha 0.5
+            bracket=(0, 1),
+            branch="negative_dot",
+        ),
+        "near_parallel_lerp": dict(
+            poses=(
+                ((0.0, 0.0, 0.0), _axis_angle_quat((0.0, 0.0, 1.0), 10.0)),
+                ((0.6, 0.3, -0.2), _axis_angle_quat((0.0, 0.0, 1.0), 10.6)),
+            ),
+            timestamps_us=(0, 12),
+            camera_startend_us=(2, 4),  # midpoint 3 -> alpha 0.25
+            bracket=(0, 1),
+            branch="near_parallel",
+        ),
+        "generic_mid_interval": dict(
+            poses=(
+                ((0.0, 0.0, 0.0), _axis_angle_quat((1.0, 2.0, 3.0), 50.0)),
+                ((0.5, -0.4, 0.3), _axis_angle_quat((-2.0, 1.0, 1.0), 120.0)),
+            ),
+            timestamps_us=(0, 10),
+            camera_startend_us=(2, 4),  # midpoint 3 -> alpha 0.3
+            bracket=(0, 1),
+            branch="generic",
+        ),
+        "three_pose_second_interval": dict(
+            poses=(
+                ((5.0, 5.0, 5.0), _axis_angle_quat((1.0, 0.0, 0.0), 0.0)),
+                ((0.0, 0.0, 0.0), _axis_angle_quat((0.0, 0.0, 1.0), 90.0)),
+                ((1.0, 0.5, -0.25), _axis_angle_quat((1.0, 1.0, 0.0), 60.0)),
+            ),
+            timestamps_us=(0, 10, 20),
+            camera_startend_us=(14, 16),  # midpoint 15 -> poses 1..2, alpha 0.5
+            bracket=(1, 2),
+            branch="generic",
+        ),
+    }
+
+
+_SLERP_CASE_IDS = tuple(_slerp_cases())
+
+
+def _slerp_case_inputs(case):
+    """Build a single-track fixture whose probe points straddle the faces of
+    the reference-interpolated box; returns ``(inputs_fp64, expected_inside,
+    expected_raw)``."""
+    poses = case["poses"]
+    timestamps = case["timestamps_us"]
+    cam_start, cam_end = case["camera_startend_us"]
+    i0, i1 = case["bracket"]
+
+    # Reference bracketing per the documented semantics (truncated midpoint,
+    # right-bound search) — asserted, not searched, so a kernel bracket bug
+    # cannot silently steer the reference.
+    t_mid = cam_start + (cam_end - cam_start) // 2
+    t0, t1 = timestamps[i0], timestamps[i1]
+    assert i1 == i0 + 1 and t0 < t_mid < t1, "fixture must pin one interval"
+    assert timestamps[0] <= t_mid <= timestamps[-1]
+    alpha = (t_mid - t0) / (t1 - t0)
+
+    q0, q1 = poses[i0][1], poses[i1][1]
+    dot = _quat_dot(q0, q1)
+    if case["branch"] == "negative_dot":
+        assert dot < 0.0 and -dot < 1.0 - 1e-3, "must pin the sign flip"
+    elif case["branch"] == "near_parallel":
+        assert dot > 1.0 - 1e-3, "must pin the normalized-lerp branch"
+    else:
+        assert 0.0 < dot < 1.0 - 1e-3, "must pin the generic sin branch"
+
+    q_ref = _slerp_reference(q0, q1, alpha)
+    c0, c1 = poses[i0][0], poses[i1][0]
+    center = tuple((1.0 - alpha) * a + alpha * b for a, b in zip(c0, c1))
+    rot = _quat_rotmat_rows(q_ref)
+    half = tuple(0.5 * d for d in _SLERP_BOX_DIMS)
+
+    positions = []
+    expected_inside = []
+    for axis in range(3):
+        for sign in (1.0, -1.0):
+            for factor, inside in (
+                (1.0 - _SLERP_PROBE_MARGIN, True),
+                (1.0 + _SLERP_PROBE_MARGIN, False),
+            ):
+                local = [0.0, 0.0, 0.0]
+                local[axis] = sign * factor * half[axis]
+                positions.append(
+                    tuple(
+                        center[row]
+                        + sum(rot[row][col] * local[col] for col in range(3))
+                        for row in range(3)
+                    )
+                )
+                expected_inside.append(inside)
+    # Corner probes: inside on every axis / outside on every axis.
+    for factor, inside in ((0.99, True), (1.0 + _SLERP_PROBE_MARGIN, False)):
+        local = [factor * h for h in half]
+        positions.append(
+            tuple(
+                center[row] + sum(rot[row][col] * local[col] for col in range(3))
+                for row in range(3)
+            )
+        )
+        expected_inside.append(inside)
+
+    n_probes = len(positions)
+    density_logits = [0.4 + 0.15 * i for i in range(n_probes)]
+    selected_softplus = [
+        _softplus_f(logit)
+        for logit, inside in zip(density_logits, expected_inside)
+        if inside
+    ]
+    expected_raw = sum(selected_softplus) / len(selected_softplus)
+
+    inp = _base_inputs()
+    inp["tracks_packinfo"] = torch.tensor([[0, len(poses)]], dtype=torch.int32)
+    inp["tracks_poses"] = torch.tensor(
+        [list(c) + list(q) for c, q in poses], dtype=torch.float64
+    )
+    inp["tracks_timestamps_us"] = torch.tensor(list(timestamps), dtype=torch.int64)
+    inp["cuboids_dims"] = torch.tensor([list(_SLERP_BOX_DIMS)], dtype=torch.float64)
+    inp["camera_timestamps_startend_us"] = torch.tensor(
+        [[cam_start, cam_end]], dtype=torch.int64
+    )
+    inp["positions"] = torch.tensor(positions, dtype=torch.float64)
+    inp["density_logits"] = torch.tensor(density_logits, dtype=torch.float64)
+    inp["n_semantic_points"] = 0  # fully unfiltered background domain
+    return inp, expected_inside, expected_raw
+
+
+def _run_slerp_case(case_key, device):
+    """Forward + backward on (device); selection and mean pinned to the
+    pure-Python fp64 reference."""
+    inp, expected_inside, expected_raw = _slerp_case_inputs(_slerp_cases()[case_key])
+    inp = _move_inputs(inp, device, dtype=torch.float64)
+    inp, (bg_leaf, _) = _with_grad_leaves(inp)
+    outputs = _call(_make_module(), inp, 1.0, DISABLED)
+
+    raw = outputs[0].reshape(())
+    torch.testing.assert_close(
+        raw.cpu(),
+        torch.tensor(expected_raw, dtype=torch.float64),
+        atol=1e-12,
+        rtol=1e-12,
+    )
+    # The gradient support is exactly the reference-selected probe set.
+    (grad,) = _grads_of(raw, (bg_leaf,))
+    assert (grad != 0).cpu().tolist() == expected_inside
+
+
+class TestTrackBoxSlerpInterpolation:
+    """Pose-pair quaternions genuinely differ, so the interpolated box only
+    lands where a correct slerp puts it: sign-flip, normalized-lerp, and
+    generic branches plus multi-pose bracketing, against a torch/scipy-free
+    fp64 reference."""
+
+    @pytest.mark.parametrize("case", _SLERP_CASE_IDS)
+    def test_fallback_matches_slerp_reference(self, case):
+        _run_slerp_case(case, "cpu")
+
+    @pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA or fused losses not available")
+    @pytest.mark.parametrize("case", _SLERP_CASE_IDS)
+    def test_cuda_matches_slerp_reference(self, case):
+        _run_slerp_case(case, "cuda")
+
+
+# ---------------------------------------------------------------------------
 # CPU fallback tests — always runnable
 # ---------------------------------------------------------------------------
 
@@ -1270,6 +1526,42 @@ class TestBgTrackNodeSemanticCUDA:
         )
         assert torch.count_nonzero(grads[0]) == 0
         assert torch.count_nonzero(grads[1]) == 0
+
+    def test_background_only_backward_accepts_shared_selection_buffer(self):
+        """Regression: in background-only mode the autograd wrapper still
+        allocates the shared uint8 selection buffer sized [Nbg + Nother];
+        the backward must apply the forward's windowed acceptance (>= Nbg,
+        background bits leading) instead of demanding exactly [Nbg]."""
+        inp, bg_lambda, _, _, _ = _scenario_bg_only_filtered()
+        other_density, _ = _other_cloud()
+        inp["other_density_logits"] = other_density  # nonempty, node disabled
+        inp = _move_inputs(inp, "cuda")
+
+        cuda_inp, cuda_leaves = _with_grad_leaves(inp)
+        cuda_outputs = _call(_make_module(), cuda_inp, bg_lambda, DISABLED)
+        cuda_grads = _grads_of(
+            _objective(cuda_outputs, bg_lambda, DISABLED), cuda_leaves
+        )
+
+        fallback_inp, fallback_leaves = _with_grad_leaves(inp)
+        fallback_outputs = _call(_fallback_module(), fallback_inp, bg_lambda, DISABLED)
+        fallback_grads = _grads_of(
+            _objective(fallback_outputs, bg_lambda, DISABLED), fallback_leaves
+        )
+
+        _assert_outputs_match(cuda_outputs, fallback_outputs, FWD_TOL)
+        for label, cuda_grad, fallback_grad in zip(
+            ("density_logits", "other_density_logits"), cuda_grads, fallback_grads
+        ):
+            torch.testing.assert_close(
+                cuda_grad,
+                fallback_grad,
+                **GRAD_TOL,
+                msg=lambda m, label=label: f"{label} grad mismatch: {m}",
+            )
+        assert torch.count_nonzero(cuda_grads[0]) > 0
+        # The disabled node member owns the only path into the other domain.
+        assert torch.count_nonzero(cuda_grads[1]) == 0
 
     def test_zero_points_zero_loss(self):
         inp, bg_lambda, node_lambda, _, _ = _scenario_zero_points()

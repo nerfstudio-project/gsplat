@@ -510,12 +510,21 @@ class _FusedBgTrackNodeSemantic(torch.autograd.Function):
       predicate" (only legal when the joint mode is not selected).
     - ``semantic_logits`` is only read in joint mode; other modes pass an
       empty ``[0, 1]`` placeholder.
+    - ``camera_timestamps_startend_us`` is ``[B, 2]`` int64 with ``B >= 1``
+      (the op rejects ``B == 0``); only row 0 — the reference camera — is
+      read, matching the pure-PyTorch fallback. Extra rows are ignored.
     - ``track_boxes`` is a ``[T, 16]`` float workspace (three world-to-local
       rotation rows with the world center in the 4th column, then half dims
       + valid flag); ``selection_bits`` is ``uint8 [Nbg + Nother]``
-      (bit 0 = background-in-track, bit 1 = node-semantic);  ``workspace``
-      is a zeroed, 16-byte-aligned int32 reduction buffer sized 4 for fp32
-      inputs (8 for fp64) holding (loss_sum, selected_count) per member.
+      (bit 0 = background-in-track, bit 1 = node-semantic); ``workspace``
+      is a zeroed, 16-byte-aligned ``int32[8]`` reduction buffer for BOTH
+      dtypes (the fp32 layout occupies the first 16 bytes, fp64 all 32)
+      holding (loss_sum, selected_count) per member. The selected counts are
+      written only by the forward and divided by in the backward: the same
+      ``selection_bits``/``workspace`` instances the forward filled must
+      reach the backward unmodified (they ride ``ctx.save_for_backward``);
+      re-zeroing, pooling, or reusing them between the passes silently
+      corrupts every gradient of that step.
     - The four loss outputs are one-element float tensors; raw values are
       selected-count means (0 when nothing is selected) and weighted values
       are ``lambda * raw``. Disabled members' outputs are left untouched
@@ -532,7 +541,7 @@ class _FusedBgTrackNodeSemantic(torch.autograd.Function):
         density_logits: Tensor,  # [Nbg] (differentiable)
         semantic_logits: Optional[Tensor],  # [Nbg, C] joint mode only
         other_density_logits: Tensor,  # [Nother] (differentiable)
-        camera_timestamps_startend_us: Tensor,  # [B, 2] int64
+        camera_timestamps_startend_us: Tensor,  # [B, 2] int64, B >= 1; row 0 only
         tracks_packinfo: Tensor,  # [T, 2] int32
         tracks_poses: Tensor,  # [P, 7]
         tracks_timestamps_us: Tensor,  # [P] int64
@@ -670,6 +679,11 @@ class _FusedBgTrackNodeSemantic(torch.autograd.Function):
             node_weighted_loss,
         )
 
+        # Forward-to-backward contract: selection_bits and workspace (whose
+        # selected counts the backward divides by) are written only by the
+        # forward op above. save_for_backward carries these exact instances
+        # to backward(); they must arrive unmodified — re-zeroing or pooling
+        # them between the passes is a silent-gradient-corruption bug.
         ctx.save_for_backward(
             density_logits, other_density_logits, selection_bits, workspace
         )

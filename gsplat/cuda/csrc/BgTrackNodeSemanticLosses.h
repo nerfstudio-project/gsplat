@@ -24,6 +24,7 @@
 #include <vector>
 
 #include <ATen/core/Tensor.h>
+#include <c10/util/ArrayRef.h>
 
 namespace gsplat
 {
@@ -58,6 +59,11 @@ namespace gsplat
 //     dtype-templated reduction struct {loss sums (scalar_t) + selected
 //     counts (int32)}; 8 int32 words (32 bytes) cover both the fp32 (16-byte)
 //     and fp64 (32-byte) layouts, so allocation does not depend on dtype.
+//     Forward-to-backward contract: ONLY the forward writes the selected
+//     counts, and the backward divides by them. The exact workspace instance
+//     the forward filled must reach the backward unmodified — re-zeroing,
+//     pooling, or reusing it between the two passes silently corrupts every
+//     gradient of that step.
 //   - track_boxes: [n_tracks, 16] scalar_t, 16-byte aligned. Precomputed by
 //     the forward: rows 0-2 hold the world-to-local rotation rows with the
 //     world center in their fourth slot, row 3 holds (half_dim_x, half_dim_y,
@@ -66,9 +72,15 @@ namespace gsplat
 // Timestamps stay int64 (microseconds), tracks_packinfo stays int32.
 // Floating tensors are templated on scalar_t (fp32/fp64) and must all share
 // density_logits' dtype.
-using BackgroundInTrackSemanticSegment = std::pair<int64_t, std::vector<int64_t>>;
-using NodeSemanticSegment              = std::tuple<int64_t, std::vector<int64_t>, bool>;
-using NodeSemanticPredicate            = std::pair<std::vector<int64_t>, bool>;
+//
+// The class-id lists inside the segment/predicate aliases are non-owning
+// at::IntArrayRef views into the op's int[] argument storage (kept alive by
+// the dispatcher for the duration of the op call). The launchers consume
+// them synchronously on the host — packed into uint32 masks before any
+// kernel launch returns — so nothing may retain these views past the call.
+using BackgroundInTrackSemanticSegment = std::pair<int64_t, at::IntArrayRef>;
+using NodeSemanticSegment              = std::tuple<int64_t, at::IntArrayRef, bool>;
+using NodeSemanticPredicate            = std::pair<at::IntArrayRef, bool>;
 
 void launch_bg_track_node_semantic_losses_fwd_kernel(
     double density_logits_min,
@@ -81,12 +93,13 @@ void launch_bg_track_node_semantic_losses_fwd_kernel(
     const at::Tensor &other_density_logits, // [Nother]
     const std::vector<at::Tensor> &other_semantic_logits,
     const std::vector<NodeSemanticSegment> &other_segments,
-    const at::Tensor &camera_timestamps_startend_us, // [B, 2] int64
+    const at::Tensor &camera_timestamps_startend_us, // [B, 2] int64, B >= 1; only row 0
+                                                     // (the reference camera) is read
     const at::Tensor &tracks_packinfo,               // [T, 2] int32 (start idx, n poses)
     const at::Tensor &tracks_poses,                  // [P, 7] (tx,ty,tz,qx,qy,qz,qw)
     const at::Tensor &tracks_timestamps_us,          // [P] int64
     const at::Tensor &cuboids_dims,                  // [T, 3]
-    const std::vector<int64_t> &background_allowed_class_ids,
+    at::IntArrayRef background_allowed_class_ids,
     const std::optional<NodeSemanticPredicate> &node_primary_predicate,
     double background_lambda,
     double node_lambda,
@@ -102,8 +115,11 @@ void launch_bg_track_node_semantic_losses_fwd_kernel(
 // Backward: re-reads the selection bits and reduction workspace written by
 // the forward and scatters d(mean softplus)/d(logit) = upstream / count *
 // sigmoid(logit) to the selected density logits (both members accumulate into
-// points selected by both). Absent upstream gradients count as zero; absent
-// gradient outputs skip that member's point domain entirely.
+// points selected by both). The selected counts it divides by are written
+// only by the forward: the same workspace instance must arrive here
+// unmodified (no re-zeroing or pooling between the passes). Absent upstream
+// gradients count as zero; absent gradient outputs skip that member's point
+// domain entirely.
 void launch_bg_track_node_semantic_losses_bwd_kernel(
     const at::Tensor &background_density_logits,                 // [Nbg]
     const at::Tensor &other_density_logits,                      // [Nother]
