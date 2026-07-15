@@ -21,7 +21,9 @@ script_dir="$(cd "$(dirname "${script_path}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 script_name="$(basename "${BASH_SOURCE[0]}")"
 
-full_mode=true
+# Selection mode: full | changed. Set by the mutually-related --full/--changed
+# flags; --full is the default.
+mode="full"
 changed_base=""
 check_mode=false
 black_args=()
@@ -83,13 +85,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --full)
-            full_mode=true
-            changed_base=""
+            mode="full"
             shift
             ;;
         --changed)
             [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die "--changed requires a git ref argument"
-            full_mode=false
+            mode="changed"
             changed_base="$2"
             shift 2
             ;;
@@ -106,20 +107,24 @@ done
 find_repo_files() {
     local git_diff_args=()
 
-    if $full_mode; then
-        local empty_tree
-        empty_tree="$(git -C "${repo_root}" hash-object -t tree /dev/null)"
-        git_diff_args=(
-            --cached
-            --diff-filter=ACMR
-            "${empty_tree}"
-        )
-    else
-        git_diff_args=(
-            --diff-filter=ACMR
-            "${changed_base}"
-        )
-    fi
+    case "${mode}" in
+        full)
+            # Index vs the empty tree enumerates every tracked source file.
+            local empty_tree
+            empty_tree="$(git -C "${repo_root}" hash-object -t tree /dev/null)"
+            git_diff_args=(
+                --cached
+                --diff-filter=ACMR
+                "${empty_tree}"
+            )
+            ;;
+        changed)
+            git_diff_args=(
+                --diff-filter=ACMR
+                "${changed_base}"
+            )
+            ;;
+    esac
 
     git -C "${repo_root}" diff --name-only "${git_diff_args[@]}" -z -- "$@"
 }
