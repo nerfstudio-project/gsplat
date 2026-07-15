@@ -190,6 +190,10 @@ aot-test-debug:
 # asserts.
 jit-test-release:
   extends: .test-base
+  # Superseded by aot-build-release, which compiles the release build ahead of
+  # time.
+  rules:
+    - when: never
   needs:
     - code-format
   variables:
@@ -197,6 +201,10 @@ jit-test-release:
 
 aot-build-release:
   extends: .aot-build-base
+  # Re-enabled (the shared .aot-base rule disables the AOT jobs) so the release
+  # wheel is built ahead of time for the docs job.
+  rules:
+    - when: on_success
   variables:
     DEBUG: 0
 
@@ -211,25 +219,18 @@ aot-test-release:
 render-docs:
   stage: docs
 
-  # Render as soon as lint passes; rendering doesn't depend on the test stage.
+  # Reuse the release build's compiled wheel so the docs job loads a prebuilt
+  # extension instead of recompiling it, which would need the third_party
+  # submodules this job does not check out.
   needs:
     - code-format
+    - job: aot-build-release
+      artifacts: true
 
   variables:
-    # Autodoc imports gsplat and may trigger a clean CUDA JIT build. Fetch the
-    # GLM headers required by that fallback without cloning unrelated submodules.
-    GIT_SUBMODULE_STRATEGY: normal
-    GIT_SUBMODULE_PATHS: gsplat/cuda/csrc/third_party/glm
-    # Restrict CUDA build scope: doc output is identical regardless of which
-    # features or channel counts are compiled in; compile the minimum to keep
-    # the JIT build fast.
-    NUM_CHANNELS: "3"
-    BUILD_3DGUT: "0"
-    BUILD_2DGS: "0"
-    BUILD_ADAM: "0"
-    BUILD_RELOC: "0"
-    BUILD_LOSSES: "0"
-    BUILD_CAMERA_WRAPPERS: "0"
+    # Nothing compiles here, so the docs job needs neither the submodules nor a
+    # build scope.
+    GIT_SUBMODULE_STRATEGY: none
 
   tags:
     - type/docker
@@ -237,7 +238,10 @@ render-docs:
     - arch/x86_64
 
   script:
-    - BUILD_NO_CUDA=1 pip install .
+    # Install the compiled wheel, then drop the checkout's package so autodoc
+    # imports the installed extension rather than the source tree.
+    - pip install -v dist/*.whl
+    - rm -f gsplat/__init__.py
     - bash docs/render_docs.sh build/html
 
   artifacts:
