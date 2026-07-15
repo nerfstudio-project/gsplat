@@ -2,52 +2,49 @@
 
 ## Set up the development environment
 
-Clone the repository and submodules with
-
-```bash
-git clone --recurse-submodules URL
-```
-
-Install an [NVIDIA CUDA Toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
-supported by PyTorch. Activate an existing Python environment, then run:
+Clone the repository, install an
+[NVIDIA CUDA Toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
+supported by PyTorch, activate a Python environment, and run:
 
 ```bash
 ./bootstrap.sh
 ```
 
-This installs the development extra. The CuPy wheel matching the local CUDA
-toolkit is selected automatically. On Python 3.13, `dev` skips the
-PNG-compression extra (`vc-flas` doesn't support 3.13 yet); install
-`gsplat[png]` separately on 3.10-3.12 if you need it.
+Bootstrap initializes the Git submodules, then installs the complete
+development and test dependency set, including the optional PNG compression
+feature. Re-running it is idempotent: an omitted option keeps what the
+environment already has, and passing an option applies that change while
+leaving the rest untouched.
 
-If bootstrap cannot detect `nvcc`, or to choose the CUDA-tagged Python
-dependencies (PyTorch wheel index, CuPy package) explicitly, run:
+By default bootstrap selects the CUDA-tagged Python dependencies (the PyTorch
+wheel index and the CuPy package) from the environment's installed Torch,
+falling back to the detected `nvcc`. Choose the CUDA major explicitly with:
 
 ```bash
 ./bootstrap.sh --cuda 12.8
 ```
 
 This selects binary dependencies only; it does not choose the CUDA compiler
-used by the build. Bootstrap warns when the toolkit it detects disagrees with
-the requested version.
+used by the build. Passing `--cuda` with a CUDA major other than the installed
+Torch's reinstalls Torch to match. A later CMake configuration verifies that
+the build compiler and Torch use the same CUDA major, and points back to
+bootstrap when a dependency is missing.
 
-To have bootstrap create a new virtual environment, run:
+To have bootstrap create and provision a new virtual environment, run:
 
 ```bash
 ./bootstrap.sh --venv /path/to/venvs/gsplat --cuda 12.8
 source /path/to/venvs/gsplat/bin/activate
 ```
 
-Use `./bootstrap.sh --help` to see the Python and CUDA options.
+With that environment active, a later bare `./bootstrap.sh` reuses its CUDA and
+interpreter. Use `./bootstrap.sh --help` to see the Python and CUDA options.
 
-Bootstrap installs the complete development and test dependency set, including
-the optional PNG compression feature. It selects CuPy from the requested or
-detected dependency CUDA major, rather than from the GPU driver's maximum
-supported version. A later CMake configuration verifies that the build
-compiler and Torch use the same CUDA major. The `vc-flas` dependency currently
-limits these environments to Python 3.10 through 3.12. The base gsplat package
-continues to support Python 3.13 when the `png`, `test`, and `dev` extras are not
-selected.
+Bootstrap selects CuPy from the requested or detected dependency CUDA major,
+rather than from the GPU driver's maximum supported version. The `vc-flas`
+dependency currently limits these environments to Python 3.10 through 3.12. The
+base gsplat package continues to support Python 3.13 when the `png`, `test`, and
+`dev` extras are not selected.
 
 ## Develop with a CMake build tree
 

@@ -87,7 +87,7 @@ def test_bootstrap_expands_declared_development_dependencies(tmp_path: Path) -> 
     ]
 
     assert len(pip_commands) == 2
-    assert "CUDA: 12.8 (selected by --cuda)" in completed.stdout
+    assert "CUDA: 12.8 (requested)" in completed.stdout
     torch_command, dependency_command = pip_commands
     assert "torch>=2.7" in torch_command
     assert "https://download.pytorch.org/whl/cu128" in torch_command
@@ -135,7 +135,7 @@ def test_bootstrap_defaults_to_active_python_and_cuda(tmp_path: Path) -> None:
         },
     )
 
-    assert f"CUDA: 12.8 ({cuda_root}/bin/nvcc)" in completed.stdout
+    assert f"CUDA: 12.8 (nvcc {cuda_root}/bin/nvcc)" in completed.stdout
     pip_commands = [
         command
         for command in _printed_commands(completed.stdout)
@@ -143,48 +143,3 @@ def test_bootstrap_defaults_to_active_python_and_cuda(tmp_path: Path) -> None:
     ]
     assert pip_commands
     assert all(command[0] == str(bin_dir / "python") for command in pip_commands)
-
-
-def test_bootstrap_warns_when_cuda_option_disagrees_with_detected_nvcc(
-    tmp_path: Path,
-) -> None:
-    """--cuda selects binary dependencies; a differing toolkit draws a warning."""
-
-    cuda_root = _fake_cuda(tmp_path, version="13.0")
-    completed = _dry_run(
-        tmp_path,
-        "--python",
-        sys.executable,
-        "--cuda",
-        "12.8",
-        environment={
-            "CUDA_HOME": str(cuda_root),
-            "CUDACXX": None,
-            "CUDA_PATH": None,
-        },
-    )
-    assert "CUDA: 12.8 (selected by --cuda)" in completed.stdout
-    assert "WARNING" in completed.stderr
-    assert "13.0" in completed.stderr
-
-
-def test_bootstrap_does_not_warn_when_cuda_option_matches_detected_nvcc(
-    tmp_path: Path,
-) -> None:
-    """A toolkit matching --cuda stays quiet."""
-
-    cuda_root = _fake_cuda(tmp_path, version="12.8")
-    completed = _dry_run(
-        tmp_path,
-        "--python",
-        sys.executable,
-        "--cuda",
-        "12.8",
-        environment={
-            "CUDA_HOME": str(cuda_root),
-            "CUDACXX": None,
-            "CUDA_PATH": None,
-        },
-    )
-    assert "CUDA: 12.8 (selected by --cuda)" in completed.stdout
-    assert "WARNING" not in completed.stderr
