@@ -30,10 +30,20 @@ import torch
 from torch import Tensor
 
 from . import _backend
+from ...constants import (
+    SLERP_SMALL_ANGLE_DOT_THRESHOLD as _MIRRORED_SLERP_SMALL_ANGLE_DOT_THRESHOLD,
+)
 
 SLERP_SMALL_ANGLE_DOT_THRESHOLD = float(
     _backend._GEOMETRY_CUDA.SLERP_SMALL_ANGLE_DOT_THRESHOLD
 )
+if SLERP_SMALL_ANGLE_DOT_THRESHOLD != _MIRRORED_SLERP_SMALL_ANGLE_DOT_THRESHOLD:
+    raise RuntimeError(
+        "gsplat_geometry::kSlerpSmallAngleDotThreshold "
+        f"({SLERP_SMALL_ANGLE_DOT_THRESHOLD}) diverged from its extension-free "
+        "mirror gsplat.constants.SLERP_SMALL_ANGLE_DOT_THRESHOLD "
+        f"({_MIRRORED_SLERP_SMALL_ANGLE_DOT_THRESHOLD}); update both together."
+    )
 
 
 def _expect_tensor(name: str, x: object) -> Tensor:

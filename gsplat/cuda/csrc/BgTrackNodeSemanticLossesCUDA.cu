@@ -34,6 +34,8 @@
 #    include "Common.h"
 #    include "cores/BgTrackNodeSemanticCore.cuh"
 
+#    include "../../geometry/kernels/cuda/csrc/quaternion.cuh"
+
 namespace gsplat
 {
 namespace
@@ -160,70 +162,50 @@ namespace
         return binary_search_unsafe(val, data, length);
     }
 
-    // Quaternion (x, y, z, w) slerp with shortest-arc flip and a linear
-    // fallback for nearby quaternions. Ported from ku::unitquat_slerp.
+    // Quaternion (x, y, z, w) slerp with shortest-arc flip. Delegates to the
+    // shared geometry helper so the hemisphere flip, the dot clamp, and the
+    // normalized-lerp acceptance (dot > 0.9995) stay identical across every
+    // kernel that interpolates track poses. The pure-PyTorch fallback
+    // (_unitquat_slerp in gsplat/losses.py) mirrors the same helper.
     template<typename scalar_t>
     __device__ __forceinline__ void unitquat_slerp(
         const scalar_t q_start[4], const scalar_t q_end_in[4], const scalar_t t, scalar_t out[4]
     )
     {
-        scalar_t q_end[4] = {q_end_in[0], q_end_in[1], q_end_in[2], q_end_in[3]};
-        scalar_t cos_omega
-            = q_start[0] * q_end[0] + q_start[1] * q_end[1] + q_start[2] * q_end[2] + q_start[3] * q_end[3];
-        if(cos_omega < scalar_t(0))
-        {
-            cos_omega = -cos_omega;
-#    pragma unroll
-            for(int i = 0; i < 4; i++)
-            {
-                q_end[i] = -q_end[i];
-            }
-        }
-
-        const bool nearby_quaternions = cos_omega > scalar_t(1) - scalar_t(1e-3);
-        const scalar_t omega          = acos(cos_omega);
-        const scalar_t alpha          = nearby_quaternions ? (scalar_t(1) - t) : sin((scalar_t(1) - t) * omega);
-        const scalar_t beta           = nearby_quaternions ? t : sin(t * omega);
-
-        scalar_t norm2 = scalar_t(0);
-#    pragma unroll
-        for(int i = 0; i < 4; i++)
-        {
-            out[i]  = alpha * q_start[i] + beta * q_end[i];
-            norm2  += out[i] * out[i];
-        }
-        const scalar_t inv_norm = rsqrt(norm2);
-#    pragma unroll
-        for(int i = 0; i < 4; i++)
-        {
-            out[i] *= inv_norm;
-        }
+        gsplat_geometry::quat_slerp_pair_fwd(
+            q_start[0],
+            q_start[1],
+            q_start[2],
+            q_start[3],
+            q_end_in[0],
+            q_end_in[1],
+            q_end_in[2],
+            q_end_in[3],
+            t,
+            &out[0],
+            &out[1],
+            &out[2],
+            &out[3]
+        );
     }
 
-    // Unit quaternion (x, y, z, w) to a row-major SO3 rotation matrix.
-    // Ported from ku::unitquat_rotmatrix.
+    // Quaternion (x, y, z, w) to a row-major SO3 rotation matrix. Delegates
+    // to the shared geometry helper (safe-normalizing, near-zero input maps
+    // to identity); the fallback's _quat_xyzw_to_rotmat mirrors it.
     template<typename scalar_t>
     __device__ __forceinline__ void unitquat_rotmatrix(const scalar_t q[4], scalar_t R[3][3])
     {
-        const scalar_t x = q[0];
-        const scalar_t y = q[1];
-        const scalar_t z = q[2];
-        const scalar_t w = q[3];
-
-        const scalar_t xx = x * x;
-        const scalar_t yy = y * y;
-        const scalar_t zz = z * z;
-        const scalar_t ww = w * w;
-
-        R[0][0] = xx - yy - zz + ww;
-        R[0][1] = scalar_t(2) * (x * y - z * w);
-        R[0][2] = scalar_t(2) * (x * z + y * w);
-        R[1][0] = scalar_t(2) * (x * y + z * w);
-        R[1][1] = -xx + yy - zz + ww;
-        R[1][2] = scalar_t(2) * (y * z - x * w);
-        R[2][0] = scalar_t(2) * (x * z - y * w);
-        R[2][1] = scalar_t(2) * (y * z + x * w);
-        R[2][2] = -xx - yy + zz + ww;
+        scalar_t out9[9];
+        gsplat_geometry::quat_to_matrix_fwd_write(q[0], q[1], q[2], q[3], out9);
+#    pragma unroll
+        for(int row = 0; row < 3; row++)
+        {
+#    pragma unroll
+            for(int col = 0; col < 3; col++)
+            {
+                R[row][col] = out9[row * 3 + col];
+            }
+        }
     }
 
     struct RangeSemanticFilter

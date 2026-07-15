@@ -839,9 +839,10 @@ def _slerp_reference(q0, q1, t):
 
     Independent of the kernel's formulation: exact ``sin`` ratio weights
     with a normalized-lerp fallback only for numerically degenerate
-    ``sin(omega)``. The kernel's renormalized-sum form and its wider
-    normalized-lerp branch (``cos(omega) > 1 - 1e-3``) agree with this
-    reference far below the probe margins used by the tests.
+    ``sin(omega)``. The kernel's shared geometry helper (sin-ratio weights
+    with a wider normalized-lerp branch above ``cos(omega) >
+    _NLERP_DOT_THRESHOLD``) agrees with this reference far below the probe
+    margins used by the tests.
     """
     dot = _quat_dot(q0, q1)
     if dot < 0.0:
@@ -870,10 +871,14 @@ def _quat_rotmat_rows(q):
     )
 
 
+# Nearby-quaternion cutoff of the shared geometry helper the kernel and the
+# fallback both delegate to (gsplat_geometry::kSlerpSmallAngleDotThreshold).
+_NLERP_DOT_THRESHOLD = 0.9995
+
 # Probe margin around the interpolated box faces. Far above every acceptable
-# numerical divergence between implementations (renormalized-sum vs sin-ratio
-# slerp, nlerp branch: <= ~1e-9 here) and far below any real math error
-# (wrong branch, missing flip, wrong bracket: >= ~1e-2).
+# numerical divergence between implementations (the helper's nlerp branch vs
+# the reference's exact slerp above the cutoff: <= ~1e-8 here) and far below
+# any real math error (wrong branch, missing flip, wrong bracket: >= ~1e-2).
 _SLERP_PROBE_MARGIN = 1e-4
 
 # Non-cubic half dims so every rotation error is observable on some face.
@@ -894,15 +899,15 @@ def _slerp_cases():
     * ``sign_flip_skew_axes``: negative dot with distinct rotation axes
       at ``alpha = 0.3``, so the long-way result is not related to the
       correct one by any box symmetry.
-    * ``near_parallel_lerp``: ``cos(omega) > 1 - 1e-3`` pins the kernel's
-      normalized-lerp branch, at ``alpha = 0.25`` where lerp and slerp are
-      not trivially identical (they are at 0.5).
+    * ``near_parallel_lerp``: ``cos(omega) > _NLERP_DOT_THRESHOLD`` pins
+      the helper's normalized-lerp branch, at ``alpha = 0.25`` where lerp
+      and slerp are not trivially identical (they are at 0.5).
     * ``nlerp_threshold_band``: ``cos(omega)`` inside ``(1 - 1e-2,
-      1 - 1e-3)`` with a tightened probe margin, so widening the
-      normalized-lerp acceptance by an order of magnitude (or more)
-      routes this case through nlerp and moves the faces past the
-      probes. Together with ``near_parallel_lerp`` this pins the branch
-      threshold from both sides.
+      _NLERP_DOT_THRESHOLD)`` with a tightened probe margin, so widening
+      the normalized-lerp acceptance to ``1 - 1e-2`` (or more) routes
+      this case through nlerp and moves the faces past the probes.
+      Together with ``near_parallel_lerp`` this pins the branch threshold
+      from both sides.
     * ``generic_mid_interval``: distinct rotation axes at ``alpha = 0.3``
       pin the generic ``sin``-path.
     * ``three_pose_second_interval``: a three-pose track whose camera
@@ -1023,13 +1028,13 @@ def _slerp_case_inputs(case):
     q0, q1 = poses[i0][1], poses[i1][1]
     dot = _quat_dot(q0, q1)
     if case["branch"] == "negative_dot":
-        assert dot < 0.0 and -dot < 1.0 - 1e-3, "must pin the sign flip"
+        assert dot < 0.0 and -dot < _NLERP_DOT_THRESHOLD, "must pin the sign flip"
     elif case["branch"] == "near_parallel":
-        assert dot > 1.0 - 1e-3, "must pin the normalized-lerp branch"
+        assert dot > _NLERP_DOT_THRESHOLD, "must pin the normalized-lerp branch"
     elif case["branch"] == "threshold_band":
-        assert 1.0 - 1e-2 < dot < 1.0 - 1e-3, "must sit just below the cutoff"
+        assert 1.0 - 1e-2 < dot < _NLERP_DOT_THRESHOLD, "must sit below the cutoff"
     else:
-        assert 0.0 < dot < 1.0 - 1e-3, "must pin the generic sin branch"
+        assert 0.0 < dot < _NLERP_DOT_THRESHOLD, "must pin the generic sin branch"
 
     q_ref = _slerp_reference(q0, q1, alpha)
     c0, c1 = poses[i0][0], poses[i1][0]
