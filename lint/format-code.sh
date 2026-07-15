@@ -21,9 +21,10 @@ script_dir="$(cd "$(dirname "${script_path}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 script_name="$(basename "${BASH_SOURCE[0]}")"
 
-# Selection mode: full | changed. Set by the mutually-related --full/--changed
-# flags; --full is the default.
+# Selection mode: full | changed. `mode_flag` records the flag that set it so
+# a second, different mode flag is a hard error rather than a silent last-wins.
 mode="full"
+mode_flag=""
 changed_base=""
 check_mode=false
 black_args=()
@@ -57,13 +58,15 @@ usage() {
     cat <<EOF
 Format code in the gsplat repository.
 
-Usage: ${script_name} [--check] [--full] [--changed <ref>] [--help|-h]
+Usage: ${script_name} [--check] [--full | --changed <ref>] [--help|-h]
 
 Options:
   --check          Check formatting without modifying files.
   --full           Format all tracked source files (default).
   --changed <ref>  Format only source files changed since <ref> (e.g. for CI).
   --help, -h       Show this help message.
+
+--full and --changed select what to act on and are mutually exclusive.
 EOF
 }
 
@@ -72,6 +75,16 @@ die() {
     usage
     exit 1
 } >&2
+
+# Select a mode, rejecting a conflicting second selection flag.
+set_mode() {
+    local requested="$1" flag="$2"
+    if [[ -n "${mode_flag}" && "${mode_flag}" != "${flag}" ]]; then
+        die "${flag} cannot be combined with ${mode_flag}; pass at most one of --full / --changed"
+    fi
+    mode="${requested}"
+    mode_flag="${flag}"
+}
 
 # Command line argument processing
 while [[ $# -gt 0 ]]; do
@@ -85,12 +98,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --full)
-            mode="full"
+            set_mode full --full
             shift
             ;;
         --changed)
             [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die "--changed requires a git ref argument"
-            mode="changed"
+            set_mode changed --changed
             changed_base="$2"
             shift 2
             ;;
