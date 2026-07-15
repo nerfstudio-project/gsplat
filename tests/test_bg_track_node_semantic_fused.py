@@ -1867,7 +1867,13 @@ class TestBgTrackNodeSemanticCUDA:
         """Regression: the joint launcher must zero the selection buffer itself
         (like the generic launcher) rather than relying on the wrapper's
         zero-allocation plus full mask-word coverage — backward reads every
-        selection byte, so stale bytes would silently corrupt gradients."""
+        selection byte, so stale bytes would silently corrupt gradients.
+
+        Dirty and clean runs are separate launches, so block-completion
+        order can move the reduction's fp32 atomic adds by a few ulp; the
+        comparison uses an ulp-scale tolerance rather than bitwise equality.
+        A surviving stale selection byte pulls whole extra points into the
+        member means, which shows up orders of magnitude above that."""
         import unittest.mock as mock
 
         inp, bg_lambda, node_lambda, _, _ = _scenario_joint_shared_primary()
@@ -1894,11 +1900,17 @@ class TestBgTrackNodeSemanticCUDA:
                 _objective(dirty_outputs, bg_lambda, node_lambda), dirty_leaves
             )
 
-        _assert_outputs_match(dirty_outputs, clean_outputs, dict(rtol=0.0, atol=0.0))
+        tol = dict(rtol=1e-6, atol=1e-7)
+        _assert_outputs_match(dirty_outputs, clean_outputs, tol)
         for clean_grad, dirty_grad in zip(clean_grads, dirty_grads):
-            assert torch.equal(
-                dirty_grad, clean_grad
-            ), "gradients depend on the selection buffer's initial contents"
+            torch.testing.assert_close(
+                dirty_grad,
+                clean_grad,
+                **tol,
+                msg=lambda m: (
+                    f"gradients depend on the selection buffer's initial contents: {m}"
+                ),
+            )
 
     def test_production_scale_matches_fallback(self):
         """Production-scale smoke: the CUDA path stays finite and agrees with
