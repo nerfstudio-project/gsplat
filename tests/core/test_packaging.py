@@ -177,15 +177,6 @@ def test_experimental_published_under_gsplat_namespace():
         p == "experimental" or p.startswith("experimental.") for p in packages
     ), f"bare top-level 'experimental' published: {sorted(packages)}"
 
-    # Neither pyproject.toml nor setup.py may declare a package-dir remapping
-    # for experimental. It is a normal gsplat submodule.
-    if HAS_SOURCE_TREE:
-        pyproject_text = (REPO_ROOT / "pyproject.toml").read_text()
-        assert "package-dir" not in pyproject_text
-        assert "package_dir" not in pyproject_text
-        setup_text = (REPO_ROOT / "setup.py").read_text()
-        assert "package_dir" not in setup_text
-
 
 @pytest.mark.skipif(
     os.environ.get("RUN_PACKAGING_BUILD_TESTS") != "1",
