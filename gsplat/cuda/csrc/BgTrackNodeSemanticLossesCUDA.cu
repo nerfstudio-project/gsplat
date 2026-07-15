@@ -32,6 +32,7 @@
 
 #    include "BgTrackNodeSemanticLosses.h"
 #    include "Common.h"
+#    include "KernelUtils.cuh"
 #    include "cores/BgTrackNodeSemanticCore.cuh"
 
 #    include "../../geometry/kernels/cuda/csrc/quaternion.cuh"
@@ -97,18 +98,6 @@ namespace
     // ------------------------------------------------------------------------
     // Device helpers
     // ------------------------------------------------------------------------
-
-    // Warp-wide sum reduction across all WARP_SIZE lanes for any number of
-    // accumulators. Every lane must participate; lane 0 receives the sums.
-    template<typename... Ts>
-    __device__ __forceinline__ void warp_reduce_sum_all(Ts &...values)
-    {
-#    pragma unroll
-        for(int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
-        {
-            ((values += __shfl_down_sync(FULL_WARP_MASK, values, offset)), ...);
-        }
-    }
 
     // Binary search over sorted timestamps returning the "right" bound index:
     // (none or data[ret-1]) <= val < data[ret], assuming val <= data[length-1]
@@ -445,7 +434,7 @@ namespace
         int32_t thread_count = selected ? 1 : 0;
         const int lane_idx   = threadIdx.x & (WARP_SIZE - 1);
         const int warp_idx   = threadIdx.x / WARP_SIZE;
-        warp_reduce_sum_all(thread_loss, thread_count);
+        warp_reduce_sum_all(FULL_WARP_MASK, thread_loss, thread_count);
         if(lane_idx == 0)
         {
             shared_warp_loss[warp_idx]  = thread_loss;
@@ -457,7 +446,7 @@ namespace
         {
             scalar_t block_loss = lane_idx < WARPS_PER_BLOCK ? shared_warp_loss[lane_idx] : scalar_t(0);
             int32_t block_count = lane_idx < WARPS_PER_BLOCK ? shared_warp_count[lane_idx] : 0;
-            warp_reduce_sum_all(block_loss, block_count);
+            warp_reduce_sum_all(FULL_WARP_MASK, block_loss, block_count);
             if(lane_idx == 0 && block_count > 0)
             {
                 atomicAdd(loss_sum, block_loss);
@@ -559,7 +548,7 @@ namespace
         int32_t thread_count = selected ? 1 : 0;
         const int lane_idx   = threadIdx.x & (WARP_SIZE - 1);
         const int warp_idx   = threadIdx.x / WARP_SIZE;
-        warp_reduce_sum_all(thread_loss, thread_count);
+        warp_reduce_sum_all(FULL_WARP_MASK, thread_loss, thread_count);
         if(lane_idx == 0)
         {
             shared_warp_loss[warp_idx]  = thread_loss;
@@ -571,7 +560,7 @@ namespace
         {
             scalar_t block_loss = lane_idx < WARPS_PER_BLOCK ? shared_warp_loss[lane_idx] : scalar_t(0);
             int32_t block_count = lane_idx < WARPS_PER_BLOCK ? shared_warp_count[lane_idx] : 0;
-            warp_reduce_sum_all(block_loss, block_count);
+            warp_reduce_sum_all(FULL_WARP_MASK, block_loss, block_count);
             if(lane_idx == 0 && block_count > 0)
             {
                 atomicAdd(&workspace->node_loss_sum, block_loss);
@@ -718,7 +707,9 @@ namespace
         int32_t node_thread_count       = node_selected ? 1 : 0;
         const int lane_idx              = threadIdx.x & (WARP_SIZE - 1);
         const int warp_idx              = threadIdx.x / WARP_SIZE;
-        warp_reduce_sum_all(background_thread_loss, background_thread_count, node_thread_loss, node_thread_count);
+        warp_reduce_sum_all(
+            FULL_WARP_MASK, background_thread_loss, background_thread_count, node_thread_loss, node_thread_count
+        );
         if(lane_idx == 0)
         {
             shared_warp_background_loss[warp_idx]  = background_thread_loss;
@@ -735,7 +726,9 @@ namespace
             int32_t background_block_count = lane_idx < WARPS_PER_BLOCK ? shared_warp_background_count[lane_idx] : 0;
             scalar_t node_block_loss       = lane_idx < WARPS_PER_BLOCK ? shared_warp_node_loss[lane_idx] : scalar_t(0);
             int32_t node_block_count       = lane_idx < WARPS_PER_BLOCK ? shared_warp_node_count[lane_idx] : 0;
-            warp_reduce_sum_all(background_block_loss, background_block_count, node_block_loss, node_block_count);
+            warp_reduce_sum_all(
+                FULL_WARP_MASK, background_block_loss, background_block_count, node_block_loss, node_block_count
+            );
             if(lane_idx == 0)
             {
                 if(background_block_count > 0)
