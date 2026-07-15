@@ -216,7 +216,10 @@ render-docs:
     - code-format
 
   variables:
-    GIT_SUBMODULE_STRATEGY: none
+    # Autodoc imports gsplat and may trigger a clean CUDA JIT build. Fetch the
+    # GLM headers required by that fallback without cloning unrelated submodules.
+    GIT_SUBMODULE_STRATEGY: normal
+    GIT_SUBMODULE_PATHS: gsplat/cuda/csrc/third_party/glm
     # Restrict CUDA build scope: doc output is identical regardless of which
     # features or channel counts are compiled in; compile the minimum to keep
     # the JIT build fast.

@@ -27,6 +27,9 @@
 #    include <cmath>
 #    include <cstdint>
 #    include <limits>
+#    include <type_traits>
+
+#    include "KernelUtils.cuh"
 
 namespace gsplat
 {
@@ -42,6 +45,14 @@ enum
     kCount       = 6,
     kFieldsCount = 7
 };
+
+// Warp aggregation requires complete CUDA warps (32 lanes) and HIP wavefronts
+// (32 or 64 lanes) in every block.
+constexpr uint32_t kAccumulationBlockSize = 256;
+
+// Sparse warps retain per-hit atomics because seven reductions cost more than
+// the contention they remove.
+constexpr uint32_t kWarpAggregationMinHits = 4;
 
 // ---------------------------------------------------------------------------
 // Scalar / small-vector device helpers
@@ -597,13 +608,92 @@ struct PointTransform
     }
 };
 
+template<typename scalar_t>
+__device__ __forceinline__ void accumulate_bin_per_hit(
+    scalar_t *__restrict__ shared_stats_at, scalar_t y, scalar_t roll, scalar_t pitch
+)
+{
+    atomicAdd(&shared_stats_at[kAccumY], y);
+    atomicAdd(&shared_stats_at[kAccumY2], y * y);
+    atomicAdd(&shared_stats_at[kAccumRoll], roll);
+    atomicAdd(&shared_stats_at[kAccumRoll2], roll * roll);
+    atomicAdd(&shared_stats_at[kAccumPitch], pitch);
+    atomicAdd(&shared_stats_at[kAccumPitch2], pitch * pitch);
+    atomicAdd(&shared_stats_at[kCount], scalar_t(1));
+}
+
+// Every lane in a complete warp/wave must call this convergently. Threads past
+// N remain in the collective and pass hit=false.
+template<uint32_t CTA_SIZE, uint32_t MIN_HITS, typename scalar_t>
+__device__ __forceinline__ void accumulate_bin_warp_aggregated(
+    scalar_t *__restrict__ shared_stats_at, bool hit, scalar_t y, scalar_t roll, scalar_t pitch
+)
+{
+    static_assert(CTA_SIZE % 64 == 0);
+    static_assert(MIN_HITS > 0 && MIN_HITS <= 64);
+
+    const auto active_mask = __activemask();
+    const auto hit_mask    = __ballot_sync(active_mask, hit);
+    if(hit_mask == 0)
+    {
+        return;
+    }
+
+    const uint32_t hit_count = warp_mask_popcount(hit_mask);
+    if(hit_count < MIN_HITS)
+    {
+        if(hit)
+        {
+            accumulate_bin_per_hit(shared_stats_at, y, roll, pitch);
+        }
+        return;
+    }
+
+    const bool leader = threadIdx.x % warpSize == 0;
+    scalar_t sum      = warp_sum(hit ? y : scalar_t(0), active_mask);
+    if(leader)
+    {
+        atomicAdd(&shared_stats_at[kAccumY], sum);
+    }
+    sum = warp_sum(hit ? y * y : scalar_t(0), active_mask);
+    if(leader)
+    {
+        atomicAdd(&shared_stats_at[kAccumY2], sum);
+    }
+    sum = warp_sum(hit ? roll : scalar_t(0), active_mask);
+    if(leader)
+    {
+        atomicAdd(&shared_stats_at[kAccumRoll], sum);
+    }
+    sum = warp_sum(hit ? roll * roll : scalar_t(0), active_mask);
+    if(leader)
+    {
+        atomicAdd(&shared_stats_at[kAccumRoll2], sum);
+    }
+    sum = warp_sum(hit ? pitch : scalar_t(0), active_mask);
+    if(leader)
+    {
+        atomicAdd(&shared_stats_at[kAccumPitch], sum);
+    }
+    sum = warp_sum(hit ? pitch * pitch : scalar_t(0), active_mask);
+    if(leader)
+    {
+        atomicAdd(&shared_stats_at[kAccumPitch2], sum);
+    }
+    sum = warp_sum(hit ? scalar_t(1) : scalar_t(0), active_mask);
+    if(leader)
+    {
+        atomicAdd(&shared_stats_at[kCount], sum);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Forward kernels
 // ---------------------------------------------------------------------------
 
 // Pass 1: accumulate per-bin statistics. Block-local shared-memory reduction
 // keeps global atomics down to one flush per (bin, field).
-template<typename scalar_t>
+template<uint32_t CTA_SIZE, typename scalar_t>
 __global__ void ground_gaussians_accumulate_kernel(
     const int64_t N,
     const int n_bins,
@@ -618,18 +708,47 @@ __global__ void ground_gaussians_accumulate_kernel(
 )
 {
     extern __shared__ char shared_raw[];
-    scalar_t *shared = reinterpret_cast<scalar_t *>(shared_raw);
+    scalar_t *shared_stats = reinterpret_cast<scalar_t *>(shared_raw);
 
     const int local        = threadIdx.x;
     const int total_fields = n_bins * kFieldsCount;
     for(int off = local; off < total_fields; off += blockDim.x)
     {
-        shared[off] = scalar_t(0);
+        shared_stats[off] = scalar_t(0);
     }
     __syncthreads();
 
     const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if(idx < N)
+    // Seven 64-bit shuffle reductions cost more than the shared atomics they
+    // replace, so warp aggregation is intentionally limited to float32.
+    if constexpr(std::is_same_v<scalar_t, float>)
+    {
+        const bool valid = idx < N;
+        PointTransform<scalar_t> pt;
+        if(valid)
+        {
+            pt.load(positions, rotations, cam_tquat, idx);
+        }
+
+        for(int b = 0; b < n_bins; b++)
+        {
+            const scalar_t bin_min    = random_values[b] * range_bias + min_bias;
+            const scalar_t bin_max    = bin_min + grid_len;
+            scalar_t *shared_stats_at = shared_stats + b * kFieldsCount;
+
+            bool hit   = false;
+            scalar_t y = scalar_t(0), roll = scalar_t(0), pitch = scalar_t(0);
+            if(valid)
+            {
+                hit   = bin_min <= pt.z && pt.z < bin_max;
+                y     = pt.y;
+                roll  = pt.roll;
+                pitch = pt.pitch;
+            }
+            accumulate_bin_warp_aggregated<CTA_SIZE, kWarpAggregationMinHits>(shared_stats_at, hit, y, roll, pitch);
+        }
+    }
+    else if(idx < N)
     {
         PointTransform<scalar_t> pt;
         pt.load(positions, rotations, cam_tquat, idx);
@@ -640,14 +759,8 @@ __global__ void ground_gaussians_accumulate_kernel(
             const scalar_t bin_max = bin_min + grid_len;
             if(bin_min <= pt.z && pt.z < bin_max)
             {
-                scalar_t *bin = shared + b * kFieldsCount;
-                atomicAdd(&bin[kAccumY], pt.y);
-                atomicAdd(&bin[kAccumY2], pt.y * pt.y);
-                atomicAdd(&bin[kAccumRoll], pt.roll);
-                atomicAdd(&bin[kAccumRoll2], pt.roll * pt.roll);
-                atomicAdd(&bin[kAccumPitch], pt.pitch);
-                atomicAdd(&bin[kAccumPitch2], pt.pitch * pt.pitch);
-                atomicAdd(&bin[kCount], scalar_t(1));
+                scalar_t *shared_stats_at = shared_stats + b * kFieldsCount;
+                accumulate_bin_per_hit(shared_stats_at, pt.y, pt.roll, pt.pitch);
             }
         }
     }
@@ -655,7 +768,7 @@ __global__ void ground_gaussians_accumulate_kernel(
 
     for(int off = local; off < total_fields; off += blockDim.x)
     {
-        const scalar_t v = shared[off];
+        const scalar_t v = shared_stats[off];
         if(v != scalar_t(0))
         {
             atomicAdd(&stats[off], v);
@@ -819,8 +932,8 @@ void launch_ground_gaussians_fwd_kernel(
         return;
     }
 
-    const int threads = 256;
-    const auto stream = at::cuda::getCurrentCUDAStream();
+    constexpr uint32_t threads = kAccumulationBlockSize;
+    const auto stream          = at::cuda::getCurrentCUDAStream();
 
     AT_DISPATCH_FLOATING_TYPES(
         positions.scalar_type(),
@@ -852,7 +965,7 @@ void launch_ground_gaussians_fwd_kernel(
             if(N > 0)
             {
                 const dim3 grid(static_cast<uint32_t>((N + threads - 1) / threads));
-                ground_gaussians_accumulate_kernel<scalar_t><<<grid, threads, accum_shmem, stream>>>(
+                ground_gaussians_accumulate_kernel<threads, scalar_t><<<grid, threads, accum_shmem, stream>>>(
                     N,
                     n_bins,
                     positions.data_ptr<scalar_t>(),
