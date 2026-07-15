@@ -250,7 +250,7 @@ class BivariateWindshieldModelParameters(ExternalDistortionModelParameters):
 
 
 @functools.lru_cache(maxsize=1)
-def _build_config() -> Mapping[str, bool]:
+def _build_config() -> Mapping[str, bool | int]:
     try:
         from ._backend import _C
 
@@ -264,7 +264,7 @@ def _build_config() -> Mapping[str, bool]:
 
 
 def _has_build_feature(name: str) -> bool:
-    return _build_config().get(name, False)
+    return bool(_build_config().get(name, False))
 
 
 def has_camera_wrappers():

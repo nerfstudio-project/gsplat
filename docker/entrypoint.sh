@@ -87,22 +87,21 @@ if [ "$HOST_UID" != 0 ]; then
     export HOME="$HOST_HOME"
 fi
 
-# Check if gsplat source deps match what's installed in the image.
-# This warns (but does not block) when the source has been updated
-# but the Docker image hasn't been rebuilt.
+# When started from a gsplat checkout, check whether its dependencies match
+# the image. Starting elsewhere is valid (for example, artifact-only CI jobs),
+# so the absence of a source tree is not itself a warning.
 if [[ ! -f /opt/dep-check/all_packages.txt ]]; then
     echo "ERROR: /opt/dep-check/all_packages.txt not found in the docker image." >&2
     echo "The docker image was not built correctly." >&2
     exit 1
 fi
 
-if [[ ! -f "$PWD/pyproject.toml" ]] || ! grep -q 'name = "gsplat"' "$PWD/pyproject.toml" 2>/dev/null; then
-    echo "WARNING: gsplat pyproject.toml not found in $PWD — skipping dependency check." >&2
-else
+if [[ -f "$PWD/pyproject.toml" ]] && grep -q 'name = "gsplat"' "$PWD/pyproject.toml" 2>/dev/null; then
     mapfile -t pkgs < /opt/dep-check/all_packages.txt
     args=(
         -f "$PWD/pyproject.toml:dependencies"
-        -f "$PWD/pyproject.toml:dev-cuda${CUDA_VERSION%%.*}"
+        -f "$PWD/pyproject.toml:dev"
+        -f /opt/dep-check/cupy_requirement.txt
         -f "$PWD/pyproject.toml:examples"
     )
     if [[ -f "$PWD/examples/requirements.txt" ]]; then

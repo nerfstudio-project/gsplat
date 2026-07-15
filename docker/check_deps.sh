@@ -13,7 +13,7 @@ Usage: ${0##*/} [-f <file>[:<section>]]... -- <pkg1> <pkg2> ...
 Source files (-f):
   -f requirements.txt           requirements-format file
   -f pyproject.toml:dependencies [project].dependencies
-  -f pyproject.toml:dev-cuda12   CUDA 12 development dependencies
+  -f pyproject.toml:dev         development dependencies
 
 Packages in the docker image (after --):
   The exact dependency strings from the docker image to check against
@@ -282,7 +282,7 @@ for file_spec in "${file_specs[@]}"; do
             die "sections are only supported for pyproject.toml files: '$file_spec'"
         fi
         case $section in
-            dependencies|install|lidar|examples|dev-common|dev-cuda12|dev-cuda13)
+            dependencies|install|lidar|examples|dev)
                 ;;
             *)
                 die "unknown pyproject.toml dependency section '$section' in '$file_spec'"

@@ -340,7 +340,6 @@ def test_real_fisheye_matches_cv2_oracle(
 ):
     """Assert the real fisheye projection matches cv2.fisheye.projectPoints within 0.01 px
     on in-FOV in-bounds rays via the stateless ``ReferenceOpenCVFisheyeCamera`` oracle."""
-    pytest.importorskip("cv2")
     import numpy as np
 
     from gsplat.sensors.kernels.cameras import camera_rays_to_image_points
@@ -409,7 +408,6 @@ def test_real_fisheye_matches_cv2_oracle_swept_grid(
 ):
     """Assert forward projection matches cv2.fisheye across a swept angular grid (not just
     near-axis), within 0.01 px on every ray where both gsplat and cv2 report valid."""
-    pytest.importorskip("cv2")
     import math
 
     import numpy as np

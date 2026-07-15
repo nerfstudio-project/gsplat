@@ -58,7 +58,7 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
         libpython3-dev
         python3-venv
         python-is-python3
-        # For downloading some dependencies (plas)
+        # For dependencies installed from Git repositories.
         git
         # CUDA toolchain subset — the -base image ships only the CUDA runtime:
         # - cuda-nvcc: compiles gsplat and the source-built dependencies
@@ -125,6 +125,7 @@ COPY --link --chmod=755 check_deps.sh /usr/local/bin/check_gsplat_deps.sh
 COPY --link --from=gsplatrepo pyproject.toml /opt/dep-check/pyproject.toml
 COPY --link --from=gsplatrepo config.yaml /opt/dep-check/config.yaml
 COPY --link --from=gsplatrepo gsplat/build_support/pyproject_metadata.py /opt/dep-check/gsplat/build_support/pyproject_metadata.py
+COPY --link --from=gsplatrepo gsplat/build_support/cupy_requirement.py /opt/dep-check/gsplat/build_support/cupy_requirement.py
 COPY --link --from=gsplatrepo examples/requirements.txt /opt/dep-check/examples/requirements.txt
 COPY --link --from=gsplatrepo docs/requirements.txt /opt/dep-check/docs/requirements.txt
 
@@ -159,16 +160,21 @@ RUN pip install "cmake==4.3.2" && rm -rf $PYTHONPYCACHEPREFIX/*
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
     clang_format_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
-        /opt/dep-check/pyproject.toml dev-common --pin clang-format)
+        /opt/dep-check/pyproject.toml dev --pin clang-format)
     test -n "$clang_format_version"
 
     black_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
-        /opt/dep-check/pyproject.toml dev-common --pin black)
+        /opt/dep-check/pyproject.toml dev --pin black)
     test -n "$black_version"
 
     isort_version=$(python3 /opt/dep-check/gsplat/build_support/pyproject_metadata.py \
-        /opt/dep-check/pyproject.toml dev-common --pin isort)
+        /opt/dep-check/pyproject.toml dev --pin isort)
     test -n "$isort_version"
+
+    # Resolve the CuPy wheel matching this image's CUDA toolkit. The wheel
+    # name depends on the local CUDA major, so it is not static pyproject
+    # metadata; the build_support helper owns the selection.
+    cupy_pkg=$(python3 /opt/dep-check/gsplat/build_support/cupy_requirement.py)
 
     # Dev/test deps
     packages=(
@@ -185,46 +191,31 @@ RUN --mount=type=tmpfs,target=/tmp \
         # endonerf / dynamic-surgical test collection imports these at module top
         "Pillow==12.1.1"
         "tqdm==4.67.3"
+        "opencv-python-headless==5.0.0.93"
         "typeguard==4.5.1"
         "pyyaml==6.0.1"
         "build==1.3.0"
         "twine==1.6.0"
-        "cupy-cuda${CUDA_VERSION%%.*}x==13.6.0"
+        "${cupy_pkg}==13.6.0"
         "nerfacc==0.5.3"
         "imageio[ffmpeg]==2.37.2"
         "torchpq==0.3.0.6"
+        "vc-flas==0.1.7"
     )
-    plas_pkg="PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
 
+    # The image provisions dependencies before a gsplat wheel exists, so keep
+    # the helper-derived dynamic CuPy requirement as an explicit check source.
+    printf '%s\n' "${cupy_pkg}" > /opt/dep-check/cupy_requirement.txt
     check_gsplat_deps.sh \
-        -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
-        -- "${packages[@]}" "$plas_pkg"
+        -f /opt/dep-check/pyproject.toml:dev \
+        -f /opt/dep-check/cupy_requirement.txt \
+        -- "${packages[@]}"
 
     # The CUDA-major-specific CuPy wheel avoids compiling CuPy from source.
     pip install "${packages[@]}"
 
-    # Install PLAS alone, then its declared dependencies read from its own
-    # metadata — minus the GUI opencv-python, whose cv2 the pinned headless
-    # build already provides. Deriving the list keeps it in sync with PLAS.
-    pip install --no-deps "$plas_pkg"
-    python3 - <<'PY' > /tmp/plas-deps.txt
-from importlib.metadata import requires
-
-from packaging.requirements import Requirement
-from packaging.utils import canonicalize_name
-
-for raw in requires("PLAS") or []:
-    requirement = Requirement(raw)
-    if requirement.marker is not None and not requirement.marker.evaluate():
-        continue
-    if canonicalize_name(requirement.name) == "opencv-python":
-        continue
-    print(requirement)
-PY
-    pip install -r /tmp/plas-deps.txt
-
     # Save list so the examples stage can reference it
-    printf '%s\n' "${packages[@]}" "$plas_pkg" > /opt/dep-check/dev_packages.txt
+    printf '%s\n' "${packages[@]}" > /opt/dep-check/dev_packages.txt
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
@@ -261,7 +252,6 @@ RUN --mount=type=tmpfs,target=/tmp \
         "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
         "splines==0.3.3"
         "ppisp @ https://github.com/nv-tlabs/ppisp/archive/refs/tags/v1.0.0.tar.gz"
-        "opencv-python-headless==4.10.0.84"
         "tqdm==4.67.3"
         "matplotlib==3.10.8"
         "Pillow==12.1.1"
@@ -269,7 +259,8 @@ RUN --mount=type=tmpfs,target=/tmp \
 
     check_gsplat_deps.sh \
         -f /opt/dep-check/pyproject.toml:dependencies \
-        -f /opt/dep-check/pyproject.toml:dev-cuda${CUDA_VERSION%%.*} \
+        -f /opt/dep-check/pyproject.toml:dev \
+        -f /opt/dep-check/cupy_requirement.txt \
         -f /opt/dep-check/pyproject.toml:examples \
         -f /opt/dep-check/examples/requirements.txt \
         -- "${base_pkgs[@]}" "${dev_pkgs[@]}" "$fused_ssim" "${packages[@]}"

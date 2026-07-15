@@ -18,6 +18,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import time
 import glob
 import sys
@@ -81,6 +82,47 @@ BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0"
 NUM_CHANNELS = os.getenv("NUM_CHANNELS")
 
 
+def _cuda_major_for_build():
+    """Return the CUDA major after checking the compiler against Torch."""
+
+    torch_cuda_version = torch.version.cuda
+    if torch_cuda_version is None:
+        raise RuntimeError("Building gsplat requires a CUDA-enabled PyTorch")
+    if CUDA_HOME is None:
+        raise RuntimeError("Building gsplat requires a discoverable CUDA toolkit")
+
+    nvcc_name = "nvcc.exe" if os.name == "nt" else "nvcc"
+    nvcc_path = os.path.join(CUDA_HOME, "bin", nvcc_name)
+    try:
+        version_output = subprocess.check_output(
+            [nvcc_path, "--version"],
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            f"Could not determine the CUDA compiler version from {nvcc_path}"
+        ) from exc
+
+    # Keep this regex in sync with parse_nvcc_major in cupy_requirement.py —
+    # that build-only module isn't shipped in the wheel, so build.py parses
+    # inline instead of importing it.
+    match = re.search(r"\brelease\s+(\d+)(?:\.\d+)?", version_output)
+    if match is None:
+        raise RuntimeError(
+            f"Could not parse the CUDA compiler version reported by {nvcc_path}"
+        )
+    compiler_major = int(match.group(1))
+
+    torch_cuda_major = int(torch_cuda_version.partition(".")[0])
+    if compiler_major != torch_cuda_major:
+        raise RuntimeError(
+            f"The CUDA {compiler_major} compiler at {nvcc_path} does not match "
+            f"the CUDA {torch_cuda_major} ABI used to build PyTorch"
+        )
+    return compiler_major
+
+
 # nvcc requires escaped commas in -D values.
 def _cuda_num_channels_define(num_channels):
     return "-DGSPLAT_NUM_CHANNELS=" + num_channels.replace(",", "\\,")
@@ -96,6 +138,7 @@ def format_jit_cuda_cflags(cuda_cflags):
 
 
 def get_build_parameters():
+    cuda_major = _cuda_major_for_build()
     name = "gsplat_cuda"
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -265,6 +308,9 @@ def get_build_parameters():
 
     return SimpleNamespace(
         name=name,
+        # Recording the validated major invalidates a JIT build made before
+        # this check existed or after the selected CUDA toolkit changes.
+        cuda_major=cuda_major,
         extra_include_paths=extra_include_paths,
         sources=sources,
         extra_cflags=extra_cflags,

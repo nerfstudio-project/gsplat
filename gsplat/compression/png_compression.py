@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import json
 import os
 from dataclasses import dataclass
@@ -23,8 +24,34 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from gsplat.compression._png_dependencies import validate_cupy
 from gsplat.compression.sort import sort_splats
 from gsplat.utils import inverse_log_transform, log_transform
+
+
+def _load_kmeans() -> Any:
+    """Load TorchPQ's KMeans after validating its CuPy runtime."""
+
+    # TorchPQ imports and initializes CuPy while it is imported. Validate CuPy
+    # first so a CUDA-major mismatch fails with the useful diagnostic.
+    validate_cupy()
+    from torchpq.clustering import KMeans
+
+    return KMeans
+
+
+def validate_png_dependencies(
+    *,
+    use_sort: bool = True,
+    use_kmeans: bool = True,
+) -> None:
+    """Import the optional packages required by a PNG-compression path."""
+
+    importlib.import_module("imageio.v2")
+    if use_sort:
+        importlib.import_module("vc_flas")
+    if use_kmeans:
+        _load_kmeans()
 
 
 @dataclass
@@ -34,8 +61,10 @@ class PngCompression:
 
     .. warning::
         This class requires the `imageio <https://pypi.org/project/imageio/>`_,
-        `plas <https://github.com/fraunhoferhhi/PLAS.git>`_
+        `vc-flas <https://pypi.org/project/vc-flas/>`_,
         and `torchpq <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_ packages to be installed.
+        Install them with ``pip install "gsplat[png]"``. Build metadata selects
+        the CuPy distribution matching the CUDA major used to build gsplat.
 
     .. warning::
         This class might throw away a few lowest opacities splats if the number of
@@ -94,6 +123,13 @@ class PngCompression:
             compress_dir (str): directory to save compressed files
             splats (Dict[str, Tensor]): Gaussian splats to compress
         """
+
+        # Validate the selected path before mutating the caller's tensors or
+        # leaving a partially written compression directory behind.
+        validate_png_dependencies(
+            use_sort=self.use_sort,
+            use_kmeans="shN" in splats,
+        )
 
         # Param-specific preprocessing
         splats["means"] = log_transform(splats["means"])
@@ -361,12 +397,7 @@ def _compress_kmeans(
     Returns:
         Dict[str, Any]: metadata
     """
-    try:
-        from torchpq.clustering import KMeans
-    except:
-        raise ImportError(
-            "Please install extra dependencies with 'pip install torchpq cupy' to use K-means clustering"
-        )
+    KMeans = _load_kmeans()
 
     if torch.numel == 0:
         meta = {

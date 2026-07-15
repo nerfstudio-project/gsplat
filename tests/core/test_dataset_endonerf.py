@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import torch
 
-# Pillow is an `[examples]` / `[dev-cuda*]` extra dep — skip the whole module
+# Pillow is an `[examples]` / `[dev]` extra dep — skip the whole module
 # cleanly if a fresh `pip install .` doesn't pull it.
 Image = pytest.importorskip("PIL.Image")
 

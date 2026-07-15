@@ -14,6 +14,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 METADATA_HELPER_PATH = REPO_ROOT / "gsplat/build_support/pyproject_metadata.py"
+CUDA_BUILD_HELPER_PATH = REPO_ROOT / "gsplat/cuda/build.py"
+CUPY_REQUIREMENT_HELPER_PATH = REPO_ROOT / "gsplat/build_support/cupy_requirement.py"
 
 
 def _load_metadata_helper():
@@ -23,6 +25,32 @@ def _load_metadata_helper():
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_cuda_build_helper():
+    """Load the pre-CMake build helper without importing gsplat."""
+
+    spec = importlib.util.spec_from_file_location(
+        "_gsplat_pre_cmake_build", CUDA_BUILD_HELPER_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_cupy_requirement_helper():
+    """Load the CuPy-selection helper without importing gsplat."""
+
+    spec = importlib.util.spec_from_file_location(
+        "_gsplat_cupy_requirement", CUPY_REQUIREMENT_HELPER_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -51,6 +79,8 @@ third-party-extra = ["other-project[feature]"]
 constrained-self = ["demo-project[lint]>=1"]
 cycle-a = ["demo-project[cycle-b]"]
 cycle-b = ["demo-project[cycle-a]"]
+png = ["imageio>=1", 'vc-flas>=1; python_version < "3.12"']
+conditional-self = ['demo-project[png]; python_version < "3.13"']
 """.lstrip()
     )
     return path
@@ -82,6 +112,19 @@ def test_expand_optional_group_preserves_non_composite_requirements(
     ]
     assert metadata_helper.expand_optional_group(project, "constrained-self") == [
         "demo-project[lint]>=1"
+    ]
+
+
+def test_expand_optional_group_propagates_marker_onto_composite_expansion(
+    metadata_helper, pyproject_path
+):
+    """A marker on a self-reference carries onto every expanded requirement."""
+    project = metadata_helper.load_project(pyproject_path)
+    expanded = metadata_helper.expand_optional_group(project, "conditional-self")
+
+    assert expanded == [
+        'imageio>=1; python_version < "3.13"',
+        'vc-flas>=1; python_version < "3.12" and python_version < "3.13"',
     ]
 
 
@@ -145,3 +188,87 @@ def test_pyproject_metadata_command_line_interface(pyproject_path):
         text=True,
     )
     assert pin.stdout == "22.3.0\n"
+
+
+def test_pre_cmake_build_rejects_cuda_major_mismatch(monkeypatch):
+    """The JIT build cannot mix a compiler with a different Torch CUDA ABI."""
+
+    build = _load_cuda_build_helper()
+    monkeypatch.setattr(build.torch.version, "cuda", "12.8")
+    monkeypatch.setattr(build, "CUDA_HOME", "/mock/cuda")
+    monkeypatch.setattr(
+        build.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "Cuda compilation tools, release 13.0, V13.0.0",
+    )
+
+    with pytest.raises(RuntimeError, match="CUDA 13 compiler.*CUDA 12 ABI"):
+        build._cuda_major_for_build()
+
+
+def test_cupy_requirement_env_override_wins(monkeypatch):
+    """CUPY_PACKAGE short-circuits detection entirely."""
+
+    cupy_requirement = _load_cupy_requirement_helper()
+    monkeypatch.setenv("CUPY_PACKAGE", "cupy-cuda99x")
+
+    assert cupy_requirement.detect_cupy_requirement() == "cupy-cuda99x"
+
+
+def test_cupy_requirement_detected_from_nvcc_version_output(monkeypatch):
+    """A parseable ``nvcc --version`` selects the matching CuPy wheel."""
+
+    cupy_requirement = _load_cupy_requirement_helper()
+    monkeypatch.delenv("CUPY_PACKAGE", raising=False)
+    monkeypatch.setattr(
+        cupy_requirement.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "Cuda compilation tools, release 12.4, V12.4.99",
+    )
+
+    assert cupy_requirement.detect_cupy_requirement() == "cupy-cuda12x"
+
+
+def test_cupy_requirement_falls_back_to_cuda_h_when_nvcc_output_unparseable(
+    monkeypatch, tmp_path
+):
+    """An unparseable ``nvcc`` output falls back to ``cuda.h``'s CUDA_VERSION."""
+
+    cupy_requirement = _load_cupy_requirement_helper()
+    monkeypatch.delenv("CUPY_PACKAGE", raising=False)
+    monkeypatch.setattr(
+        cupy_requirement.subprocess,
+        "check_output",
+        lambda *args, **kwargs: "not a recognizable nvcc banner",
+    )
+
+    cuda_home = tmp_path / "cuda"
+    (cuda_home / "include").mkdir(parents=True)
+    (cuda_home / "include" / "cuda.h").write_text("#define CUDA_VERSION 12040\n")
+    monkeypatch.setenv("CUDA_HOME", str(cuda_home))
+    monkeypatch.delenv("CUDA_PATH", raising=False)
+
+    with pytest.warns(UserWarning, match="unparseable"):
+        assert cupy_requirement.detect_cupy_requirement() == "cupy-cuda12x"
+
+
+def test_cupy_requirement_defaults_to_bare_cupy_when_nothing_detected(
+    monkeypatch, tmp_path
+):
+    """No override, no readable ``nvcc``, no readable ``cuda.h`` -> bare ``cupy``."""
+
+    cupy_requirement = _load_cupy_requirement_helper()
+    monkeypatch.delenv("CUPY_PACKAGE", raising=False)
+
+    def _nvcc_not_found(*_args, **_kwargs):
+        raise FileNotFoundError("nvcc")
+
+    def _cuda_h_not_found(*_args, **_kwargs):
+        raise FileNotFoundError("cuda.h")
+
+    monkeypatch.setattr(cupy_requirement.subprocess, "check_output", _nvcc_not_found)
+    monkeypatch.setattr(cupy_requirement, "open", _cuda_h_not_found, raising=False)
+    monkeypatch.setenv("CUDA_HOME", str(tmp_path / "does-not-exist"))
+    monkeypatch.delenv("CUDA_PATH", raising=False)
+
+    assert cupy_requirement.detect_cupy_requirement() == "cupy"

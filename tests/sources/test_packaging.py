@@ -22,10 +22,6 @@ the native extension). They never require CUDA.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-import tarfile
 from importlib import metadata
 from pathlib import Path
 
@@ -56,17 +52,27 @@ SEGMENTED_SORT_SOURCES = [
 ]
 
 
-def test_cuda_dev_extras_compose_the_common_dependencies():
-    """Each supported development extra selects exactly one CuPy variant."""
+def test_dev_extra_omits_the_dynamic_cupy_requirement():
+    """The dev extra is CUDA-agnostic; CuPy is resolved dynamically."""
     if not HAS_SOURCE_TREE:
         pytest.skip("pyproject.toml is only available in a source checkout")
 
     with (REPO_ROOT / "pyproject.toml").open("rb") as f:
         extras = tomllib.load(f)["project"]["optional-dependencies"]
 
-    assert "dev" not in extras
-    assert extras["dev-cuda12"] == ["gsplat[dev-common]", "cupy-cuda12x"]
-    assert extras["dev-cuda13"] == ["gsplat[dev-common]", "cupy-cuda13x"]
+    assert not any(dep.startswith("cupy") for dep in extras["dev"])
+
+
+def test_png_extra_is_public():
+    """Source metadata exposes the documented PNG feature name."""
+
+    if not HAS_SOURCE_TREE:
+        pytest.skip("pyproject.toml is only available in a source checkout")
+
+    with (REPO_ROOT / "pyproject.toml").open("rb") as f:
+        extras = tomllib.load(f)["project"]["optional-dependencies"]
+
+    assert "png" in extras
 
 
 def _installed_files() -> list[metadata.PackagePath]:
@@ -178,57 +184,3 @@ def test_experimental_published_under_gsplat_namespace():
     assert not any(
         p == "experimental" or p.startswith("experimental.") for p in packages
     ), f"bare top-level 'experimental' published: {sorted(packages)}"
-
-    # Neither pyproject.toml nor setup.py may declare a package-dir remapping
-    # for experimental. It is a normal gsplat submodule.
-    if HAS_SOURCE_TREE:
-        pyproject_text = (REPO_ROOT / "pyproject.toml").read_text()
-        assert "package-dir" not in pyproject_text
-        assert "package_dir" not in pyproject_text
-        setup_text = (REPO_ROOT / "setup.py").read_text()
-        assert "package_dir" not in setup_text
-
-
-@pytest.mark.skipif(
-    os.environ.get("RUN_PACKAGING_BUILD_TESTS") != "1",
-    reason="heavy sdist build test; set RUN_PACKAGING_BUILD_TESTS=1 to enable",
-)
-def test_sdist_excludes_tests_includes_cuda(tmp_path):
-    """Build an sdist and verify test files are excluded and CUDA csrc included."""
-    env = dict(os.environ, BUILD_NO_CUDA="1")
-    subprocess.run(
-        [sys.executable, "setup.py", "sdist", "--dist-dir", str(tmp_path)],
-        cwd=str(REPO_ROOT),
-        check=True,
-        env=env,
-    )
-    tarballs = list(tmp_path.glob("*.tar.gz"))
-    assert tarballs, "no sdist produced"
-    with tarfile.open(tarballs[0]) as tf:
-        names = tf.getnames()
-
-    # No test files from the sub-packages.
-    stray = [
-        n
-        for n in names
-        if "/test_" in n
-        and (
-            "/gsplat/geometry/" in n
-            or "/gsplat/sensors/" in n
-            or "/gsplat/scene/" in n
-            or "/gsplat/stage/" in n
-            or "/gsplat/experimental/" in n
-        )
-    ]
-    assert not stray, f"sdist shipped relocated test files: {stray}"
-
-    # CUDA csrc sources from the sub-packages ARE included.
-    required_substrings = [
-        *SEGMENTED_SORT_SOURCES,
-        "gsplat/scene/kernels/cuda/csrc/gaussian_scene_pack.cuh",
-        "gsplat/geometry/kernels/cuda/csrc/pose.cu",
-        "gsplat/sensors/kernels/cuda/csrc/camera_kernel.cu",
-        "gsplat/experimental/render/kernels/cuda/csrc/gaussian_inference/Projection.cu",
-    ]
-    for sub in required_substrings:
-        assert any(n.endswith(sub) for n in names), f"sdist missing CUDA source: {sub}"

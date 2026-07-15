@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 
+#include <cuda.h>
 #include <torch/extension.h>
 
 #include <cmath>
@@ -98,6 +99,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
             config["reloc"]           = static_cast<bool>(GSPLAT_BUILD_RELOC);
             config["losses"]          = static_cast<bool>(GSPLAT_BUILD_LOSSES);
             config["camera_wrappers"] = static_cast<bool>(GSPLAT_BUILD_CAMERA_WRAPPERS);
+            config["cuda_version"]    = static_cast<int>(CUDA_VERSION);
             return config;
         }
     );

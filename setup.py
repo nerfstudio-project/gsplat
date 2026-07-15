@@ -27,6 +27,66 @@ BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 BUILD_EXPERIMENTAL = os.getenv("BUILD_EXPERIMENTAL", "1") == "1"
 
 
+def _load_build_module(module_name, build_py_path):
+    """Load build-only helpers without importing the unbuilt gsplat package."""
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(module_name, build_py_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _get_gsplat_build_parameters():
+    """Return the main extension parameters used by metadata and compilation."""
+
+    gsplat_build = _load_build_module(
+        "gsplat_cuda_build", os.path.join("gsplat", "cuda", "build.py")
+    )
+    return gsplat_build.get_build_parameters()
+
+
+def _egg_info_class():
+    """Create an egg_info command that records build-compatible CuPy metadata."""
+
+    from setuptools.command.egg_info import egg_info
+
+    class GSplatEggInfo(egg_info):
+        def run(self):
+            """Extend the static PNG extra with the build-matched CuPy pin.
+
+            egg_info is the command that actually writes the metadata
+            (PKG-INFO / *.egg-info, which sdist and wheel builds both read
+            from), so patching self.distribution here is a documented
+            command-extension point rather than a Distribution-internals
+            override.
+            """
+
+            if not BUILD_NO_CUDA:
+                # Metadata preparation runs before compilation. Reuse the
+                # exact build-parameter path so the selected CuPy major is
+                # the compiler major already checked against Torch, rather
+                # than the driver's maximum supported CUDA version.
+                cuda_major = _get_gsplat_build_parameters().cuda_major
+                cupy_requirement = f"cupy-cuda{cuda_major}x"
+                png_requirements = list(self.distribution.extras_require["png"])
+                if cupy_requirement not in png_requirements:
+                    png_requirements.append(cupy_requirement)
+
+                self.distribution.extras_require = {
+                    **self.distribution.extras_require,
+                    "png": png_requirements,
+                }
+                self.distribution.metadata.extras_require = (
+                    self.distribution.extras_require
+                )
+
+            super().run()
+
+    return GSplatEggInfo
+
+
 def get_ext():
     from torch.utils.cpp_extension import BuildExtension
 
@@ -36,26 +96,10 @@ def get_ext():
 def get_extensions():
     from torch.utils.cpp_extension import CUDAExtension
 
-    # Use the same build parameters as the JIT build. However, directly
-    # importing the gsplat.cuda.build module would trigger a circular
-    # dependency where gsplat is imported before it is built. To avoid
-    # this, we sidestep the traditional Python import mechanism and construct
-    # the module directly from build.py.
-    import importlib.util
-
-    def _load_build_module(module_name, build_py_path):
-        spec = importlib.util.spec_from_file_location(module_name, build_py_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-
     setup_dir = os.path.dirname(os.path.abspath(__file__))
 
     # --- gsplat main extension ---
-    gsplat_build = _load_build_module(
-        "gsplat_cuda_build", os.path.join("gsplat", "cuda", "build.py")
-    )
-    params = gsplat_build.get_build_parameters()
+    params = _get_gsplat_build_parameters()
     sources = [os.path.relpath(s, setup_dir) for s in params.sources]
     gsplat_ext = CUDAExtension(
         "gsplat.csrc",
@@ -99,9 +143,13 @@ def get_extensions():
 def _setup():
     from setuptools import setup
 
+    cmdclass: dict = {"egg_info": _egg_info_class()}
+    if not BUILD_NO_CUDA:
+        cmdclass["build_ext"] = get_ext()
+
     setup(
         ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
-        cmdclass={"build_ext": get_ext()} if not BUILD_NO_CUDA else {},
+        cmdclass=cmdclass,
     )
 
 

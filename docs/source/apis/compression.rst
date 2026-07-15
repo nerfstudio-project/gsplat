@@ -8,6 +8,22 @@ which can significantly reduce the storage / streaming cost. For example, using 
 1 million Gaussians that are stored in 236 MB can be compressed to 16.5 MB, with only 0.5dB
 PSNR loss (29.18dB to 28.65dB).
 
+Install the optional PNG compression dependencies with:
+
+.. code-block:: bash
+
+    pip install "gsplat[png]"
+
+Build metadata selects the CuPy distribution matching the CUDA toolkit used to
+compile gsplat. The PNG extra currently supports Python 3.10 through 3.12
+because its ``vc-flas`` dependency does not support Python 3.13. This
+restriction does not apply when installing gsplat without the PNG extra.
+
+Grid sorting for PNG compression now uses FLAS instead of the former PLAS.
+Existing compressed archives still decompress normally, but re-compressing
+the same Gaussians may produce a different grid layout and file size than
+before.
+
 Similar to the :doc:`strategy`, our compression APIs also has a specific expectation on 
 the format of the Gaussian parameters. It is designed to work with the Gaussians defined 
 as either a Dict of

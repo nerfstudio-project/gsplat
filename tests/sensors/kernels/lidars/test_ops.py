@@ -894,7 +894,10 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
         s = torch.where(dot < 0, -1.0, 1.0)
         sx, sy, sz, sw = s * x1, s * y1, s * z1, s * w1
         c = (x0 * sx + y0 * sy + z0 * sz + w0 * sw).clamp(-1.0, 1.0)
-        if float(c) > SLERP_SMALL_ANGLE_DOT_THRESHOLD:
+        # Branch selection is intentionally non-differentiable. Detach before
+        # extracting the scalar so PyTorch does not imply that this control
+        # flow participates in the reference function's gradient.
+        if c.detach().item() > SLERP_SMALL_ANGLE_DOT_THRESHOLD:
             om = 1 - alpha
             rx, ry, rz, rw = (
                 om * x0 + alpha * sx,
