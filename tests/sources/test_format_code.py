@@ -178,6 +178,387 @@ def _commit_file(repo, name, content):
     _git(["commit", "-qm", name], repo)
 
 
+# --- --staged perform mode ------------------------------------------------
+
+
+def test_fully_staged_formats_and_restages(repo):
+    _commit_file(repo, "x.cu", "int x;\n")
+    (repo / "x.cu").write_text("int  y;\n")  # a real change, unformatted
+    _git(["add", "x.cu"], repo)
+    assert _run(repo, "--staged").returncode == 0
+    assert _git(["show", ":x.cu"], repo).stdout == "int y;\n"  # formatted + re-staged
+    assert (repo / "x.cu").read_text() == "int y;\n"  # mirrored into the worktree
+
+
+def test_partial_staged_formats_staged_only(repo):
+    # A partially-staged file has its staged content formatted and re-staged;
+    # an unstaged edit far enough from the formatting (outside its patch
+    # context) stays in the working tree intact, with the delta applied
+    # around it.
+    base = "int a;\nint b;\nint c;\nint d;\nint e;\n"
+    _commit_file(repo, "two.cu", base)
+    (repo / "two.cu").write_text("int  A;" + base[6:])  # stage line 1, unformatted
+    _git(["add", "two.cu"], repo)
+    staged = (repo / "two.cu").read_text()
+    (repo / "two.cu").write_text(
+        staged.replace("int e;", "int  E;")
+    )  # line 5, unstaged
+    assert _run(repo, "--staged").returncode == 0
+    formatted = base.replace("int a;", "int A;")
+    # The staged content is formatted and re-staged...
+    assert _git(["show", ":two.cu"], repo).stdout == formatted
+    # ...and the working tree got only the formatting delta: line 1 formatted,
+    # the unstaged line-5 edit byte-identical.
+    assert (repo / "two.cu").read_text() == formatted.replace("int e;", "int  E;")
+
+
+def test_partial_overlap_leaves_worktree_alone(repo):
+    # When an unstaged edit overlaps the formatting delta, the delta cannot be
+    # applied to the working tree: the commit still gets the formatted content,
+    # and the working-tree copy is left byte-identical.
+    _commit_file(repo, "v.cu", "int v;\n")
+    (repo / "v.cu").write_text("int  v1;\n")  # stage a change to the line
+    _git(["add", "v.cu"], repo)
+    (repo / "v.cu").write_text("int  v2;\n")  # re-edit the same line, unstaged
+    result = _run(repo, "--staged")
+    assert result.returncode == 0
+    assert _git(["show", ":v.cu"], repo).stdout == "int v1;\n"  # index formatted
+    assert (repo / "v.cu").read_text() == "int  v2;\n"  # worktree untouched
+    assert "overlap" in result.stderr  # the desync is called out
+
+
+def test_staged_deleted_file_formats_index_only(repo):
+    # A file staged then deleted from the working tree still commits formatted;
+    # there is no working-tree copy to sync.
+    _commit_file(repo, "gone.cu", "int g;\n")
+    (repo / "gone.cu").write_text("int  g2;\n")
+    _git(["add", "gone.cu"], repo)
+    (repo / "gone.cu").unlink()
+    assert _run(repo, "--staged").returncode == 0
+    assert _git(["show", ":gone.cu"], repo).stdout == "int g2;\n"  # formatted
+    assert not (repo / "gone.cu").exists()  # still deleted
+
+
+def test_sibling_bookkeeping_dirs_do_not_collide(repo):
+    # The scratch tree keeps staged copies and its own orig/ and work/ backups
+    # in disjoint subtrees, so repo files living under directories literally
+    # named orig/ or work/ cannot collide with a sibling file's copies.
+    (repo / "orig").mkdir()
+    (repo / "work").mkdir()
+    _commit_file(repo, "x.cu", "int top;\n")
+    _commit_file(repo, "orig/x.cu", "int nested;\n")
+    _commit_file(repo, "work/x.cu", "int w;\n")
+    (repo / "x.cu").write_text("int  top2;\n")
+    (repo / "orig/x.cu").write_text("int  nested2;\n")
+    (repo / "work/x.cu").write_text("int  w2;\n")
+    _git(["add", "x.cu", "orig/x.cu", "work/x.cu"], repo)
+    assert _run(repo, "--staged").returncode == 0
+    assert _git(["show", ":x.cu"], repo).stdout == "int top2;\n"
+    assert _git(["show", ":orig/x.cu"], repo).stdout == "int nested2;\n"
+    assert _git(["show", ":work/x.cu"], repo).stdout == "int w2;\n"
+
+
+def test_crlf_staged_bytes_survive_scratch_hashing(repo):
+    # The scratch tree lives under TMPDIR, which can sit inside an unrelated
+    # repo whose .gitattributes converts line endings; re-staging must hash the
+    # exact blob bytes, not a filtered version.
+    attr = repo / "attrtmp"
+    attr.mkdir()
+    _git(["init", "-q"], attr)
+    (attr / ".gitattributes").write_text("* text=auto\n")
+    (repo / "c.cu").write_bytes(b"int  crlf;\r\n")
+    _git(["-c", "core.safecrlf=false", "add", "c.cu"], repo)
+    assert _run(repo, "--staged", env_extra={"TMPDIR": str(attr)}).returncode == 0
+    raw = subprocess.run(
+        ["git", "show", ":c.cu"],
+        cwd=str(repo),
+        env=_isolated_env(),
+        capture_output=True,
+    ).stdout
+    assert raw == b"int crlf;\r\n"  # formatted, line ending untouched
+
+
+def test_abort_mid_run_restores_index_and_worktree(repo):
+    # If the run dies between mutations (here: hash-object fails on the second
+    # file), the EXIT trap must restore the index and every touched worktree
+    # file to the pre-run state.
+    base = "int a;\nint b;\nint c;\nint d;\nint e;\n"
+    _commit_file(repo, "one.cu", base)
+    _commit_file(repo, "two.cu", "int x;\n")
+    (repo / "one.cu").write_text(base.replace("int a;", "int  A;"))
+    (repo / "two.cu").write_text("int  X;\n")
+    _git(["add", "one.cu", "two.cu"], repo)
+    staged_one = (repo / "one.cu").read_text()
+    (repo / "one.cu").write_text(staged_one.replace("int e;", "int  E;"))  # unstaged
+    worktree_one = (repo / "one.cu").read_text()
+    gitwrap = repo / "gitwrap"
+    gitwrap.mkdir()
+    (gitwrap / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$1" == hash-object && "$*" == *two.cu* ]]; then exit 42; fi\n'
+        f'exec {shutil.which("git")} "$@"\n'
+    )
+    (gitwrap / "git").chmod(0o755)
+    result = _run(
+        repo,
+        "--staged",
+        env_extra={"PATH": f"{gitwrap}:{repo / 'bin'}:{os.environ['PATH']}"},
+    )
+    assert result.returncode != 0
+    assert "interrupted" in result.stderr
+    # one.cu was mutated before the abort; the trap must have undone it.
+    assert _git(["show", ":one.cu"], repo).stdout == staged_one
+    assert (repo / "one.cu").read_text() == worktree_one
+    assert _git(["show", ":two.cu"], repo).stdout == "int  X;\n"
+
+
+def test_partial_near_miss_takes_note_path(repo):
+    # An unstaged edit inside the delta's context lines (but not on the
+    # formatted lines) still makes the patch unappliable: worktree left alone,
+    # note printed, commit content formatted.
+    base = "int a;\nint b;\nint c;\nint d;\nint e;\n"
+    _commit_file(repo, "near.cu", base)
+    (repo / "near.cu").write_text(base.replace("int a;", "int  A;"))  # stage line 1
+    _git(["add", "near.cu"], repo)
+    staged = (repo / "near.cu").read_text()
+    worktree = staged.replace("int c;", "int  C;")  # line 3: within context
+    (repo / "near.cu").write_text(worktree)
+    result = _run(repo, "--staged")
+    assert result.returncode == 0
+    assert _git(["show", ":near.cu"], repo).stdout == base.replace("int a;", "int A;")
+    assert (repo / "near.cu").read_text() == worktree  # byte-identical
+    assert "left as is" in result.stderr
+
+
+def test_formatter_line_count_change_syncs_worktree(repo):
+    # The formatter itself can change the line count (blank-line squeezing);
+    # the delta then shifts every line below it and must still apply around a
+    # far-away unstaged edit.
+    base = "int a;\n\nint b;\nint c;\nint d;\nint e;\nint f;\n"
+    _commit_file(repo, "flow.cu", base)
+    # A real change (a -> aa) bloated with blank lines the formatter removes.
+    bloated = base.replace("int a;\n\n", "int  aa;\n\n\n\n")
+    (repo / "flow.cu").write_text(bloated)
+    _git(["add", "flow.cu"], repo)
+    (repo / "flow.cu").write_text(bloated.replace("int f;", "int  F;"))  # unstaged
+    assert _run(repo, "--staged").returncode == 0
+    formatted = base.replace("int a;", "int aa;")  # squeezed + formatted
+    assert _git(["show", ":flow.cu"], repo).stdout == formatted
+    assert (repo / "flow.cu").read_text() == formatted.replace("int f;", "int  F;")
+
+
+def test_partial_edit_above_formatting_applies_at_offset(repo):
+    # An unstaged insertion above the formatting shifts every line below it;
+    # the delta still lands on the right lines, found at its shifted offset.
+    base = "".join(f"int {c};\n" for c in "abcdefgh")
+    _commit_file(repo, "off.cu", base)
+    (repo / "off.cu").write_text(base.replace("int h;", "int  H;"))  # stage line 8
+    _git(["add", "off.cu"], repo)
+    staged = (repo / "off.cu").read_text()
+    (repo / "off.cu").write_text("int  X;\n" + staged)  # unstaged insert at top
+    assert _run(repo, "--staged").returncode == 0
+    assert _git(["show", ":off.cu"], repo).stdout == base.replace("int h;", "int H;")
+    assert (repo / "off.cu").read_text() == "int  X;\n" + base.replace(
+        "int h;", "int H;"
+    )
+
+
+def test_partial_overlap_skips_the_whole_file_delta(repo):
+    # The delta is applied per file, all-or-nothing: when an unstaged edit
+    # overlaps one of two formatting hunks, the other hunk is not applied
+    # either -- the working tree is either fully synced or left alone.
+    base = "".join(f"int {c};\n" for c in "abcdefghijkl")
+    _commit_file(repo, "atomic.cu", base)
+    two = base.replace("int a;", "int  A;").replace("int l;", "int  L;")
+    (repo / "atomic.cu").write_text(two)  # stage two far-apart unformatted hunks
+    _git(["add", "atomic.cu"], repo)
+    (repo / "atomic.cu").write_text(
+        two.replace("int  L;", "int  L2;")
+    )  # overlap hunk 2
+    result = _run(repo, "--staged")
+    assert result.returncode == 0
+    # Index: both hunks formatted.
+    assert _git(["show", ":atomic.cu"], repo).stdout == base.replace(
+        "int a;", "int A;"
+    ).replace("int l;", "int L;")
+    # Worktree: byte-identical -- hunk 1 was NOT applied on its own.
+    assert (repo / "atomic.cu").read_text() == two.replace("int  L;", "int  L2;")
+    assert "overlap" in result.stderr
+
+
+def test_multiple_files_mixed_sync_outcomes(repo):
+    # One run, three files: fully staged (mirrored), partial with the delta
+    # applying (synced), partial with an overlap (left alone). Each file gets
+    # its own outcome; all three commit formatted.
+    base = "".join(f"int {c};\n" for c in "abcde")
+    _commit_file(repo, "full.cu", "int f;\n")
+    _commit_file(repo, "sync.cu", base)
+    _commit_file(repo, "skip.cu", "int s;\n")
+    (repo / "full.cu").write_text("int  F2;\n")  # fully staged
+    (repo / "sync.cu").write_text(base.replace("int a;", "int  A;"))
+    (repo / "skip.cu").write_text("int  s1;\n")
+    _git(["add", "full.cu", "sync.cu", "skip.cu"], repo)
+    synced = (repo / "sync.cu").read_text()
+    (repo / "sync.cu").write_text(synced.replace("int e;", "int  E;"))  # far edit
+    (repo / "skip.cu").write_text("int  s2;\n")  # overlapping edit
+    assert _run(repo, "--staged").returncode == 0
+    assert _git(["show", ":full.cu"], repo).stdout == "int F2;\n"
+    assert (repo / "full.cu").read_text() == "int F2;\n"
+    assert _git(["show", ":sync.cu"], repo).stdout == base.replace("int a;", "int A;")
+    assert (repo / "sync.cu").read_text() == base.replace("int a;", "int A;").replace(
+        "int e;", "int  E;"
+    )
+    assert _git(["show", ":skip.cu"], repo).stdout == "int s1;\n"
+    assert (repo / "skip.cu").read_text() == "int  s2;\n"  # untouched
+
+
+def test_partial_formatting_only_staged_change_is_refused(repo):
+    # A formatting-only staged change on a partially-staged file normalizes to
+    # HEAD: the empty commit is refused and the unstaged edit stays intact.
+    base = "".join(f"int {c};\n" for c in "abcde")
+    _commit_file(repo, "po.cu", base)
+    (repo / "po.cu").write_text(base.replace("int a;", "int  a;"))  # fmt-only, staged
+    _git(["add", "po.cu"], repo)
+    staged = (repo / "po.cu").read_text()
+    (repo / "po.cu").write_text(staged.replace("int e;", "int  E;"))  # far, unstaged
+    result = _run(repo, "--staged")
+    assert result.returncode != 0
+    assert "nothing to commit" in result.stderr
+    assert _git(["show", ":po.cu"], repo).stdout == base  # normalized to HEAD
+    # The worktree kept the unstaged edit (formatting delta applied around it).
+    assert (repo / "po.cu").read_text() == base.replace("int e;", "int  E;")
+
+
+def test_partial_staged_formatted_content_passes(repo):
+    # Already-formatted staged bytes on a partially-staged file are fine: the
+    # commit proceeds and the unstaged edits stay untouched.
+    _commit_file(repo, "p2.cu", "int a;\n")
+    (repo / "p2.cu").write_text("int b;\n")  # staged: formatted
+    _git(["add", "p2.cu"], repo)
+    (repo / "p2.cu").write_text("int b;\nint  extra;\n")  # unstaged edit on top
+    assert _run(repo, "--staged").returncode == 0
+    assert _git(["show", ":p2.cu"], repo).stdout == "int b;\n"
+    assert (repo / "p2.cu").read_text() == "int b;\nint  extra;\n"
+
+
+def test_partial_staged_formatter_failure_preserves_unstaged(repo):
+    # The staged content is formatted on a scratch copy first, so if the staged
+    # bytes fail to format the working tree is never touched and the unstaged
+    # edits survive.
+    _commit_file(repo, "m.cu", "int m;\n")
+    (repo / "m.cu").write_text("FAILME\n")  # the fake refuses to format this
+    _git(["add", "m.cu"], repo)
+    (repo / "m.cu").write_text("FAILME\nint precious;\n")  # unstaged edit on top
+    result = _run(repo, "--staged")
+    assert result.returncode != 0  # the format failure blocks the commit
+    assert _git(["show", ":m.cu"], repo).stdout == "FAILME\n"  # index untouched
+    # Worktree byte-identical: the unstaged edit is preserved on the staged bytes.
+    assert (repo / "m.cu").read_text() == "FAILME\nint precious;\n"
+
+
+def test_staged_formatting_only_change_is_refused(repo):
+    _commit_file(repo, "only.cu", "int e;\n")  # HEAD is already formatted
+    (repo / "only.cu").write_text("int  e;\n")  # a formatting-only regression
+    _git(["add", "only.cu"], repo)
+    result = _run(repo, "--staged")
+    # Formatting normalizes the change away; committing it would be an empty
+    # commit, so --staged refuses instead of recording one.
+    assert result.returncode != 0
+    assert "nothing to commit" in result.stderr
+    assert "--allow-empty --no-verify" in result.stderr  # the escape hatch
+    # Left formatted (== HEAD), not rolled back to the unformatted staged bytes.
+    assert _git(["show", ":only.cu"], repo).stdout == "int e;\n"
+    assert (repo / "only.cu").read_text() == "int e;\n"
+
+
+def test_already_formatted_file_is_not_rewritten(repo):
+    # A staged change that is already formatted must not have its working-tree
+    # file rewritten, which would spuriously invalidate a build.
+    import time
+
+    _commit_file(repo, "c.cu", "int c;\n")
+    (repo / "c.cu").write_text("int d;\n")  # a real change, already formatted
+    _git(["add", "c.cu"], repo)
+    before = (repo / "c.cu").stat().st_mtime_ns
+    time.sleep(0.01)
+    assert _run(repo, "--staged").returncode == 0
+    assert (repo / "c.cu").stat().st_mtime_ns == before  # untouched
+
+
+def test_same_name_files_in_different_dirs(repo):
+    # Each file is formatted at its repo-relative path in the scratch tree, so
+    # two files sharing a basename in different directories do not collide.
+    (repo / "a").mkdir()
+    (repo / "b").mkdir()
+    _commit_file(repo, "a/f.cu", "int a;\n")
+    _commit_file(repo, "b/f.cu", "int b;\n")
+    (repo / "a/f.cu").write_text("int  A;\n")
+    (repo / "b/f.cu").write_text("int  B;\n")
+    _git(["add", "a/f.cu", "b/f.cu"], repo)
+    assert _run(repo, "--staged").returncode == 0
+    assert _git(["show", ":a/f.cu"], repo).stdout == "int A;\n"
+    assert _git(["show", ":b/f.cu"], repo).stdout == "int B;\n"
+
+
+def test_mixed_real_and_formatting_only_change_commits(repo):
+    # The empty-commit guard fires only when the whole index equals HEAD, so a
+    # real change staged alongside a formatting-only one still commits.
+    _commit_file(repo, "real.cu", "int r;\n")
+    _commit_file(repo, "fmt.cu", "int f;\n")
+    (repo / "real.cu").write_text("int s;\n")  # real change, already formatted
+    (repo / "fmt.cu").write_text("int  f;\n")  # formatting-only regression
+    _git(["add", "real.cu", "fmt.cu"], repo)
+    assert _run(repo, "--staged").returncode == 0  # not refused
+    assert _git(["show", ":real.cu"], repo).stdout == "int s;\n"
+    assert _git(["show", ":fmt.cu"], repo).stdout == "int f;\n"
+
+
+def test_check_staged_judges_staged_bytes_only(repo):
+    # --staged --check reads each staged blob into a scratch tree and checks
+    # that. The staged bytes differ from both HEAD and the working tree here, so
+    # a check that judged either of those instead would give the opposite
+    # verdict.
+    _commit_file(repo, "p.cu", "int p;\n")
+    (repo / "p.cu").write_text("int q;\n")  # staged: formatted, differs from HEAD
+    _git(["add", "p.cu"], repo)
+    (repo / "p.cu").write_text("int  q;\nint  r;\n")  # worktree: unformatted
+    assert _run(repo, "--staged", "--check").returncode == 0
+    # And unformatted staged bytes fail even when the working tree is formatted.
+    (repo / "p.cu").write_text("int  s;\n")
+    _git(["add", "p.cu"], repo)
+    (repo / "p.cu").write_text("int s;\n")  # worktree: formatted
+    assert _run(repo, "--staged", "--check").returncode != 0
+
+
+def test_staged_ignores_unstaged_only_bystander(repo):
+    # --staged selects index-vs-HEAD, so a file with only unstaged edits (its
+    # staged bytes equal HEAD) is not this commit's content and must be ignored
+    # -- even when those staged-equal bytes are unformatted.
+    _commit_file(repo, "by.cu", "int  b;\n")  # committed unformatted
+    (repo / "by.cu").write_text("int  b;\nint  c;\n")  # unstaged edit, never staged
+    _commit_file(repo, "ok.cu", "int o;\n")
+    (repo / "ok.cu").write_text("int k;\n")  # the actual staged change
+    _git(["add", "ok.cu"], repo)
+    assert _run(repo, "--staged").returncode == 0
+    assert _git(["show", ":by.cu"], repo).stdout == "int  b;\n"  # untouched
+    assert (repo / "by.cu").read_text() == "int  b;\nint  c;\n"
+
+
+def test_staged_symlink_is_left_alone(repo):
+    # A symlink's staged blob is its target string; both staged modes must skip
+    # it rather than format the string or write through the link. The target
+    # name carries a double space, so a missing skip would "format" the blob.
+    (repo / "link.cu").symlink_to("tgt  t.cu")
+    _git(["add", "link.cu"], repo)
+    assert _run(repo, "--staged").returncode == 0
+    assert _run(repo, "--staged", "--check").returncode == 0
+    entry = _git(["ls-files", "--stage", "--", "link.cu"], repo).stdout
+    assert entry.startswith("120000")  # still a symlink in the index
+    assert _git(["show", ":link.cu"], repo).stdout == "tgt  t.cu"  # blob untouched
+    assert (repo / "link.cu").is_symlink()
+    assert not (repo / "tgt  t.cu").exists()  # nothing written through the link
+
+
 # --- selection modes -------------------------------------------------------
 
 
