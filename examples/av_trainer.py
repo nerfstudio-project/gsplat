@@ -55,6 +55,7 @@ except ModuleNotFoundError as e:
         "    python -m pip install -e ."
     ) from e
 from gsplat.strategy import MCMCStrategy
+from utils import set_random_seed
 
 # ---------------------------------------------------------------------------
 # PandaSet NPZ loading
@@ -291,14 +292,21 @@ def init_gaussians(
     sh_degree: int = 0,
 ) -> torch.nn.ParameterDict:
     """Initialize Gaussians from point cloud (LiDAR or SfM)."""
+    from gsplat.init_utils import knn_scale_init
+
     N = points.shape[0]
+    if N > 1:
+        log_scales = knn_scale_init(points, k=min(3, N - 1))
+        scales = log_scales[:, None].expand(-1, 3).clone()
+    else:
+        scales = torch.full((N, 3), -5.0, device=device)
+    quats = torch.zeros(N, 4, device=device)
+    quats[:, 0] = 1.0
     params = torch.nn.ParameterDict(
         {
             "means": torch.nn.Parameter(points.clone()),
-            "scales": torch.nn.Parameter(torch.full((N, 3), -5.0, device=device)),
-            "quats": torch.nn.Parameter(
-                F.normalize(torch.randn(N, 4, device=device), dim=-1)
-            ),
+            "scales": torch.nn.Parameter(scales),
+            "quats": torch.nn.Parameter(quats),
             "opacities": torch.nn.Parameter(
                 torch.logit(torch.full((N,), 0.1, device=device))
             ),
@@ -616,9 +624,8 @@ def scene_state_payload(
     """Scene payload shared by checkpoints and model.pt so the two schemas
     cannot drift: always ``{"scene_id", "splats"}``, plus per-scene state
     dicts (pose context and transform graph included) for multi-scene rigid
-    runs. ``dataset`` records the training-time data selection (cameras,
-    duration, downscale) so inference can reproduce the same scene frame
-    without the caller re-specifying it."""
+    runs. ``dataset`` records the training-time data selection so inference
+    can reproduce the same scene frame without the caller re-specifying it."""
     payload: dict = {
         "scene_id": gaussian_scene.id,
         "splats": gaussian_scene.splats.state_dict(),
@@ -813,14 +820,20 @@ def train(
     cameras: list[str] | None = None,
     duration: float | None = None,
     max_lidar: int = 150_000,
+    max_dynamic_lidar: int | None = None,
+    max_dynamic_lidar_per_track: int = 5_000,
+    lidar_step_frame: int = 1,
     downscale: int = 1,
     rigid_dynamic_track_class_ids: list[str] | None = None,
     rigid_dynamic_static_baseline: bool = False,
+    seed: int = 42,
     # LiDAR rendering (addition over simple_trainer)
     lidar_render: bool = False,
     lidar_render_subsample: int = 112,
     lidar_render_weight: float = 0.0003,
 ):
+    set_random_seed(seed)
+    initialization_started = time.time()
     device = torch.device("cuda:0")
     torch.cuda.reset_peak_memory_stats()
     renders_dir, stats_dir, ckpt_dir = prepare_output_dirs(
@@ -846,6 +859,8 @@ def train(
 
     ncore_camera_data = None
     lidar_r = None
+    static_init_points = None
+    dynamic_init_points = None
 
     if is_ncore:
         from datasets.ncore import (
@@ -861,8 +876,12 @@ def train(
             camera_ids=cameras or None,
             duration_sec=duration,
             max_lidar_points=max_lidar,
+            max_dynamic_lidar_points=max_dynamic_lidar,
+            max_dynamic_lidar_points_per_track=max_dynamic_lidar_per_track,
+            lidar_step_frame=lidar_step_frame,
             rigid_dynamic_track_class_ids=rigid_dynamic_track_class_ids,
             keep_dynamic_points_in_static_scene=not rigid_dynamics_enabled,
+            random_seed=seed,
         )
         if rigid_tracks_requested:
             n_dyn_pts = sum(len(t.points_local) for t in parser.rigid_dynamic_tracks)
@@ -963,6 +982,10 @@ def train(
         # Gaussian init from LiDAR (same as simple_trainer init_type="lidar")
         points = torch.from_numpy(parser.points).float().to(device)
         colors = torch.from_numpy(parser.points_rgb).float().to(device) / 255.0
+        static_init_points = len(parser.points)
+        dynamic_init_points = sum(
+            len(track.points_local) for track in parser.rigid_dynamic_tracks
+        )
         params = init_gaussians(points, colors, device, sh_degree)
 
         first_cam = parser.camera_ids[0]
@@ -1013,6 +1036,12 @@ def train(
             "cameras": list(parser.camera_ids),
             "duration_sec": duration,
             "downscale": downscale,
+            "rigid_dynamic_track_class_ids": rigid_dynamic_track_class_ids,
+            "rigid_dynamic_static_baseline": rigid_dynamic_static_baseline,
+            "max_dynamic_lidar_points": max_dynamic_lidar,
+            "max_dynamic_lidar_points_per_track": max_dynamic_lidar_per_track,
+            "lidar_step_frame": lidar_step_frame,
+            "seed": seed,
         }
 
     stage = Stage()
@@ -1079,6 +1108,8 @@ def train(
 
     losses_history = []
     checkpoints = []
+    initialization_time_s = time.time() - initialization_started
+    initialization_peak_mb = torch.cuda.max_memory_allocated() / 1e6
     start_time = time.time()
 
     # --- Training loop ---
@@ -1275,10 +1306,11 @@ def train(
                 f"{max(1, step) / elapsed:.0f} it/s | {mem_peak:.0f} MB"
             )
 
-        # Evaluation
+        # Schedule periodic evaluations by completed-step count.
+        completed_step = step + 1
         if (
-            eval_every > 0 and step > 0 and step % eval_every == 0
-        ) or step == max_steps - 1:
+            eval_every > 0 and completed_step % eval_every == 0
+        ) or completed_step == max_steps:
             is_last = step == max_steps - 1
             psnrs = []
             with torch.no_grad():
@@ -1375,7 +1407,22 @@ def train(
     # Summary
     elapsed = time.time() - start_time
     summary = {
+        "scene_path": scene_path,
+        "use_mcmc": use_mcmc,
         "max_steps": max_steps,
+        "seed": seed,
+        "cameras": cameras,
+        "duration_sec": duration,
+        "downscale": downscale,
+        "rigid_dynamic_track_class_ids": rigid_dynamic_track_class_ids,
+        "max_lidar_points": max_lidar,
+        "max_dynamic_lidar_points": max_dynamic_lidar,
+        "max_dynamic_lidar_points_per_track": max_dynamic_lidar_per_track,
+        "lidar_step_frame": lidar_step_frame,
+        "static_init_points": static_init_points,
+        "dynamic_init_points": dynamic_init_points,
+        "initialization_time_s": initialization_time_s,
+        "initialization_peak_mb": initialization_peak_mb,
         "total_time_s": elapsed,
         "initial_loss": losses_history[0] if losses_history else None,
         "final_loss": losses_history[-1] if losses_history else None,
@@ -1454,6 +1501,9 @@ def main():
         ),
     )
     p.add_argument("--max-lidar", type=int, default=150_000)
+    p.add_argument("--max-dynamic-lidar", type=int, default=None)
+    p.add_argument("--max-dynamic-lidar-per-track", type=int, default=5_000)
+    p.add_argument("--lidar-step-frame", type=int, default=1)
     p.add_argument("--downscale", type=int, default=1)
     p.add_argument("--max-steps", type=int, default=15000)
     p.add_argument("--lr", type=float, default=0.005)
@@ -1470,6 +1520,7 @@ def main():
     p.add_argument("--no-save-model", action="store_true")
     p.add_argument("--mcmc", action="store_true")
     p.add_argument("--cap-max", type=int, default=300_000)
+    p.add_argument("--seed", type=int, default=42)
     # LiDAR rendering (addition over simple_trainer)
     p.add_argument(
         "--lidar-render",
@@ -1516,9 +1567,13 @@ def main():
         cameras=cameras_list,
         duration=args.duration,
         max_lidar=args.max_lidar,
+        max_dynamic_lidar=args.max_dynamic_lidar,
+        max_dynamic_lidar_per_track=args.max_dynamic_lidar_per_track,
+        lidar_step_frame=args.lidar_step_frame,
         downscale=args.downscale,
         rigid_dynamic_track_class_ids=rigid_dynamic_track_class_ids,
         rigid_dynamic_static_baseline=args.rigid_dynamic_static_baseline,
+        seed=args.seed,
         lidar_render=args.lidar_render,
         lidar_render_subsample=args.lidar_render_subsample,
         lidar_render_weight=args.lidar_render_weight,

@@ -53,6 +53,51 @@ python examples/av_trainer.py \
     --duration 4.0 --downscale 4 --max-steps 10000
 ```
 
+#### Offline `dynamic_flag` preparation
+
+`prepare_ncore_dynamics.py` materializes a derived NCore v4 clip with per-point
+`dynamic_flag` arrays on the LiDAR store, using annotation-time LiDAR-spin
+association (same semantics as rigid-dynamic static exclusion):
+
+```bash
+python examples/prepare_ncore_dynamics.py \
+    --input ncore_data/004c2001-.../pai_004c2001-...json \
+    --output-dir ncore_data/004c2001-...-dynamic \
+    --class-ids automobile,person,heavy_truck
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--input` | (required) | NCore v4 JSON manifest |
+| `--output-dir` | (required) | New directory for the derived manifest and component stores |
+| `--class-ids` | default actor classes | Comma-separated cuboid class IDs |
+| `--lidar-id` | unset | LiDAR sensor ID; required only when the manifest has multiple LiDARs |
+
+Constraints:
+
+- `--output-dir` must not already exist (`FileExistsError` on rerun).
+- `--lidar-id` is required when the manifest has multiple LiDARs; otherwise the
+  sole LiDAR is chosen automatically.
+- The selected LiDAR must own its own component store (no mixed or multi-LiDAR
+  stores).
+
+**Producer / consumer semantics.** The prepare tool writes an offline export
+artifact (`dynamic_flag` per LiDAR return). `av_trainer.py` / `NCoreParser`
+intentionally does **not** read baked `dynamic_flag`; it recomputes static
+exclusion live from cuboid annotations when `--rigid-dynamic-track-class-ids`
+is set. A plain `av_trainer.py --scene X.json` (no rigid classes) does **not**
+drop baked-dynamic returns — exclusion only happens when rigid classes are
+requested. A runtime warning may be emitted when a flag-carrying manifest is
+loaded without rigid classes.
+
+**Disk layout.** The tool writes a full derived clip directory under
+`--output-dir`. Unchanged component stores (e.g. camera `.itar` files) are
+hard-linked into the output (falling back to symlink, then copy); only the
+rewritten LiDAR `dynamic_flag` store is newly written, so the derived clip is
+not a full duplicate of the source. Across filesystems, unchanged stores may
+still be fully copied — plan disk accordingly (~2 GB per clip on typical
+multi-camera manifests).
+
 ## Arguments
 
 | Argument | Default | Description |
@@ -64,8 +109,12 @@ python examples/av_trainer.py \
 | `--rigid-dynamic-track-class-ids` | unset | Comma-separated NCore cuboid class IDs to load as rigid dynamic tracks in a dynamic scene |
 | `--rigid-dynamic-static-baseline` | off | Keep selected moving-object returns in the static scene instead of splitting them into rigid components |
 | `--max-lidar` | 150000 | Max initial LiDAR points; with rigid dynamics this is the total across static and dynamic scenes |
+| `--max-dynamic-lidar` | 30% of `--max-lidar` | Global cap for rigid dynamic initialization points (unset ⇒ `int(0.3 × max_lidar)`) |
+| `--max-dynamic-lidar-per-track` | 5000 | Per-track cap for rigid dynamic initialization points |
+| `--lidar-step-frame` | 1 | Load every Nth LiDAR frame for initialization |
 | `--max-steps` | 15000 | Training iterations |
 | `--lr` | 0.005 | Base learning rate |
+| `--seed` | 42 | Seed for deterministic point sampling and initialization |
 | `--mcmc` | off | Enable MCMC densification |
 | `--cap-max` | 300000 | Max Gaussians (MCMC) |
 | `--sh-degree` | 0 | SH degree (0=flat, 3=full) |
@@ -88,6 +137,20 @@ scenes and renders each NCore camera at its frame-midpoint timestamp. The
 checkpoint records the training-time camera set, clip duration, and downscale
 (the scene frame's origin depends on them), and `sample_inference.py` uses the
 recorded values by default; `--cameras`/`--duration`/`--downscale` override.
+
+NCore checkpoints and `model.pt` serialize a `dataset` object with:
+
+| Field | Description |
+|-------|-------------|
+| `cameras` | Camera IDs used during training |
+| `duration_sec` | Clip duration in seconds (`null` = full clip) |
+| `downscale` | Image downscale factor |
+| `rigid_dynamic_track_class_ids` | Cuboid class IDs for rigid tracks (`null` if unset) |
+| `rigid_dynamic_static_baseline` | Whether moving-object returns stayed in the static scene |
+| `max_dynamic_lidar_points` | Global rigid-dynamic initialization cap (`null` lets the parser derive 30% of `max_lidar` when rigid splitting is enabled) |
+| `max_dynamic_lidar_points_per_track` | Per-track rigid-dynamic initialization cap |
+| `lidar_step_frame` | LiDAR frame stride used for initialization |
+| `seed` | Random seed for deterministic initialization |
 
 ## Benchmark: NCore v4
 
@@ -125,3 +188,12 @@ python examples/av_trainer.py $COMMON --mcmc --sh-degree 3 --result-dir results/
 # 4. + LiDAR rendering
 python examples/av_trainer.py $COMMON --mcmc --sh-degree 3 --lidar-render --result-dir results/4_lidar
 ```
+
+Periodic evaluations run after completed training steps `k * eval_every` and at
+`max_steps`. Artifact names and checkpoint metadata use the same completed-step
+number, so a step boundary produces matching `stats/stepNNNNN.json` and
+`ckpts/ckpt_NNNNN.pt` artifacts.
+
+Each stats file records the evaluation `mean_psnr`, and `summary.json` includes
+that value in its `checkpoints` entries. Final evaluation renders are written
+under `renders/`.
