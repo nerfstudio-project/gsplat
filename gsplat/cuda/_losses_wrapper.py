@@ -30,19 +30,38 @@ from gsplat.cuda._wrapper import _make_lazy_cuda_func
 
 class _FusedGaussianLosses(torch.autograd.Function):
     """Fused forward+backward for gaussian_scale_reg, gaussian_density_reg,
-    gaussian_z_scale_reg, and out_of_bound_loss via a single CUDA kernel."""
+    gaussian_z_scale_reg, and out_of_bound_loss via a single CUDA kernel.
+
+    Each member owns its row count (``N_scales``/``N_densities``/
+    ``N_z_scales``/``N_oob``, any of which may be zero); ``visibility`` spans
+    the scale and density members. ``preactivation`` selects the log-space
+    member math (see :class:`gsplat.losses_fused.FusedGaussianLosses`).
+
+    Grouped dispatch: when ``deformation`` is given, the same
+    single op call additionally launches the deform-smoothness kernels and a
+    fifth output — the scalar deform loss — is returned. Its gradients flow to
+    ``deformation`` and, when present, ``deform_mask``.
+    """
 
     @staticmethod
     def forward(
         ctx,
-        scales: Tensor,  # [N, 3]
-        densities: Tensor,  # [N]
-        z_scales: Tensor,  # [N]
-        positions: Tensor,  # [N, 3]
-        cuboid_dims: Tensor,  # [N, 3]
+        scales: Tensor,  # [N_scales, 3]
+        densities: Tensor,  # [N_densities]
+        z_scales: Tensor,  # [N_z_scales]
+        positions: Tensor,  # [N_oob, 3]
+        cuboid_dims: Tensor,  # [N_oob, 3]
         z_scale_threshold: float,
-        visibility: Optional[Tensor] = None,  # [N] float
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        visibility: Optional[Tensor] = None,  # [max(N_scales, N_densities)] float
+        deformation: Optional[Tensor] = None,  # [M, D]
+        deform_mask: Optional[Tensor] = None,  # broadcastable to [M, D]
+        preactivation: bool = False,
+    ) -> Tuple[Tensor, ...]:
+        # Unused outputs must reach backward as None rather than materialized
+        # zeros: backward() normalizes each None base cotangent to a defined
+        # exact zero and skips the deform member outright when its cotangent
+        # is None, so an unused output can never poison a sibling's gradient.
+        ctx.set_materialize_grads(False)
         # The CUDA backward does not compute d(oob)/d(cuboid_dims); failing loudly
         # here is safer than silently returning a zero gradient that the
         # pure-PyTorch path would have propagated.
@@ -51,6 +70,8 @@ class _FusedGaussianLosses(torch.autograd.Function):
                 "FusedGaussianLosses does not support grad w.r.t. cuboid_dims; "
                 "pass cuboid_dims with requires_grad=False."
             )
+        if deformation is None and deform_mask is not None:
+            raise ValueError("_FusedGaussianLosses: deform_mask requires deformation.")
         scales = scales.contiguous()
         densities = densities.contiguous()
         z_scales = z_scales.contiguous()
@@ -69,6 +90,22 @@ class _FusedGaussianLosses(torch.autograd.Function):
         loss_z_scale = torch.empty_like(z_scales)
         loss_oob = torch.empty_like(positions)
 
+        # Grouped deform-smoothness member: the running-sums buffer and scalar
+        # loss must start zeroed (the kernel accumulates into sums via
+        # atomics).
+        deform_sums = None
+        deform_loss = None
+        if deformation is not None:
+            deformation = deformation.contiguous()
+            if deform_mask is not None:
+                deform_mask = deform_mask.contiguous()
+            deform_sums = torch.zeros(
+                2, dtype=deformation.dtype, device=deformation.device
+            )
+            deform_loss = torch.zeros(
+                (), dtype=deformation.dtype, device=deformation.device
+            )
+
         _make_lazy_cuda_func("gaussian_losses_fwd")(
             scales,
             densities,
@@ -81,46 +118,85 @@ class _FusedGaussianLosses(torch.autograd.Function):
             loss_density,
             loss_z_scale,
             loss_oob,
+            deformation,
+            deform_mask,
+            deform_sums,
+            deform_loss,
+            preactivation,
         )
 
+        saved = [scales, densities, z_scales, positions, cuboid_dims]
         if visibility is not None:
-            ctx.save_for_backward(
-                scales, densities, z_scales, positions, cuboid_dims, visibility
-            )
-            ctx.has_visibility = True
-        else:
-            ctx.save_for_backward(scales, densities, z_scales, positions, cuboid_dims)
-            ctx.has_visibility = False
+            saved.append(visibility)
+        if deformation is not None:
+            saved.extend([deformation, deform_sums])
+            if deform_mask is not None:
+                saved.append(deform_mask)
+        ctx.save_for_backward(*saved)
+        ctx.has_visibility = visibility is not None
+        ctx.has_deform = deformation is not None
+        ctx.has_deform_mask = deform_mask is not None
         ctx.z_scale_threshold = z_scale_threshold
+        ctx.preactivation = preactivation
 
+        if deformation is not None:
+            return loss_scale, loss_density, loss_z_scale, loss_oob, deform_loss
         return loss_scale, loss_density, loss_z_scale, loss_oob
 
     @staticmethod
     def backward(
         ctx,
-        v_loss_scale: Tensor,
-        v_loss_density: Tensor,
-        v_loss_z_scale: Tensor,
-        v_loss_oob: Tensor,
+        v_loss_scale: Optional[Tensor],
+        v_loss_density: Optional[Tensor],
+        v_loss_z_scale: Optional[Tensor],
+        v_loss_oob: Optional[Tensor],
+        *v_extra: Optional[Tensor],
     ) -> Tuple[Optional[Tensor], ...]:
+        saved = list(ctx.saved_tensors)
+        scales, densities, z_scales, positions, cuboid_dims = saved[:5]
+        idx = 5
+        visibility = None
         if ctx.has_visibility:
-            (
-                scales,
-                densities,
-                z_scales,
-                positions,
-                cuboid_dims,
-                visibility,
-            ) = ctx.saved_tensors
-        else:
-            scales, densities, z_scales, positions, cuboid_dims = ctx.saved_tensors
-            visibility = None
+            visibility = saved[idx]
+            idx += 1
+        deformation = None
+        deform_sums = None
+        deform_mask = None
+        if ctx.has_deform:
+            deformation, deform_sums = saved[idx : idx + 2]
+            idx += 2
+            if ctx.has_deform_mask:
+                deform_mask = saved[idx]
+                idx += 1
 
         # Pre-allocate gradient buffers in Python (matches forward pattern).
         v_scales = torch.empty_like(scales)
         v_densities = torch.empty_like(densities)
         v_z_scales = torch.empty_like(z_scales)
         v_positions = torch.empty_like(positions)
+
+        # set_materialize_grads(False) delivers unused outputs' cotangents as
+        # None. The base op requires defined per-element upstream grads, so
+        # normalize those to exact zeros; the per-element base backward turns
+        # a zero upstream into a zero gradient.
+        def _upstream(grad: Optional[Tensor], ref: Tensor) -> Tensor:
+            return torch.zeros_like(ref) if grad is None else grad.contiguous()
+
+        # Grouped deform-smoothness member: v_deformation is fully written by
+        # the kernel; v_deform_mask accumulates via atomics, so it must start
+        # zeroed. A None cotangent means the deform loss is not part of the
+        # objective: the member's backward launch is skipped outright (all
+        # deform arguments passed as None) so an unused-but-present
+        # non-finite deformation can never poison any gradient.
+        v_deform_loss = v_extra[0] if v_extra else None
+        deform_active = ctx.has_deform and v_deform_loss is not None
+        v_deformation = None
+        v_deform_mask = None
+        if deform_active:
+            v_deform_loss = v_deform_loss.reshape(()).contiguous()
+            v_deformation = torch.empty_like(deformation)
+            if deform_mask is not None:
+                v_deform_mask = torch.zeros_like(deform_mask)
 
         _make_lazy_cuda_func("gaussian_losses_bwd")(
             scales,
@@ -130,19 +206,40 @@ class _FusedGaussianLosses(torch.autograd.Function):
             cuboid_dims,
             visibility,
             ctx.z_scale_threshold,
-            v_loss_scale.contiguous(),
-            v_loss_density.contiguous(),
-            v_loss_z_scale.contiguous(),
-            v_loss_oob.contiguous(),
+            _upstream(v_loss_scale, scales),
+            _upstream(v_loss_density, densities),
+            _upstream(v_loss_z_scale, z_scales),
+            _upstream(v_loss_oob, positions),
             v_scales,
             v_densities,
             v_z_scales,
             v_positions,
+            deformation if deform_active else None,
+            deform_mask if deform_active else None,
+            deform_sums if deform_active else None,
+            v_deform_loss if deform_active else None,
+            v_deformation,
+            v_deform_mask,
+            ctx.preactivation,
         )
 
         # Gradients for: scales, densities, z_scales, positions, cuboid_dims,
-        #                 z_scale_threshold, visibility
-        return v_scales, v_densities, v_z_scales, v_positions, None, None, None
+        #   z_scale_threshold, visibility, deformation, deform_mask,
+        #   preactivation.
+        # (The trailing entries are None whenever the caller omitted the
+        # optional inputs — autograd drops extra trailing None grads.)
+        return (
+            v_scales,
+            v_densities,
+            v_z_scales,
+            v_positions,
+            None,
+            None,
+            None,
+            v_deformation,
+            v_deform_mask,
+            None,
+        )
 
 
 class _FusedCameraLosses(torch.autograd.Function):

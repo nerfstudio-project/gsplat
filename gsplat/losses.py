@@ -1064,6 +1064,58 @@ def reduce_sum(value: Tensor) -> Tensor:
 # ---------------------------------------------------------------------------
 
 
+def fold_log_space_weight(preactivation: Tensor, weight: float) -> Tensor:
+    """Fold a per-segment weight into log-space pre-activations.
+
+    ``exp(x + log(w)) == w * exp(x)``, so adding ``log(weight)`` to a
+    segment's pre-activations makes a downstream fused ``exp()`` (e.g.
+    :class:`gsplat.losses_fused.FusedGaussianLosses` in pre-activation mode)
+    produce the weighted post-activation values directly.
+
+    A non-positive weight takes an exact-zero branch instead: the segment is
+    replaced by a ``-inf`` fill, which ``exp()`` maps to an exact zero for
+    both the value and the gradient. Weighting by multiplication *after* the
+    ``exp()`` could not guarantee this — ``0 * exp(x)`` is NaN once ``x``
+    is large enough for ``exp(x)`` to overflow to infinity.
+
+    .. warning::
+        Folding is exact only where the downstream loss is **linear** in the
+        activated value ``exp(x)`` — the scale member of
+        :class:`~gsplat.losses_fused.FusedGaussianLosses` (densities fold
+        their weights by plain multiplication instead). Do **not** fold a
+        weight into pre-activations that feed a *thresholded* member such as
+        z-scale: there the threshold is subtracted after the ``exp()``, so
+        the folded weight lands inside the relu::
+
+            relu(exp(z + log(w)) - T) == relu(w * exp(z) - T)
+                                      != w * relu(exp(z) - T)
+
+        e.g. with ``exp(z) = 10`` and ``T = 8``, ``w = 0.5`` gives
+        ``relu(5 - 8) = 0`` where the intended weighted loss is
+        ``0.5 * relu(10 - 8) = 1``. Only ``w = 1`` (identity) and the
+        exact-zero ``w <= 0`` branch are valid for such members — and the
+        latter only because thresholds are non-negative by contract
+        (``relu(0 - T)`` with ``T < 0`` would be positive; the module and
+        the native launchers reject negative ``z_scale_threshold``); a
+        fractional weight must be applied to the member's *output* instead
+        (or folded into the threshold as well: ``relu(w * exp(z) - w * T)
+        == w * relu(exp(z) - T)`` for ``w > 0``).
+
+    Args:
+        preactivation: Log-space pre-activations, any shape.
+        weight: Non-log-space segment weight. ``weight <= 0`` disables the
+            segment exactly (zero values, zero gradients — the returned fill
+            is a constant with no autograd edge to *preactivation*).
+
+    Returns:
+        Pre-activations with the weight folded in, same shape as
+        *preactivation*.
+    """
+    if weight <= 0.0:
+        return torch.full_like(preactivation, float("-inf"))
+    return preactivation + math.log(weight)
+
+
 def gaussian_scale_reg(scales: Tensor, visibility: Tensor | None = None) -> Tensor:
     """Penalize large Gaussian scale values.
 
@@ -1129,11 +1181,17 @@ def gaussian_z_scale_reg(z_scales: Tensor, threshold: float) -> Tensor:
     Args:
         z_scales: Post-activation z-component of Gaussian scales ``[N]``,
             must be ``>= 0``.
-        threshold: Scale value above which penalty is applied.
+        threshold: Scale value above which penalty is applied. Must be
+            non-negative, so that empty or disabled members stay exact
+            zeros (``relu(0 - T) == 0``).
 
     Returns:
         Per-element penalty ``[N]``.
     """
+    # `not (T >= 0)` mirrors the native launcher predicate: it also rejects
+    # NaN, which `T < 0` would let through (nan < 0 is False).
+    if not threshold >= 0:
+        raise ValueError(f"threshold must be non-negative, got {threshold}")
     if ENFORCE_CONTRACTS:
         assert (
             z_scales >= 0
@@ -1587,3 +1645,78 @@ def node_semantic_loss(
     count = selected.sum()
     raw = per_element.sum() / count.clamp(min=1)
     return raw, node_lambda * raw
+
+
+# ---------------------------------------------------------------------------
+# Deform smoothness (scalar, training contract)
+# ---------------------------------------------------------------------------
+
+
+def deform_smoothness_loss(deformation: Tensor, mask: Tensor | None = None) -> Tensor:
+    """Masked mean of ``|deformation|`` (scalar) — the deform-smoothness loss.
+
+    Unlike most functions in this module, this is a *training-contract*
+    scalar (masked mean), matching the fused CUDA kernels behind the optional
+    deform member of :class:`gsplat.losses_fused.FusedGaussianLosses` (and
+    serving as their pure-PyTorch reference/fallback). The contract is an
+    ``abs`` + masked-mean reduction:
+
+    - The numerator sums ``|deformation| * mask`` with the mask broadcast to
+      the deformation's shape. Masked-out elements (``mask == 0``) are fully
+      inert: their deformation is never read, so a non-finite residual left
+      behind in a masked-out row cannot poison the loss (masking a region is
+      often exactly why its residuals are garbage).
+    - The denominator sums the **original** (un-broadcast) mask exactly once
+      and is clamped to ``>= 1``, so an all-zero mask yields an exact,
+      differentiable zero (the clamp also suppresses the mask's denominator
+      gradient term while active).
+    - Without a mask the loss is the plain mean of ``|deformation|``; an
+      empty ``deformation`` yields a differentiable zero rather than ``0/0``.
+
+    Gradients w.r.t. ``deformation`` are ``upstream * mask * sign(d) /
+    denominator`` (``sign(0) == 0``; exactly zero at masked-out elements).
+    Gradients w.r.t. ``mask`` combine the numerator term (``upstream * |d| /
+    denominator``, broadcast-reduced onto the mask element, and exactly zero
+    at masked-out elements — an inert lane deliberately stops receiving the
+    "this residual is large" reopening signal) and the denominator term
+    (``-upstream * loss_sum / denominator**2``, applied only when
+    ``mask.sum() >= 1``).
+
+    Args:
+        deformation: Deformation residuals ``[N, D]`` (e.g. ``[N, 3]``
+            position deltas). Any float dtype here; the fused CUDA path
+            supports ``fp32``/``fp64`` only.
+        mask: Optional float weights broadcastable to *deformation*'s shape
+            (e.g. ``[N, 1]`` per-point weights). One-way broadcast only: the
+            mask must not force *deformation* to expand.
+
+    Returns:
+        Scalar loss tensor (shape ``[]``).
+    """
+    if mask is not None:
+        # One-way broadcast contract (cheap shape-only check, no GPU sync):
+        # a mask that would expand deformation changes the numerator element
+        # count and is rejected by the CUDA path as well.
+        broadcast_shape = torch.broadcast_shapes(deformation.shape, mask.shape)
+        if broadcast_shape != deformation.shape:
+            raise ValueError(
+                f"mask {tuple(mask.shape)} must broadcast to deformation's "
+                f"shape {tuple(deformation.shape)} without expanding it"
+            )
+        # Masked-out elements are fully inert: gate |d| BEFORE the multiply so
+        # neither the loss nor any gradient reads it. Gating the product
+        # instead would leak NaN into the mask gradient — the mul's backward
+        # computes grad_mask = upstream * |d| and 0 * inf == NaN even when the
+        # where() zeroes the upstream.
+        gated_abs = torch.where(mask == 0, deformation.new_zeros(()), deformation.abs())
+        numerator = (gated_abs * mask).sum()
+        # The original mask is reduced exactly once (not its broadcast view);
+        # the clamp makes the all-zero-mask case an exact zero instead of a
+        # blow-up and zeroes the denominator's gradient while active.
+        denominator = mask.sum().clamp(min=1)
+        return numerator / denominator
+    if deformation.numel() == 0:
+        # Differentiable zero connected to the input, matching the CUDA path
+        # (clamped denominator) instead of mean's 0/0 = NaN.
+        return deformation.sum()
+    return deformation.abs().sum() / deformation.numel()

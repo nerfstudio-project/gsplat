@@ -24,35 +24,44 @@ class Tensor;
 
 namespace gsplat
 {
+// Each member owns its row count (heterogeneous regularization domains):
+// scales [N_scales, 3], densities [N_densities], z_scales [N_z_scales],
+// positions/cuboid_dims [N_oob, 3]; any count may be zero. `visibility`
+// spans the scale and density members: [max(N_scales, N_densities)] or
+// nullptr. `preactivation` selects log-space member math (exp() fused for
+// scales/z_scales, |.| for densities); false reproduces the post-activation
+// math bit for bit.
 void launch_gaussian_losses_fwd_kernel(
-    const at::Tensor &scales,      // [N, 3]
-    const at::Tensor &densities,   // [N]
-    const at::Tensor &z_scales,    // [N]
-    const at::Tensor &positions,   // [N, 3]
-    const at::Tensor &cuboid_dims, // [N, 3]
-    const at::Tensor *visibility,  // [N] float or nullptr
+    const at::Tensor &scales,      // [N_scales, 3]
+    const at::Tensor &densities,   // [N_densities]
+    const at::Tensor &z_scales,    // [N_z_scales]
+    const at::Tensor &positions,   // [N_oob, 3]
+    const at::Tensor &cuboid_dims, // [N_oob, 3]
+    const at::Tensor *visibility,  // [max(N_scales, N_densities)] float or nullptr
     float z_scale_threshold,
-    at::Tensor &loss_scale,   // [N, 3]
-    at::Tensor &loss_density, // [N]
-    at::Tensor &loss_z_scale, // [N]
-    at::Tensor &loss_oob      // [N, 3]
+    bool preactivation,
+    at::Tensor &loss_scale,   // [N_scales, 3]
+    at::Tensor &loss_density, // [N_densities]
+    at::Tensor &loss_z_scale, // [N_z_scales]
+    at::Tensor &loss_oob      // [N_oob, 3]
 );
 
 void launch_gaussian_losses_bwd_kernel(
-    const at::Tensor &scales,      // [N, 3]
-    const at::Tensor &densities,   // [N]
-    const at::Tensor &z_scales,    // [N]
-    const at::Tensor &positions,   // [N, 3]
-    const at::Tensor &cuboid_dims, // [N, 3]
-    const at::Tensor *visibility,  // [N] float or nullptr
+    const at::Tensor &scales,      // [N_scales, 3]
+    const at::Tensor &densities,   // [N_densities]
+    const at::Tensor &z_scales,    // [N_z_scales]
+    const at::Tensor &positions,   // [N_oob, 3]
+    const at::Tensor &cuboid_dims, // [N_oob, 3]
+    const at::Tensor *visibility,  // [max(N_scales, N_densities)] float or nullptr
     float z_scale_threshold,
-    const at::Tensor &v_loss_scale,   // [N, 3]
-    const at::Tensor &v_loss_density, // [N]
-    const at::Tensor &v_loss_z_scale, // [N]
-    const at::Tensor &v_loss_oob,     // [N, 3]
-    at::Tensor &v_scales,             // [N, 3]
-    at::Tensor &v_densities,          // [N]
-    at::Tensor &v_z_scales,           // [N]
-    at::Tensor &v_positions           // [N, 3]
+    bool preactivation,
+    const at::Tensor &v_loss_scale,   // [N_scales, 3]
+    const at::Tensor &v_loss_density, // [N_densities]
+    const at::Tensor &v_loss_z_scale, // [N_z_scales]
+    const at::Tensor &v_loss_oob,     // [N_oob, 3]
+    at::Tensor &v_scales,             // [N_scales, 3]
+    at::Tensor &v_densities,          // [N_densities]
+    at::Tensor &v_z_scales,           // [N_z_scales]
+    at::Tensor &v_positions           // [N_oob, 3]
 );
 } // namespace gsplat
