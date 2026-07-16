@@ -27,7 +27,6 @@ mode="full"
 mode_flag=""
 changed_base=""
 check_mode=false
-black_args=()
 python_extensions=(
     '*.py'
     '*.pyi'
@@ -91,10 +90,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --check)
             check_mode=true
-            black_args+=(
-                --check
-                --diff
-            )
             shift
             ;;
         --full)
@@ -180,43 +175,59 @@ find_code_format() {
 }
 
 
-# Python code formatting ====================
-mapfile -d '' python_files < <(
-    find_repo_files "${python_extensions[@]}"
+# Run the pinned formatters over the given files. ACTION is "format" (rewrite in
+# place) or "check" (report only, non-zero if unformatted). Each formatter's
+# failure is captured into rc and returned rather than left to set -e --
+# callers invoke this in an `if !`/`||` context where set -e is ignored inside.
+run_formatters() {
+    local action="$1"
+    shift
+    local py=() cpp=() f rc=0
+    for f in "$@"; do
+        case "${f}" in
+            *.py | *.pyi) py+=("${f}") ;;
+            *) cpp+=("${f}") ;;
+        esac
+    done
+    if (( ${#py[@]} > 0 )); then
+        local black_pin
+        black_pin="$(read_dev_pin black)"
+        if [[ -z "${black_pin}" ]]; then
+            echo "ERROR: pyproject.toml's dev extra must pin black==<version>." >&2
+            return 1
+        fi
+        local black_flags=(--required-version "${black_pin}" --color)
+        if [[ "${action}" == check ]]; then
+            black_flags+=(--check --diff)
+        fi
+        python -m black "${black_flags[@]}" -- "${py[@]}" || rc=1
+    fi
+    if (( ${#cpp[@]} > 0 )); then
+        local cf pin clang_flags=(-i)
+        if [[ "${action}" == check ]]; then
+            clang_flags=(--dry-run --Werror)
+        fi
+        pin="$(read_dev_pin clang-format)"
+        if [[ -z "${pin}" ]]; then
+            echo "ERROR: pyproject.toml's dev extra must pin clang-format==<version>." >&2
+            return 1
+        fi
+        # Propagate a lookup failure explicitly: callers invoke this in an
+        # `if !`/`||` context where set -e is ignored inside.
+        cf="$(find_code_format "${pin}")" || return 1
+        printf '%s\n' "${cpp[@]}" | "${cf}" "${clang_flags[@]}" --files=/dev/stdin || rc=1
+    fi
+    return "${rc}"
+}
+
+mapfile -d '' -t src_files < <(
+    find_repo_files "${python_extensions[@]}" "${cpp_extensions[@]}"
 )
 
-if (( ${#python_files[@]} > 0 )); then
-    black_version="$(read_dev_pin black)"
-    black_args+=(
-        --required-version "${black_version}"
-        --color
-    )
-
-    python -m black "${black_args[@]}" "${python_files[@]}"
+if (( ${#src_files[@]} == 0 )); then
+    echo "No source files selected."
+elif $check_mode; then
+    run_formatters check "${src_files[@]}"
 else
-    echo "Python formatting was not performed because there are no selected Python files."
-fi
-
-
-# C/C++/CUDA code formatting ===============
-mapfile -d '' cpp_files < <(
-    find_repo_files "${cpp_extensions[@]}"
-)
-
-if (( ${#cpp_files[@]} > 0 )); then
-    clang_format_version="$(read_dev_pin clang-format)"
-    if [[ -z "${clang_format_version}" ]]; then
-        echo "ERROR: pyproject.toml's dev extra must pin clang-format==<version>." >&2
-        exit 1
-    fi
-
-    code_format="$(find_code_format "${clang_format_version}")"
-
-    if $check_mode; then
-        printf '%s\n' "${cpp_files[@]}" | "${code_format}" --dry-run --Werror --files=/dev/stdin
-    else
-        printf '%s\n' "${cpp_files[@]}" | "${code_format}" -i --files=/dev/stdin
-    fi
-else
-    echo "C/C++/CUDA formatting was not performed because there are no selected C/C++/CUDA files."
+    run_formatters format "${src_files[@]}"
 fi
