@@ -200,6 +200,13 @@ def test_precommit_implies_staged_mode(repo):
     assert "combined" in result.stderr.lower()
 
 
+def test_changed_rejects_unknown_ref(repo):
+    # --changed with a ref that does not resolve must fail loudly, not exit 0.
+    result = _run(repo, "--check", "--changed", "no-such-ref-xyz")
+    assert result.returncode != 0
+    assert "no-such-ref-xyz" in result.stderr
+
+
 # --- --staged perform mode ------------------------------------------------
 
 

@@ -113,6 +113,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         --changed)
             [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die "--changed requires a git ref argument"
+            git -C "${repo_root}" rev-parse --verify -q "$2^{commit}" >/dev/null 2>&1 \
+                || die "--changed: unknown git ref '$2'"
             set_mode changed --changed
             changed_base="$2"
             shift 2
