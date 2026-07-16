@@ -36,7 +36,11 @@ jobs:
         run: |
           source .github/workflows/cuda/Linux-env.sh cu126
           # Tests need only one portable architecture and the reduced CI channel set.
-          cmake --preset ci-release -B build/ -DGSPLAT_TESTS_FORCE_CUDA=OFF
+          cmake --preset ci-release -B build/
           cmake --build build/
       - name: Run CTest Tests
+        # CPU-only runners: consult PyTorch's availability probe instead of
+        # forcing CUDA-backed coverage.
+        env:
+          GSPLAT_TESTS_FORCE_CUDA: "0"
         run: ctest --test-dir build/ --output-on-failure

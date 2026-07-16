@@ -146,6 +146,11 @@ python -m pytest
 python -m pytest ../../tests/core/test_basic.py
 ```
 
+CUDA-backed tests run unconditionally by default so a missing or broken GPU
+fails visibly instead of silently skipping coverage. On a machine without
+CUDA, export `GSPLAT_TESTS_FORCE_CUDA=0` for the test run to fall back to
+PyTorch's availability probe.
+
 ### Adding source files
 
 New C++/CUDA implementation files must be registered explicitly in the source
@@ -175,7 +180,6 @@ apply to a top-level build unless noted otherwise; presets can override them.
 | --- | --- | --- |
 | `GSPLAT_BUILD_TESTS` | `ON` (`OFF` as a subproject) | Build the C++ tests and install the self-contained test payload; Python source-tree tests are registered independently in top-level builds. |
 | `GSPLAT_BUILD_CAMERA_WRAPPERS` | value of `GSPLAT_BUILD_TESTS` | Build the Python-exposed camera-wrapper test kernels. |
-| `GSPLAT_TESTS_FORCE_CUDA` | `ON` | Require CUDA-backed pytest coverage without consulting PyTorch's availability probe. Disable it only on runners where CUDA tests should be skipped when `torch.cuda.is_available()` is false. |
 
 #### Dependencies
 

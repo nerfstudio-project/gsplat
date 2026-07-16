@@ -25,8 +25,8 @@ def cuda_is_available() -> bool:
         availability.
 
     Raises:
-        RuntimeError: If the CMake-to-pytest configuration contains a value
-            other than ``0`` or ``1``.
+        RuntimeError: If the ``GSPLAT_TESTS_FORCE_CUDA`` environment variable
+            contains a value other than ``0`` or ``1``.
     """
 
     force_cuda = os.environ.get(_TESTS_FORCE_CUDA_ENV, "1")

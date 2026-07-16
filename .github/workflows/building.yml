@@ -138,8 +138,7 @@ jobs:
           # test-carrying wheels.
           ./tools/build-wheel.sh "${CMAKE_PRESET}" \
             --wheel-dir dist \
-            --config-settings=cmake.define.GSPLAT_BUILD_TESTS=OFF \
-            --config-settings=cmake.define.GSPLAT_TESTS_FORCE_CUDA=OFF
+            --config-settings=cmake.define.GSPLAT_BUILD_TESTS=OFF
           mv dist/*.whl "$GITHUB_WORKSPACE/dist/"
         shell: bash
 
