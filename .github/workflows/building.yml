@@ -132,24 +132,14 @@ jobs:
             --strip-components=1
 
           cd "$RUNNER_TEMP/gsplat-sdist"
-          # scikit-build-core drives the single CMake configure and build:
-          # - cmake.args=--preset keeps the preset as the one source of build
-          #   config
-          # - cmake.build-type is emptied so scikit-build-core's Release
-          #   default cannot override the preset's CMAKE_BUILD_TYPE
-          # - distribution wheels ship without the test payload; the
-          #   GPU-backed CI pipeline validates test-carrying wheels
-          python -m pip wheel \
-            --verbose \
-            --no-build-isolation \
-            --no-deps \
+          # tools/build-wheel.sh (shipped in the sdist) wraps the pip +
+          # scikit-build-core wheel contract. Distribution wheels ship
+          # without the test payload; the GPU-backed CI pipeline validates
+          # test-carrying wheels.
+          ./tools/build-wheel.sh "${CMAKE_PRESET}" \
             --wheel-dir dist \
-            --config-settings=build-dir="build/${CMAKE_PRESET}" \
-            --config-settings=cmake.build-type= \
-            --config-settings=cmake.args=--preset="${CMAKE_PRESET}" \
             --config-settings=cmake.define.GSPLAT_BUILD_TESTS=OFF \
-            --config-settings=cmake.define.GSPLAT_TESTS_FORCE_CUDA=OFF \
-            .
+            --config-settings=cmake.define.GSPLAT_TESTS_FORCE_CUDA=OFF
           mv dist/*.whl "$GITHUB_WORKSPACE/dist/"
         shell: bash
 

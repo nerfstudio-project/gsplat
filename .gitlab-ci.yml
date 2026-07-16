@@ -68,24 +68,14 @@ code-format:
     - mkdir -p dist
 
   script:
-    # scikit-build-core drives the single CMake configure and build:
-    # - cmake.args=--preset keeps the preset as the one source of build config
-    # - cmake.build-type is emptied so scikit-build-core's Release default
-    #   cannot override the preset's CMAKE_BUILD_TYPE
-    # - the second cmake.args entry records configure/build traces, published
-    #   as job artifacts next to the wheel
+    # tools/build-wheel.sh wraps the pip + scikit-build-core wheel contract.
+    # The extra settings record configure/build traces, published as job
+    # artifacts next to the wheel.
     - |
-      python -m pip wheel \
-        --verbose \
-        --no-build-isolation \
-        --no-deps \
+      ./tools/build-wheel.sh "${CMAKE_PRESET}" \
         --wheel-dir dist \
-        --config-settings=build-dir="build/${CMAKE_PRESET}" \
         --config-settings=build.verbose=true \
-        --config-settings=cmake.build-type= \
-        --config-settings=cmake.args=--preset="${CMAKE_PRESET}" \
-        --config-settings=cmake.args=-DGSPLAT_ENABLE_BUILD_TRACES=ON \
-        .
+        --config-settings=cmake.args=-DGSPLAT_ENABLE_BUILD_TRACES=ON
 
   artifacts:
     name: "gsplat-wheel-${CI_JOB_NAME}-${CI_COMMIT_SHORT_SHA}"

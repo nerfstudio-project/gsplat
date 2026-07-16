@@ -211,27 +211,23 @@ entry and its current value.
 ## Build and test wheels
 
 Wheels are built by `pip` with scikit-build-core running a single CMake
-configure and build. `cmake.args=--preset` selects the configure preset, which
-stays the one source of the build configuration; `cmake.build-type` is emptied
-so scikit-build-core's `Release` default cannot override the preset's
-`CMAKE_BUILD_TYPE`. Clear `dist` first so every wheel there belongs to the
-current build:
+configure and build. `tools/build-wheel.sh` owns that contract: it forwards
+the configure preset so it stays the one source of the build configuration,
+empties `cmake.build-type` so scikit-build-core's `Release` default cannot
+override the preset's `CMAKE_BUILD_TYPE`, and clears `dist` first so every
+wheel there belongs to the current build:
 
 ```bash
-rm -rf dist
-python -m pip wheel \
-    --verbose \
-    --no-build-isolation \
-    --no-deps \
-    --wheel-dir dist \
-    --config-settings=build-dir=build/full-release \
-    --config-settings=cmake.build-type= \
-    --config-settings=cmake.args=--preset=full-release \
-    .
+./tools/build-wheel.sh
 ```
 
-For a portable development wheel, replace `full-release` with `debug` or
-`release` in both the `build-dir` and `cmake.args` settings.
+The script accepts an optional configure preset (default: `full-release`)
+and passes any remaining arguments to pip unchanged. For a portable
+development wheel, pass `debug` or `release`:
+
+```bash
+./tools/build-wheel.sh release
+```
 
 The build above includes the test payload because `GSPLAT_BUILD_TESTS` is `ON`
 by default. Install its test extra to resolve the complete test environment,
@@ -413,15 +409,7 @@ tar \
     --strip-components=1
 (
     cd build/sdist-tree
-    python -m pip wheel \
-        --verbose \
-        --no-build-isolation \
-        --no-deps \
-        --wheel-dir dist \
-        --config-settings=build-dir=build/full-release \
-        --config-settings=cmake.build-type= \
-        --config-settings=cmake.args=--preset=full-release \
-        .
+    ./tools/build-wheel.sh
 )
 mv build/sdist-tree/dist/*.whl dist/
 ```
