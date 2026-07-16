@@ -1285,16 +1285,36 @@ TORCH_LIBRARY(gsplat, m)
 #endif
 
 #if GSPLAT_BUILD_LOSSES
+    // Fused gaussian dispatch: one host entry launching the
+    // four per-gaussian regularizer kernels plus, when the trailing optional
+    // deform arguments are present, the deform-smoothness kernels (implemented
+    // in DeformLosses.*). The optional arguments default to None so
+    // pre-fold positional callers keep working.
+    //
+    // The four regularizer members own independent row counts (heterogeneous
+    // regularization domains; equal counts reproduce the shared-cloud path bit
+    // for bit), and the trailing `preactivation` flag (default false, so
+    // pre-extension positional callers keep working) selects log-space member
+    // math — see GaussianLosses.cpp for the full contract. Caller-side
+    // `+log(w)` weight folds are valid only for the linear scale member and
+    // must NOT be pre-applied to the z_scales input (its threshold is
+    // subtracted after the fused exp(), so the fold lands inside the relu).
+    // z_scale_threshold must be non-negative: relu(0 - T) must stay an exact
+    // zero so disabled (w <= 0 folded) or empty z-scale members contribute
+    // nothing (checked host-side by both launchers).
     m.def(
         "gaussian_losses_fwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, "
         "Tensor? visibility, float z_scale_threshold, Tensor(a!) loss_scale, Tensor(b!) loss_density, Tensor(c!) "
-        "loss_z_scale, Tensor(d!) loss_oob) -> ()"
+        "loss_z_scale, Tensor(d!) loss_oob, Tensor? deformation=None, Tensor? deform_mask=None, "
+        "Tensor(e!)? deform_sums=None, Tensor(f!)? deform_loss=None, bool preactivation=False) -> ()"
     );
     m.def(
         "gaussian_losses_bwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, "
         "Tensor? visibility, float z_scale_threshold, Tensor v_loss_scale, Tensor v_loss_density, Tensor "
         "v_loss_z_scale, Tensor v_loss_oob, Tensor(a!) v_scales, Tensor(b!) v_densities, Tensor(c!) v_z_scales, "
-        "Tensor(d!) v_positions) -> ()"
+        "Tensor(d!) v_positions, Tensor? deformation=None, Tensor? deform_mask=None, Tensor? deform_sums=None, "
+        "Tensor? v_deform_loss=None, Tensor(e!)? v_deformation=None, Tensor(f!)? v_deform_mask=None, "
+        "bool preactivation=False) -> ()"
     );
     m.def(
         "camera_losses_fwd(Tensor flags, Tensor rgb_pred, Tensor rgb_gt, Tensor bg_pred, float rgb_factor, float "

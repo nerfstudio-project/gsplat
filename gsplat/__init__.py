@@ -78,7 +78,9 @@ from .rendering import (
 from .losses import (
     background_in_track_loss,
     create_ssim_window,
+    deform_smoothness_loss,
     depth_l1_loss,
+    fold_log_space_weight,
     gaussian_density_reg,
     gaussian_scale_reg,
     gaussian_z_scale_reg,
@@ -184,6 +186,8 @@ __all__ = [
     "LossFlag",
     "ground_gaussians_loss",
     "background_in_track_loss",
+    "deform_smoothness_loss",
+    "fold_log_space_weight",
     "gaussian_scale_reg",
     "gaussian_density_reg",
     "gaussian_z_scale_reg",

@@ -27,6 +27,7 @@ from gsplat.losses import (
     background_in_track_loss,
     bilateral_grid_drift_loss,
     create_ssim_window,
+    deform_smoothness_loss,
     gaussian_density_reg,
     gaussian_scale_reg,
     gaussian_z_scale_reg,
@@ -130,11 +131,58 @@ class FusedGaussianLosses(torch.nn.Module):
     :func:`~gsplat.losses.gaussian_z_scale_reg`, and
     :func:`~gsplat.losses.out_of_bound_loss` in a single fused CUDA kernel.
 
+    Each member owns its row count (heterogeneous regularization domains):
+    ``scales [N_scales, 3]``, ``densities [N_densities]``,
+    ``z_scales [N_z_scales]``, ``positions``/``cuboid_dims [N_oob, 3]``. Any
+    count may be zero (that member simply produces an empty output);
+    callers whose members share one gaussian cloud pass equal counts.
+    ``visibility`` spans the scale and density members, so it must have
+    ``max(N_scales, N_densities)`` elements when given.
+
+    Pre-activation mode (``preactivation=True``) switches the member math to
+    log-space inputs:
+
+    - ``scales``/``z_scales`` arrive as log-space pre-activations and the
+      ``exp()`` is fused into the kernel. Per-segment weights fold in
+      caller-side as ``+log(w)`` on the pre-activations (see
+      :func:`~gsplat.losses.fold_log_space_weight`); a non-positive weight
+      arrives as a ``-inf`` fill, which ``exp()`` maps to an exact zero for
+      both the value and the gradient — weighting after the ``exp()`` would
+      instead risk ``0 * inf = NaN`` on pre-activation overflow.
+
+      .. warning::
+          The ``+log(w)`` fold is exact only for the **scale** member, whose
+          loss is linear in the activated value. It must **not** be
+          pre-applied to ``z_scales``: the z member subtracts its threshold
+          after the ``exp()``, so a folded weight lands inside the relu —
+          ``relu(exp(z + log(w)) - T) == relu(w * exp(z) - T)``, which is not
+          ``w * relu(exp(z) - T)`` for any ``w`` outside ``{w <= 0, 1}``. To
+          weight the z member per segment, scale its output post-relu (or
+          equivalently fold the weight into the threshold too:
+          ``relu(w * exp(z) - w * T) == w * relu(exp(z) - T)`` for
+          ``w > 0``). See :func:`~gsplat.losses.fold_log_space_weight`.
+    - ``densities`` stay post-activation but carry per-segment weights folded
+      by plain multiplication, so they are treated as signed magnitudes
+      (``|.|`` applied) rather than relying on the ``>= 0`` contract.
+
+    With the default ``preactivation=False`` every member computes the
+    post-activation math bit for bit as before.
+
+    Grouped dispatch: when the optional ``deformation`` input
+    is given, the same single op call additionally runs the deform-smoothness
+    loss (see :func:`~gsplat.losses.deform_smoothness_loss` for the exact
+    contract; its CUDA kernels are launched from the gaussian host entry) and
+    a fifth output — the scalar deform loss — is appended to the returned
+    tuple. Without it, the module behaves exactly as before and returns the
+    four-tuple. The deform member is independent of the gaussian members: it
+    composes with either mode and is never gated on the gaussian counts.
+
     Falls back to the pure-PyTorch implementations when CUDA is
     unavailable or the inputs are on CPU.
 
-    All outputs are **unreduced** (per-element), matching the pure-PyTorch
-    contract.
+    All gaussian outputs are **unreduced** (per-element), matching the
+    pure-PyTorch contract; the deform loss is a scalar (masked mean), matching
+    :func:`~gsplat.losses.deform_smoothness_loss`.
 
     .. note::
         The CUDA kernel dispatches on ``fp32`` and ``fp64`` only. AMP training
@@ -143,36 +191,80 @@ class FusedGaussianLosses(torch.nn.Module):
         to half-precision is a possible future enhancement.
 
     Args:
-        z_scale_threshold: Threshold above which z-scale penalty is applied.
+        z_scale_threshold: Threshold above which z-scale penalty is applied
+            (always in post-activation units, in both modes). Must be
+            non-negative: the exact-zero contract for disabled (``w <= 0``
+            folded) or empty z-scale members relies on ``relu(0 - T) == 0``.
+        preactivation: When ``True``, ``scales``/``z_scales`` are log-space
+            pre-activations (``exp()`` fused in-kernel) and ``densities`` are
+            signed magnitudes. Defaults to ``False`` (post-activation inputs).
     """
 
-    def __init__(self, z_scale_threshold: float = 0.0):
+    def __init__(self, z_scale_threshold: float = 0.0, preactivation: bool = False):
         super().__init__()
+        # `not (T >= 0)` mirrors the native launcher predicate: it also
+        # rejects NaN, which `T < 0` would let through (nan < 0 is False).
+        if not z_scale_threshold >= 0:
+            raise ValueError(
+                "z_scale_threshold must be non-negative (relu(0 - T) must be an "
+                f"exact zero for disabled or empty z-scale members), got "
+                f"{z_scale_threshold}"
+            )
         self.z_scale_threshold = z_scale_threshold
+        self.preactivation = preactivation
         self._cuda_available = has_losses()
 
     def forward(
         self,
-        scales: Tensor,  # [N, 3]
-        densities: Tensor,  # [N]
-        z_scales: Tensor,  # [N]
-        positions: Tensor,  # [N, 3]
-        cuboid_dims: Tensor,  # [N, 3]
-        visibility: Optional[Tensor] = None,  # [N] float
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        """Compute all four gaussian regularization losses.
+        scales: Tensor,  # [N_scales, 3]
+        densities: Tensor,  # [N_densities]
+        z_scales: Tensor,  # [N_z_scales]
+        positions: Tensor,  # [N_oob, 3]
+        cuboid_dims: Tensor,  # [N_oob, 3]
+        visibility: Optional[Tensor] = None,  # [max(N_scales, N_densities)] float
+        deformation: Optional[Tensor] = None,  # [M, D]
+        deform_mask: Optional[Tensor] = None,  # broadcastable to [M, D]
+    ) -> Tuple[Tensor, ...]:
+        """Compute the four gaussian regularization losses (plus, optionally,
+        the grouped deform-smoothness loss).
 
         Returns:
             Tuple of ``(loss_scale, loss_density, loss_z_scale, loss_oob)``,
-            each unreduced per-element.
+            each unreduced per-element. When ``deformation`` is given, the
+            scalar ``deform_loss`` is appended as a fifth element.
         """
+        if deformation is None and deform_mask is not None:
+            raise ValueError("FusedGaussianLosses: deform_mask requires deformation.")
+        if deformation is not None and deformation.dim() != 2:
+            # The CUDA kernels require a 2-D [N, D] deformation while the
+            # pure-PyTorch reference is shape-agnostic; validate at the module
+            # boundary, before dispatch, so both paths accept exactly the same
+            # shapes instead of training on one path and raising on the other.
+            raise ValueError(
+                "FusedGaussianLosses: deformation must be 2-D [N, D], got "
+                f"shape {tuple(deformation.shape)}."
+            )
+        if visibility is not None:
+            # One shared visibility tensor spans the scale and density
+            # members; validate at the public boundary so the native and
+            # fallback paths reject a wrong length with one contract (the
+            # fallback slices per member and would otherwise silently accept
+            # an overlong tensor).
+            n_visibility = max(scales.shape[0], densities.shape[0])
+            if visibility.reshape(-1).shape[0] != n_visibility:
+                raise ValueError(
+                    "FusedGaussianLosses: visibility must have "
+                    f"max(N_scales, N_densities) = {n_visibility} elements, "
+                    f"got {visibility.reshape(-1).shape[0]}."
+                )
         # Dispatch to CUDA only when every input is on the same GPU — otherwise
         # fall through to pure-PyTorch instead of tripping CHECK_INPUT deep in C++.
         all_cuda = scales.is_cuda and all(
             t.is_cuda for t in (densities, z_scales, positions, cuboid_dims)
         )
-        if visibility is not None:
-            all_cuda = all_cuda and visibility.is_cuda
+        for optional_input in (visibility, deformation, deform_mask):
+            if optional_input is not None:
+                all_cuda = all_cuda and optional_input.is_cuda
         if self._cuda_available and all_cuda:
             from gsplat.cuda._losses_wrapper import _FusedGaussianLosses
 
@@ -184,15 +276,61 @@ class FusedGaussianLosses(torch.nn.Module):
                 cuboid_dims,
                 self.z_scale_threshold,
                 visibility,
+                deformation,
+                deform_mask,
+                self.preactivation,
             )
 
-        # Pure-PyTorch fallback
-        return (
-            gaussian_scale_reg(scales, visibility=visibility),
-            gaussian_density_reg(densities, visibility=visibility),
-            gaussian_z_scale_reg(z_scales, self.z_scale_threshold),
-            out_of_bound_loss(positions, cuboid_dims),
-        )
+        # Pure-PyTorch fallback (grouped mode composes the existing torch
+        # references, exactly like the ungrouped modules would). Each member
+        # owns its row count, so visibility is sliced per member — a no-op
+        # for shared-cloud callers, where every count matches.
+        if visibility is not None:
+            visibility = visibility.reshape(-1)
+            vis_scales = visibility[: scales.shape[0]]
+            vis_densities = visibility[: densities.shape[0]]
+        else:
+            vis_scales = vis_densities = None
+        if self.preactivation:
+            # Log-space members: the explicit exp() mirrors the fused kernel
+            # (a -inf pre-activation — a folded non-positive segment weight —
+            # becomes an exact zero for value and gradient). Densities carry
+            # folded signed weights, so take |.| directly instead of relying
+            # on gaussian_density_reg's >= 0 contract.
+            if vis_scales is not None:
+                # A zero-visibility lane takes the same exact-zero branch as a
+                # folded non-positive segment weight: substitute -inf BEFORE
+                # the exp() (exp(-inf) == 0 for value and gradient, mirroring
+                # the kernel's no-read branch). Multiplying after the exp()
+                # would yield 0 * inf = NaN when a pre-activation overflows —
+                # and masking after the exp() would still leak the NaN through
+                # the masked branch's backward.
+                scales = torch.where(
+                    (vis_scales == 0).view(-1, 1),
+                    torch.full_like(scales, float("-inf")),
+                    scales,
+                )
+            loss_density = densities.abs()
+            if vis_densities is not None:
+                loss_density = loss_density * vis_densities.view(
+                    -1, *[1] * (loss_density.ndim - 1)
+                )
+            gaussian_losses = (
+                gaussian_scale_reg(scales.exp(), visibility=vis_scales),
+                loss_density,
+                gaussian_z_scale_reg(z_scales.exp(), self.z_scale_threshold),
+                out_of_bound_loss(positions, cuboid_dims),
+            )
+        else:
+            gaussian_losses = (
+                gaussian_scale_reg(scales, visibility=vis_scales),
+                gaussian_density_reg(densities, visibility=vis_densities),
+                gaussian_z_scale_reg(z_scales, self.z_scale_threshold),
+                out_of_bound_loss(positions, cuboid_dims),
+            )
+        if deformation is None:
+            return gaussian_losses
+        return (*gaussian_losses, deform_smoothness_loss(deformation, deform_mask))
 
 
 # Per-ray flag bitmask values are single-sourced in csrc/LossFlags.h and surfaced
