@@ -16,7 +16,7 @@
 """Fused CUDA loss modules with pure-PyTorch fallbacks."""
 
 from enum import IntFlag
-from typing import Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import torch
 from torch import Tensor
@@ -24,11 +24,13 @@ from torch import Tensor
 from gsplat.cuda._backend import _C
 from gsplat.cuda._wrapper import has_losses
 from gsplat.losses import (
+    background_in_track_loss,
     bilateral_grid_drift_loss,
     create_ssim_window,
     gaussian_density_reg,
     gaussian_scale_reg,
     gaussian_z_scale_reg,
+    node_semantic_loss,
     out_of_bound_loss,
     torch_ssim_loss,
 )
@@ -1038,3 +1040,266 @@ def _bg_grid_losses_pytorch(
     grid_camera_tv_loss = _grid_tv_loss(grids_camera, grid_camera_tv_factor)
     grid_frame_tv_loss = _grid_tv_loss(grids_frame, grid_frame_tv_factor)
     return bg_loss, grids_drift_loss, grid_camera_tv_loss, grid_frame_tv_loss
+
+
+# ---------------------------------------------------------------------------
+# Background-in-track + node-semantic Gaussian losses
+# ---------------------------------------------------------------------------
+
+
+def _cuda_bg_track_node_semantic_available() -> bool:
+    """Check if the fused CUDA bg-track + node-semantic op is compiled."""
+    try:
+        from gsplat.cuda._backend import _C  # noqa: F401
+
+        return hasattr(torch.ops.gsplat, "bg_track_node_semantic_losses_fwd")
+    except Exception:
+        return False
+
+
+class FusedBgTrackNodeSemanticLosses(torch.nn.Module):
+    """Fused background-in-track + node-semantic grouped BCE losses.
+
+    One forward computes up to two scalar loss pairs that share a single
+    selection pass:
+
+    - **Background-in-track** (enabled iff ``background_lambda >= 0``):
+      penalizes ``BCEWithLogits(density_logit, 0)`` for background Gaussians
+      whose density logit exceeds *density_logits_min*, whose semantic argmax
+      is in the allowed class set, and whose position lies inside any dynamic
+      cuboid track at the mean camera timestamp (SE(3)-interpolated, inclusive
+      AABB test, time-window gated).
+    - **Node-semantic** (enabled iff ``node_lambda >= 0``): penalizes the
+      density of Gaussians whose semantic argmax fails a per-node
+      ``(class_ids, select_matches)`` predicate — ``select_matches=True``
+      penalizes argmax **in** the id set (an exclusion list),
+      ``select_matches=False`` penalizes argmax **not in** the id set (an
+      allow list). Empty ids are legal on either polarity (penalize
+      nothing / penalize everything). Nodes without semantic logits are the
+      caller's responsibility to omit.
+
+    Each raw loss is a selected-count mean (exactly 0 when nothing is
+    selected) and each weighted loss is ``lambda * raw``. Only the two density
+    tensors receive gradients.
+
+    Falls back to the pure-PyTorch implementations
+    (:func:`~gsplat.losses.background_in_track_loss`,
+    :func:`~gsplat.losses.node_semantic_loss`) when CUDA or the compiled op
+    is unavailable or any input is on CPU.
+
+    Domain modes, mirroring the CUDA host entry:
+
+    - **joint** (``n_semantic_points=None``, node enabled): the primary node
+      shares the background point domain. Pass the shared ``[Nbg, C]``
+      ``semantic_logits``, the background filter as
+      ``background_allowed_class_ids``, and an explicit
+      ``node_primary_predicate`` (required — an empty predicate is legal,
+      absence is not). Remaining nodes are packed into
+      ``other_density_logits`` / ``other_segments``.
+    - **packed** (``n_semantic_points`` given, node enabled): the background
+      member runs its own segmented semantic filter
+      (``background_semantic_logits`` / ``background_segments`` cover the
+      first ``n_semantic_points`` points; the rest are unfiltered, covering
+      layers that carry no semantic logits) and all node-semantic points are
+      packed separately. Requires the background member enabled.
+    - **background-only** (``node_lambda < 0``): requires
+      ``n_semantic_points`` (0 with no segments = fully unfiltered).
+
+    .. note::
+        The CUDA kernels dispatch on ``fp32``/``fp64`` only; cast half
+        precision inputs before calling.
+
+    Args:
+        density_logits_min: Background selection threshold on the raw density
+            logit (strictly-greater comparison). Default: ``-20.0``.
+    """
+
+    def __init__(self, density_logits_min: float = -20.0):
+        super().__init__()
+        self.density_logits_min = density_logits_min
+        self._cuda_available = _cuda_bg_track_node_semantic_available()
+
+    def forward(
+        self,
+        positions: Tensor,  # [Nbg, 3]
+        density_logits: Tensor,  # [Nbg] (differentiable)
+        camera_timestamps_startend_us: Tensor,  # [B, 2] int64
+        tracks_packinfo: Tensor,  # [T, 2] int32
+        tracks_poses: Tensor,  # [P, 7] (tx, ty, tz, qx, qy, qz, qw)
+        tracks_timestamps_us: Tensor,  # [P] int64
+        cuboids_dims: Tensor,  # [T, 3]
+        semantic_logits: Optional[Tensor] = None,  # [Nbg, C] joint mode
+        background_allowed_class_ids: Sequence[int] = (),  # joint mode
+        node_primary_predicate: Optional[
+            Tuple[Sequence[int], bool]
+        ] = None,  # joint mode
+        n_semantic_points: Optional[int] = None,  # generic/packed modes
+        background_semantic_logits: Sequence[Tensor] = (),  # generic/packed
+        background_segments: Sequence[Tuple[int, Sequence[int]]] = (),  # generic/packed
+        other_density_logits: Optional[Tensor] = None,  # [Nother]
+        other_semantic_logits: Sequence[Tensor] = (),
+        other_segments: Sequence[Tuple[int, Sequence[int], bool]] = (),
+        background_lambda: float = 1.0,
+        node_lambda: float = -1.0,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Returns ``(background_raw, background_weighted, node_raw,
+        node_weighted)`` scalars; disabled members return zeros."""
+        background_enabled = background_lambda >= 0.0
+        node_enabled = node_lambda >= 0.0
+        if not background_enabled and not node_enabled:
+            raise ValueError(
+                "FusedBgTrackNodeSemanticLosses: at least one of "
+                "background_lambda and node_lambda must be >= 0."
+            )
+        if other_density_logits is None:
+            other_density_logits = density_logits.new_zeros(0)
+        background_semantic_logits = list(background_semantic_logits)
+        background_segments = [
+            (int(end), list(ids)) for end, ids in background_segments
+        ]
+        other_semantic_logits = list(other_semantic_logits)
+        other_segments = [
+            (int(end), list(ids), bool(sel)) for end, ids, sel in other_segments
+        ]
+
+        if node_enabled and n_semantic_points is None:
+            # Joint mode: shared primary domain.
+            if semantic_logits is None:
+                raise ValueError(
+                    "FusedBgTrackNodeSemanticLosses: the joint mode "
+                    "(n_semantic_points=None) requires the shared "
+                    "semantic_logits tensor for the primary domain."
+                )
+            if node_primary_predicate is None:
+                raise ValueError(
+                    "FusedBgTrackNodeSemanticLosses: the joint node-semantic "
+                    "path requires an explicit node_primary_predicate; pass "
+                    "(class_ids, select_matches). Empty ids with "
+                    "select_matches=True penalize no primary point, with "
+                    "select_matches=False they penalize all of them."
+                )
+        elif node_enabled:
+            # Packed mode mirrors the kernel's requirement of independent
+            # background metadata.
+            if not background_enabled:
+                raise ValueError(
+                    "FusedBgTrackNodeSemanticLosses: the packed node mode "
+                    "(n_semantic_points given) requires the background member "
+                    "enabled (background_lambda >= 0)."
+                )
+        else:
+            if n_semantic_points is None:
+                raise ValueError(
+                    "FusedBgTrackNodeSemanticLosses: the background-only mode "
+                    "requires n_semantic_points (pass 0 with no segments for "
+                    "a fully unfiltered domain)."
+                )
+        if n_semantic_points is not None:
+            last_end = background_segments[-1][0] if background_segments else 0
+            if last_end != int(n_semantic_points):
+                raise ValueError(
+                    "FusedBgTrackNodeSemanticLosses: the final background "
+                    f"segment end ({last_end}) must equal n_semantic_points "
+                    f"({int(n_semantic_points)})."
+                )
+
+        cuda_inputs: List[Tensor] = [
+            positions,
+            density_logits,
+            other_density_logits,
+            camera_timestamps_startend_us,
+            tracks_packinfo,
+            tracks_poses,
+            tracks_timestamps_us,
+            cuboids_dims,
+            *background_semantic_logits,
+            *other_semantic_logits,
+        ]
+        if semantic_logits is not None:
+            cuda_inputs.append(semantic_logits)
+        if self._cuda_available and all(t.is_cuda for t in cuda_inputs):
+            from gsplat.cuda._losses_wrapper import _FusedBgTrackNodeSemantic
+
+            return _FusedBgTrackNodeSemantic.apply(
+                positions,
+                density_logits,
+                semantic_logits,
+                other_density_logits,
+                camera_timestamps_startend_us,
+                tracks_packinfo,
+                tracks_poses,
+                tracks_timestamps_us,
+                cuboids_dims,
+                n_semantic_points,
+                background_semantic_logits,
+                background_segments,
+                other_semantic_logits,
+                other_segments,
+                list(background_allowed_class_ids),
+                node_primary_predicate,
+                background_lambda,
+                node_lambda,
+                self.density_logits_min,
+            )
+
+        # Pure-PyTorch fallback: compose the standalone reference losses. The
+        # node member's selected-count denominator is shared across all node
+        # segments (kernel accumulates one global sum/count), so the joint
+        # mode packs the primary domain and the other nodes into one call.
+        n_background = int(density_logits.shape[0])
+        if background_enabled:
+            if n_semantic_points is None:
+                bg_filter_logits: List[Tensor] = [semantic_logits]
+                bg_filter_segments: List[Tuple[int, Sequence[int]]] = [
+                    (n_background, list(background_allowed_class_ids))
+                ]
+            else:
+                bg_filter_logits = background_semantic_logits
+                bg_filter_segments = background_segments
+            background_raw, background_weighted = background_in_track_loss(
+                positions,
+                density_logits,
+                camera_timestamps_startend_us,
+                tracks_packinfo,
+                tracks_poses,
+                tracks_timestamps_us,
+                cuboids_dims,
+                semantic_logits=bg_filter_logits,
+                semantic_segments=bg_filter_segments,
+                background_lambda=background_lambda,
+                density_logits_min=self.density_logits_min,
+            )
+        else:
+            # Disabled member: differentiable exact zero via an empty-view sum
+            # (never reads values, so a present-but-non-finite input cannot
+            # poison it; matches the CUDA path's zero-filled outputs).
+            background_raw = density_logits[:0].sum()
+            background_weighted = density_logits[:0].sum()
+
+        if node_enabled:
+            if n_semantic_points is None:
+                primary_ids, primary_select = node_primary_predicate
+                packed_density = torch.cat([density_logits, other_density_logits])
+                packed_logits = [semantic_logits] + other_semantic_logits
+                packed_segments = [
+                    (n_background, list(primary_ids), bool(primary_select))
+                ] + [(n_background + end, ids, sel) for end, ids, sel in other_segments]
+                node_raw, node_weighted = node_semantic_loss(
+                    packed_density,
+                    packed_logits,
+                    packed_segments,
+                    node_lambda=node_lambda,
+                )
+            else:
+                node_raw, node_weighted = node_semantic_loss(
+                    other_density_logits,
+                    other_semantic_logits,
+                    other_segments,
+                    node_lambda=node_lambda,
+                )
+        else:
+            # Disabled member: differentiable exact zero (empty-view sum).
+            node_raw = other_density_logits[:0].sum()
+            node_weighted = other_density_logits[:0].sum()
+
+        return background_raw, background_weighted, node_raw, node_weighted

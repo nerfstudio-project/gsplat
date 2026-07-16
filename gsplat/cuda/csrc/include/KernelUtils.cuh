@@ -41,6 +41,41 @@ __device__ __forceinline__ scalar_t warp_sum(scalar_t value, mask_t full_mask)
     return value;
 }
 
+// Identity key projection for lower_bound.
+struct IdentityKey
+{
+    template<typename T>
+    __device__ __forceinline__ T operator()(T v) const
+    {
+        return v;
+    }
+};
+
+// First index in [0, count) whose projected key is not less than query, over
+// data[start .. start + count) (sorted by the projected key). The classic
+// lower_bound tree; Key projects a stored element to its comparison key
+// (identity by default), so packed-key searches can pass an extractor.
+template<typename T, typename Query, typename Key = IdentityKey>
+__device__ __forceinline__ int64_t
+    lower_bound(const T *__restrict__ data, int64_t start, int64_t count, Query query, Key key = {})
+{
+    int64_t lo = 0;
+    int64_t hi = count;
+    while(lo < hi)
+    {
+        const int64_t mid = lo + ((hi - lo) >> 1);
+        if(key(data[start + mid]) < query)
+        {
+            lo = mid + 1;
+        }
+        else
+        {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
 template<typename mask_t>
 __device__ __forceinline__ uint32_t warp_mask_popcount(mask_t mask)
 {

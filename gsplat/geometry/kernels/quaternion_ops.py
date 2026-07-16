@@ -30,10 +30,21 @@ import torch
 from torch import Tensor
 
 from . import _backend
+from ...constants import (
+    SLERP_SMALL_ANGLE_DOT_THRESHOLD as _MIRRORED_SLERP_SMALL_ANGLE_DOT_THRESHOLD,
+)
+from ..._quat_math import quat_slerp_batched
 
 SLERP_SMALL_ANGLE_DOT_THRESHOLD = float(
     _backend._GEOMETRY_CUDA.SLERP_SMALL_ANGLE_DOT_THRESHOLD
 )
+if SLERP_SMALL_ANGLE_DOT_THRESHOLD != _MIRRORED_SLERP_SMALL_ANGLE_DOT_THRESHOLD:
+    raise RuntimeError(
+        "gsplat_geometry::kSlerpSmallAngleDotThreshold "
+        f"({SLERP_SMALL_ANGLE_DOT_THRESHOLD}) diverged from its extension-free "
+        "mirror gsplat.constants.SLERP_SMALL_ANGLE_DOT_THRESHOLD "
+        f"({_MIRRORED_SLERP_SMALL_ANGLE_DOT_THRESHOLD}); update both together."
+    )
 
 
 def _expect_tensor(name: str, x: object) -> Tensor:
@@ -175,24 +186,6 @@ def _quat_lerp_backward_reference(
     return grad_q1, grad_q2
 
 
-def _quat_slerp_batched_forward_reference(q1: Tensor, q2: Tensor, t: Tensor) -> Tensor:
-    """Differentiable batched SLERP reference matching CUDA hemisphere and lerp-fallback semantics."""
-    d = (q1 * q2).sum(dim=-1, keepdim=True)
-    q2e = torch.where(d < 0, -q2, q2)
-    c_raw = (q1 * q2e).sum(dim=-1, keepdim=True)
-    c = c_raw.clamp(min=-1.0, max=1.0)
-    use_lerp = c > SLERP_SMALL_ANGLE_DOT_THRESHOLD
-    om = 1.0 - t
-    r = om * q1 + t * q2e
-    y_lerp = r / r.norm(dim=-1, keepdim=True)
-    theta = torch.acos(c)
-    sin_theta = torch.sin(theta)
-    w1 = torch.sin((1.0 - t) * theta) / sin_theta
-    w2 = torch.sin(t * theta) / sin_theta
-    y_slerp = w1 * q1 + w2 * q2e
-    return torch.where(use_lerp.expand_as(q1), y_lerp, y_slerp)
-
-
 def _quat_slerp_batched_backward_reference(
     q1: Tensor, q2: Tensor, t: Tensor, grad_out: Tensor
 ) -> tuple[Tensor, Tensor, Tensor]:
@@ -201,7 +194,10 @@ def _quat_slerp_batched_backward_reference(
         q1n = q1.detach().requires_grad_(True)
         q2n = q2.detach().requires_grad_(True)
         tn = t.detach().requires_grad_(True)
-        y = _quat_slerp_batched_forward_reference(q1n, q2n, tn)
+        # The differentiable SLERP reference lives in gsplat/_quat_math.py
+        # (extension-free), shared with the losses CPU fallback so the two
+        # Python mirrors of gsplat_geometry::quat_slerp_pair_fwd cannot drift.
+        y = quat_slerp_batched(q1n, q2n, tn)
         grad_q1, grad_q2, grad_t = torch.autograd.grad(
             y,
             (q1n, q2n, tn),

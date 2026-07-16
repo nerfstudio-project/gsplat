@@ -336,7 +336,9 @@ __forceinline__ __device__ scalar_t quat_slerp_clamp_dot(scalar_t x)
 }
 
 // Dot threshold above which SLERP uses normalized linear blend instead of sin/acos path.
-// Host+device constant; also exposed to Python via the extension (see ext.cpp).
+// Host+device constant; also exposed to Python via the extension (see ext.cpp) and
+// mirrored extension-free in gsplat/constants.py (quaternion_ops.py checks the two
+// stay in sync at import time).
 inline constexpr double kSlerpSmallAngleDotThreshold = 0.9995;
 
 template<typename scalar_t>
@@ -346,8 +348,10 @@ __forceinline__ __device__ scalar_t quat_slerp_small_angle_dot_threshold()
 }
 
 // Scalar SLERP(q1, q2, t) in xyzw order. Used by batched quaternion, trajectory,
-// and packed pose-track kernels so the hemisphere, clamp, and small-angle paths
-// stay identical.
+// and packed pose-track kernels — and by the track-box losses kernel
+// (gsplat/cuda/csrc/BgTrackNodeSemanticLossesCUDA.cu), whose pure-PyTorch
+// fallback and parity tests mirror this exact branch behavior — so the
+// hemisphere, clamp, and small-angle paths stay identical.
 template<typename scalar_t>
 __forceinline__ __device__ void quat_slerp_pair_fwd(
     scalar_t x1,

@@ -76,6 +76,7 @@ from .rendering import (
     rasterization_inria_wrapper,
 )
 from .losses import (
+    background_in_track_loss,
     create_ssim_window,
     depth_l1_loss,
     gaussian_density_reg,
@@ -87,6 +88,7 @@ from .losses import (
     lidar_intensity_loss,
     lidar_raydrop_loss,
     mse_loss,
+    node_semantic_loss,
     opacity_reg_loss,
     out_of_bound_loss,
     scale_reg_loss,
@@ -96,6 +98,7 @@ from .losses import (
 )
 from .losses_fused import (
     FusedBgGridLosses,
+    FusedBgTrackNodeSemanticLosses,
     FusedCameraLosses,
     FusedGaussianLosses,
     FusedLidarLosses,
@@ -172,6 +175,7 @@ __all__ = [
     "has_losses",
     "has_reloc",
     "FusedBgGridLosses",
+    "FusedBgTrackNodeSemanticLosses",
     "FusedCameraLosses",
     "FusedGaussianLosses",
     "FusedLidarLosses",
@@ -179,9 +183,11 @@ __all__ = [
     "FusedSSIMLosses",
     "LossFlag",
     "ground_gaussians_loss",
+    "background_in_track_loss",
     "gaussian_scale_reg",
     "gaussian_density_reg",
     "gaussian_z_scale_reg",
+    "node_semantic_loss",
     "out_of_bound_loss",
     "RowOffsetStructuredSpinningLidarModelParameters",
     "RowOffsetStructuredSpinningLidarModelParametersExt",

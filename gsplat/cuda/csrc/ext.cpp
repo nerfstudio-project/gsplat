@@ -60,6 +60,9 @@ void register_relocation_cuda_impl(torch::Library &m);
 void register_ssim_losses_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_privateuseone_impl(torch::Library &m);
+// --- Background-in-track + node-semantic losses ---
+void register_bg_track_node_semantic_losses_cuda_impl(torch::Library &m);
+// --- end background-in-track + node-semantic losses ---
 } // namespace gsplat
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
@@ -1314,6 +1317,46 @@ TORCH_LIBRARY(gsplat, m)
         "Tensor v_raydrop_loss, Tensor v_bg_loss, Tensor(a!) v_distance_pred, Tensor(b!) v_intensity_pred, "
         "Tensor(c!) v_raydrop_pred, Tensor(d!) v_bg_pred) -> ()"
     );
+    // --- Background-in-track + node-semantic losses (see
+    // BgTrackNodeSemanticLosses.cpp). Masked BCE-with-logits means over
+    // density logits: the background member penalizes background gaussians
+    // that fall inside a dynamic cuboid track, the node member penalizes
+    // gaussians whose semantic argmax fails a per-node class predicate.
+    // Segment metadata is flattened: per-segment exclusive point ends plus a
+    // packed class-id list with per-segment exclusive ends into it (node
+    // segments also carry a 0/1 select_matches flag each). lambda >= 0
+    // enables a member. A missing n_semantic_points selects the joint
+    // shared-primary-domain path, which requires node_primary_class_ids to be
+    // passed explicitly (an empty list is valid; the polarity comes from
+    // node_primary_select_matches). camera_timestamps_startend_us is [B, 2]
+    // int64 with B >= 1; only row 0 (the reference camera) is read.
+    // track_boxes ([T, 16]), selection (uint8) and workspace (16-byte-aligned
+    // int32[8]) are caller-allocated scratch written by fwd and consumed by
+    // bwd; the four loss outputs are scalars (raw and lambda-weighted per
+    // member). fwd->bwd contract: the selection bits and the workspace's
+    // selected counts (bwd's divisors) are written only by fwd — the exact
+    // instances fwd filled must reach bwd unmodified; re-zeroing or pooling
+    // them between the passes silently corrupts gradients.
+    m.def(
+        "bg_track_node_semantic_losses_fwd(Tensor positions, Tensor density_logits, Tensor semantic_logits, "
+        "int? n_semantic_points, Tensor[] background_semantic_logits, int[] background_segment_ends, "
+        "int[] background_segment_class_ids, int[] background_segment_class_id_ends, Tensor other_density_logits, "
+        "Tensor[] other_semantic_logits, int[] other_segment_ends, int[] other_segment_class_ids, "
+        "int[] other_segment_class_id_ends, int[] other_segment_select_matches, "
+        "Tensor camera_timestamps_startend_us, Tensor tracks_packinfo, Tensor tracks_poses, "
+        "Tensor tracks_timestamps_us, Tensor cuboids_dims, int[] background_allowed_class_ids, "
+        "int[]? node_primary_class_ids, bool node_primary_select_matches, float density_logits_min, "
+        "float background_lambda, float node_lambda, Tensor(a!) track_boxes, Tensor(b!) selection, "
+        "Tensor(c!) workspace, Tensor(d!) background_unweighted_loss, Tensor(e!) background_weighted_loss, "
+        "Tensor(f!) node_unweighted_loss, Tensor(g!) node_weighted_loss) -> ()"
+    );
+    m.def(
+        "bg_track_node_semantic_losses_bwd(Tensor background_density_logits, Tensor other_density_logits, "
+        "Tensor selection, Tensor workspace, Tensor? grad_background_unweighted, Tensor? grad_background_weighted, "
+        "Tensor? grad_node_unweighted, Tensor? grad_node_weighted, float background_lambda, float node_lambda, "
+        "Tensor(a!)? grad_background_density_logits, Tensor(b!)? grad_other_density_logits) -> ()"
+    );
+    // --- end background-in-track + node-semantic losses ---
     m.def(
         "ground_gaussians_losses_fwd(Tensor positions, Tensor rotations, Tensor cam_tquat, Tensor random_values, "
         "float min_bias, float range_bias, float grid_len, float rotation_lambda, Tensor(a!) stats, "
@@ -1384,6 +1427,9 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m)
     gsplat::register_ground_gaussians_losses_cuda_impl(m);
     gsplat::register_bg_grid_losses_cuda_impl(m);
     gsplat::register_ssim_losses_cuda_impl(m);
+    // --- Background-in-track + node-semantic losses ---
+    gsplat::register_bg_track_node_semantic_losses_cuda_impl(m);
+    // --- end background-in-track + node-semantic losses ---
 #endif
 }
 
