@@ -99,58 +99,6 @@ namespace
     // Device helpers
     // ------------------------------------------------------------------------
 
-    // Binary search over sorted timestamps returning the "right" bound index:
-    // (none or data[ret-1]) <= val < data[ret], assuming val <= data[length-1]
-    // was handled by the caller wrapper below.
-    __device__ __forceinline__ int32_t
-        binary_search_unsafe(const int64_t val, const int64_t *__restrict__ data, const int32_t length)
-    {
-        int32_t count = length;
-        int32_t first = 0;
-        while(count > 0)
-        {
-            int32_t it          = first;
-            const int32_t step  = count / 2;
-            it                 += step;
-            if(data[it] < val)
-            {
-                first  = it + 1;
-                count -= step + 1;
-            }
-            else
-            {
-                count = step;
-            }
-        }
-        return first;
-    }
-
-    // Same as a plain right-bound binary search but returns length - 1 when
-    // val == data[length - 1] (left-open interval at the range end), so the
-    // caller can always interpolate between ret - 1 and ret for in-range
-    // queries. Ported from ku::binary_search_interp.
-    __device__ __forceinline__ int32_t
-        binary_search_interp(const int64_t val, const int64_t *__restrict__ data, const int32_t length)
-    {
-        if(length <= 0)
-        {
-            return 0;
-        }
-        if(val == data[0])
-        {
-            return 1;
-        }
-        if(val == data[length - 1])
-        {
-            return length - 1;
-        }
-        if(val > data[length - 1])
-        {
-            return length;
-        }
-        return binary_search_unsafe(val, data, length);
-    }
-
     // Quaternion (x, y, z, w) slerp with shortest-arc flip. Delegates to the
     // shared geometry helper so the hemisphere flip, the dot clamp, and the
     // normalized-lerp acceptance (dot > 0.9995) stay identical across every
@@ -290,7 +238,18 @@ namespace
             return;
         }
 
-        const int32_t interpolation_end_idx   = binary_search_interp(timestamp, local_timestamps, n_track_poses);
+        // timestamp is range-checked above, so the shared lower_bound
+        // (include/KernelUtils.cuh) lands in [0, n_track_poses - 1]; the only
+        // boundary needing adjustment is timestamp == local_timestamps[0],
+        // where ret == 0 and the bracket must be (0, 1) with alpha == 0 —
+        // max() pins it. The pure-Python fallback mirrors this exactly with
+        // bisect_left (the same lower_bound by definition).
+        const int32_t interpolation_end_idx = max(
+            static_cast<int32_t>(
+                lower_bound(local_timestamps, int64_t(0), static_cast<int64_t>(n_track_poses), timestamp)
+            ),
+            1
+        );
         const int32_t interpolation_start_idx = interpolation_end_idx - 1;
         const int64_t t0                      = local_timestamps[interpolation_start_idx];
         const int64_t t1                      = local_timestamps[interpolation_end_idx];

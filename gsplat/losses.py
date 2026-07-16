@@ -1303,14 +1303,12 @@ def _interpolate_track_boxes(
             local_ts = pose_timestamps[start_idx : start_idx + n_poses]
             if timestamp < local_ts[0] or timestamp > local_ts[-1]:
                 continue
-            # ku::binary_search_interp: data[idx-1] < t <= data[idx], with the
-            # boundary special cases t == data[0] -> 1 and t == data[-1] -> n-1.
-            if timestamp == local_ts[0]:
-                end_idx = 1
-            elif timestamp == local_ts[-1]:
-                end_idx = n_poses - 1
-            else:
-                end_idx = bisect.bisect_left(local_ts, timestamp)
+            # Mirrors the kernel's direct lower_bound bracketing: timestamp
+            # is range-checked above, so bisect_left lands in [0, n - 1]; the
+            # only boundary needing adjustment is timestamp == local_ts[0],
+            # where the bracket must be (0, 1) with alpha == 0 — max() pins it
+            # (t == local_ts[-1] already yields n - 1 by lower_bound).
+            end_idx = max(bisect.bisect_left(local_ts, timestamp), 1)
             t0 = local_ts[end_idx - 1]
             t1 = local_ts[end_idx]
             if t1 == t0:
