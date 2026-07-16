@@ -646,32 +646,98 @@ namespace
         return rays.value().expand(expected_shape).contiguous();
     }
 
-    at::Tensor maybe_evaluate_feature_sh(
-        int64_t degree,
-        const at::Tensor &coeffs,
+    at::Tensor viewmat_to_camera_position(const at::Tensor &viewmats)
+    {
+        at::Tensor R = viewmats.narrow(-2, 0, 3).narrow(-1, 0, 3);
+        at::Tensor t = viewmats.narrow(-2, 0, 3).select(-1, 3);
+        return -at::matmul(R.transpose(-1, -2), t.unsqueeze(-1)).squeeze(-1);
+    }
+
+    at::Tensor compute_classic_viewdirs(
         const at::Tensor &means,
         const at::Tensor &viewmats,
         const at::optional<at::Tensor> &viewmats_rs,
-        const at::Tensor &valid_gaussians,
         const at::optional<at::Tensor> &batch_ids,
         const at::optional<at::Tensor> &camera_ids,
+        const at::optional<at::Tensor> &gaussian_ids,
+        const at::optional<at::Tensor> &indptr,
+        int64_t B,
+        int64_t C,
+        int64_t N
+    )
+    {
+        at::Tensor campos = viewmat_to_camera_position(viewmats);
+        if(viewmats_rs.has_value())
+        {
+            campos = 0.5 * (campos + viewmat_to_camera_position(viewmats_rs.value()));
+        }
+        at::Tensor dirs;
+        if(gaussian_ids.has_value())
+        {
+            const at::Tensor &gaussian_ids_tensor = gaussian_ids.value();
+            at::Tensor means_flat                 = means.view({B, N, 3});
+            at::Tensor campos_flat                = campos.view({B, C, 3});
+            if(B * C == 1)
+            {
+                dirs = means_flat.select(0, 0).index_select(0, gaussian_ids_tensor)
+                     - campos_flat.select(0, 0).select(0, 0);
+            }
+            else if(
+                indptr.has_value()
+                && static_cast<double>(gaussian_ids_tensor.numel()) / static_cast<double>(B * C) > 10000.0
+                && campos_flat.is_cuda()
+                && campos_flat.requires_grad()
+            )
+            {
+                dirs                   = at::empty({gaussian_ids_tensor.numel(), 3}, means.options());
+                at::Tensor indptr_cpu  = indptr.value().to(at::kCPU, at::kLong).contiguous();
+                const int64_t *offsets = indptr_cpu.const_data_ptr<int64_t>();
+                for(int64_t batch_idx = 0; batch_idx < B; ++batch_idx)
+                {
+                    for(int64_t camera_idx = 0; camera_idx < C; ++camera_idx)
+                    {
+                        const int64_t image_idx = batch_idx * C + camera_idx;
+                        const int64_t start     = offsets[image_idx];
+                        const int64_t end       = offsets[image_idx + 1];
+                        if(start == end)
+                        {
+                            continue;
+                        }
+                        at::Tensor gids       = gaussian_ids_tensor.slice(0, start, end);
+                        at::Tensor dirs_chunk = means_flat.select(0, batch_idx).index_select(0, gids)
+                                              - campos_flat.select(0, batch_idx).select(0, camera_idx);
+                        dirs.slice(0, start, end).copy_(dirs_chunk);
+                    }
+                }
+            }
+            else
+            {
+                dirs = means_flat.index({batch_ids.value(), gaussian_ids_tensor})
+                     - campos_flat.index({batch_ids.value(), camera_ids.value()});
+            }
+        }
+        else
+        {
+            dirs = means.unsqueeze(-3) - campos.unsqueeze(-2);
+        }
+        // The SH CUDA kernel normalizes directions internally and its backward
+        // computes gradients through that normalization, so pass raw
+        // (un-normalized) camera-to-Gaussian directions here.
+        return dirs;
+    }
+
+    at::Tensor maybe_evaluate_feature_sh(
+        int64_t degree,
+        const at::Tensor &coeffs,
+        const at::Tensor &dirs,
+        const at::Tensor &valid_gaussians,
         const at::optional<at::Tensor> &gaussian_ids,
         bool clamp_after_bias
     )
     {
         at::Tensor coeffs_for_visible = gaussian_ids.has_value() ? coeffs.index({gaussian_ids.value()}) : coeffs;
-        at::Tensor values             = spherical_harmonics(
-            degree,
-            means,
-            viewmats,
-            coeffs_for_visible,
-            valid_gaussians,
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-            viewmats_rs
-        );
-        values = values + 0.5;
+        at::Tensor values             = spherical_harmonics(degree, dirs, coeffs_for_visible, valid_gaussians);
+        values                        = values + 0.5;
         return clamp_after_bias ? at::clamp_min(values, 0.0) : values;
     }
 
@@ -1075,9 +1141,6 @@ Rasterization3DGSResult rasterization_3dgs(
     // rasterization kernels can process a uniform feature tensor.
     at::Tensor projected_features;
 
-    const bool needs_dirs = (has_color && sh_degree > 0) || (extra_signals.has_value() && extra_signals_sh_degree > 0);
-    const at::optional<at::Tensor> sh_viewmats_rs = needs_dirs ? viewmats_rs : c10::nullopt;
-
     // --- Fused fast-path: assemble [SH colors | direct extra | depth] in one
     // coalesced CUDA kernel (folds SH eval + the +0.5/relu color bias + extra
     // read + depth write + the cat()s). Eligible for the unpacked, non-
@@ -1099,6 +1162,11 @@ Rasterization3DGSResult rasterization_3dgs(
                                  || (extra_signals_sh_degree < 0 && extra_signals.value().scalar_type() == at::kFloat));
     if(fused_eligible)
     {
+        at::Tensor campos = viewmat_to_camera_position(proj_viewmats);
+        if(viewmats_rs.has_value())
+        {
+            campos = 0.5 * (campos + viewmat_to_camera_position(viewmats_rs.value()));
+        }
         const int64_t Dc = colors.value().size(-1);
         const int64_t E  = extra_signals.has_value() ? extra_signals.value().size(-1) : 0;
 
@@ -1134,7 +1202,7 @@ Rasterization3DGSResult rasterization_3dgs(
         at::optional<at::Tensor> depths_in
             = (has_depth && !depth_is_zero) ? at::optional<at::Tensor>(depths) : c10::nullopt;
 
-        if(extra_ok && depth_ok && proj_viewmats.is_cuda() && proj_viewmats.scalar_type() == at::kFloat)
+        if(extra_ok && depth_ok && campos.is_cuda() && campos.scalar_type() == at::kFloat)
         {
             projected_features = assemble_proj_features(
                 sh_degree,
@@ -1149,8 +1217,7 @@ Rasterization3DGSResult rasterization_3dgs(
                 depth_is_zero,
                 extra_has_c,
                 means,
-                proj_viewmats,
-                sh_viewmats_rs,
+                campos,
                 colors.value(),
                 extra_in,
                 depths_in,
@@ -1162,6 +1229,16 @@ Rasterization3DGSResult rasterization_3dgs(
 
     if(!fused_assembled)
     {
+        const bool needs_dirs
+            = (has_color && sh_degree >= 0) || (extra_signals.has_value() && extra_signals_sh_degree >= 0);
+        at::Tensor dirs;
+        if(needs_dirs)
+        {
+            dirs = compute_classic_viewdirs(
+                means, proj_viewmats, viewmats_rs, batch_ids_opt, camera_ids_opt, gaussian_ids_opt, indptr_opt, B, C, N
+            );
+        }
+
         std::vector<at::Tensor> feature_list;
         if(has_color)
         {
@@ -1172,12 +1249,8 @@ Rasterization3DGSResult rasterization_3dgs(
                 = sh_degree >= 0 ? maybe_evaluate_feature_sh(
                                        sh_degree,
                                        colors.value(),
-                                       means,
-                                       proj_viewmats,
-                                       sh_viewmats_rs,
+                                       dirs,
                                        valid_gaussians,
-                                       batch_ids_opt,
-                                       camera_ids_opt,
                                        gaussian_ids_opt,
                                        true // clamp_after_bias
                                    )
@@ -1196,12 +1269,8 @@ Rasterization3DGSResult rasterization_3dgs(
                     ? maybe_evaluate_feature_sh(
                           extra_signals_sh_degree,
                           extra_signals.value(),
-                          means,
-                          proj_viewmats,
-                          sh_viewmats_rs,
+                          dirs,
                           valid_gaussians,
-                          batch_ids_opt,
-                          camera_ids_opt,
                           gaussian_ids_opt,
                           false // clamp_after_bias
                       )
@@ -1689,22 +1758,43 @@ namespace
         TORCH_CHECK(!distloss || append_depth, "distloss requires a depth render mode");
     }
 
+    // Camera-to-Gaussian directions for SH evaluation, with the camera position
+    // taken as inverse(viewmats)[..., :3, 3]. Directions are left un-normalized:
+    // the SH kernel normalizes them internally and differentiates through it.
+    at::Tensor compute_viewdirs_2dgs(
+        const at::Tensor &means,
+        const at::Tensor &viewmats,
+        const at::optional<at::Tensor> &batch_ids,
+        const at::optional<at::Tensor> &camera_ids,
+        const at::optional<at::Tensor> &gaussian_ids,
+        int64_t B,
+        int64_t C,
+        int64_t N
+    )
+    {
+        at::Tensor camtoworlds = at::linalg_inv(viewmats);
+        at::Tensor campos      = camtoworlds.narrow(-2, 0, 3).select(-1, 3); // [..., C, 3]
+        if(gaussian_ids.has_value())
+        {
+            at::Tensor means_flat  = means.reshape({B, N, 3});
+            at::Tensor campos_flat = campos.reshape({B, C, 3});
+            return means_flat.index({batch_ids.value(), gaussian_ids.value()})
+                 - campos_flat.index({batch_ids.value(), camera_ids.value()});
+        }
+        return means.unsqueeze(-3) - campos.unsqueeze(-2); // [..., C, N, 3]
+    }
+
     // Evaluate SH colors, add the +0.5 bias, and clamp to non-negative values.
     at::Tensor evaluate_sh_colors_2dgs(
         int64_t degree,
         const at::Tensor &coeffs,
-        const at::Tensor &means,
-        const at::Tensor &viewmats,
+        const at::Tensor &dirs,
         const at::Tensor &valid_gaussians,
-        const at::optional<at::Tensor> &batch_ids,
-        const at::optional<at::Tensor> &camera_ids,
         const at::optional<at::Tensor> &gaussian_ids
     )
     {
         at::Tensor coeffs_for_visible = gaussian_ids.has_value() ? coeffs.index({gaussian_ids.value()}) : coeffs;
-        at::Tensor values             = spherical_harmonics(
-            degree, means, viewmats, coeffs_for_visible, valid_gaussians, batch_ids, camera_ids, gaussian_ids
-        );
+        at::Tensor values             = spherical_harmonics(degree, dirs, coeffs_for_visible, valid_gaussians);
         return at::clamp_min(values + 0.5, 0.0);
     }
 
@@ -1902,16 +1992,9 @@ Rasterization2DGSResult rasterization_2dgs(
         if(sh_degree_value >= 0)
         {
             at::Tensor valid_gaussians = radii.gt(0).all(-1);
-            feature                    = evaluate_sh_colors_2dgs(
-                sh_degree_value,
-                colors,
-                means,
-                viewmats,
-                valid_gaussians,
-                batch_ids_opt,
-                camera_ids_opt,
-                gaussian_ids_opt
-            );
+            at::Tensor dirs
+                = compute_viewdirs_2dgs(means, viewmats, batch_ids_opt, camera_ids_opt, gaussian_ids_opt, B, C, N);
+            feature = evaluate_sh_colors_2dgs(sh_degree_value, colors, dirs, valid_gaussians, gaussian_ids_opt);
         }
         else
         {
