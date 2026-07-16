@@ -30,17 +30,27 @@ namespace gsplat
 // callers (Rendering.cpp). Returns colors only.
 at::Tensor spherical_harmonics(
     int64_t degrees_to_use,
-    const at::Tensor &dirs,               // [..., 3]
-    const at::Tensor &coeffs,             // [..., K, 3]
-    const at::optional<at::Tensor> &masks // [...]
+    const at::Tensor &means,
+    const at::Tensor &viewmats,
+    const at::Tensor &coeffs,
+    const at::optional<at::Tensor> &masks,
+    const at::optional<at::Tensor> &batch_ids,
+    const at::optional<at::Tensor> &camera_ids,
+    const at::optional<at::Tensor> &gaussian_ids,
+    const at::optional<at::Tensor> &viewmats_rs = c10::nullopt
 );
 
 void launch_spherical_harmonics_fwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor means,
+    const at::Tensor viewmats,
+    const at::optional<at::Tensor> viewmats_rs,
     const at::Tensor coeffs,              // [N, K, D]
     const at::optional<at::Tensor> masks, // [..., N]
+    const at::optional<at::Tensor> batch_ids,
+    const at::optional<at::Tensor> camera_ids,
+    const at::optional<at::Tensor> gaussian_ids,
     // outputs
     at::Tensor colors // [..., N, D]
 );
@@ -48,9 +58,14 @@ void launch_spherical_harmonics_fwd_kernel(
 void launch_spherical_harmonics_l1_plus_fwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor means,
+    const at::Tensor viewmats,
+    const at::optional<at::Tensor> viewmats_rs,
     const at::Tensor coeffs,              // [N, K - 1, D]
     const at::optional<at::Tensor> masks, // [..., N]
+    const at::optional<at::Tensor> batch_ids,
+    const at::optional<at::Tensor> camera_ids,
+    const at::optional<at::Tensor> gaussian_ids,
     // outputs
     at::Tensor colors // [..., N, D]
 );
@@ -58,9 +73,13 @@ void launch_spherical_harmonics_l1_plus_fwd_kernel(
 void launch_spherical_harmonics_fwd_kernels(
     // inputs
     const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor means,
+    const at::Tensor viewmats,
     const at::Tensor coeffs,              // [N, K, D]
     const at::optional<at::Tensor> masks, // [..., N]
+    const at::optional<at::Tensor> batch_ids,
+    const at::optional<at::Tensor> camera_ids,
+    const at::optional<at::Tensor> gaussian_ids,
     // outputs
     at::Tensor colors // [..., N, D]
 );
@@ -68,9 +87,13 @@ void launch_spherical_harmonics_fwd_kernels(
 void launch_spherical_harmonics_l1_plus_fwd_kernels(
     // inputs
     const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor means,
+    const at::Tensor viewmats,
     const at::Tensor coeffs,              // [N, K - 1, D]
     const at::optional<at::Tensor> masks, // [..., N]
+    const at::optional<at::Tensor> batch_ids,
+    const at::optional<at::Tensor> camera_ids,
+    const at::optional<at::Tensor> gaussian_ids,
     // outputs
     at::Tensor colors // [..., N, D]
 );
@@ -78,25 +101,39 @@ void launch_spherical_harmonics_l1_plus_fwd_kernels(
 void launch_spherical_harmonics_bwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor means,
+    const at::Tensor viewmats,
+    const at::optional<at::Tensor> viewmats_rs,
     const at::Tensor coeffs,              // [N, K, D]
     const at::optional<at::Tensor> masks, // [..., N]
-    const at::Tensor v_colors,            // [..., N, D]
+    const at::optional<at::Tensor> batch_ids,
+    const at::optional<at::Tensor> camera_ids,
+    const at::optional<at::Tensor> gaussian_ids,
+    const at::Tensor v_colors, // [..., N, D]
     // outputs
-    at::Tensor v_coeffs,            // [N, K, D]
-    at::optional<at::Tensor> v_dirs // [..., N, 3]
+    at::Tensor v_coeffs,
+    at::optional<at::Tensor> v_means,
+    at::optional<at::Tensor> v_viewmats,
+    at::optional<at::Tensor> v_viewmats_rs
 );
 
 void launch_spherical_harmonics_l1_plus_bwd_kernel(
     // inputs
     const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor means,
+    const at::Tensor viewmats,
+    const at::optional<at::Tensor> viewmats_rs,
     const at::Tensor coeffs,              // [N, K - 1, D]
     const at::optional<at::Tensor> masks, // [..., N]
-    const at::Tensor v_colors,            // [..., N, D]
+    const at::optional<at::Tensor> batch_ids,
+    const at::optional<at::Tensor> camera_ids,
+    const at::optional<at::Tensor> gaussian_ids,
+    const at::Tensor v_colors, // [..., N, D]
     // outputs
-    at::Tensor v_coeffs,            // [N, K - 1, D]
-    at::optional<at::Tensor> v_dirs // [..., N, 3]
+    at::Tensor v_coeffs,
+    at::optional<at::Tensor> v_means,
+    at::optional<at::Tensor> v_viewmats,
+    at::optional<at::Tensor> v_viewmats_rs
 );
 
 // Fused forward assembly of proj_features = [SH colors | extra | (depth)] for
@@ -115,14 +152,15 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
     const bool has_depth,
     const bool depth_is_zero,
     const bool extra_has_c,
-    const at::Tensor means,                  // [B, N, 3]
-    const at::Tensor campos,                 // [B, C, 3]
-    const at::Tensor coeffs,                 // [N, K, Dc]
-    const at::optional<at::Tensor> extra,    // [B, C, N, E] or [B, N, E]
-    const at::optional<at::Tensor> depths,   // [B, C, N]
-    const at::optional<at::Tensor> masks,    // [B, C, N]
-    at::Tensor out,                          // [B, C, N, Dc + E + has_depth]
-    const at::optional<at::Tensor> relu_mask // [B, C, N, Dc]
+    const at::Tensor means,                     // [B, N, 3]
+    const at::Tensor viewmats,                  // [B, C, 4, 4]
+    const at::optional<at::Tensor> viewmats_rs, // [B, C, 4, 4]
+    const at::Tensor coeffs,                    // [N, K, Dc]
+    const at::optional<at::Tensor> extra,       // [B, C, N, E] or [B, N, E]
+    const at::optional<at::Tensor> depths,      // [B, C, N]
+    const at::optional<at::Tensor> masks,       // [B, C, N]
+    at::Tensor out,                             // [B, C, N, Dc + E + has_depth]
+    const at::optional<at::Tensor> relu_mask    // [B, C, N, Dc]
 );
 
 // Autograd-aware fused assembly of proj_features = [SH colors | extra | (depth)]
@@ -144,7 +182,8 @@ at::Tensor assemble_proj_features(
     bool depth_is_zero,
     bool extra_has_c,
     const at::Tensor &means,
-    const at::Tensor &campos,
+    const at::Tensor &viewmats,
+    const at::optional<at::Tensor> &viewmats_rs,
     const at::Tensor &coeffs,
     const at::optional<at::Tensor> &extra,
     const at::optional<at::Tensor> &depths,
@@ -165,7 +204,8 @@ void assemble_proj_features_unpacked_fwd(
     bool depth_is_zero,
     bool extra_has_c,
     const at::Tensor &means,
-    const at::Tensor &campos,
+    const at::Tensor &viewmats,
+    const at::optional<at::Tensor> &viewmats_rs,
     const at::Tensor &coeffs,
     const at::optional<at::Tensor> &extra,
     const at::optional<at::Tensor> &depths,
@@ -177,24 +217,34 @@ void assemble_proj_features_unpacked_fwd(
 void launch_spherical_harmonics_bwd_kernels(
     // inputs
     const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor means,
+    const at::Tensor viewmats,
     const at::Tensor coeffs,              // [N, K, D]
     const at::optional<at::Tensor> masks, // [..., N]
-    const at::Tensor v_colors,            // [..., N, D]
+    const at::optional<at::Tensor> batch_ids,
+    const at::optional<at::Tensor> camera_ids,
+    const at::optional<at::Tensor> gaussian_ids,
+    const at::Tensor v_colors, // [..., N, D]
     // outputs
-    at::Tensor v_coeffs,            // [N, K, D]
-    at::optional<at::Tensor> v_dirs // [..., N, 3]
+    at::Tensor v_coeffs,
+    at::optional<at::Tensor> v_means,
+    at::optional<at::Tensor> v_viewmats
 );
 
 void launch_spherical_harmonics_l1_plus_bwd_kernels(
     // inputs
     const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., N, 3]
+    const at::Tensor means,
+    const at::Tensor viewmats,
     const at::Tensor coeffs,              // [N, K - 1, D]
     const at::optional<at::Tensor> masks, // [..., N]
-    const at::Tensor v_colors,            // [..., N, D]
+    const at::optional<at::Tensor> batch_ids,
+    const at::optional<at::Tensor> camera_ids,
+    const at::optional<at::Tensor> gaussian_ids,
+    const at::Tensor v_colors, // [..., N, D]
     // outputs
-    at::Tensor v_coeffs,            // [N, K - 1, D]
-    at::optional<at::Tensor> v_dirs // [..., N, 3]
+    at::Tensor v_coeffs,
+    at::optional<at::Tensor> v_means,
+    at::optional<at::Tensor> v_viewmats
 );
 } // namespace gsplat
