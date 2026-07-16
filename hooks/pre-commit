@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+# ---- do not edit the line below ----
+# GSPLAT PRE-COMMIT HOOK
+# ------------------------------------
+
+# Run the committing worktree's formatter (git runs the hook there), passing
+# only options it advertises in --help so this keeps working against an older or
+# garbled format-code.sh.
+formatter="$(git rev-parse --show-toplevel)/lint/format-code.sh"
+
+# A flag counts as advertised only when it heads its own entry in --help's
+# options list -- an indented line (options are indented; the synopsis and prose
+# start at column 0), the flag, then a space. Matching a bare mention would
+# misread a flag named in another option's description or a prose paragraph.
+advertises() { grep -qE "^[[:space:]]+${1}([[:space:]]|\$)" <<<"${help}"; }
+
+if [[ -x "${formatter}" ]]; then
+    help="$("${formatter}" --help 2>/dev/null || true)"
+    if advertises --precommit; then
+        # Current format-code.sh: format and re-stage the staged content.
+        # Known limit: for a pathspec commit (git commit -- <path>) git commits
+        # from a temporary index this hook cannot reach, so the real index can
+        # keep the pre-format content; the next hook run normalizes it.
+        exec "${formatter}" --precommit
+    elif advertises --check && advertises --full; then
+        # Older format-code.sh without --precommit: whole-tree check instead.
+        exec "${formatter}" --check --full
+    else
+        # Not a format-code.sh we recognize.
+        echo "WARNING: this worktree's lint/format-code.sh appears invalid; this commit was" >&2
+        echo "         not formatted." >&2
+    fi
+else
+    # No formatter to run (e.g. a checkout predating it).
+    echo "WARNING: no runnable lint/format-code.sh in this worktree; this commit was" >&2
+    echo "         not formatted." >&2
+fi
