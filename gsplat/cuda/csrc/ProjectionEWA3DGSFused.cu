@@ -565,7 +565,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     // #if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction
     auto warp         = cg::tiled_partition<32>(cg::this_thread_block());
-    auto warp_group_g = cg::labeled_partition(warp, gid);
+    auto warp_group_g = cg::labeled_partition(warp, static_cast<int64_t>(bid) * N + gid);
     if(v_means != nullptr)
     {
         warpSum(v_mean, warp_group_g);
@@ -618,7 +618,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     }
     if(v_viewmats != nullptr)
     {
-        auto warp_group_c = cg::labeled_partition(warp, cid);
+        auto warp_group_c = cg::labeled_partition(warp, static_cast<int64_t>(bid) * C + cid);
         warpSum(v_R, warp_group_c);
         warpSum(v_t, warp_group_c);
         if(warp_group_c.thread_rank() == 0)
