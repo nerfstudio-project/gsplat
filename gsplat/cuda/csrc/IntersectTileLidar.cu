@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+#include <cub/cub.cuh>
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h>
@@ -22,7 +24,6 @@
 
 // for CUB_WRAPPER
 #include <c10/cuda/CUDACachingAllocator.h>
-#include <cub/cub.cuh>
 
 #include "Common.h"
 #include "Intersect.h"

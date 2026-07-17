@@ -331,15 +331,13 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
 
     auto launch_kernel = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
-
         auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
         {
             const dim3 threads       = dim3{CTA_SIZE, 1, 1};
             const int64_t shmem_size = CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 
             if(cudaFuncSetAttribute(
-                   rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
+                   rasterize_to_pixels_3dgs_fwd_kernel<ChannelsT::value, TILE_SIZE, CTA_SIZE>,
                    cudaFuncAttributeMaxDynamicSharedMemorySize,
                    shmem_size
                )
@@ -355,7 +353,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
             const float *bg_ptr   = backgrounds.has_value() ? backgrounds.value().const_data_ptr<float>() : nullptr;
             const bool *masks_ptr = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
 
-            rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
+            rasterize_to_pixels_3dgs_fwd_kernel<ChannelsT::value, TILE_SIZE, CTA_SIZE>
                 <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
                     N,
                     n_isects,
@@ -449,8 +447,6 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
 
     auto launch_kernels = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
-
         auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
         {
             const dim3 threads       = dim3{CTA_SIZE, 1, 1};
@@ -528,7 +524,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
                 C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
                 C10_CUDA_CHECK(cudaEventDestroy(events[device_id]));
                 if(cudaFuncSetAttribute(
-                       rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>,
+                       rasterize_to_pixels_3dgs_fwd_kernel<ChannelsT::value, TILE_SIZE, CTA_SIZE>,
                        cudaFuncAttributeMaxDynamicSharedMemorySize,
                        shmem_size
                    )
@@ -545,7 +541,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
                 if(block_count > 0)
                 {
                     const dim3 grid = {static_cast<uint32_t>(block_count), 1, 1};
-                    rasterize_to_pixels_3dgs_fwd_kernel<CDIM, TILE_SIZE, CTA_SIZE>
+                    rasterize_to_pixels_3dgs_fwd_kernel<ChannelsT::value, TILE_SIZE, CTA_SIZE>
                         <<<grid, threads, shmem_size, stream>>>(
                             N,
                             n_isects,
