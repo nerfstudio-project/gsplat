@@ -6706,6 +6706,47 @@ def test_sh_k16_misaligned_coeffs(dtype, sh_degree, storage_offset):
     torch.testing.assert_close(colors_misaligned, colors_aligned)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sh_degree", [0, 4])
+@pytest.mark.parametrize("K", [26, 30])
+def test_sh_backward_zeros_padded_k_gt_max_supported(sh_degree: int, K: int):
+    """Backward must zero-fill padded coeff slots when K > MAX_K (25)."""
+    from gsplat.cuda._wrapper import spherical_harmonics, spherical_harmonics_l1_plus
+
+    torch.manual_seed(42)
+    N, D = 16, 3
+    coeffs = torch.randn(
+        N, K, D, device=device, dtype=torch.float16, requires_grad=True
+    )
+    dirs = torch.randn(N, 3, device=device)
+
+    colors = spherical_harmonics(sh_degree, dirs, coeffs)
+    colors.sum().backward()
+
+    active = (sh_degree + 1) ** 2
+    if active < min(K, 25):
+        torch.testing.assert_close(
+            coeffs.grad[:, active : min(K, 25), :],
+            torch.zeros_like(coeffs.grad[:, active : min(K, 25), :]),
+        )
+    if K > 25:
+        torch.testing.assert_close(
+            coeffs.grad[:, 25:, :],
+            torch.zeros_like(coeffs.grad[:, 25:, :]),
+        )
+
+    sh0 = coeffs[:, :1, :].detach().clone().requires_grad_(True)
+    shN = coeffs[:, 1:K, :].detach().clone().requires_grad_(True)
+    colors_l1 = spherical_harmonics_l1_plus(sh_degree, dirs, shN)
+    colors_l1.sum().backward()
+    if sh_degree == 0:
+        torch.testing.assert_close(shN.grad, torch.zeros_like(shN.grad))
+    if K - 1 > 24:
+        torch.testing.assert_close(
+            shN.grad[:, 24:, :], torch.zeros_like(shN.grad[:, 24:, :])
+        )
+
+
 # ============================================================================
 # NaN/wrong-value safety tests for the 3DGUT code path
 # ============================================================================

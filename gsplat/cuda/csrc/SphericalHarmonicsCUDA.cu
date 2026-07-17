@@ -21,6 +21,7 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
+#include <array>
 #include <cooperative_groups.h>
 #include <type_traits>
 #include <variant>
@@ -149,15 +150,18 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     const scalar_t *coeffs,                    // [K, D]
     const at::opmath_type<scalar_t> *v_colors, // [D]
     // output
-    // v_coeffs is fp32; caller casts back to the coeff dtype after all atomic adds.
-    float *v_coeffs, // [K, D]
-    vec3 *v_dir      // [3] optional
+    // acc is a per-thread fp32 accumulator indexed by coefficient k (channel c is
+    // fixed for this thread). The caller sums contributions from every batch here
+    // in registers and writes the result to global memory once (casting to the
+    // coeff dtype), so no global atomics or fp32 scratch buffer are needed.
+    at::opmath_type<scalar_t> *acc, // [MAX_K]
+    vec3 *v_dir                     // [3] optional
 )
 {
     using opmath_t          = at::opmath_type<scalar_t>;
     opmath_t v_colors_local = v_colors[c];
 
-    gpuAtomicAdd(&v_coeffs[c], 0.2820947917738781f * v_colors_local);
+    acc[0] += 0.2820947917738781f * v_colors_local;
     if(degree < 1)
     {
         return;
@@ -168,9 +172,9 @@ __device__ void sh_coeffs_to_color_fast_vjp(
     float z     = dir.z * inorm;
     float v_x = 0.f, v_y = 0.f, v_z = 0.f;
 
-    gpuAtomicAdd(&v_coeffs[1 * D + c], -0.48860251190292f * y * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[2 * D + c], 0.48860251190292f * z * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[3 * D + c], -0.48860251190292f * x * v_colors_local);
+    acc[1] += -0.48860251190292f * y * v_colors_local;
+    acc[2] += 0.48860251190292f * z * v_colors_local;
+    acc[3] += -0.48860251190292f * x * v_colors_local;
 
     if(v_dir != nullptr)
     {
@@ -193,20 +197,20 @@ __device__ void sh_coeffs_to_color_fast_vjp(
         return;
     }
 
-    float z2     = z * z;
-    float fTmp0B = -1.092548430592079f * z;
-    float fC1    = x * x - y * y;
-    float fS1    = 2.f * x * y;
-    float pSH6   = (0.9461746957575601f * z2 - 0.3153915652525201f);
-    float pSH7   = fTmp0B * x;
-    float pSH5   = fTmp0B * y;
-    float pSH8   = 0.5462742152960395f * fC1;
-    float pSH4   = 0.5462742152960395f * fS1;
-    gpuAtomicAdd(&v_coeffs[4 * D + c], pSH4 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[5 * D + c], pSH5 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[6 * D + c], pSH6 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[7 * D + c], pSH7 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[8 * D + c], pSH8 * v_colors_local);
+    float z2      = z * z;
+    float fTmp0B  = -1.092548430592079f * z;
+    float fC1     = x * x - y * y;
+    float fS1     = 2.f * x * y;
+    float pSH6    = (0.9461746957575601f * z2 - 0.3153915652525201f);
+    float pSH7    = fTmp0B * x;
+    float pSH5    = fTmp0B * y;
+    float pSH8    = 0.5462742152960395f * fC1;
+    float pSH4    = 0.5462742152960395f * fS1;
+    acc[4]       += pSH4 * v_colors_local;
+    acc[5]       += pSH5 * v_colors_local;
+    acc[6]       += pSH6 * v_colors_local;
+    acc[7]       += pSH7 * v_colors_local;
+    acc[8]       += pSH8 * v_colors_local;
 
     float fTmp0B_z, fC1_x, fC1_y, fS1_x, fS1_y, pSH6_z, pSH7_x, pSH7_z, pSH5_y, pSH5_z, pSH8_x, pSH8_y, pSH4_x, pSH4_y;
     if(v_dir != nullptr)
@@ -255,24 +259,24 @@ __device__ void sh_coeffs_to_color_fast_vjp(
         return;
     }
 
-    float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
-    float fTmp1B = 1.445305721320277f * z;
-    float fC2    = x * fC1 - y * fS1;
-    float fS2    = x * fS1 + y * fC1;
-    float pSH12  = z * (1.865881662950577f * z2 - 1.119528997770346f);
-    float pSH13  = fTmp0C * x;
-    float pSH11  = fTmp0C * y;
-    float pSH14  = fTmp1B * fC1;
-    float pSH10  = fTmp1B * fS1;
-    float pSH15  = -0.5900435899266435f * fC2;
-    float pSH9   = -0.5900435899266435f * fS2;
-    gpuAtomicAdd(&v_coeffs[9 * D + c], pSH9 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[10 * D + c], pSH10 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[11 * D + c], pSH11 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[12 * D + c], pSH12 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[13 * D + c], pSH13 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[14 * D + c], pSH14 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[15 * D + c], pSH15 * v_colors_local);
+    float fTmp0C  = -2.285228997322329f * z2 + 0.4570457994644658f;
+    float fTmp1B  = 1.445305721320277f * z;
+    float fC2     = x * fC1 - y * fS1;
+    float fS2     = x * fS1 + y * fC1;
+    float pSH12   = z * (1.865881662950577f * z2 - 1.119528997770346f);
+    float pSH13   = fTmp0C * x;
+    float pSH11   = fTmp0C * y;
+    float pSH14   = fTmp1B * fC1;
+    float pSH10   = fTmp1B * fS1;
+    float pSH15   = -0.5900435899266435f * fC2;
+    float pSH9    = -0.5900435899266435f * fS2;
+    acc[9]       += pSH9 * v_colors_local;
+    acc[10]      += pSH10 * v_colors_local;
+    acc[11]      += pSH11 * v_colors_local;
+    acc[12]      += pSH12 * v_colors_local;
+    acc[13]      += pSH13 * v_colors_local;
+    acc[14]      += pSH14 * v_colors_local;
+    acc[15]      += pSH15 * v_colors_local;
 
     float fTmp0C_z, fTmp1B_z, fC2_x, fC2_y, fS2_x, fS2_y, pSH12_z, pSH13_x, pSH13_z, pSH11_y, pSH11_z, pSH14_x, pSH14_y,
         pSH14_z, pSH10_x, pSH10_y, pSH10_z, pSH15_x, pSH15_y, pSH9_x, pSH9_y;
@@ -337,29 +341,29 @@ __device__ void sh_coeffs_to_color_fast_vjp(
         return;
     }
 
-    float fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
-    float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
-    float fTmp2B = -1.770130769779931f * z;
-    float fC3    = x * fC2 - y * fS2;
-    float fS3    = x * fS2 + y * fC2;
-    float pSH20  = (1.984313483298443f * z * pSH12 + -1.006230589874905f * pSH6);
-    float pSH21  = fTmp0D * x;
-    float pSH19  = fTmp0D * y;
-    float pSH22  = fTmp1C * fC1;
-    float pSH18  = fTmp1C * fS1;
-    float pSH23  = fTmp2B * fC2;
-    float pSH17  = fTmp2B * fS2;
-    float pSH24  = 0.6258357354491763f * fC3;
-    float pSH16  = 0.6258357354491763f * fS3;
-    gpuAtomicAdd(&v_coeffs[16 * D + c], pSH16 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[17 * D + c], pSH17 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[18 * D + c], pSH18 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[19 * D + c], pSH19 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[20 * D + c], pSH20 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[21 * D + c], pSH21 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[22 * D + c], pSH22 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[23 * D + c], pSH23 * v_colors_local);
-    gpuAtomicAdd(&v_coeffs[24 * D + c], pSH24 * v_colors_local);
+    float fTmp0D  = z * (-4.683325804901025f * z2 + 2.007139630671868f);
+    float fTmp1C  = 3.31161143515146f * z2 - 0.47308734787878f;
+    float fTmp2B  = -1.770130769779931f * z;
+    float fC3     = x * fC2 - y * fS2;
+    float fS3     = x * fS2 + y * fC2;
+    float pSH20   = (1.984313483298443f * z * pSH12 + -1.006230589874905f * pSH6);
+    float pSH21   = fTmp0D * x;
+    float pSH19   = fTmp0D * y;
+    float pSH22   = fTmp1C * fC1;
+    float pSH18   = fTmp1C * fS1;
+    float pSH23   = fTmp2B * fC2;
+    float pSH17   = fTmp2B * fS2;
+    float pSH24   = 0.6258357354491763f * fC3;
+    float pSH16   = 0.6258357354491763f * fS3;
+    acc[16]      += pSH16 * v_colors_local;
+    acc[17]      += pSH17 * v_colors_local;
+    acc[18]      += pSH18 * v_colors_local;
+    acc[19]      += pSH19 * v_colors_local;
+    acc[20]      += pSH20 * v_colors_local;
+    acc[21]      += pSH21 * v_colors_local;
+    acc[22]      += pSH22 * v_colors_local;
+    acc[23]      += pSH23 * v_colors_local;
+    acc[24]      += pSH24 * v_colors_local;
 
     float fTmp0D_z, fTmp1C_z, fTmp2B_z, fC3_x, fC3_y, fS3_x, fS3_y, pSH20_z, pSH21_x, pSH21_z, pSH19_y, pSH19_z,
         pSH22_x, pSH22_y, pSH22_z, pSH18_x, pSH18_y, pSH18_z, pSH23_x, pSH23_y, pSH23_z, pSH17_x, pSH17_y, pSH17_z,
@@ -721,44 +725,74 @@ __global__ void spherical_harmonics_bwd_kernel(
     const scalar_t *__restrict__ coeffs,   // [N, K, D]
     const bool *__restrict__ masks,        // [..., N]
     const opmath_t *__restrict__ v_colors, // [..., N, D]
-    float *__restrict__ v_coeffs,          // [N, K, D]
+    scalar_t *__restrict__ v_coeffs,       // [N, K, D] (coeff dtype)
     opmath_t *__restrict__ v_dirs          // [..., N, 3] optional
 )
 {
-    // parallelize over B * gaussian_count * D
+    // One thread per (Gaussian, channel). Each thread reduces the coeff gradient
+    // over all B batches in registers (accumulating in fp32) and writes the K
+    // results to global memory once, cast to the coeff dtype. This removes the
+    // global atomic accumulation into a fp32 scratch buffer as well as the
+    // separate fp32 zero-init and fp32->coeff-dtype cast the batch-parallel
+    // formulation required.
     auto idx            = cg::this_grid().thread_rank();
-    const int64_t count = static_cast<int64_t>(B) * gaussian_count * D;
+    const int64_t count = gaussian_count * static_cast<int64_t>(D);
     if(idx >= count)
     {
         return;
     }
-    const int64_t local_elem_id = idx / D;
-    const int64_t batch_id      = local_elem_id / gaussian_count;
-    const int64_t gaussian_id   = local_elem_id % gaussian_count + gaussian_offset;
-    const int64_t elem_id       = batch_id * N + gaussian_id;
-    const uint32_t c            = idx % D; // output channel
-    if(masks != nullptr && !masks[elem_id])
+    const int64_t gaussian_id = idx / D + gaussian_offset;
+    const uint32_t c          = static_cast<uint32_t>(idx % D); // output channel
+
+    // fp32 register accumulator, one slot per coefficient. Degree <= 4 -> K <= 25.
+    constexpr int MAX_K = SH_MAX_COEFFS;
+    std::array<opmath_t, MAX_K> acc{};
+
+    const scalar_t *coeffs_ptr = coeffs + gaussian_id * K * D;
+    for(uint32_t batch_id = 0; batch_id < B; ++batch_id)
     {
-        return;
+        const int64_t elem_id = static_cast<int64_t>(batch_id) * N + gaussian_id;
+        if(masks != nullptr && !masks[elem_id])
+        {
+            continue;
+        }
+
+        vec3 v_dir = {0.f, 0.f, 0.f};
+        sh_coeffs_to_color_fast_vjp<scalar_t>(
+            degrees_to_use,
+            D,
+            c,
+            dirs[elem_id],
+            coeffs_ptr,
+            v_colors + elem_id * D,
+            acc.data(),
+            v_dirs == nullptr ? nullptr : &v_dir
+        );
+
+        if(v_dirs != nullptr)
+        {
+            // v_dirs is [B, N, 3]: each (batch, Gaussian) slot is summed across the
+            // D channel-threads, so it still uses atomics. It is tiny relative to
+            // v_coeffs, so this is not on the critical path.
+            gpuAtomicAdd(v_dirs + elem_id * 3, v_dir.x);
+            gpuAtomicAdd(v_dirs + elem_id * 3 + 1, v_dir.y);
+            gpuAtomicAdd(v_dirs + elem_id * 3 + 2, v_dir.z);
+        }
     }
 
-    vec3 v_dir = {0.f, 0.f, 0.f};
-    sh_coeffs_to_color_fast_vjp<scalar_t>(
-        degrees_to_use,
-        D,
-        c,
-        dirs[elem_id],
-        coeffs + gaussian_id * K * D,
-        v_colors + elem_id * D,
-        v_coeffs + gaussian_id * K * D,
-        v_dirs == nullptr ? nullptr : &v_dir
-    );
-
-    if(v_dirs != nullptr)
+    scalar_t *v_coeffs_ptr = v_coeffs + gaussian_id * K * D;
+#pragma unroll
+    for(int k = 0; k < MAX_K; ++k)
     {
-        gpuAtomicAdd(v_dirs + elem_id * 3, v_dir.x);
-        gpuAtomicAdd(v_dirs + elem_id * 3 + 1, v_dir.y);
-        gpuAtomicAdd(v_dirs + elem_id * 3 + 2, v_dir.z);
+        if(static_cast<uint32_t>(k) < K)
+        {
+            v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(acc[k]);
+        }
+    }
+    // Padded bases may allocate K > MAX_K; zero the tail so at::empty outputs are defined.
+    for(uint32_t k = MAX_K; k < K; ++k)
+    {
+        v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(0.f);
     }
 }
 
@@ -781,8 +815,9 @@ void launch_spherical_harmonics_bwd_kernel(
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
-    // parallelize over B * N * D
-    int64_t n_elements             = static_cast<int64_t>(B) * N * D;
+    // One thread per (Gaussian, channel); the kernel loops over the B batches
+    // internally and reduces in registers.
+    int64_t n_elements             = static_cast<int64_t>(N) * D;
     constexpr unsigned int threads = 256;
     unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
 
@@ -792,8 +827,8 @@ void launch_spherical_harmonics_bwd_kernel(
         return;
     }
 
-    // Dispatch on the coeff dtype (fp16/fp32). v_coeffs accumulates in fp32;
-    // dirs/v_colors/v_dirs read as opmath_t (float).
+    // Dispatch on the coeff dtype (fp16/fp32). v_coeffs is written in the coeff
+    // dtype (register accumulation is fp32); dirs/v_colors/v_dirs read as opmath_t.
     AT_DISPATCH_V2(
         coeffs.scalar_type(),
         "spherical_harmonics_bwd_kernel",
@@ -818,7 +853,7 @@ void launch_spherical_harmonics_bwd_kernel(
                     coeffs.const_data_ptr<scalar_t>(),
                     masks_ptr,
                     v_colors_ptr,
-                    v_coeffs.data_ptr<float>(),
+                    v_coeffs.data_ptr<scalar_t>(),
                     v_dirs_ptr
                 );
                 C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -1415,13 +1450,8 @@ void launch_spherical_harmonics_bwd_kernels(
             ));
 #endif
 
-            C10_CUDA_CHECK(cudaMemsetAsync(
-                static_cast<char *>(v_coeffs.data_ptr())
-                    + gaussian_offset * v_coeffs.stride(-3) * v_coeffs.element_size(),
-                0,
-                gaussian_count * v_coeffs.stride(-3) * v_coeffs.element_size(),
-                stream
-            ));
+            // v_coeffs is fully written by the kernel (one thread per (Gaussian,
+            // channel) stores all K coefficients), so no zero-init is needed.
             if(v_dirs.has_value())
             {
                 for(const auto batch_id: c10::irange(B))
@@ -1449,7 +1479,7 @@ void launch_spherical_harmonics_bwd_kernels(
 
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
-        int64_t n_elements                        = static_cast<int64_t>(B) * gaussian_count * D;
+        int64_t n_elements                        = gaussian_count * static_cast<int64_t>(D);
         unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
@@ -1477,7 +1507,7 @@ void launch_spherical_harmonics_bwd_kernels(
                             coeffs.const_data_ptr<scalar_t>(),
                             masks_ptr,
                             v_colors_ptr,
-                            v_coeffs.data_ptr<float>(),
+                            v_coeffs.data_ptr<scalar_t>(),
                             v_dirs_ptr
                         );
                         C10_CUDA_KERNEL_LAUNCH_CHECK();
