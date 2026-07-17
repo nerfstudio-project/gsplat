@@ -30,7 +30,10 @@ import torch
 from tests._cuda import cuda_is_available
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../examples"))
-from av_trainer import train  # noqa: E402
+# Skip cleanly (don't error collection) when the examples extra is absent:
+#   - av_trainer imports examples/utils.py -> matplotlib (examples extra only)
+#   - the ncore/cuda guards below run at call time, not on this module import
+train = pytest.importorskip("av_trainer").train
 
 
 NCORE_TEST_SCENE_ENV = "GSPLAT_NCORE_TEST_SCENE"

@@ -277,6 +277,23 @@ if(PROJECT_IS_TOP_LEVEL)
     gsplat_add_pytest(source "${GSPLAT_SOURCE_DIR}/tests/source")
     gsplat_add_pytest(stage "${GSPLAT_SOURCE_DIR}/tests/stage")
 
+    # A CPU-only core_tests host (GSPLAT_TESTS_FORCE_CUDA=0, no GPU) legitimately
+    # collects zero tests in these groups, so pytest exits 5 ("no tests
+    # collected"). Report that as a Skip rather than a CTest failure:
+    #   - experimental/geometry/sensors: each dir's conftest collect_ignore_glob
+    #     de-collects the whole CUDA-backed tree when Torch reports no device.
+    #   - examples: every module skips when its optional deps are absent (ncore
+    #     for the *_ncore_* suites; the examples extra / matplotlib for the
+    #     av_trainer suites).
+    # A genuine failure still exits 1/2 and fails the group.
+    set_tests_properties(
+        python_examples
+        python_experimental
+        python_geometry
+        python_sensors
+        PROPERTIES SKIP_RETURN_CODE 5
+    )
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # Every Python extension module must export exactly its PyInit symbol.
         get_property(_gsplat_extension_targets GLOBAL PROPERTY GSPLAT_PYTHON_EXTENSION_TARGETS)

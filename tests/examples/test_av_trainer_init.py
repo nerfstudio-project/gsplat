@@ -17,10 +17,17 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
-from examples.av_trainer import init_gaussians
 from gsplat.init_utils import knn_scale_init
+
+# Skip cleanly (don't error collection) when the examples package/extra is
+# unavailable, as on a minimal CPU core_tests env. It can be absent because:
+#   - the build-tree pytest config omits the repo root from sys.path (only the
+#     installed wheel adds it), so `examples` may not import
+#   - av_trainer pulls in matplotlib, which lives only in the "examples" extra
+init_gaussians = pytest.importorskip("examples.av_trainer").init_gaussians
 
 
 def test_init_gaussians_multi_point_knn_isotropic_scales_and_identity_quats():
