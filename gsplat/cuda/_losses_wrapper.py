@@ -243,7 +243,18 @@ class _FusedGaussianLosses(torch.autograd.Function):
 
 
 class _FusedCameraLosses(torch.autograd.Function):
-    """Fused RGB L1 + background MSE with per-ray flag masking."""
+    """Fused RGB L1 + background MSE with per-ray flag masking, plus an
+    optional grouped masked semantic cross-entropy member of the fused
+    camera dispatch.
+
+    When the ``semantic_*`` inputs are provided, the same single
+    ``camera_losses_fwd``/``camera_losses_bwd`` op call additionally launches
+    the semantic-CE kernels and a third output — the scalar CE loss — is
+    returned. The semantic row count is independent of the camera ray count
+    (the CE carries its own ``valid`` row mask). Gradient routing: the CE
+    member contributes ``v_semantic_logits`` only; the camera members
+    contribute ``v_rgb_pred``/``v_bg_pred`` exactly as in ungrouped mode.
+    """
 
     @staticmethod
     def forward(
@@ -254,7 +265,16 @@ class _FusedCameraLosses(torch.autograd.Function):
         bg_pred: Tensor,  # [N]
         rgb_factor: float,
         bg_factor: float,
-    ) -> Tuple[Tensor, Tensor]:
+        semantic_logits: Optional[Tensor] = None,  # [M, C] fp32/fp64
+        semantic_targets: Optional[Tensor] = None,  # [M] uint8 or int64
+        semantic_valid: Optional[Tensor] = None,  # [M] bool
+        semantic_ignore_index: int = -100,
+    ) -> Tuple[Tensor, ...]:
+        # Unused outputs must reach backward as None rather than materialized
+        # zeros: backward() normalizes each None camera cotangent to a defined
+        # exact zero and skips the CE member outright when its cotangent is
+        # None, so an unused output can never poison a sibling's gradient.
+        ctx.set_materialize_grads(False)
         flags = flags.contiguous()
         rgb_pred = rgb_pred.contiguous()
         rgb_gt = rgb_gt.contiguous()
@@ -267,6 +287,27 @@ class _FusedCameraLosses(torch.autograd.Function):
         rgb_loss = torch.empty_like(bg_pred)
         bg_loss = torch.empty_like(bg_pred)
 
+        has_semantic = semantic_logits is not None
+        if has_semantic:
+            semantic_logits = semantic_logits.contiguous()
+            semantic_targets = semantic_targets.reshape(-1).contiguous()
+            semantic_valid = semantic_valid.reshape(-1).contiguous()
+            # CE workspace + scalar loss. The kernel accumulates into
+            # loss_sum/valid_count via atomics, so both must start zeroed.
+            semantic_loss_sum = torch.zeros(
+                (), dtype=semantic_logits.dtype, device=semantic_logits.device
+            )
+            semantic_valid_count = torch.zeros(
+                (), dtype=torch.int32, device=semantic_logits.device
+            )
+            semantic_loss = torch.zeros(
+                (), dtype=semantic_logits.dtype, device=semantic_logits.device
+            )
+        else:
+            semantic_loss_sum = None
+            semantic_valid_count = None
+            semantic_loss = None
+
         _make_lazy_cuda_func("camera_losses_fwd")(
             flags,
             rgb_pred,
@@ -276,25 +317,87 @@ class _FusedCameraLosses(torch.autograd.Function):
             bg_factor,
             rgb_loss,
             bg_loss,
+            semantic_logits,
+            semantic_targets,
+            semantic_valid,
+            int(semantic_ignore_index),
+            semantic_loss_sum,
+            semantic_valid_count,
+            semantic_loss,
         )
 
-        ctx.save_for_backward(flags, rgb_pred, rgb_gt, bg_pred)
+        if has_semantic:
+            # The CE backward only needs the valid-row count from the
+            # workspace (the per-row softmax is re-derived from logits).
+            ctx.save_for_backward(
+                flags,
+                rgb_pred,
+                rgb_gt,
+                bg_pred,
+                semantic_logits,
+                semantic_targets,
+                semantic_valid,
+                semantic_valid_count,
+            )
+        else:
+            ctx.save_for_backward(flags, rgb_pred, rgb_gt, bg_pred)
+        ctx.has_semantic = has_semantic
         ctx.rgb_factor = rgb_factor
         ctx.bg_factor = bg_factor
+        ctx.semantic_ignore_index = int(semantic_ignore_index)
 
+        if has_semantic:
+            return rgb_loss, bg_loss, semantic_loss
         return rgb_loss, bg_loss
 
     @staticmethod
     def backward(
         ctx,
-        v_rgb_loss: Tensor,
-        v_bg_loss: Tensor,
+        v_rgb_loss: Optional[Tensor],
+        v_bg_loss: Optional[Tensor],
+        v_semantic_loss: Optional[Tensor] = None,
     ) -> Tuple[Optional[Tensor], ...]:
-        flags, rgb_pred, rgb_gt, bg_pred = ctx.saved_tensors
+        if ctx.has_semantic:
+            (
+                flags,
+                rgb_pred,
+                rgb_gt,
+                bg_pred,
+                semantic_logits,
+                semantic_targets,
+                semantic_valid,
+                semantic_valid_count,
+            ) = ctx.saved_tensors
+        else:
+            flags, rgb_pred, rgb_gt, bg_pred = ctx.saved_tensors
+            semantic_logits = None
+            semantic_targets = None
+            semantic_valid = None
+            semantic_valid_count = None
 
         # Pre-allocate gradient buffers in Python (matches forward pattern).
         v_rgb_pred = torch.empty_like(rgb_pred)
         v_bg_pred = torch.empty_like(bg_pred)
+
+        # set_materialize_grads(False) delivers unused outputs' cotangents as
+        # None. The camera op requires defined per-ray upstream grads, so
+        # normalize those to exact zeros; the per-ray backward turns a zero
+        # upstream into a zero gradient.
+        def _upstream(grad: Optional[Tensor]) -> Tensor:
+            return torch.zeros_like(bg_pred) if grad is None else grad.contiguous()
+
+        # Grouped CE member: a None cotangent means the CE loss is not part of
+        # the objective — its backward launch is skipped outright (all
+        # semantic arguments passed as None), so present-but-unused non-finite
+        # logits can never poison any gradient.
+        semantic_active = ctx.has_semantic and v_semantic_loss is not None
+        v_semantic_logits = None
+        if semantic_active:
+            # The CE backward kernel writes every (row, class) element of
+            # v_semantic_logits exactly once (gradients for contributing rows,
+            # exact zeros otherwise), so the buffer needs no pre-zeroing.
+            v_semantic_logits = torch.empty_like(semantic_logits)
+            v_semantic_loss = v_semantic_loss.reshape(()).contiguous()
 
         _make_lazy_cuda_func("camera_losses_bwd")(
             flags,
@@ -303,14 +406,34 @@ class _FusedCameraLosses(torch.autograd.Function):
             bg_pred,
             ctx.rgb_factor,
             ctx.bg_factor,
-            v_rgb_loss.contiguous(),
-            v_bg_loss.contiguous(),
+            _upstream(v_rgb_loss),
+            _upstream(v_bg_loss),
             v_rgb_pred,
             v_bg_pred,
+            semantic_logits if semantic_active else None,
+            semantic_targets if semantic_active else None,
+            semantic_valid if semantic_active else None,
+            ctx.semantic_ignore_index,
+            semantic_valid_count if semantic_active else None,
+            v_semantic_loss if semantic_active else None,
+            v_semantic_logits,
         )
 
-        # Gradients for: flags, rgb_pred, rgb_gt, bg_pred, rgb_factor, bg_factor
-        return None, v_rgb_pred, None, v_bg_pred, None, None
+        # Gradients for: flags, rgb_pred, rgb_gt, bg_pred, rgb_factor,
+        #   bg_factor, semantic_logits, semantic_targets, semantic_valid,
+        #   semantic_ignore_index
+        return (
+            None,
+            v_rgb_pred,
+            None,
+            v_bg_pred,
+            None,
+            None,
+            v_semantic_logits,
+            None,
+            None,
+            None,
+        )
 
 
 class _FusedLidarLosses(torch.autograd.Function):

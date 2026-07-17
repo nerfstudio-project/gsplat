@@ -1316,13 +1316,23 @@ TORCH_LIBRARY(gsplat, m)
         "Tensor? v_deform_loss=None, Tensor(e!)? v_deformation=None, Tensor(f!)? v_deform_mask=None, "
         "bool preactivation=False) -> ()"
     );
+    // Fused camera dispatch: one host entry launching the
+    // RGB/background kernels plus, when the trailing optional semantic-CE
+    // arguments are present, the masked semantic cross-entropy kernels from
+    // the standalone port (SemanticCELosses.cpp). The optional arguments
+    // default to None so pre-fold positional callers keep working.
     m.def(
         "camera_losses_fwd(Tensor flags, Tensor rgb_pred, Tensor rgb_gt, Tensor bg_pred, float rgb_factor, float "
-        "bg_factor, Tensor(a!) rgb_loss, Tensor(b!) bg_loss) -> ()"
+        "bg_factor, Tensor(a!) rgb_loss, Tensor(b!) bg_loss, Tensor? semantic_logits=None, Tensor? "
+        "semantic_targets=None, Tensor? semantic_valid=None, int semantic_ignore_index=-100, Tensor(c!)? "
+        "semantic_loss_sum=None, Tensor(d!)? semantic_valid_count=None, Tensor(e!)? semantic_loss=None) -> ()"
     );
     m.def(
         "camera_losses_bwd(Tensor flags, Tensor rgb_pred, Tensor rgb_gt, Tensor bg_pred, float rgb_factor, float "
-        "bg_factor, Tensor v_rgb_loss, Tensor v_bg_loss, Tensor(a!) v_rgb_pred, Tensor(b!) v_bg_pred) -> ()"
+        "bg_factor, Tensor v_rgb_loss, Tensor v_bg_loss, Tensor(a!) v_rgb_pred, Tensor(b!) v_bg_pred, Tensor? "
+        "semantic_logits=None, Tensor? semantic_targets=None, Tensor? semantic_valid=None, int "
+        "semantic_ignore_index=-100, Tensor? semantic_valid_count=None, Tensor? v_semantic_loss=None, Tensor(c!)? "
+        "v_semantic_logits=None) -> ()"
     );
     m.def(
         "lidar_losses_fwd(Tensor flags, Tensor distance_pred, Tensor distance_gt, Tensor intensity_pred, Tensor "
