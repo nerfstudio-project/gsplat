@@ -23,11 +23,9 @@ foreach(_kind IN ITEMS elf ptx)
         )
     endif()
 
-    if(_kind STREQUAL "elf")
-        set(_prefix sm)
-    else()
-        set(_prefix compute)
-    endif()
+    # cuobjdump labels PTX images sm_<cc> too (e.g. `foo.1.sm_80.ptx`), so both
+    # kinds use sm_; the real/virtual split is from --list-<kind>, not the label.
+    set(_prefix sm)
 
     string(REGEX MATCHALL "${_prefix}_[0-9]+[a-z]?" _architectures "${_output}${_error}")
     list(TRANSFORM _architectures REPLACE "^${_prefix}_" "")

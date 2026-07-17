@@ -104,11 +104,9 @@ foreach(_command_index RANGE 0 ${_last_command})
                 )
             endif()
 
-            if(_kind STREQUAL "elf")
-                set(_prefix sm)
-            else()
-                set(_prefix compute)
-            endif()
+            # cuobjdump labels PTX images sm_<cc> too, so both kinds use sm_;
+            # the real/virtual split is from --list-<kind>, not the label.
+            set(_prefix sm)
             string(REGEX MATCHALL "${_prefix}_[0-9]+[a-z]?" _object_arches "${_output}${_error}")
             list(TRANSFORM _object_arches REPLACE "^${_prefix}_" "")
             list(REMOVE_DUPLICATES _object_arches)
