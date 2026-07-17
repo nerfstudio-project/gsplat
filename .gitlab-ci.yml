@@ -62,8 +62,10 @@ code-format:
     - arch/x86_64
 
   before_script:
-    # Configure the persistent caches using CI_BUILDS_DIR.
-    - source /etc/profile.d/00-persistent-cache.sh
+    # ccache persists across jobs in the runner-preserved CI_BUILDS_DIR/.ci-keep
+    # (git clean keeps .ci-keep). The build pins ccache there via
+    # GSPLAT_CCACHE_DIR below.
+    - mkdir -p "$CI_BUILDS_DIR/.ci-keep/ccache"
     - rm -rf dist
     - mkdir -p dist
 
@@ -74,6 +76,7 @@ code-format:
     - |
       ./tools/build-wheel.sh "${CMAKE_PRESET}" \
         --wheel-dir dist \
+        --config-settings=cmake.define.GSPLAT_CCACHE_DIR="${CI_BUILDS_DIR}/.ci-keep/ccache" \
         --config-settings=build.verbose=true \
         --config-settings=cmake.args=-DGSPLAT_ENABLE_BUILD_TRACES=ON
 
@@ -121,8 +124,10 @@ build-release:
         rm -rf "$CI_BUILDS_DIR/.ci-keep"
       fi
       df -h "$HOME" | awk 'NR==2 {print "Disk usage now: "$3" used of "$2", "$5" full"}'
-    # Configure the persistent caches after any disk cleanup above.
-    - source /etc/profile.d/00-persistent-cache.sh
+    # Persist the CUDA JIT cache in the runner-preserved CI_BUILDS_DIR/.ci-keep
+    # (kernels JIT-compile at test run time; git clean keeps .ci-keep).
+    - export CUDA_CACHE_PATH="$CI_BUILDS_DIR/.ci-keep/cuda"
+    - mkdir -p "$CUDA_CACHE_PATH"
     # Determine GPU architecture of current CI machine.
     - CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1)
     - echo "Determined CUDA Architecture ${CUDA_ARCH}"
@@ -175,9 +180,6 @@ test-source:
     - type/docker
     - os/linux
     - arch/x86_64
-
-  before_script:
-    - source /etc/profile.d/00-persistent-cache.sh
 
   script:
     - |

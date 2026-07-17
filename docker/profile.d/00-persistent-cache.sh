@@ -1,11 +1,8 @@
 #!/bin/sh
 
-# Set the cache directory
-if [ -n "$CI_BUILDS_DIR" ]; then
-    export XDG_CACHE_HOME="$CI_BUILDS_DIR/.ci-keep"
-else
-    export XDG_CACHE_HOME="$HOME/.cache"
-fi
+# Consolidate the cache under /var/cache/<user> (via the symlink below), which
+# run_tests.sh bind-mounts to persistent host storage.
+export XDG_CACHE_HOME="$HOME/.cache"
 
 # Setup user's cache
 mkdir -p "/var/cache/$(id -un)"
