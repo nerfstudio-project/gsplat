@@ -1,0 +1,46 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#pragma once
+
+#ifndef GSPLAT_BUILD_2DGS
+#define GSPLAT_BUILD_2DGS @_gsplat_final_build_2DGS@
+#endif
+#ifndef GSPLAT_BUILD_3DGS
+#define GSPLAT_BUILD_3DGS @_gsplat_final_build_3DGS@
+#endif
+#ifndef GSPLAT_BUILD_3DGUT
+#define GSPLAT_BUILD_3DGUT @_gsplat_final_build_3DGUT@
+#endif
+#ifndef GSPLAT_BUILD_ADAM
+#define GSPLAT_BUILD_ADAM @_gsplat_final_build_ADAM@
+#endif
+#ifndef GSPLAT_BUILD_RELOC
+#define GSPLAT_BUILD_RELOC @_gsplat_final_build_RELOC@
+#endif
+#ifndef GSPLAT_BUILD_LOSSES
+#define GSPLAT_BUILD_LOSSES @_gsplat_final_build_LOSSES@
+#endif
+#ifndef GSPLAT_BUILD_CAMERA_WRAPPERS
+#define GSPLAT_BUILD_CAMERA_WRAPPERS @_gsplat_final_build_camera_wrappers@
+#endif
+
+// Bilateral-grid affine-matrix dimensions (see FusedBgGridLosses). The grid
+// stores one 3x4 affine matrix per (b, d, h, w) cell, flattened into 12
+// channels. This layout is structural — the kernels and the Python wrapper
+// both hard-assume a 3x4 (12-channel) affine — so it is fixed here and is
+// deliberately NOT overrideable (a different count would silently disagree
+// with the wrapper's cell-count math).
+#define LOSSES_GRID_NUM_ROWS     3
+#define LOSSES_GRID_NUM_COLS     4
+#define LOSSES_GRID_NUM_CHANNELS (LOSSES_GRID_NUM_ROWS * LOSSES_GRID_NUM_COLS)
+
+#ifndef GSPLAT_NUM_CHANNELS
+#define GSPLAT_NUM_CHANNELS @_gsplat_final_num_channels_csv@
+#endif
+
+#ifndef GSPLAT_MACRO_TILE_RENDER_TILE_SIZES
+#define GSPLAT_MACRO_TILE_RENDER_TILE_SIZES 8, 16
+#endif

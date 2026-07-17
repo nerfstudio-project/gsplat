@@ -16,25 +16,21 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
+#include <cuda/std/optional>
 
-#if GSPLAT_BUILD_3DGUT
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-#    include <cuda/std/optional>
-
-#    include "Common.h"
-#    include "ExternalDistortion.cuh"
-#    include "Projection.h"
-#    include "Utils.cuh"
-#    include "Cameras.cuh"
-#    include "Lidars.cuh"
-#    include "Sensors.cuh"
-#    include "Dispatch.h"
+#include "Common.h"
+#include "ExternalDistortion.cuh"
+#include "Projection.h"
+#include "Utils.cuh"
+#include "Cameras.cuh"
+#include "Lidars.cuh"
+#include "Sensors.cuh"
+#include "Dispatch.h"
 
 namespace gsplat
 {
@@ -427,5 +423,3 @@ void launch_projection_ut_3dgs_fused_kernel(
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 } // namespace gsplat
-
-#endif

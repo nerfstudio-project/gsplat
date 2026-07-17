@@ -51,8 +51,7 @@ gsplat/<name>/
     <domain>_ops.py
     ...
     cuda/
-      __init__.py
-      build.py
+      CMakeLists.txt
       ext.cpp
       csrc/
         *.cu
@@ -194,7 +193,7 @@ This keeps backend concerns from leaking into the public API surface.
 Libraries with native CUDA code should follow the same top-level extension
 structure:
 
-- `kernels/cuda/build.py`: JIT build and load logic
+- `kernels/cuda/CMakeLists.txt`: extension target and source list
 - `kernels/cuda/csrc/ext.cpp`: C++ binding layer and PyBind exports
 - `kernels/cuda/csrc/*.cuh`: device-side helpers and per-row/per-element logic
 - `kernels/cuda/csrc/*.cu`: host launch code, `__global__` kernels, dispatch,
@@ -221,10 +220,10 @@ launch logic localized.
 Libraries with native extensions should mirror the same build model unless there
 is a strong reason not to:
 
-- JIT loading via `torch.utils.cpp_extension`
+- one CMake target per extension
 - stable extension naming per library
-- cached build-parameter invalidation
-- explicit compile flags in `build.py`
+- explicit source lists and target dependencies
+- shared compile configuration from the top-level CMake project
 
 Compatibility rules:
 

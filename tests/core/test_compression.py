@@ -27,19 +27,17 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 device = torch.device("cuda:0")
 
 
 def _native_cuda_major() -> int:
-    """Return the built extension's CUDA major or skip a CPU-only installation."""
+    """Return the CUDA major embedded in the CMake-built extension."""
 
     from gsplat.cuda._wrapper import _build_config
 
-    build_config = _build_config()
-    if not build_config:
-        pytest.skip("CUDA extension was not built")
-
-    cuda_version = build_config.get("cuda_version")
+    cuda_version = _build_config().get("cuda_version")
     assert type(cuda_version) is int
     assert cuda_version >= 1000
     return cuda_version // 1000
@@ -63,7 +61,6 @@ def test_png_dependency_failures_are_atomic(monkeypatch, tmp_path, cupy_state):
         error = "requires a CUDA-matched CuPy"
     else:
         cupy_cuda_major = cuda_major + 1
-        monkeypatch.setattr(torch.version, "cuda", f"{cupy_cuda_major}.0")
         monkeypatch.setitem(
             sys.modules,
             "cupy",
@@ -137,8 +134,8 @@ def test_flas_sort_preserves_alignment_and_seed():
         torch.testing.assert_close(results[0][name], results[1][name])
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_png_compression():
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
+def test_png_compression(tmp_path):
     from gsplat.compression import PngCompression
 
     torch.manual_seed(42)
@@ -156,14 +153,10 @@ def test_png_compression():
             "features": torch.randn(N, 128),
         }
     ).to(device)
-    compress_dir = "/tmp/gsplat/compression"
+    compress_dir = str(tmp_path / "compression")
 
     compression_method = PngCompression()
     # run compression and save the compressed files to compress_dir
     compression_method.compress(compress_dir, splats)
     # decompress the compressed files
     splats_c = compression_method.decompress(compress_dir)
-
-
-if __name__ == "__main__":
-    test_png_compression()

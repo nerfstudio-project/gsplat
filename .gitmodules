@@ -1,5 +1,5 @@
-[submodule "gsplat/cuda/csrc/third_party/glm"]
-	path = gsplat/cuda/csrc/third_party/glm
+[submodule "third_party/glm"]
+	path = third_party/glm
 	url = https://github.com/g-truc/glm.git
 [submodule "third_party/googletest"]
 	path = third_party/googletest

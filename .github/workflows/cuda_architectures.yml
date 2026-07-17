@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: CUDA Architecture Compile Check
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
+  pull_request:
+    branches: [main]
+    paths:
+      - CMakeLists.txt
+      - CMakePresets.json
+      - 'cmake/**'
+      - gsplat/CMakeLists.txt
+      - gsplat/cuda/CMakeLists.txt
+      - 'gsplat/cuda/csrc/**'
+      - third_party/glm
+      - 'gsplat/geometry/kernels/cuda/**'
+      - 'gsplat/scene/kernels/cuda/**'
+      - 'gsplat/sensors/kernels/cuda/**'
+      - 'gsplat/experimental/render/kernels/cuda/**'
+      - '.github/workflows/cuda/**'
+      - .github/workflows/cuda_architectures.yml
+  push:
+    branches: [main]
+    paths:
+      - CMakeLists.txt
+      - CMakePresets.json
+      - 'cmake/**'
+      - gsplat/CMakeLists.txt
+      - gsplat/cuda/CMakeLists.txt
+      - 'gsplat/cuda/csrc/**'
+      - third_party/glm
+      - 'gsplat/geometry/kernels/cuda/**'
+      - 'gsplat/scene/kernels/cuda/**'
+      - 'gsplat/sensors/kernels/cuda/**'
+      - 'gsplat/experimental/render/kernels/cuda/**'
+      - '.github/workflows/cuda/**'
+      - .github/workflows/cuda_architectures.yml
+
+permissions:
+  contents: read
+
+env:
+  CCACHE_MAXSIZE: 5G
+  CMAKE_BUILD_PARALLEL_LEVEL: '2'
+
+jobs:
+  compile:
+    name: Compile all supported CUDA architectures
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      CCACHE_SHA256: 630c34ec94d451b200f5b14a6a25580d6a45bc80c394b7e0b93e33556eee5d32
+      CCACHE_VERSION: 4.12.2
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Free up disk space
+        run: sudo rm -rf /usr/share/dotnet
+
+      - name: Install CUDA 13.0
+        run: bash .github/workflows/cuda/Linux.sh cu130
+
+      - name: Configure CUDA environment
+        run: |
+          source .github/workflows/cuda/Linux-env.sh cu130
+          printf '%s\n' \
+            "CUDA_HOME=${CUDA_HOME}" \
+            "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" \
+            >> "$GITHUB_ENV"
+          printf '%s\n' "${CUDA_HOME}/bin" >> "$GITHUB_PATH"
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          # ccache's default cache directory; CCACHE_DIR is deliberately unset.
+          path: ~/.cache/ccache
+          key: cuda-architectures-ccache-cu130-${{ env.CCACHE_VERSION }}-${{ github.sha }}
+          restore-keys: |
+            cuda-architectures-ccache-cu130-${{ env.CCACHE_VERSION }}-
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade 'setuptools<82'
+          python -m pip install \
+            torch==2.10.0 \
+            --index-url https://download.pytorch.org/whl/cu130
+          python -m pip install 'cmake>=3.26' ninja
+
+          ccache_archive="$RUNNER_TEMP/ccache.tar.xz"
+          ccache_root="$RUNNER_TEMP/ccache-bin"
+          curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --output "$ccache_archive" \
+            "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}-linux-x86_64.tar.xz"
+          printf '%s  %s\n' "$CCACHE_SHA256" "$ccache_archive" \
+            | sha256sum --check --strict
+          mkdir -p "$ccache_root"
+          tar \
+            --extract \
+            --file "$ccache_archive" \
+            --directory "$ccache_root" \
+            --strip-components=1
+          printf '%s\n' "$ccache_root" >> "$GITHUB_PATH"
+
+      - name: Compile full architecture set
+        run: |
+          cmake \
+            --preset full-release \
+            -DGSPLAT_BUILD_TESTS=OFF \
+            -DGSPLAT_FORCE_CCACHE=ON
+          cmake \
+            --build \
+            --preset full-release

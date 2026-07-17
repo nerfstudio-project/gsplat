@@ -26,13 +26,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from PIL import Image
 
-# Pillow + tqdm are `[examples]` / `[dev]` extras — skip the whole module
-# cleanly if a fresh `pip install .` doesn't pull them. Must
-# importorskip *before* we touch examples.dynamic_surgical_trainer which
-# imports tqdm at module top.
-Image = pytest.importorskip("PIL.Image")
-pytest.importorskip("tqdm")
+from tests._cuda import cuda_is_available
+
+# Pillow and tqdm are declared test dependencies. Import Pillow normally and
+# let the trainer import tqdm below so either missing package fails collection
+# instead of silently dropping coverage.
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -195,7 +195,7 @@ def test_init_means_inside_derived_hexplane_aabb(trainer_dir: Path):
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available() or _ENDONERF_DATA_DIR is None,
+    not cuda_is_available() or _ENDONERF_DATA_DIR is None,
     reason=(
         "Requires CUDA and ENDONERF_DATA_DIR env var pointing at a "
         "pulling-style EndoNeRF directory."

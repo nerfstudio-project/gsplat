@@ -16,31 +16,31 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_3DGUT
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cassert>
+#include <cuda/std/optional>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cassert>
-#    include <cuda/std/optional>
-
-#    include "Common.h"
-#    include "ExternalDistortion.cuh"
-#    include "RasterizeCSR.cuh"
-#    include "RasterizeToPixelsFromWorld3DGS.h"
-#    include "RasterizeToPixelsFromWorld3DGS.cuh"
-#    include "Cameras.cuh"
-#    include "Lidars.cuh"
-#    include "TorchUtils.h"
-#    include "Utils.cuh"
-#    include "Dispatch.h"
+#include "Common.h"
+#include "ExternalDistortion.cuh"
+#include "RasterizeCSR.cuh"
+#include "RasterizeToPixelsFromWorld3DGS.h"
+#include "RasterizeToPixelsFromWorld3DGS.cuh"
+#include "Cameras.cuh"
+#include "Lidars.cuh"
+#include "TorchUtils.h"
+#include "Utils.cuh"
+#include "Dispatch.h"
 
 namespace gsplat
 {
 using SupportedChannels       = dispatch::IntParam<GSPLAT_NUM_CHANNELS>;
 using MaskedOutputSafetyModes = dispatch::IntParam<0, 1>;
+
+#ifdef GSPLAT_INSTANTIATE_TEMPLATE
 
 // CtaSizeForTile (the tile_size -> CTA_SIZE launch-variant mapping) and
 // SupportedTileSizes live in RasterizeToPixelsFromWorld3DGS.cuh.
@@ -531,51 +531,90 @@ __global__ void
     }
 }
 
-void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
-    // Gaussian parameters
-    const at::Tensor means,                     // [..., N, 3]
-    const at::Tensor quats,                     // [..., N, 4]
-    const at::Tensor scales,                    // [..., N, 3]
-    const at::Tensor colors,                    // [..., C, N, channels] or [nnz, channels]
-    const at::Tensor opacities,                 // [..., C, N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [..., C, channels]
-    const at::optional<at::Tensor> masks,       // [..., C, grid_h, grid_w]
-    // image size
+#endif
+
+template<uint32_t Channels>
+struct RasterizeToPixelsFromWorld3DGSSerialBatchFwdLauncher
+{
+    static void launch(
+        const at::Tensor &means,
+        const at::Tensor &quats,
+        const at::Tensor &scales,
+        const at::Tensor &colors,
+        const at::Tensor &opacities,
+        const at::optional<at::Tensor> &backgrounds,
+        const at::optional<at::Tensor> &masks,
+        const uint32_t image_width,
+        const uint32_t image_height,
+        const uint32_t tile_size,
+        const at::Tensor &viewmats0,
+        const at::optional<at::Tensor> &viewmats1,
+        const at::Tensor &Ks,
+        const CameraModelType camera_model,
+        const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+        ShutterType rs_type,
+        const at::optional<at::Tensor> &rays,
+        const at::optional<at::Tensor> &radial_coeffs,
+        const at::optional<at::Tensor> &tangential_coeffs,
+        const at::optional<at::Tensor> &thin_prism_coeffs,
+        const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+        const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+        const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+        const at::Tensor &isect_offsets,
+        const at::Tensor &flatten_ids,
+        const bool use_hit_distance,
+        const bool unsafe_masked_tile_outputs,
+        const at::Tensor &batches_per_tile,
+        const at::Tensor &batch_offsets,
+        const int64_t total_batches,
+        at::Tensor &renders,
+        at::Tensor &alphas,
+        at::Tensor &last_ids,
+        at::optional<at::Tensor> &sample_counts,
+        at::optional<at::Tensor> &normals,
+        at::Tensor &fwd_batch_state
+    );
+};
+
+#ifdef GSPLAT_INSTANTIATE_TEMPLATE
+template<uint32_t Channels>
+void RasterizeToPixelsFromWorld3DGSSerialBatchFwdLauncher<Channels>::launch(
+    const at::Tensor &means,
+    const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &colors,
+    const at::Tensor &opacities,
+    const at::optional<at::Tensor> &backgrounds,
+    const at::optional<at::Tensor> &masks,
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
-    // camera
-    const at::Tensor viewmats0,               // [..., C, 4, 4]
-    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
-    const at::Tensor Ks,                      // [..., C, 3, 3]
+    const at::Tensor &viewmats0,
+    const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks,
     const CameraModelType camera_model,
-    // unscented transform
     const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
-    const at::optional<at::Tensor> rays,              // [...., C, H, W, 6]
-    const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
-    const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
+    const at::optional<at::Tensor> &rays,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
     const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
-    // external distortion
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
-    // intersections
-    const at::Tensor isect_offsets, // [..., C, grid_h, grid_w]
-    const at::Tensor flatten_ids,   // [n_isects]
+    const at::Tensor &isect_offsets,
+    const at::Tensor &flatten_ids,
     const bool use_hit_distance,
     const bool unsafe_masked_tile_outputs,
-    // CSR batch structure (precomputed by caller, shared with bwd)
-    const at::Tensor batches_per_tile, // [num_tiles] int32
-    const at::Tensor batch_offsets,    // [num_tiles + 1] int32
-    const int64_t total_batches,       // scalar; equals batch_offsets[num_tiles]
-    // outputs
-    at::Tensor renders,                     // [..., C, image_height, image_width, channels]
-    at::Tensor alphas,                      // [..., C, image_height, image_width]
-    at::Tensor last_ids,                    // [..., C, image_height, image_width]
-    at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
-    at::optional<at::Tensor> normals,       // [..., C, image_height, image_width, 3]
-    at::Tensor fwd_batch_state              // [total_batches, state_dim, pixels_per_tile] fp32
+    const at::Tensor &batches_per_tile,
+    const at::Tensor &batch_offsets,
+    const int64_t total_batches,
+    at::Tensor &renders,
+    at::Tensor &alphas,
+    at::Tensor &last_ids,
+    at::optional<at::Tensor> &sample_counts,
+    at::optional<at::Tensor> &normals,
+    at::Tensor &fwd_batch_state
 )
 {
     // Note: quats need to be normalized before passing in.
@@ -630,11 +669,11 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
 
     const int32_t channels = colors.size(-1);
     TORCH_CHECK_VALUE(
-        SupportedChannels::contains(channels),
+        channels == Channels,
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     TORCH_CHECK_VALUE(
@@ -652,13 +691,10 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
     // from CTA_SIZE so the schedule stays valid past CTA=32.
     const int safe_masked_outputs = unsafe_masked_tile_outputs ? 0 : 1;
     const bool return_normals     = normals.has_value();
-    auto launch_kernel            = [&]<typename ChannelsT,
-                                        typename TileSizeT,
-                                        typename ReturnNormalsT,
-                                        typename UseHitDistanceT,
-                                        typename SafeMaskedOutputsT>()
+    auto launch_kernel
+        = [&]<typename TileSizeT, typename ReturnNormalsT, typename UseHitDistanceT, typename SafeMaskedOutputsT>()
     {
-        constexpr uint32_t CDIM            = ChannelsT::value;
+        constexpr uint32_t CDIM            = Channels;
         constexpr uint32_t TILE_SIZE       = TileSizeT::value;
         constexpr uint32_t CTA_SIZE        = CtaSizeForTile<TILE_SIZE>::value;
         constexpr bool ReturnNormals       = static_cast<bool>(ReturnNormalsT::value);
@@ -737,7 +773,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
         );
     };
     const bool dispatched = dispatch::dispatch(
-        SupportedChannels{channels},
         SupportedTileSizes{static_cast<int>(tile_size)},
         dispatch::IntParam<0, 1>{return_normals ? 1 : 0},
         dispatch::IntParam<0, 1>{use_hit_distance ? 1 : 0},
@@ -746,6 +781,10 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
     );
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
+
+template struct RasterizeToPixelsFromWorld3DGSSerialBatchFwdLauncher<GSPLAT_CHANNEL_INSTANCE>;
+
+#else
 
 void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
     // Gaussian parameters
@@ -794,45 +833,57 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
     at::Tensor fwd_batch_state              // [total_batches, state_dim, pixels_per_tile] fp32
 )
 {
-    launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
-        means,
-        quats,
-        scales,
-        colors,
-        opacities,
-        backgrounds,
-        masks,
-        image_width,
-        image_height,
-        tile_size,
-        viewmats0,
-        viewmats1,
-        Ks,
-        camera_model,
-        ut_params,
-        rs_type,
-        rays,
-        radial_coeffs,
-        tangential_coeffs,
-        thin_prism_coeffs,
-        ftheta_coeffs,
-        lidar_coeffs,
-        external_distortion_params,
-        isect_offsets,
-        flatten_ids,
-        use_hit_distance,
-        unsafe_masked_tile_outputs,
-        batches_per_tile,
-        batch_offsets,
-        total_batches,
-        renders,
-        alphas,
-        last_ids,
-        sample_counts,
-        normals,
-        fwd_batch_state
+    const int32_t channels = colors.size(-1);
+    auto launch            = [&]<typename ChannelsT>()
+    {
+        RasterizeToPixelsFromWorld3DGSSerialBatchFwdLauncher<ChannelsT::value>::launch(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            image_width,
+            image_height,
+            tile_size,
+            viewmats0,
+            viewmats1,
+            Ks,
+            camera_model,
+            ut_params,
+            rs_type,
+            rays,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            ftheta_coeffs,
+            lidar_coeffs,
+            external_distortion_params,
+            isect_offsets,
+            flatten_ids,
+            use_hit_distance,
+            unsafe_masked_tile_outputs,
+            batches_per_tile,
+            batch_offsets,
+            total_batches,
+            renders,
+            alphas,
+            last_ids,
+            sample_counts,
+            normals,
+            fwd_batch_state
+        );
+    };
+    const bool dispatched = dispatch::dispatch(SupportedChannels{channels}, std::move(launch));
+    TORCH_CHECK_VALUE(
+        dispatched,
+        "Unsupported number of color channels: ",
+        channels,
+        ". To add support, rebuild gsplat with this channel count included "
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 }
-} // namespace gsplat
 
 #endif
+} // namespace gsplat

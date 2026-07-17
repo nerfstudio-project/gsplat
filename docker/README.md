@@ -91,7 +91,9 @@ After building, test the image:
 ```
 
 This runs the complete test suite and verifies that the Docker
-image works correctly with your changes. See [`../tests/README.md`](../tests/README.md)
+image works correctly with your changes. The container's CMake build
+trees live in the repository under `build/docker/` and are visible from
+the host. See [`../tests/README.md`](../tests/README.md)
 for more details on test options.
 
 ### Versioning Requirements

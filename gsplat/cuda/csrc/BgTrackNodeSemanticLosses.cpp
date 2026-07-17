@@ -15,20 +15,16 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/core/Tensor.h>
+#include <c10/util/ArrayRef.h>
+#include <c10/util/OptionalArrayRef.h>
+#include <torch/library.h>
 
-#if GSPLAT_BUILD_LOSSES
+#include <cstdint>
+#include <optional>
+#include <vector>
 
-#    include <ATen/core/Tensor.h>
-#    include <c10/util/ArrayRef.h>
-#    include <c10/util/OptionalArrayRef.h>
-#    include <torch/library.h>
-
-#    include <cstdint>
-#    include <optional>
-#    include <vector>
-
-#    include "BgTrackNodeSemanticLosses.h"
+#include "BgTrackNodeSemanticLosses.h"
 
 namespace gsplat
 {
@@ -241,5 +237,3 @@ void register_bg_track_node_semantic_losses_cuda_impl(torch::Library &m)
     m.impl("bg_track_node_semantic_losses_bwd", &bg_track_node_semantic_losses_bwd);
 }
 } // namespace gsplat
-
-#endif

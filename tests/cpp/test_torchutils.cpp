@@ -42,9 +42,6 @@
 //     that names the field (turning a null deref into an attributable failure).
 //   - gsplat::detail traits: classify the type shapes that drive dispatcher
 //     marshalling and saved-state routing.
-//
-// Pytest owns discovery/execution via tests/test_cpp.py; this calls the helpers
-// directly.
 
 namespace
 {

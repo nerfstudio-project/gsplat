@@ -15,19 +15,15 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAStream.h>
 
-#if GSPLAT_BUILD_LOSSES
+#include <cmath>
+#include <cstdint>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAException.h>
-#    include <c10/cuda/CUDAStream.h>
-
-#    include <cmath>
-#    include <cstdint>
-
-#    include "cores/DeformCore.cuh"
+#include "cores/DeformCore.cuh"
 
 namespace gsplat
 {
@@ -287,5 +283,3 @@ void launch_deform_losses_bwd_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

@@ -22,6 +22,8 @@ pre-allocated output buffers, and confirms the op's dispatch table properties.
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 
 def _make_gaussians(N=100, sh_degree=None, device="cuda"):
     torch.manual_seed(12345)
@@ -95,7 +97,7 @@ _PARITY_CASES = [
 ]
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.parametrize("sh_degree,sh_compression", _PARITY_CASES)
 def test_forward_parity(sh_degree, sh_compression):
     """Python-packed scene and C++-packed scene render bit-exact via gaussian_render_inference_only."""
@@ -173,7 +175,7 @@ def test_forward_parity(sh_degree, sh_compression):
 # ------------------------------------------------------------------ #
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_out_renders_out_alphas():
     """Pre-allocated buffers must be written in-place and match the no-buffer call."""
     from gsplat.experimental.render.kernels._backend import _C  # noqa: F401
@@ -251,7 +253,7 @@ def test_out_renders_out_alphas():
 # ------------------------------------------------------------------ #
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 def test_op_smoke():
     """The new op must exist, have a CUDA dispatch key, and NOT have AutogradCUDA."""
     from gsplat.experimental.render.kernels._backend import _C  # noqa: F401

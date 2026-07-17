@@ -28,12 +28,13 @@ import os
 import re
 import sys
 import types
-from pathlib import Path
 
 import pytest
 import torch
 
-PROFILE_PATH = Path(__file__).resolve().parents[2] / "gsplat" / "profile.py"
+from .._package_paths import gsplat_package_file
+
+PROFILE_PATH = gsplat_package_file("profile.py")
 
 
 @pytest.fixture

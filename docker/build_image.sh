@@ -60,7 +60,6 @@ fi
 
 build_args=(
   --build-context "gsplatrepo=$REPOROOT"
-  --build-arg "IMAGE_VERSION=$IMAGE_TAG"
   --build-arg "DOCKER_REGISTRY=$DOCKER_REGISTRY"
   --target main
   -t "$IMAGE_URL"

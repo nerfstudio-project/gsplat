@@ -23,7 +23,7 @@ limitations under the License.
 It owns the native CUDA sources for camera and spinning-LiDAR projection, the
 C++ `torch::class_<>` registrations for sensor parameter types, the Torch op
 bindings, the Python autograd wrappers that drive them, the dispatch tables,
-and the JIT build configuration for the `gsplat_sensors_cuda` extension.
+and the CMake target for the `gsplat_sensors_cuda` extension.
 
 It does not own the public stateless API (that is `gsplat/sensors/functional/`,
 see `design-functional.md`) or the `nn.Module` surface that wraps it (that is
@@ -98,7 +98,7 @@ the per-call API takes the projection and distortion objects directly.
 ```text
 gsplat/sensors/kernels/
   __init__.py
-  _backend.py                       # prebuilt-import then JIT fallback
+  _backend.py                       # lazy CMake-built extension import
   projective_sensor_ops.py          # cross-family Python dispatch tables
   cameras/
     __init__.py                     # curated re-exports for tests / models
@@ -117,8 +117,7 @@ gsplat/sensors/kernels/
     tensor_ops.py                   # shared tensor validation and movement
     utils.py                        # wxyz_to_xyzw, xyzw_to_wxyz, poses_to_matrix, ...
   cuda/
-    __init__.py
-    build.py                        # JIT build via torch.utils.cpp_extension.load
+    CMakeLists.txt                  # gsplat_sensors_cuda target and source list
     ext.cpp                         # TORCH_LIBRARY + PYBIND11_MODULE
     csrc/
       camera_params.h               # bridge POD + per-pair _launch prototypes
@@ -376,7 +375,7 @@ trajectory backward path where query time is differentiable.
 
 | Path | Owns |
 | --- | --- |
-| `kernels/_backend.py` | Prebuilt `gsplat_sensors_cuda` import, `GSPLAT_SENSORS_FORCE_JIT=1` override, JIT fallback wiring. |
+| `kernels/_backend.py` | Lazy import and caching for the CMake-built `gsplat_sensors_cuda` extension. |
 | `kernels/projective_sensor_ops.py` | Seven `(projection, distortion)`-keyed dispatch dicts + the public `_DISPATCH_TABLES` registry and `_lookup` helper. |
 | `tests/sensors/kernels/test_projective_sensor_ops.py` | Dispatch-table conformance + a smoke test that the `None`-distortion path raises and the bivariate path returns a valid point. |
 | `tests/sensors/kernels/test_lidar_dispatch.py` | Single-key LiDAR dispatch conformance for all five LiDAR ops. |
@@ -390,7 +389,7 @@ trajectory backward path where query time is differentiable.
 | `tests/sensors/kernels/lidars/test_ops.py` | LiDAR forward/backward tests against runtime oracles, analytic geometry checks, round-trip recovery, and fp64 gradcheck coverage. |
 | `kernels/common/pose.py` | `Pose`, `DynamicPose`, `Trajectory` dataclasses and `DynamicPose.from_static_pose` / `to_trajectory` helpers. |
 | `kernels/common/utils.py` | `wxyz_to_xyzw`, `xyzw_to_wxyz`, `poses_to_matrix`, `valid_flags_to_indices`. |
-| `kernels/cuda/build.py` | `get_build_parameters()` + `build_and_load_sensors_cuda()` JIT entry; `DEBUG` / `NVCC_FLAGS` / `VERBOSE` env handling; stale ninja lock cleanup. |
+| `kernels/cuda/CMakeLists.txt` | `gsplat_sensors_cuda` target, explicit source list, and geometry-header dependency. |
 | `kernels/cuda/csrc/ext.cpp` | TorchScript class registrations, camera per-pair `m.def` bindings, LiDAR op bindings, and `PYBIND11_MODULE` re-export of `ShutterType` / `SpinningDirection`. |
 | `csrc/camera_params.h` | Projection kernel-parameter PODs + 36 forward + 36 backward `_launch` prototypes + rolling-shutter iteration bounds. Forward-declared `cudaStream_t`. |
 | `csrc/external_distortion_params.h` | `NoExternalDistortion_KernelParameters`, `BivariateWindshieldDistortion_KernelParameters`, `DistortionSensor`, `DistortionOpFamily`, `DistortionDirection`, the policy tags, and host-safe `DistortionScratchTraits` specializations. |
@@ -413,12 +412,10 @@ trajectory backward path where query time is differentiable.
 
 ## Build configuration
 
-The extension is built via `torch.utils.cpp_extension.load` driven by
-`build_and_load_sensors_cuda` in `kernels/cuda/build.py`. The extension name
-is `gsplat_sensors_cuda`. Both host C++ and nvcc compile at `-std=c++20`
-(MSVC: `/std:c++20` with `/Zc:preprocessor` mirrored into nvcc via
-`-Xcompiler`); host and nvcc flags are populated independently rather than
-folded together on Windows. Sources split cleanly between compilers:
+The extension is the `gsplat_sensors_cuda` CMake target defined in
+`kernels/cuda/CMakeLists.txt`. It inherits the project's C++20, CUDA
+architecture, fast-math, warning, and debug-information settings through
+`gsplat_compile_opts`. Sources split cleanly between compilers:
 
 - `nvcc`: `camera_kernel.cu`, `camera_kernel_backward.cu`,
   `ftheta_kernel.cu`, `ftheta_kernel_backward.cu`, `fisheye_kernel.cu`,
@@ -426,28 +423,15 @@ folded together on Windows. Sources split cleanly between compilers:
 - Host C++: `ext.cpp`, `camera_torch.cpp`, `external_distortion_torch.cpp`,
   `lidar_torch.cpp`.
 
-`extra_include_paths` pulls in `gsplat/geometry/kernels/cuda/csrc` so the CUDA
+The target includes `gsplat/geometry/kernels/cuda/csrc` so the CUDA
 TUs can `#include` geometry headers (`quaternion.cuh`, `pose.cuh`,
 `coordinate_conversions.cuh`) from the geometry module without duplicating
 quaternion, SE3-transform, or ray/angle coordinate-conversion device math.
 
-Environment toggles, honoured at import time:
-
-- `DEBUG=1` switches `-O3 -DNDEBUG` to `-g -O0`.
-- `NVCC_FLAGS` is a space-separated list forwarded to nvcc.
-- `VERBOSE=1` enables verbose JIT load.
-- `GSPLAT_BUILD_LOCK_AGE_S` (default 1800s) bounds how long a stale ninja
-  lock is tolerated before removal.
-
-The build emits a JSON snapshot of every flag and source path into
-`build_params.json` alongside the build directory. On flag change the
-directory is wiped and rebuilt cleanly so a stale `.so` cannot survive a
-compiler-flag toggle.
-
-`_backend.py` prefers importing the prebuilt `gsplat_sensors_cuda` wheel on
-process start and only falls through to the JIT path if that import fails or
-if `GSPLAT_SENSORS_FORCE_JIT=1` is set. The JIT path is the dev workflow;
-the wheel path is the deployment workflow.
+Raw CMake builds emit the extension into the build-tree Python directory.
+Wheel builds install it through the `gsplat_runtime` component. `_backend.py`
+imports that module lazily on first native operation and caches either the
+loaded module or its import failure.
 
 ## Naming and API Semantics
 
@@ -492,9 +476,8 @@ the wheel path is the deployment workflow.
   five ops against oracles derived at runtime from the reference sensor JSONs
   (`generic`, with per-row offsets, and `waymo`, without) — analytic cases,
   table-gather reference, round-trip recovery, and fp64 gradcheck.
-- `tests/sensors/kernels/test_backend.py` covers `gsplat_sensors_cuda` import behaviour
-  (prebuilt vs JIT, `GSPLAT_SENSORS_FORCE_JIT`) and snapshots native camera-op
-  schemas and registered custom classes.
+- `tests/sensors/kernels/test_backend.py` verifies that `gsplat_sensors_cuda` loads and
+  registers its required Torch operators, classes, and enums.
 - Public-API-shape tests (return-type dataclasses, `Pose | DynamicPose`
   handling, the `CameraModel` surface) live in `tests/sensors/functional/` and
   `tests/sensors/models/` and are not duplicated here.
@@ -529,7 +512,7 @@ the wheel path is the deployment workflow.
   the only pose representation that crosses the C++ boundary. Pose
   dataclasses are unpacked to tensors immediately before
   `Function.apply(...)`.
-- The build is JIT by default with prebuilt wheel preference; flag changes
-  trigger a clean rebuild via the `build_params.json` snapshot.
+- CMake builds the sensor extension; build options and source dependencies
+  participate in the normal incremental build graph.
 - `ShutterType` has exactly one definition in C++ (`csrc/shutter_type.h`)
   and is mirror-verified at Python import.

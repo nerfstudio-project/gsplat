@@ -21,13 +21,13 @@ vector norms, cosine similarity, and signed-bias detection.
 """
 
 import importlib.util
-from pathlib import Path
 
 import pytest
 import torch
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_HELPER_PATH = _REPO_ROOT / "gsplat" / "_helper.py"
+from .._package_paths import gsplat_package_file
+
+_HELPER_PATH = gsplat_package_file("_helper.py")
 _HELPER_SPEC = importlib.util.spec_from_file_location(
     "gsplat_helper_under_test", _HELPER_PATH
 )

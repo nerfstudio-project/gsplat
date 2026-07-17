@@ -15,7 +15,7 @@
 #include <cstring>
 #include <vector>
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
 #if GSPLAT_BUILD_3DGUT
 #    include "Cameras.cuh"

@@ -16,20 +16,16 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
+#include <vector>
 
-#if GSPLAT_BUILD_3DGS
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-#    include <vector>
-
-#    include "Common.h"
-#    include "Projection.h"
-#    include "Utils.cuh"
+#include "Common.h"
+#include "Projection.h"
+#include "Utils.cuh"
 
 namespace gsplat
 {
@@ -572,7 +568,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
         if(warp_group_g.thread_rank() == 0)
         {
             v_means += bid * N * 3 + gid * 3;
-#    pragma unroll
+#pragma unroll
             for(uint32_t i = 0; i < 3; i++)
             {
                 gpuAtomicAdd(v_means + i, v_mean[i]);
@@ -624,10 +620,10 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
         if(warp_group_c.thread_rank() == 0)
         {
             v_viewmats += bid * C * 16 + cid * 16;
-#    pragma unroll
+#pragma unroll
             for(uint32_t i = 0; i < 3; i++)
             { // rows
-#    pragma unroll
+#pragma unroll
                 for(uint32_t j = 0; j < 3; j++)
                 { // cols
                     atomicAdd_system(v_viewmats + i * 4 + j, v_R[j][i]);
@@ -812,14 +808,14 @@ void launch_projection_ewa_3dgs_fused_bwd_kernels(
                 }
             }
 
-#    if CUDART_VERSION < 13000
+#if CUDART_VERSION < 13000
             for(const auto range_id: c10::irange(prefetch_ptrs.size()))
             {
                 C10_CUDA_CHECK(
                     cudaMemPrefetchAsync(prefetch_ptrs[range_id], prefetch_sizes[range_id], device_id, stream)
                 );
             }
-#    else
+#else
             const cudaMemLocation location                  = {cudaMemLocationTypeDevice, device_id};
             std::vector<cudaMemLocation> prefetch_locations = {location};
             std::vector<size_t> prefetch_location_indices   = {0};
@@ -833,7 +829,7 @@ void launch_projection_ewa_3dgs_fused_bwd_kernels(
                 0,
                 stream
             ));
-#    endif
+#endif
 
             auto memset_range = [stream](const at::Tensor &tensor, int64_t row_offset, int64_t row_count)
             {
@@ -918,5 +914,3 @@ void launch_projection_ewa_3dgs_fused_bwd_kernels(
     merge_streams();
 }
 } // namespace gsplat
-
-#endif

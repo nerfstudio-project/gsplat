@@ -16,18 +16,14 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <cfloat>
 
-#if GSPLAT_BUILD_RELOC
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 
-#    include <cfloat>
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-
-#    include "Common.h"
-#    include "Relocation.h"
+#include "Common.h"
+#include "Relocation.h"
 
 namespace gsplat
 {
@@ -124,5 +120,3 @@ void launch_relocation_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

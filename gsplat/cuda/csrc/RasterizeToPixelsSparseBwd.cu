@@ -15,22 +15,20 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_3DGS
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <ATen/cuda/Atomic.cuh>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-
-#    include "Common.h"
-#    include "Dispatch.h"
-#    include "Rasterization.h"
-#    include "RasterizeSparseAddressing.cuh"
-#    include "RasterizeToPixels3DGSDevice.cuh"
-#    include "Utils.cuh"
+#include "Common.h"
+#include "Dispatch.h"
+#include "Rasterization.h"
+#include "RasterizeSparseAddressing.cuh"
+#include "RasterizeToPixels3DGSDevice.cuh"
+#include "Utils.cuh"
 
 namespace gsplat
 {
@@ -137,7 +135,7 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
 
     // df/d_out for this pixel
     float v_render_c[CDIM];
-#    pragma unroll
+#pragma unroll
     for(uint32_t k = 0; k < CDIM; ++k)
     {
         v_render_c[k] = inside ? v_render_colors[out_idx * CDIM + k] : 0.0f;
@@ -164,7 +162,7 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
             const float opac     = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr]      = conics[g];
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 rgbs_batch[tr * CDIM + k] = colors[g * CDIM + k];
@@ -248,7 +246,7 @@ __global__ void rasterize_to_pixels_sparse_bwd_kernel(
             {
                 int32_t g        = id_batch[t]; // flatten index in [I * N] or [nnz]
                 float *v_rgb_ptr = (float *)(v_colors) + CDIM * g;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
@@ -328,7 +326,7 @@ void launch_rasterize_to_pixels_sparse_bwd_kernel(
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     auto launch_kernel = [&]<typename ChannelsT>()
@@ -382,5 +380,3 @@ void launch_rasterize_to_pixels_sparse_bwd_kernel(
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 } // namespace gsplat
-
-#endif

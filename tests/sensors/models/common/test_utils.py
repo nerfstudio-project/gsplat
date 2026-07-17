@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 
 from gsplat.sensors.models.common import (
@@ -20,6 +21,8 @@ from gsplat.sensors.models.common import (
     wxyz_to_xyzw,
     xyzw_to_wxyz,
 )
+
+pytestmark = [pytest.mark.wheel_smoke]
 
 
 def test_compute_scaled_resolution():

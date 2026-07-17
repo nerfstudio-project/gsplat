@@ -16,18 +16,14 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
 
-#if GSPLAT_BUILD_3DGS
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-
-#    include "Common.h"
-#    include "QuatScaleToCovar.h"
-#    include "Utils.cuh"
+#include "Common.h"
+#include "QuatScaleToCovar.h"
+#include "Utils.cuh"
 
 namespace gsplat
 {
@@ -79,10 +75,10 @@ __global__ void quat_scale_to_covar_preci_fwd_kernel(
         else
         {
             covars += idx * 9;
-#    pragma unroll
+#pragma unroll
             for(uint32_t i = 0; i < 3; i++)
             { // rows
-#    pragma unroll
+#pragma unroll
                 for(uint32_t j = 0; j < 3; j++)
                 { // cols
                     covars[i * 3 + j] = covar[j][i];
@@ -105,10 +101,10 @@ __global__ void quat_scale_to_covar_preci_fwd_kernel(
         else
         {
             precis += idx * 9;
-#    pragma unroll
+#pragma unroll
             for(uint32_t i = 0; i < 3; i++)
             { // rows
-#    pragma unroll
+#pragma unroll
                 for(uint32_t j = 0; j < 3; j++)
                 { // cols
                     precis[i * 3 + j] = preci[j][i];
@@ -297,12 +293,12 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
     }
 
 // write out results
-#    pragma unroll
+#pragma unroll
     for(uint32_t k = 0; k < 3; ++k)
     {
         v_scales[k] = v_scale[k];
     }
-#    pragma unroll
+#pragma unroll
     for(uint32_t k = 0; k < 4; ++k)
     {
         v_quats[k] = v_quat[k];
@@ -415,5 +411,3 @@ void launch_quat_scale_to_covar_preci_bwd_kernels(
     merge_streams();
 }
 } // namespace gsplat
-
-#endif

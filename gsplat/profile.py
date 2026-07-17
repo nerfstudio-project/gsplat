@@ -158,11 +158,10 @@ import torch
 from torch.utils._pytree import tree_map
 
 # NOTE: do NOT import anything from the ``gsplat`` package at module scope —
-# importing ``gsplat`` runs its ``__init__.py``, which pulls in the CUDA
-# wrapper modules and triggers JIT compilation of the C++ extension. Users
-# of ``capture_inputs`` (notably ``gsplat.rendering``) should be able to
-# decorate their functions without paying that cost up-front. All gsplat
-# imports must be performed lazily inside the functions that need them.
+# importing ``gsplat`` runs its ``__init__.py`` and imports its public API.
+# Users of ``capture_inputs`` (notably ``gsplat.rendering``) should be able to
+# decorate their functions without initializing the package up front. All
+# gsplat imports must be performed lazily inside the functions that need them.
 
 
 def _detach_for_capture(x: Any) -> Any:
@@ -825,7 +824,7 @@ def _expected_kernel_families(
 
     This is intentionally a family-level list rather than a promise about exact
     template names. Exact names depend on channel count, dtype, packed mode,
-    camera model, and JIT/AOT dispatch.
+    and camera model.
     """
     kernels: list[str] = []
     if replay_name == "rasterization_2dgs":

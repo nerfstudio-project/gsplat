@@ -17,7 +17,7 @@
 
 The MT path should match the existing flat intersection path at rendered-output
 level for the standard 3DGS EWA cases covered here. Tolerances match what the
-existing `test_rasterize_to_pixels` accepts for FAST_MATH builds.
+existing `test_rasterize_to_pixels` accepts for `GSPLAT_FAST_MATH=ON` builds.
 """
 
 from __future__ import annotations
@@ -27,12 +27,12 @@ from typing import Tuple
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 import gsplat
-from gsplat.cuda._backend import _C
 from gsplat.cuda._wrapper import isect_tiles, isect_tiles_macro_binning
 
-if _C is None:
-    pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
+pytest.importorskip("gsplat.csrc", exc_type=ImportError)
 
 
 # --------------------------------------------------------------------------
@@ -120,7 +120,7 @@ def _render(
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
     "n_gauss,image_size",
@@ -152,7 +152,7 @@ def test_rasterize_macro_tile_parity_ewa(n_gauss: int, image_size: Tuple[int, in
     torch.testing.assert_close(alphas_mt, alphas_ref, rtol=1e-4, atol=2e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_macro_tile_segmented_sort_overflow_parity():
     """A single 8,193-item segment exercises segmented-sort overflow merging."""
@@ -188,7 +188,7 @@ def test_macro_tile_segmented_sort_overflow_parity():
     torch.testing.assert_close(alphas_mt, alphas_ref, rtol=1e-4, atol=2e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
     "n_gauss,image_size",
@@ -255,7 +255,7 @@ def test_rasterize_macro_tile_parity_ewa_two_images(
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
     "conic",
@@ -306,7 +306,7 @@ def test_ellipse_intersections_reject_invalid_discriminant(conic):
     assert flatten_ids.numel() == 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_macro_tile_zero_visible_gaussians():
     """Positive-depth Gaussians project offscreen and hit no render tiles."""
@@ -344,7 +344,7 @@ def test_macro_tile_zero_visible_gaussians():
     assert torch.all(alphas == 0)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_macro_tile_image_smaller_than_one_macrotile():
     """Image smaller than one macro-tile (8x4 render-tiles with
@@ -368,7 +368,7 @@ def test_macro_tile_image_smaller_than_one_macrotile():
     torch.testing.assert_close(out_mt, out_ref, rtol=1e-4, atol=1e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_macro_tile_all_gaussians_behind_camera():
     """Every Gaussian behind the camera (z < near_plane) — projection
@@ -403,7 +403,7 @@ def test_macro_tile_all_gaussians_behind_camera():
     assert torch.all(alphas == 0)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_macro_tile_image_not_multiple_of_macrotile_block():
     """Image dimensions are NOT a multiple of MACRO_TILE_WIDTH/HEIGHT *
@@ -433,7 +433,7 @@ def test_macro_tile_image_not_multiple_of_macrotile_block():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_macro_tile_with_packed_raises():
     """packed=True is not supported in this stage — raise so callers
@@ -443,7 +443,7 @@ def test_macro_tile_with_packed_raises():
         gsplat.rasterization(*scene, width=64, height=64, packed=True, macro_tile=True)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_macro_tile_with_ut_raises():

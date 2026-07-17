@@ -28,7 +28,7 @@ def sort_splats(splats: Dict[str, Tensor], verbose: bool = True) -> Dict[str, Te
     Assignment Sorting <https://doi.org/10.1111/cgf.14718>`_.
 
     .. warning::
-        A CUDA-matched PNG extra must be installed to use PNG compression.
+        The PNG extra must be installed to use PNG compression.
 
     Args:
         splats (Dict[str, Tensor]): splats

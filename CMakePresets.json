@@ -1,0 +1,160 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 26,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "_base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_COMPILE_WARNING_AS_ERROR": "ON",
+        "GSPLAT_BUILD_TESTS": "ON",
+        "GSPLAT_CCACHE_STATS": "ON",
+        "GSPLAT_PRESET": "${presetName}",
+        "GSPLAT_STRICT_SUBMODULES": "ON"
+      }
+    },
+    {
+      "name": "_dev",
+      "hidden": true,
+      "inherits": "_base",
+      "cacheVariables": {
+        "CMAKE_CUDA_ARCHITECTURES": "native",
+        "GSPLAT_CCACHE_STATS": "OFF",
+        "GSPLAT_DEVELOPMENT_MODE": "ON",
+        "GSPLAT_NUM_CHANNELS": "1,3,4,6,21,23,24,32",
+        "GSPLAT_STRICT_SUBMODULES": "OFF"
+      }
+    },
+    {
+      "name": "_portable",
+      "hidden": true,
+      "inherits": "_base",
+      "cacheVariables": {
+        "CMAKE_CUDA_ARCHITECTURES": "80-virtual"
+      }
+    },
+    {
+      "name": "_full",
+      "hidden": true,
+      "inherits": "_base",
+      "cacheVariables": {
+        "CMAKE_CUDA_ARCHITECTURES": "80;86-real;89-real;90-real;100-real;120-real"
+      }
+    },
+    {
+      "name": "_ci",
+      "hidden": true,
+      "inherits": "_portable",
+      "cacheVariables": {
+        "GSPLAT_NUM_CHANNELS": "1,3,4,6,21,23,24,32"
+      }
+    },
+    {
+      "name": "_debug",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "GSPLAT_FAST_MATH": "OFF"
+      }
+    },
+    {
+      "name": "_release",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "inherits": ["_portable", "_debug"]
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "inherits": ["_portable", "_release"]
+    },
+    {
+      "name": "dev-debug",
+      "displayName": "Development Debug",
+      "inherits": ["_dev", "_debug"]
+    },
+    {
+      "name": "dev-release",
+      "displayName": "Development Release",
+      "inherits": ["_dev", "_release"],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "full-release",
+      "displayName": "Full Release",
+      "inherits": ["_full", "_release"]
+    },
+    {
+      "name": "ci-debug",
+      "displayName": "CI Debug",
+      "inherits": ["_ci", "_debug"]
+    },
+    {
+      "name": "ci-release",
+      "displayName": "CI Release",
+      "inherits": ["_ci", "_release"]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "verbose": true
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "verbose": true
+    },
+    {
+      "name": "full-release",
+      "configurePreset": "full-release",
+      "verbose": true
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "source",
+      "displayName": "Source-tree checks (no compiled binaries required)",
+      "configurePreset": "release",
+      "filter": {
+        "include": {
+          "label": "source"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "source-checks",
+      "displayName": "Configure and run the source-tree checks",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "release"
+        },
+        {
+          "type": "test",
+          "name": "source"
+        }
+      ]
+    }
+  ]
+}

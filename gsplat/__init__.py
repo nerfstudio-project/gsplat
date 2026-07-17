@@ -14,7 +14,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import pkgutil
 import warnings
+from pathlib import Path
+
+
+def _add_cmake_build_package_path() -> None:
+    """Expose an explicitly selected CMake build beside the source package.
+
+    Commands launched from the repository resolve this source ``gsplat``
+    package before ``PYTHONPATH`` entries. The Docker development runner sets
+    ``GSPLAT_BUILD_DIR`` so native modules can still resolve from that exact
+    out-of-tree build, including for examples that prepend the repository to
+    :data:`sys.path` themselves.
+    """
+
+    build_dir = os.environ.get("GSPLAT_BUILD_DIR")
+    if not build_dir:
+        return
+
+    build_package = Path(build_dir) / "gsplat"
+    if build_package.is_dir() and str(build_package) not in __path__:
+        __path__.insert(0, str(build_package))
+
+
+_add_cmake_build_package_path()
+del _add_cmake_build_package_path
+
+# An embedding build system may stage the compiled extension modules under a
+# second sys.path root whose gsplat/ directory carries no Python sources.
+# Merge every such root into the package __path__ so the native submodules
+# resolve regardless of which root the package was imported from; the
+# explicit GSPLAT_BUILD_DIR selection above keeps priority by prepending.
+__path__ = pkgutil.extend_path(__path__, __name__)
 
 from .color_correct import color_correct_affine, color_correct_quadratic
 from .compression import PngCompression

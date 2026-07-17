@@ -24,10 +24,12 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 _scene = pytest.importorskip("gsplat.scene")
 SHCompressionMode = _scene.SHCompressionMode
 
-CUDA_AVAILABLE = torch.cuda.is_available()
+CUDA_AVAILABLE = cuda_is_available()
 pytestmark = pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available")
 
 # ---------------------------------------------------------------------------

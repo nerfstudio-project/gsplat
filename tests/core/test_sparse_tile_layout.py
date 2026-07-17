@@ -23,10 +23,12 @@ import math
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 device = torch.device("cuda:0")
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="build_sparse_tile_layout is CUDA-only"
+    not cuda_is_available(), reason="build_sparse_tile_layout is CUDA-only"
 )
 
 

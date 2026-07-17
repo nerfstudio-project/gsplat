@@ -118,8 +118,7 @@ gsplat/sensors/
       ops.py
       types.py
     cuda/
-      __init__.py
-      build.py
+      CMakeLists.txt
       ext.cpp
       csrc/
         camera_params.h

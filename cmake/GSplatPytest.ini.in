@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[pytest]
+minversion = 8.3.5
+testpaths =
+    "@_gsplat_pytest_test_path@"
+pythonpath =
+@_gsplat_pytest_python_path@
+addopts =
+    --import-mode=importlib
+    -p pytest_check
+    --confcutdir="@_gsplat_pytest_test_path@"
+filterwarnings =
+@_gsplat_pytest_warning_error_rule@    ignore::DeprecationWarning:_pytest
+    # nerfacc emits this warning for invalid \d escapes in its docstrings.
+    ignore:invalid escape sequence '\\d'\Z:SyntaxWarning
+markers =
+    camera_wrappers: requires optional camera-wrapper support in the extension
+    gradcheck: numerical autograd gradcheck (slow; CUDA double-precision)
+    slow: longer-running training or integration coverage
+    wheel_smoke: representative installed-wheel smoke coverage used by the wheel matrix

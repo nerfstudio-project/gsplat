@@ -18,6 +18,8 @@
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat import LossFlag, has_losses
 from gsplat.losses_fused import FusedSSIMLosses, _cuda_ssim_losses_available
 
@@ -26,7 +28,7 @@ if LossFlag is not None:
 else:
     _FLAG_INVALID = None
 
-SSIM_CUDA = torch.cuda.is_available() and _cuda_ssim_losses_available()
+SSIM_CUDA = cuda_is_available() and _cuda_ssim_losses_available()
 
 
 def _make_ssim_inputs(device, requires_grad=False, shape=(2, 40, 37, 3)):

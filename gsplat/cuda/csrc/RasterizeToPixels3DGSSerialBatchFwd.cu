@@ -16,21 +16,19 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_3DGS
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-
-#    include "Common.h"
-#    include "Dispatch.h"
-#    include "Prefetch.h"
-#    include "KernelUtils.cuh"
-#    include "Rasterization.h"
-#    include "RasterizeToPixels3DGSDevice.cuh"
-#    include "Utils.cuh"
+#include "Common.h"
+#include "Dispatch.h"
+#include "Prefetch.h"
+#include "KernelUtils.cuh"
+#include "Rasterization.h"
+#include "RasterizeToPixels3DGSDevice.cuh"
+#include "Utils.cuh"
 
 namespace gsplat
 {
@@ -112,7 +110,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     uint32_t out_y[PIXELS_PER_THREAD];
     float py[PIXELS_PER_THREAD];
     int32_t pix_id[PIXELS_PER_THREAD];
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         out_y[p]  = tile_y * TILE_SIZE + thread_y + p * ROW_STRIDE;
@@ -125,7 +123,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     // in the block and will block until all threads have evaluated the
     // predicate.
     uint32_t done_mask = (out_x >= image_width) ? ALL_DONE : 0;
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         if(out_y[p] >= image_height)
@@ -142,14 +140,14 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     // others are OOB.
     if(masks != nullptr && !masks[tile_id])
     {
-#    pragma unroll
+#pragma unroll
         for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
         {
             if(done_mask & (1u << p))
             {
                 continue; // this pixel is OOB, skip
             }
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 render_colors[pix_id[p] * CDIM + k] = backgrounds == nullptr ? 0.0f : backgrounds[k];
@@ -179,7 +177,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     // numerical precision so we use double for it. However double make bwd 1.5x
     // slower so we stick with float for now.
     float T[PIXELS_PER_THREAD];
-#    pragma unroll
+#pragma unroll
     for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
     {
         T[p] = 1.0f;
@@ -193,7 +191,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
     // register pressure (and icache pressure for long loops) without helping
     // throughput here. The inner per-pixel and per-CDIM loops below are also
     // unrolled.
-#    pragma unroll 1
+#pragma unroll 1
     for(uint32_t b = 0; b < num_batches; ++b)
     {
         // each thread fetch 1 gaussian from front to back
@@ -220,7 +218,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
             const float opac   = xy_opac.z;
             const float dx     = xy_opac.x - px;
 
-#    pragma unroll
+#pragma unroll
             for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
             {
                 if(done_mask & (1u << p))
@@ -246,7 +244,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
                 const int32_t g    = id_batch[t];
                 const float vis    = alpha * T[p];
                 const float *c_ptr = colors + g * CDIM;
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     pix_out[p][k] += c_ptr[k] * vis;
@@ -266,7 +264,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
 
     if(out_x < image_width)
     {
-#    pragma unroll
+#pragma unroll
         for(uint32_t p = 0; p < PIXELS_PER_THREAD; ++p)
         {
             if(out_y[p] < image_height)
@@ -277,7 +275,7 @@ __global__ void __launch_bounds__(CTA_SIZE) rasterize_to_pixels_3dgs_fwd_kernel(
                 // with float32. However, double precision makes the backward pass 1.5x
                 // slower so we stick with float for now.
                 render_alphas[pix_id[p]] = 1.0f - T[p];
-#    pragma unroll
+#pragma unroll
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     render_colors[pix_id[p] * CDIM + k]
@@ -326,7 +324,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     auto launch_kernel = [&]<typename ChannelsT>()
@@ -442,7 +440,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     auto launch_kernels = [&]<typename ChannelsT>()
@@ -597,5 +595,3 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
     merge_streams();
 }
 } // namespace gsplat
-
-#endif

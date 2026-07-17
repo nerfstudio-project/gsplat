@@ -25,7 +25,7 @@
 
 #include "Cameras.h"
 #include "Common.h"
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 #include "Lidars.h"
 #include "ExternalDistortion.h"
 #include "TorchUtils.h"

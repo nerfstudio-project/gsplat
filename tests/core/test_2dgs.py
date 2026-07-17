@@ -18,6 +18,8 @@ import math
 
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 from typing_extensions import Tuple
 import gsplat
 from gsplat._helper import (
@@ -74,7 +76,7 @@ def test_data():
     }
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
@@ -172,7 +174,7 @@ def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("packed", [False, True])
 def test_projection_2dgs_batched_warp_reduction_labels(packed: bool):
@@ -221,7 +223,7 @@ def test_projection_2dgs_batched_warp_reduction_labels(packed: bool):
     torch.testing.assert_close(v_viewmats, expected_viewmats, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("sparse_grad", [False])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
@@ -367,7 +369,7 @@ def test_fully_fused_projection_packed_2dgs(
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("channels", [3, 31])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
@@ -534,7 +536,7 @@ def test_rasterize_to_pixels_2dgs(
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("batch_dims", [(2,), (1, 2)])
 def test_rasterization_packed_2dgs(test_data, batch_dims: Tuple[int, ...]):
@@ -634,7 +636,7 @@ def _loss_2dgs_outputs(outputs, cotangents):
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("packed", [False, True])
 def test_rasterization_2dgs_multichunk_forward_backward(packed: bool):
@@ -718,7 +720,7 @@ def test_rasterization_2dgs_multichunk_forward_backward(packed: bool):
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("packed", [False, True])
 @pytest.mark.parametrize("depth_mode", ["expected", "median"])
@@ -805,7 +807,7 @@ def test_rasterization_2dgs_multichunk_depth_auxiliaries(packed: bool, depth_mod
         torch.testing.assert_close(actual_grad, expected_grad, rtol=1e-3, atol=1e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 def test_rasterization_2dgs_multichunk_absgrad_policy():
     from gsplat.rendering import rasterization_2dgs
@@ -820,7 +822,7 @@ def test_rasterization_2dgs_multichunk_absgrad_policy():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 def test_rasterization_packed_2dgs_pose_grad_large_nnz():
     # compute_directions switches to a per-(batch, camera) Python loop when
@@ -869,7 +871,7 @@ def test_rasterization_packed_2dgs_pose_grad_large_nnz():
     assert torch.isfinite(viewmats.grad).all()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
     # A masked-out tile takes the forward rasterizer's early-return branch,
@@ -936,7 +938,7 @@ def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
     assert means2d_absgrad.numel() == 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 def test_rasterize_to_pixels_2dgs_densify_gradient():
     # The densification gradient is the gradient w.r.t. the `densify` input and
@@ -1032,7 +1034,7 @@ def test_rasterize_to_pixels_2dgs_densify_gradient():
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 def test_fully_fused_projection_packed_2dgs_empty():
     # Packed 2DGS projection computed the batch count as numel/(N*3) before the

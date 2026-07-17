@@ -15,15 +15,11 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 
-#if GSPLAT_BUILD_3DGS
-
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-
-#    include "Rasterization.h"
-#    include "RasterizeContributingLaunch.cuh"
+#include "Rasterization.h"
+#include "RasterizeContributingLaunch.cuh"
 
 namespace gsplat
 {
@@ -276,5 +272,3 @@ void launch_rasterize_top_contributing_gaussian_ids_sparse_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

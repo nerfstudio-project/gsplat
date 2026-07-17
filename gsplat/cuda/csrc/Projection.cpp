@@ -33,7 +33,7 @@
 #include "Cameras.h"
 #include "Lidars.h"
 #include "Lidars.cuh"
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
 namespace gsplat
 {

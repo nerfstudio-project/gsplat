@@ -40,7 +40,7 @@
 #include <torch/library.h>
 
 #include "ChannelChunks.h"
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 #include "Common.h"
 #include "PrimingChainEncoding.cuh"
 #include "Rasterization.h"

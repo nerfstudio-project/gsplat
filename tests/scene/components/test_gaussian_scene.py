@@ -22,6 +22,8 @@ import io
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat.scene import GaussianScene, HIDDEN_OPACITY_LOGIT, Scene
 from gsplat.scene import IdentityOp, RigidTransformOp, TransformGraph, TransformOp
 
@@ -642,7 +644,7 @@ def test_transform_time_rejects_non_scalar_non_component_vector():
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="scene rigid transforms are CUDA-only"
+    not cuda_is_available(), reason="scene rigid transforms are CUDA-only"
 )
 def test_rigid_transform_graph_applies_component_pose_tracks():
     scene = GaussianScene(id="scene")
@@ -995,7 +997,7 @@ def test_strategy_ops_keep_scene_topology_sidecars_in_sync():
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="relocate/sample_add coverage needs CUDA"
+    not cuda_is_available(), reason="relocate/sample_add coverage needs CUDA"
 )
 def test_mcmc_strategy_ops_keep_scene_topology_sidecars_in_sync():
     from gsplat.strategy import MCMCStrategy, ops

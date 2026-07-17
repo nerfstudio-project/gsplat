@@ -31,8 +31,10 @@ import gsplat
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat._helper import assert_grad_reference_close
-from tests.core.test_cameras import parse_lidar_camera
+from .test_cameras import parse_lidar_camera
 from gsplat.rendering import (
     RenderMode,
     RendererConfig,
@@ -164,14 +166,14 @@ def test_rasterization_rejects_parallel_renderer_config_without_eval3d():
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 def test_rasterization_3dgut_only_build_shape():
     """Public UT/from-world rasterization must work without GSPLAT_BUILD_3DGS.
 
     The 3DGUT path routes through the C++ ``rasterization_3dgs`` op, which is
     guarded ``GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT``. A 3dgut-only build
-    (``BUILD_3DGUT=1`` with ``BUILD_3DGS=0`` — a shape Config.h documents) must
+    (``-DGSPLAT_KERNEL_FAMILIES=3DGUT``) must
     still resolve and run it; this guards against the op being re-narrowed to
     3DGS-only, which silently breaks that build shape. When 3DGS is absent, the
     classic (non-UT) path must reject cleanly rather than fail to resolve the op.
@@ -352,7 +354,7 @@ def gaussians(
     return gaussians
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
     "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,camera_model,extra_signals_info,distributed,C,N,renderer_config,execution_mode",
     [
@@ -428,9 +430,10 @@ def gaussians(
             ),
             # 3DGUT hit-distance modes: exercises `use_hit_distance` with the
             # extra-signals plumbing. Keep the resulting widths 1, 4, 21, and
-            # 24 (e.g. 24 = 3 RGB + 20 extra + 1 depth) in `pytest.ini`
-            # `NUM_CHANNELS` for direct single-launch coverage. High-level
-            # rasterization can also compose a total from multiple widths.
+            # 24 (e.g. 24 = 3 RGB + 20 extra + 1 depth) in the CMake
+            # `GSPLAT_NUM_CHANNELS` configuration for direct single-launch
+            # coverage. High-level rasterization can also compose a total from
+            # multiple widths.
             _append_renderer_execution(
                 product(
                     [False],  # per_view_color
@@ -719,7 +722,7 @@ def _make_distributed_validation_scene() -> dict:
     }
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize(
     "case,match",
@@ -801,7 +804,7 @@ def test_rasterization_distributed_rejects_unsupported_configs(
         gsplat.rasterization(**kwargs, distributed=True)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_rasterization_external_distortion_requires_ut():
     from gsplat.cuda._wrapper import BivariateWindshieldModelParameters
@@ -814,7 +817,7 @@ def test_rasterization_external_distortion_requires_ut():
         gsplat.rasterization(**kwargs, with_ut=False)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 @pytest.mark.parametrize("packed", [True, False])
 def test_rasterization_distributed_single_rank_matches_local(

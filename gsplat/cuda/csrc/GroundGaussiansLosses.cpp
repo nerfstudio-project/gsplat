@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
 #if GSPLAT_BUILD_LOSSES
 

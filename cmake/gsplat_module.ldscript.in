@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Linker version script for gsplat Python extension modules.
+#
+# Exposes ONLY the symbol Python dlsym()s on import; everything else is
+# localized. `local: *` filters the final .so's dynamic symbol table,
+# including any third-party symbols that -fvisibility=hidden cannot touch.
+# This is supported by GNU ld and lld; a Windows port would use a .def
+# export file.
+{
+global:
+    PyInit_@_gsplat_module_target@;
+local: *;
+};

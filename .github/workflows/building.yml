@@ -3,7 +3,7 @@ name: Build Wheels
 on: [workflow_call, workflow_dispatch]
 jobs:
   build_sdist:
-    name: Build source distribution and no binary wheel
+    name: Build source distribution
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -12,23 +12,32 @@ jobs:
       - name: Strip unsupported tags in README
         run: |
           sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
+      - name: Prepare source distribution build
+        run: |
+          python -m pip install build
+          rm -rf dist
+          mkdir -p dist
       - name: Build sdist
-        run: BUILD_NO_CUDA=1 pipx run build --sdist
-      - name: Build wheel with no binaries
-        run: BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
+        run: |
+          python -m build --sdist
       - uses: actions/upload-artifact@v4
         with:
           name: pypi_packages
           path: dist/*.tar.gz
+          if-no-files-found: error
 
   build_wheels:
     runs-on: ${{ matrix.os }}
     environment: production
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      CMAKE_PRESET: full-release
 
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022]
+        # Native wheel builds currently target Linux.
+        os: [ubuntu-22.04]
         python-version: ['3.10']
         # Last 3 minor PyTorch versions aligned with pytorch.org
         torch-version: ['2.8.0', '2.9.1', '2.10.0']
@@ -44,10 +53,6 @@ jobs:
           # PyTorch 2.10.0 does not ship cu129 wheels
           - torch-version: '2.10.0'
             cuda-version: 'cu129'
-          # CUDA 12.6 is incompatible with MSVC >= 14.44 (VS 2022);
-          # the MSVC STL requires CUDA 12.8+
-          - os: windows-2022
-            cuda-version: 'cu126'
 
     steps:
       - name: Checkout repository
@@ -94,43 +99,74 @@ jobs:
           sed -i "s/$VERSION/$VERSION+$TORCH_VERSION$CUDA_VERSION/" gsplat/version.py
         shell: bash
 
-      - name: Upgrade pip
+      - name: Install build dependencies
         run: |
           # https://github.com/pypa/setuptools/issues/5174, pkg_resources is removed in setuptools 82 but we need it for older torch versions
-          pip install --upgrade "setuptools<82"
-          pip install ninja
+          python -m pip install --upgrade "setuptools<82"
+          python -m pip install build "cmake>=3.26" ninja "scikit-build-core>=1.0"
         shell: bash
 
-      - name: Install main package for CPU
-        if: ${{ matrix.cuda-version == 'cpu' }}
+      - name: Prepare wheel build
         run: |
-          BUILD_NO_CUDA=1 pip install .
+          source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+
+          # Make the selected toolkit available to subsequent GitHub steps.
+          printf '%s\n' \
+            "CUDA_HOME=${CUDA_HOME}" \
+            "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" \
+            >> "$GITHUB_ENV"
+          printf '%s\n' "${CUDA_HOME}/bin" >> "$GITHUB_PATH"
+
+          rm -rf dist "$RUNNER_TEMP/gsplat-sdist"
+          mkdir -p dist "$RUNNER_TEMP/gsplat-sdist"
         shell: bash
 
-      - name: Build wheel
-        env:
-          # Step-level env so Windows Python sees CUDA_HOME (bash export does not propagate to python.exe)
-          CUDA_HOME: ${{ runner.os == 'Windows' && (matrix.cuda-version == 'cu130' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0' || matrix.cuda-version == 'cu129' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9' || matrix.cuda-version == 'cu128' && 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8' || 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6') || '' }}
+      - name: Build wheel from sdist
         run: |
-          pip install wheel
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            export PATH="${CUDA_HOME}/bin:${PATH}"
-            export TORCH_CUDA_ARCH_LIST="8.0;8.6;9.0"
-          else
-            source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+          python -m build --sdist --outdir dist
+          tar \
+            --extract \
+            --gzip \
+            --file dist/*.tar.gz \
+            --directory "$RUNNER_TEMP/gsplat-sdist" \
+            --strip-components=1
+
+          cd "$RUNNER_TEMP/gsplat-sdist"
+          # tools/build-wheel.sh (shipped in the sdist) wraps the pip +
+          # scikit-build-core wheel contract. Distribution wheels ship
+          # without the test payload; the GPU-backed CI pipeline validates
+          # test-carrying wheels.
+          ./tools/build-wheel.sh "${CMAKE_PRESET}" \
+            --wheel-dir dist \
+            --config-settings=cmake.define.GSPLAT_BUILD_TESTS=OFF
+          mv dist/*.whl "$GITHUB_WORKSPACE/dist/"
+        shell: bash
+
+      - name: Smoke-test wheel
+        run: |
+          wheel_file=$(realpath dist/*.whl)
+          test_dir="$RUNNER_TEMP/gsplat-wheel-test"
+          rm -rf "$test_dir"
+          mkdir -p "$test_dir"
+          cd "$test_dir"
+
+          if python -m pip show gsplat >/dev/null 2>&1; then
+            python -m pip uninstall --yes gsplat
           fi
-          MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
-        shell: bash
+          python -m pip install "${wheel_file}"
+          python -c "import gsplat; print('gsplat:', gsplat.__version__, gsplat.__file__)"
 
-      - name: Test wheel
-        run: |
-          cd dist
-          ls -lah
-          pip install *.whl
-          python -c "import gsplat; print('gsplat:', gsplat.__version__)"
-          pip install "$(ls *.whl)[lidar]"
-          python -c "import gsplat; print('gsplat:', gsplat.__version__); from scipy.spatial import cKDTree; print('scipy OK')"
-          cd ..
+          # Distribution wheels must not ship the test payload, while the
+          # static gsplat-test entry point stays importable without it.
+          if unzip -Z1 "$wheel_file" | grep -F _testdata; then
+              echo "distribution wheel ships test payload entries" >&2
+              exit 1
+          fi
+          python -c "import gsplat._test"
+          echo "wheel manifest: no test payload; gsplat._test importable"
+
+          python -m pip install "${wheel_file}[lidar]"
+          python -c "from scipy.spatial import cKDTree; print('scipy OK')"
         shell: bash
 
       - uses: actions/upload-artifact@v4
@@ -138,3 +174,4 @@ jobs:
           # Include unique matrix values to avoid name collisions.
           name: compiled_wheels_python${{ matrix.python-version }}-${{ matrix.os }}-${{ matrix.torch-version }}-${{ matrix.cuda-version }}
           path: dist/*.whl
+          if-no-files-found: error

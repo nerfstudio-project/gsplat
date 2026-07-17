@@ -24,11 +24,13 @@ Path Unification plan.  All tests use the ``gsplat.experimental`` surface
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
+pytestmark = [pytest.mark.wheel_smoke]
+
 device = torch.device("cuda:0")
 
-_skip_no_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="No CUDA device"
-)
+_skip_no_cuda = pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 
 
 # ---------------------------------------------------------------------------
@@ -720,57 +722,6 @@ class TestGaussianInferenceSceneLifecycle:
             assert not torch.allclose(
                 ret3.frame, frame1, atol=1e-3
             ), "Rebuilt snapshot should differ after means shifted by 10"
-
-
-# ---------------------------------------------------------------------------
-# Source parity tests (Phase 8) -- kept as-is
-# ---------------------------------------------------------------------------
-
-
-class TestSourceParity:
-    """Verify that imported viewer source files match the manifest."""
-
-    pytestmark = [_skip_no_cuda]
-
-    def test_imported_files_present(self):
-        """All expected imported files exist."""
-        import os
-
-        import gsplat.experimental.render.kernels as _kernels
-
-        # Resolve the CUDA source dir via the installed package rather than a
-        # path relative to this test file: the test lives under tests/ while the
-        # sources live in the gsplat.experimental package tree.
-        imported_dir = os.path.join(
-            os.path.dirname(_kernels.__file__),
-            "cuda",
-            "csrc",
-            "gaussian_inference",
-        )
-        expected_files = [
-            "Constants.h",
-            "IntersectCommon.cu",
-            "IntersectCommon.h",
-            "IntersectMTConfig.h",
-            "IntersectMTFused.cu",
-            "IntersectMTFused.h",
-            "MacroTileIntersect.cu",
-            "MacroTileIntersect.h",
-            "MacroTileRasterize.cu",
-            "MacroTileRasterize.h",
-            "Projection.cu",
-            "Projection.h",
-            "InferenceTypes.h",
-            "SHCommon.h",
-            "SHCompression.cu",
-            "SHCompression.h",
-            "SphericalHarmonics.cu",
-            "SphericalHarmonics.h",
-            "Utils.h",
-        ]
-        for f in expected_files:
-            path = os.path.join(imported_dir, f)
-            assert os.path.isfile(path), f"Missing imported file: {f}"
 
 
 # ---------------------------------------------------------------------------

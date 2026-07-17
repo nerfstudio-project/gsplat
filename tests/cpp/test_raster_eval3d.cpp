@@ -13,7 +13,7 @@
 #include <torch/cuda.h>
 #include <torch/torch.h>
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 #include "ExternalDistortion.h"
 #include "Intersect.h"
 #include "PrimingChainEncoding.h"
@@ -48,9 +48,6 @@ constexpr uint16_t T_FP16_ONE_HALF_BITS    = fp16_power_of_two_bits(-1);
 // frozen terminal state. Without that padding the affected slots hold
 // uninitialised memory from at::empty, and the backward pass silently corrupts
 // gradients from anything that reads them.
-//
-// Pytest still owns discovery and execution through tests/test_cpp.py; the
-// assertions below call the gsplat C++ entry points directly.
 
 c10::intrusive_ptr<FThetaCameraDistortionParameters> default_ftheta_coeffs()
 {

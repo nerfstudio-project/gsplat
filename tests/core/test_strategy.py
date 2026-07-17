@@ -24,6 +24,8 @@ pytest <THIS_PY_FILE> -s
 
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 import gsplat
 
 device = torch.device("cuda:0")
@@ -46,7 +48,7 @@ def test_mcmc_strategy_positional_constructor():
     assert strategy.noise_opacity_k == 30.0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy():
     from gsplat.rendering import rasterization
@@ -97,7 +99,7 @@ def test_strategy():
     strategy.step_post_backward(params, optimizers, state, step=600, info=info, lr=1e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not cuda_is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy_requires_grad():
     from gsplat.rendering import rasterization

@@ -17,4 +17,7 @@ OUTPUT_DIR="${1:-build/html}"
 #   wiring it in).
 # --keep-going collects every warning before exiting so a single failure
 #   doesn't hide the rest.
-sphinx-build -W --keep-going docs/source "$OUTPUT_DIR"
+# The sphinx-build console entry point does not add the working directory to
+# Python's import path, so expose the source package explicitly for autodoc.
+PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    sphinx-build -W --keep-going docs/source "$OUTPUT_DIR"

@@ -15,16 +15,12 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <algorithm>
 
-#if GSPLAT_BUILD_LOSSES
-
-#    include <algorithm>
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAException.h>
-#    include <c10/cuda/CUDAStream.h>
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAStream.h>
 
 namespace gsplat
 {
@@ -422,5 +418,3 @@ void launch_gaussian_losses_bwd_kernel(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 } // namespace gsplat
-
-#endif

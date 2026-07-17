@@ -26,8 +26,10 @@ import math
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 # Skip entire module if CUDA is unavailable.
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+pytestmark = pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 
 DEVICE = torch.device("cuda:0")
 

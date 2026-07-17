@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Expose the source package alongside the CMake-built extension module."""
+
+from pathlib import Path
+
+
+_SOURCE_PACKAGE_DIR = Path(r"@GSPLAT_SOURCE_DIR@/gsplat")
+if not _SOURCE_PACKAGE_DIR.is_dir():
+    raise ImportError(f"gsplat source package does not exist: {_SOURCE_PACKAGE_DIR}")
+
+# Keep the build package first so ``gsplat.csrc`` resolves beside this file;
+# all source-only modules and subpackages are resolved from the appended path.
+__path__.append(str(_SOURCE_PACKAGE_DIR))
+
+_SOURCE_INIT = _SOURCE_PACKAGE_DIR / "__init__.py"
+exec(
+    compile(_SOURCE_INIT.read_bytes(), str(_SOURCE_INIT), "exec"),
+    globals(),
+    globals(),
+)

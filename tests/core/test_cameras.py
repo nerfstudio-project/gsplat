@@ -23,6 +23,8 @@ to PyTorch reference implementations for all 5 methods.
 import numpy as np
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 import re
 import math
 from functools import lru_cache
@@ -30,21 +32,13 @@ from itertools import product, chain
 from types import SimpleNamespace
 from dataclasses import dataclass
 
-if not torch.cuda.is_available():
-    pytest.skip("CUDA required for camera model tests", allow_module_level=True)
-
-from gsplat.cuda._backend import _C
-
-if _C is None:
-    pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
-
-from gsplat.cuda._wrapper import has_camera_wrappers
-
-if not has_camera_wrappers():
-    pytest.skip(
-        "Camera wrappers not built (need BUILD_CAMERA_WRAPPERS=1)",
-        allow_module_level=True,
-    )
+pytestmark = [
+    pytest.mark.camera_wrappers,
+    pytest.mark.skipif(
+        not cuda_is_available(),
+        reason="CUDA required for camera model tests",
+    ),
+]
 
 from gsplat._helper import expand_named_params
 from gsplat.cuda._torch_cameras import (  # PyTorch reference
@@ -725,7 +719,7 @@ def camera(request, test_camera, ref_camera):
         raise ValueError(f"Unknown camera type: {request.param}")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.parametrize(
     "camera_model,batch_dims",
     [
@@ -961,7 +955,7 @@ class TestCameraModels:
             assert_close(test_times, ref_times, atol=2e-06, rtol=2e-06)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.parametrize("camera_model", ["fisheye"])
 @pytest.mark.parametrize("batch_dims", [(2, 3)])
 @pytest.mark.parametrize("image_dims", [(127, 256)])
@@ -1002,7 +996,7 @@ def test_projection_rejects_rays_beyond_max_angle(test_camera, ref_camera):
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 @pytest.mark.parametrize("camera_model", ["ftheta[p2a]"])
 @pytest.mark.parametrize("batch_dims", [(2, 3)])
 @pytest.mark.parametrize("image_dims", [(127, 256)])
@@ -1056,7 +1050,7 @@ def test_projection_converges_in_fp_sensitive_newton_zone(test_camera, ref_camer
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA required")
 # Pinhole-only: shutter-pose composition is camera-type-agnostic (defined on
 # _BaseCameraModel); per-type projection is covered in TestCameraModels.
 @pytest.mark.parametrize("camera_model", ["pinhole"])

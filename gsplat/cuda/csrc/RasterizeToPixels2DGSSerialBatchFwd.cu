@@ -16,18 +16,16 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 
-#if GSPLAT_BUILD_2DGS
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
 
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-
-#    include "Common.h"
-#    include "Rasterization.h"
-#    include "Dispatch.h"
+#include "Common.h"
+#include "Rasterization.h"
+#include "Dispatch.h"
 
 namespace gsplat
 {
@@ -393,14 +391,14 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
             int32_t g          = id_batch[t];
             const float vis    = alpha * T;
             const float *c_ptr = colors + g * CDIM;
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 pix_out[k] += c_ptr[k] * vis;
             }
 
             const float *n_ptr = normals + g * 3;
-#    pragma unroll
+#pragma unroll
             for(uint32_t k = 0; k < 3; ++k)
             {
                 normal_out[k] += n_ptr[k] * vis;
@@ -440,12 +438,12 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
         // with float32. However, double precision makes the backward pass 1.5x
         // slower so we stick with float for now.
         render_alphas[pix_id] = 1.0f - T;
-#    pragma unroll
+#pragma unroll
         for(uint32_t k = 0; k < CDIM; ++k)
         {
             render_colors[pix_id * CDIM + k] = backgrounds == nullptr ? pix_out[k] : (pix_out[k] + T * backgrounds[k]);
         }
-#    pragma unroll
+#pragma unroll
         for(uint32_t k = 0; k < 3; ++k)
         {
             render_normals[pix_id * 3 + k] = normal_out[k];
@@ -512,7 +510,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
         "Unsupported number of color channels: ",
         channels,
         ". To add support, rebuild gsplat with this channel count included "
-        "in -DGSPLAT_NUM_CHANNELS=... (see gsplat/cuda/csrc/Config.h)."
+        "in -DGSPLAT_NUM_CHANNELS=... at CMake configure time."
     );
 
     auto launch_kernel = [&]<typename ChannelsT>()
@@ -562,5 +560,3 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     TORCH_CHECK(dispatched, "dispatch failed: no matching compile-time instantiation for runtime parameters");
 }
 } // namespace gsplat
-
-#endif

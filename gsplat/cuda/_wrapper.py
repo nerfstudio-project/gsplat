@@ -37,6 +37,14 @@ from gsplat.cuda._lidar import (
 ExternalDistortionModelMeta = Literal["bivariate-windshield"]
 CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar"]
 
+
+def _load_csrc() -> Any:
+    """Import the CMake-built CUDA extension and register its Torch operators."""
+    import gsplat.csrc as csrc  # pylint: disable=import-outside-toplevel
+
+    return csrc
+
+
 # Autograd for the migrated ops is attached in Python (torch.library.register_autograd)
 # rather than C++. The C++ module exports only each op's `<op>_fwd` and `<op>_bwd`; the
 # backward is wired to the forward op when this module is imported (the call at the end
@@ -47,16 +55,8 @@ _AUTOGRAD_REGISTRATIONS_DONE = False
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
-        # The following import statement is required to ensure that C++ module
-        # gsplat/csrc.so is loaded (and JIT-compiled if necessary). Upon module
-        # load, the gsplat PyTorch operators are imported into the
-        # torch.ops.gsplat submodule.
-
-        # pylint: disable=import-outside-toplevel
-        from ._backend import _C
-
-        if _C is not None:
-            _ensure_autograd_registrations()
+        _load_csrc()
+        _ensure_autograd_registrations()
         return getattr(torch.ops.gsplat, name)(*args, **kwargs)
 
     return call_cuda
@@ -112,15 +112,9 @@ def _ensure_autograd_registrations() -> None:
 
 
 def _make_lazy_cuda_cls(name: str) -> Any:
-    # The following import statement is required to ensure that C++ module
-    # gsplat/csrc.so is loaded (and JIT-compiled if necessary). Upon module
-    # load, the gsplat PyTorch custom classes are imported into the
-    # torch.classes.gsplat submodule.
-
-    # pylint: disable=import-outside-toplevel
-    from ._backend import _C
-
-    if _C is None:
+    try:
+        _load_csrc()
+    except ImportError:
         return _unavailable_cuda_cls(name)
 
     try:
@@ -148,15 +142,14 @@ def _unavailable_cuda_cls(name: str) -> Any:
 
 
 def _make_lazy_cuda_obj(name: str) -> Any:
-    # pylint: disable=import-outside-toplevel
-    from ._backend import _C
-
-    if _C is None:
+    try:
+        csrc = _load_csrc()
+    except ImportError as exc:
         raise RuntimeError(
             "gsplat CUDA extension is not available (not built or failed to load). "
             f"Cannot access '{name}'."
-        )
-    obj = _C
+        ) from exc
+    obj = csrc
     for name_split in name.split("."):
         obj = getattr(obj, name_split)
     return obj
@@ -252,13 +245,7 @@ class BivariateWindshieldModelParameters(ExternalDistortionModelParameters):
 @functools.lru_cache(maxsize=1)
 def _build_config() -> Mapping[str, bool | int]:
     try:
-        from ._backend import _C
-
-        return (
-            types.MappingProxyType(_C.build_config())
-            if _C is not None
-            else types.MappingProxyType({})
-        )
+        return types.MappingProxyType(_load_csrc().build_config())
     except (ImportError, AttributeError):
         return types.MappingProxyType({})
 
@@ -1483,7 +1470,7 @@ def rasterize_to_pixels(
         conics: Inverse of the projected covariances with only upper triangle values. [..., N, 3] if packed is False, [nnz, 3] if packed is True.
         colors: Gaussian colors or ND features. [..., N, channels] if packed is False, [nnz, channels] if packed is True.
             ``colors.shape[-1]`` must be one of the channel counts compiled into ``GSPLAT_NUM_CHANNELS``
-            (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA kernel raises ``ValueError``.
+            at CMake configure time; otherwise the CUDA kernel raises ``ValueError``.
         opacities: Gaussian opacities that support per-view values. [..., N] if packed is False, [nnz] if packed is True.
         image_width: Image width.
         image_height: Image height.
@@ -2271,7 +2258,7 @@ def rasterize_to_pixels_eval3d(
     camera distortion.
 
     ``colors.shape[-1]`` must be one of the channel counts compiled into
-    ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA
+    ``GSPLAT_NUM_CHANNELS`` at CMake configure time; otherwise the CUDA
     kernel raises ``ValueError``.
 
     Args:
@@ -2366,7 +2353,7 @@ def rasterize_to_pixels_eval3d_extra(
     accumulated in a pixel and optionally the number of accumulated samples per pixel.
 
     ``colors.shape[-1]`` must be one of the channel counts compiled into
-    ``GSPLAT_NUM_CHANNELS`` (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA
+    ``GSPLAT_NUM_CHANNELS`` at CMake configure time; otherwise the CUDA
     kernel raises ``ValueError``.
 
     Args:
@@ -2906,7 +2893,7 @@ def rasterize_to_pixels_2dgs(
         ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [..., N, 3, 3] if packed is False, [nnz, channels] if packed is True.
         colors: Gaussian colors or ND features. [..., N, channels] if packed is False, [nnz, channels] if packed is True.
             ``colors.shape[-1]`` must be one of the channel counts compiled into ``GSPLAT_NUM_CHANNELS``
-            (see ``gsplat/cuda/csrc/Config.h``); otherwise the CUDA kernel raises ``ValueError``.
+            at CMake configure time; otherwise the CUDA kernel raises ``ValueError``.
         opacities: Gaussian opacities that support per-view values. [..., N] if packed is False, [nnz] if packed is True.
         normals: The normals in camera space. [..., N, 3] if packed is False, [nnz, 3] if packed is True.
         densify: Dummy variable to keep track of gradient for densification. [..., N, 2] if packed, [nnz, 3] if packed is True.

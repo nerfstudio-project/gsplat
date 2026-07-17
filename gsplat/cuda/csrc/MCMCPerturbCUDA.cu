@@ -3,19 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "Config.h"
+#include <cmath>
+#include <limits>
 
-#if GSPLAT_BUILD_3DGS
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 
-#    include <cmath>
-#    include <limits>
-
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-
-#    include "Common.h"
-#    include "MCMCPerturb.h"
-#    include "Utils.cuh"
+#include "Common.h"
+#include "MCMCPerturb.h"
+#include "Utils.cuh"
 
 namespace gsplat
 {
@@ -96,5 +92,3 @@ void launch_mcmc_perturb_positions_kernel(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 } // namespace gsplat
-
-#endif // GSPLAT_BUILD_3DGS

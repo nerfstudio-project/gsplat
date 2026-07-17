@@ -29,9 +29,11 @@ import statistics
 
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 import torch.nn as nn
 
-_CUDA = torch.cuda.is_available()
+_CUDA = cuda_is_available()
 skipif_no_cuda = pytest.mark.skipif(not _CUDA, reason="CUDA required")
 
 W, H = 256, 256

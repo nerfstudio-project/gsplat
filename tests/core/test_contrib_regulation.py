@@ -8,6 +8,8 @@ Branch: vnath_gsharp. Seed is set to 42 by the autouse fixture in
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat._helper import assert_grad_reference_close
 from gsplat.contrib.dynamic.regulation import (
     plane_smoothness,
@@ -121,7 +123,7 @@ def test_time_l1_gradient_flows():
 # crashed on the first GPU training step. Pin the contract.
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+@pytest.mark.skipif(not cuda_is_available(), reason="needs CUDA")
 def test_plane_smoothness_on_cuda_planes_runs():
     plane = torch.randn(1, 4, 5, 5, device="cuda", requires_grad=True)
     out = plane_smoothness([plane])
@@ -130,14 +132,14 @@ def test_plane_smoothness_on_cuda_planes_runs():
     assert plane.grad is not None
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+@pytest.mark.skipif(not cuda_is_available(), reason="needs CUDA")
 def test_time_smoothness_on_cuda_planes_runs():
     plane = torch.randn(1, 4, 5, 5, device="cuda", requires_grad=True)
     out = time_smoothness([plane])
     assert out.device.type == "cuda"
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+@pytest.mark.skipif(not cuda_is_available(), reason="needs CUDA")
 def test_time_l1_on_cuda_planes_runs():
     plane = torch.full((1, 1, 4, 4), 0.5, device="cuda", requires_grad=True)
     out = time_l1([plane])

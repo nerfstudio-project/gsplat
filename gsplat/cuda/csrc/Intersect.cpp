@@ -28,7 +28,7 @@
 
 #include "MathUtils.h"
 #include "Common.h" // where all the macros are defined
-#include "Config.h"
+#include "GSplatBuildConfig.h"
 #include "Intersect.h" // where the launch function is declared
 #include "IntersectMTConfig.h"
 #include "IntersectMacroTile.h"

@@ -25,9 +25,11 @@ import math
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat.relocation import compute_relocation
 
-device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+device = torch.device("cuda:0") if cuda_is_available() else torch.device("cpu")
 
 
 def _binomial_table(n_max: int, device: torch.device) -> torch.Tensor:
@@ -74,7 +76,7 @@ def _reference_relocation(
     return new_opacities.to(opacities.device), new_scales.to(scales.device)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="relocation is a CUDA op")
+@pytest.mark.skipif(not cuda_is_available(), reason="relocation is a CUDA op")
 @pytest.mark.parametrize("n_max", [5, 51])
 def test_compute_relocation_smoke(n_max: int):
     torch.manual_seed(0)
@@ -97,7 +99,7 @@ def test_compute_relocation_smoke(n_max: int):
     assert (new_scales >= 0).all()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="relocation is a CUDA op")
+@pytest.mark.skipif(not cuda_is_available(), reason="relocation is a CUDA op")
 def test_compute_relocation_min_opacity_clamps_before_scale():
     n_max = 8
     binoms = _binomial_table(n_max, device)

@@ -40,10 +40,10 @@ def _cuda_major_used_to_build_gsplat() -> int:
 
 
 def _install_hint(cuda_major: int) -> str:
-    """Return guidance for selecting a build-compatible CuPy distribution."""
+    """Return guidance for selecting a build-compatible PNG extra."""
 
     return (
-        "install `gsplat[png]`; its build metadata selects CuPy for CUDA "
+        "install `gsplat[png]`; its wheel metadata selects CuPy for CUDA "
         f"{cuda_major} used to build gsplat"
     )
 

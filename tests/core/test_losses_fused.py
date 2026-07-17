@@ -22,6 +22,8 @@ forward values and backward gradients.
 import pytest
 import torch
 
+from tests._cuda import cuda_is_available
+
 from gsplat._helper import (
     assert_grad_reference_close,
     expect_grad_reference_close,
@@ -43,7 +45,7 @@ from gsplat.losses_fused import (
     _cuda_losses_available,
 )
 
-CUDA_AVAILABLE = torch.cuda.is_available() and has_losses()
+CUDA_AVAILABLE = cuda_is_available() and has_losses()
 N = 1024
 
 # Per-ray flag bits (plain int) for building/masking the int32 ``flags``
@@ -427,7 +429,7 @@ class TestFusedGaussianLossesCUDA:
 def test_loss_flags_sourced_from_extension():
     """LossFlag must be read from the compiled extension (csrc/LossFlags.h via
     m.attr), not hardcoded — verifies the binding + read-through path."""
-    from gsplat.cuda._backend import _C
+    import gsplat.csrc as _C
 
     assert LossFlag is not None
     assert int(LossFlag.RGB_LABEL) == _C.LOSS_FLAG_RGB_LABEL
@@ -451,8 +453,8 @@ def test_requires_extension(monkeypatch):
         lf.FusedLidarLosses()
 
 
-CAMERA_CUDA = torch.cuda.is_available() and _cuda_camera_losses_available()
-LIDAR_CUDA = torch.cuda.is_available() and _cuda_lidar_losses_available()
+CAMERA_CUDA = cuda_is_available() and _cuda_camera_losses_available()
+LIDAR_CUDA = cuda_is_available() and _cuda_lidar_losses_available()
 
 
 def _make_camera_inputs(device, n=512, requires_grad=False):

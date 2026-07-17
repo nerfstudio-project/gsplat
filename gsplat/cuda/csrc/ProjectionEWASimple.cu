@@ -16,18 +16,14 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h>
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
 
-#if GSPLAT_BUILD_3DGS
-
-#    include <ATen/Dispatch.h>
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h>
-#    include <cooperative_groups.h>
-
-#    include "Common.h"
-#    include "Projection.h"
-#    include "Utils.cuh"
+#include "Common.h"
+#include "Projection.h"
+#include "Utils.cuh"
 
 namespace gsplat
 {
@@ -85,16 +81,16 @@ __global__ void projection_ewa_simple_fwd_kernel(
     }
 
 // write to outputs: glm is column-major but we want row-major
-#    pragma unroll
+#pragma unroll
     for(uint32_t i = 0; i < 2; i++)
     { // rows
-#    pragma unroll
+#pragma unroll
         for(uint32_t j = 0; j < 2; j++)
         { // cols
             covars2d[i * 2 + j] = covar2d[j][i];
         }
     }
-#    pragma unroll
+#pragma unroll
     for(uint32_t i = 0; i < 2; i++)
     {
         means2d[i] = mean2d[i];
@@ -216,17 +212,17 @@ __global__ void projection_ewa_simple_bwd_kernel(
     }
 
 // write to outputs: glm is column-major but we want row-major
-#    pragma unroll
+#pragma unroll
     for(uint32_t i = 0; i < 3; i++)
     { // rows
-#    pragma unroll
+#pragma unroll
         for(uint32_t j = 0; j < 3; j++)
         { // cols
             v_covars[i * 3 + j] = v_covar[j][i];
         }
     }
 
-#    pragma unroll
+#pragma unroll
     for(uint32_t i = 0; i < 3; i++)
     {
         v_means[i] = v_mean[i];
@@ -287,5 +283,3 @@ void launch_projection_ewa_simple_bwd_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

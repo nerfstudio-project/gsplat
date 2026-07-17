@@ -22,10 +22,12 @@ validation, dispatch tagging, and cross-path parity.
 
 import pytest
 import torch
+
+from tests._cuda import cuda_is_available
 import torch.nn as nn
 from unittest.mock import patch
 
-_CUDA = torch.cuda.is_available()
+_CUDA = cuda_is_available()
 skipif_no_cuda = pytest.mark.skipif(not _CUDA, reason="CUDA required")
 
 # ---------------------------------------------------------------------------

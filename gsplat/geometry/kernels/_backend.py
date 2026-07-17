@@ -13,25 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Load native geometry CUDA ops, preferring prebuilt then JIT build."""
+"""Lazily load the CMake-built geometry CUDA extension."""
 
 from __future__ import annotations
 
 from gsplat._lazy_backend import make_lazy_backend
 
-
-def _build():
-    # Deferred so importing this module does not import .cuda.build.
-    from .cuda.build import build_and_load_geometry_cuda
-
-    return build_and_load_geometry_cuda()
-
-
 _get_backend, __getattr__ = make_lazy_backend(
     module_name=__name__,
     public_name="_GEOMETRY_CUDA",
-    prebuilt_module="gsplat_geometry_cuda",
-    jit_loader=_build,
+    extension_module="gsplat_geometry_cuda",
 )
 
 __all__ = ["_GEOMETRY_CUDA"]

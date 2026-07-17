@@ -13,7 +13,7 @@ Usage: ${0##*/} [-f <file>[:<section>]]... -- <pkg1> <pkg2> ...
 Source files (-f):
   -f requirements.txt           requirements-format file
   -f pyproject.toml:dependencies [project].dependencies
-  -f pyproject.toml:dev         development dependencies
+  -f pyproject.toml:dev          Development dependencies
 
 Packages in the docker image (after --):
   The exact dependency strings from the docker image to check against
@@ -62,8 +62,8 @@ extract_pyproject_section()
     local support_dir
     support_dir="$(dirname "$file")/gsplat/build_support"
 
-    # Section parsing and composite-extra expansion are owned by the shared
-    # metadata helper.
+    # Section parsing and same-project extras expansion come from the shared
+    # metadata helper invoked below.
     python3 "${support_dir}/pyproject_metadata.py" "$file" "$section"
 }
 
@@ -281,13 +281,10 @@ for file_spec in "${file_specs[@]}"; do
         if [[ $file != *.toml ]]; then
             die "sections are only supported for pyproject.toml files: '$file_spec'"
         fi
-        case $section in
-            dependencies|install|lidar|examples|dev)
-                ;;
-            *)
-                die "unknown pyproject.toml dependency section '$section' in '$file_spec'"
-                ;;
-        esac
+        # pyproject_metadata.py owns the optional-group namespace and reports
+        # unknown groups. Do not mirror that evolving list in this shell tool.
+        extract_pyproject_section "$file" "$section" > /dev/null \
+            || die "invalid pyproject.toml dependency section '$section' in '$file_spec'"
     fi
 done
 

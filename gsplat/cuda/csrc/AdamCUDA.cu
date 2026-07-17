@@ -16,16 +16,12 @@
  * limitations under the License.
  */
 
-#include "Config.h"
+#include <ATen/Dispatch.h> // AT_DISPATCH_XXX
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h> // at::cuda::getCurrentCUDAStream
+#include <cooperative_groups.h>
 
-#if GSPLAT_BUILD_ADAM
-
-#    include <ATen/Dispatch.h> // AT_DISPATCH_XXX
-#    include <ATen/core/Tensor.h>
-#    include <c10/cuda/CUDAStream.h> // at::cuda::getCurrentCUDAStream
-#    include <cooperative_groups.h>
-
-#    include "Null.h"
+#include "Null.h"
 
 namespace gsplat
 {
@@ -119,5 +115,3 @@ void launch_adam_kernel(
     );
 }
 } // namespace gsplat
-
-#endif

@@ -11,10 +11,17 @@ permissions:
   contents: write
 
 jobs:
+  validate_cuda_architectures:
+    name: Validate CUDA architectures
+    uses: ./.github/workflows/cuda_architectures.yml
+    permissions:
+      contents: read
+
   # Build the wheels using the reusable building workflow
   build_wheels:
     name: Call reusable building workflow
-    uses: ./.github/workflows/building.yml  
+    needs: [validate_cuda_architectures]
+    uses: ./.github/workflows/building.yml
 
   create_release_and_upload_packages:
     name: Upload to GitHub Release
@@ -105,13 +112,18 @@ jobs:
       
       - name: Install dependencies
         run: |
-          python -m pip install build twine
+          python -m pip install twine
         shell: bash
+
+      - name: Download source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: pypi_packages
+          path: dist
 
       - name: Publish package to PyPI
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
-          BUILD_NO_CUDA=1 python -m build
           twine upload --username __token__ --password $PYPI_TOKEN dist/*
         shell: bash

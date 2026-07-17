@@ -13,106 +13,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared lazy native-extension loader for gsplat subpackages.
+"""Shared lazy loader for gsplat's CMake-built native extensions.
 
-Several gsplat subpackages (``gsplat.geometry``, ``gsplat.scene``,
-``gsplat.sensors``) load a native CUDA extension with the same policy: import a
-prebuilt extension if present, otherwise JIT-build it, otherwise raise. Loading
-must be *lazy* — importing the package (and its ``functional`` API) on a
-CPU-only machine must not build or import the extension — so the extension is
-resolved only on first access to a sentinel attribute via PEP 562 module
-``__getattr__``.
-
-:func:`make_lazy_backend` factors that boilerplate out. A kernels ``_backend.py``
-wires it in as::
-
-    from gsplat._lazy_backend import make_lazy_backend
-
-    def _build():  # deferred so importing _backend doesn't import .cuda.build
-        from .cuda.build import build_and_load_geometry_cuda
-        return build_and_load_geometry_cuda()
-
-    _get_backend, __getattr__ = make_lazy_backend(
-        module_name=__name__,
-        public_name="_GEOMETRY_CUDA",
-        prebuilt_module="gsplat_geometry_cuda",
-        jit_loader=_build,
-    )
-    __all__ = ["_GEOMETRY_CUDA"]
-
-The returned ``__getattr__`` resolves ``public_name`` on first access (and works
-for ``from ..._backend import <public_name>``); any other attribute raises
-``AttributeError``. Note ``public_name`` must NOT also be assigned as a module
-global, or it would shadow ``__getattr__`` and defeat lazy loading.
+Importing a Python-only gsplat API must not eagerly load CUDA libraries. Each
+native backend therefore resolves its extension on first access through a PEP
+562 module ``__getattr__`` hook. Successful imports and failures are cached so
+subsequent dispatches avoid repeated module resolution.
 """
 
 from __future__ import annotations
 
 import importlib
-import os
 import sys
-from typing import Callable
 
 _UNSET = object()
-
-
-def cuda_toolkit_available() -> bool:
-    """Return True if a usable CUDA toolkit (nvcc) is discoverable.
-
-    Shared by the native-extension loaders so the probe lives in one place.
-    ``torch.utils.cpp_extension`` is imported lazily so importing this module
-    (and therefore the lazy ``_backend`` modules) stays cheap.
-    """
-    from subprocess import DEVNULL, call
-
-    import torch.utils.cpp_extension as jit
-
-    cuda_home = jit._find_cuda_home()  # tries various heuristics
-    if not cuda_home:
-        return False
-    nvcc_path = os.path.join(cuda_home, "bin", "nvcc")
-    if not os.path.isfile(nvcc_path):
-        # Maybe still on PATH; try invoking nvcc directly.
-        try:
-            call(["nvcc"], stdout=DEVNULL, stderr=DEVNULL)
-            return True
-        except FileNotFoundError:
-            return False
-    return True
 
 
 def make_lazy_backend(
     *,
     module_name: str,
     public_name: str,
-    prebuilt_module: str,
-    jit_loader: Callable[[], object],
-    force_jit_env: str | None = None,
+    extension_module: str,
 ):
-    """Build the lazy loader + module ``__getattr__`` for a native extension.
+    """Create a lazy accessor for a CMake-built native extension.
 
     Args:
         module_name: ``__name__`` of the calling ``_backend`` module (for error
             messages).
         public_name: Sentinel attribute that triggers loading on first access
             (e.g. ``"_GEOMETRY_CUDA"``).
-        prebuilt_module: Importable name of the prebuilt extension (e.g.
+        extension_module: Importable name of the native extension (e.g.
             ``"gsplat_geometry_cuda"``).
-        jit_loader: Zero-arg callable that JIT-builds and returns the extension
-            when the prebuilt import is unavailable. Keep its ``.cuda.build``
-            import inside the callable so importing ``_backend`` stays cheap.
-        force_jit_env: Optional env var name; when set to ``"1"`` the prebuilt
-            import is skipped and ``jit_loader`` is used directly (handy when
-            iterating on the native sources locally).
 
     Returns:
-        ``(get_backend, module_getattr)`` — bind these as ``_get_backend`` and
+        ``(get_backend, module_getattr)``. Bind these as ``_get_backend`` and
         ``__getattr__`` in the calling module.
     """
-    # Holds the loaded extension after success, or the ImportError after a
-    # failed attempt, so a persistent build failure fails fast on retry instead
-    # of re-running the (multi-second) JIT build on every access. ``_UNSET``
-    # means "not yet attempted".
     cache: dict = {"result": _UNSET}
 
     def get_backend():
@@ -123,38 +59,19 @@ def make_lazy_backend(
                 raise result
             return result
 
-        forced_jit = bool(force_jit_env and os.getenv(force_jit_env, "0") == "1")
-        backend = None
-        prebuilt_error = None
-        if not forced_jit:
-            try:
-                backend = importlib.import_module(prebuilt_module)
-            except ImportError as error:
-                prebuilt_error = error
-
-        if backend is None:
-            try:
-                backend = jit_loader()
-            except Exception as jit_error:
-                prebuilt_note = (
-                    f"prebuilt import skipped ({force_jit_env}=1)"
-                    if forced_jit
-                    else f"prebuilt import error: {prebuilt_error!r}"
-                )
-                error = ImportError(
-                    f"Failed to load {prebuilt_module} via JIT build/load"
-                    f"{'' if forced_jit else ' (and prebuilt import)'}.\n"
-                    f"{prebuilt_note}\n"
-                    f"JIT build/load error: {jit_error!r}"
-                )
-                cache["result"] = error  # fail fast on subsequent access
-                raise error from jit_error
+        try:
+            backend = importlib.import_module(extension_module)
+        except ImportError as import_error:
+            error = ImportError(
+                f"Failed to import CMake-built extension {extension_module!r}. "
+                "Build or install gsplat before using native operations."
+            )
+            cache["result"] = error
+            raise error from import_error
 
         cache["result"] = backend
-        # Bind as a real module attribute so subsequent accesses hit the module
-        # __dict__ directly and skip this __getattr__ + get_backend indirection
-        # on every op dispatch. Binding only AFTER first resolution preserves
-        # laziness (a binding at import would shadow __getattr__).
+        # Binding only after resolution preserves laziness while making later
+        # accesses hit the module dictionary directly.
         setattr(sys.modules[module_name], public_name, backend)
         return backend
 

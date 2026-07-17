@@ -15,9 +15,6 @@
 // must agree on it, so this pins the contract -- especially the power-of-two
 // boundary, where the old floor(log2)+1 formula disagreed by one bit and a
 // packer/unpacker mismatch corrupts the decoded ids.
-//
-// Pytest owns discovery/execution via tests/test_cpp.py; this calls the gsplat
-// C++ helper directly.
 
 namespace
 {

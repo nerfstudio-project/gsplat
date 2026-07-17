@@ -53,13 +53,57 @@ code-format:
   script:
     - lint/format-code.sh --check --full
 
+.build-base:
+  stage: build
+
+  tags:
+    - type/docker
+    - os/linux
+    - arch/x86_64
+
+  before_script:
+    # ccache persists across jobs in the runner-preserved CI_BUILDS_DIR/.ci-keep
+    # (git clean keeps .ci-keep). The build pins ccache there via
+    # GSPLAT_CCACHE_DIR below.
+    - mkdir -p "$CI_BUILDS_DIR/.ci-keep/ccache"
+    - rm -rf dist
+    - mkdir -p dist
+
+  script:
+    # tools/build-wheel.sh wraps the pip + scikit-build-core wheel contract.
+    # The extra settings record configure/build traces, published as job
+    # artifacts next to the wheel.
+    - |
+      ./tools/build-wheel.sh "${CMAKE_PRESET}" \
+        --wheel-dir dist \
+        --config-settings=cmake.define.GSPLAT_CCACHE_DIR="${CI_BUILDS_DIR}/.ci-keep/ccache" \
+        --config-settings=build.verbose=true \
+        --config-settings=cmake.args=-DGSPLAT_ENABLE_BUILD_TRACES=ON
+
+  artifacts:
+    name: "gsplat-wheel-${CI_JOB_NAME}-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 1 week
+    paths:
+      - dist/*.whl
+      - build/${CMAKE_PRESET}/*-trace.json
+
+build-debug:
+  extends: .build-base
+  variables:
+    CMAKE_PRESET: ci-debug
+
+build-release:
+  extends: .build-base
+  variables:
+    CMAKE_PRESET: ci-release
+
 .test-base:
   stage: test
 
   variables:
-    VERBOSE: 1
-    CCACHE_STATSLOG: $CI_BUILDS_DIR/ccache_stats.log
-    # Optional marker expression to narrow test selection (empty = run all).
+    GIT_STRATEGY: empty
+    GIT_SUBMODULE_STRATEGY: none
+    # Optional pytest marker expression to narrow test selection (empty = all).
     PYTEST_MARKER_EXPR: ""
 
   tags:
@@ -80,15 +124,13 @@ code-format:
         rm -rf "$CI_BUILDS_DIR/.ci-keep"
       fi
       df -h "$HOME" | awk 'NR==2 {print "Disk usage now: "$3" used of "$2", "$5" full"}'
-    # Determine GPU architecture of current CI machine
-    # (only log result, not used to tweak build / test settings)
+    # Persist the CUDA JIT cache in the runner-preserved CI_BUILDS_DIR/.ci-keep
+    # (kernels JIT-compile at test run time; git clean keeps .ci-keep).
+    - export CUDA_CACHE_PATH="$CI_BUILDS_DIR/.ci-keep/cuda"
+    - mkdir -p "$CUDA_CACHE_PATH"
+    # Determine GPU architecture of current CI machine.
     - CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1)
     - echo "Determined CUDA Architecture ${CUDA_ARCH}"
-
-    # Persist ccache in the per-runner .ci-keep cache — unset otherwise, so
-    # every CI build cold-recompiles. Inherited by all jobs extending .test-base.
-    - export CCACHE_DIR="${CI_BUILDS_DIR}/.ci-keep/ccache"
-    - mkdir -p "$CCACHE_DIR"
 
     # Apply the optional marker (PYTEST_MARKER_EXPR) via PYTEST_ADDOPTS, which
     # pytest shlex-parses so the quoted expression survives.
@@ -98,142 +140,58 @@ code-format:
       fi
 
   script:
-    # Load some envvars that depend on gitlab variables
-    - source ~/.profile
-    - 'echo "ccache directory: ${CCACHE_DIR}"'
+    - |
+      wheel_file=$(realpath dist/*.whl)
+      test_root="${CI_PROJECT_DIR}/build/wheel-test/${CI_JOB_NAME}"
+      rm -rf "${test_root}"
+      mkdir -p "${test_root}"
+      cd "${test_root}"
 
-    - rm -f "$CCACHE_STATSLOG"
-    # tests/ is the single test root (pytest.ini testpaths=tests)
-    - pytest -sv
-    - ccache --show-log-stats -v
+      python -m pip install "${wheel_file}[test]"
+      python -c "import gsplat; print('gsplat:', gsplat.__version__, gsplat.__file__)"
+      gsplat-test
 
-.aot-base:
-  extends: .test-base
-
-  # TEMPORARY: AOT build/test jobs are disabled to reduce CI load while the
-  # cmake-based build migration is in progress. Remove this `rules` block to
-  # re-enable all AOT jobs (aot-build-*/aot-test-*) once that work lands.
-  rules:
-    - when: never
-
-  variables:
-    # Mirror pytest.ini env entries needed by the explicit AOT build.
-    BUILD_CAMERA_WRAPPERS: "1"
-    GSPLAT_DISABLE_JIT: "1"
-    NUM_CHANNELS: "1,3,4,6,21,23,24,32"
-
-.aot-build-base:
-  extends: .aot-base
-  stage: build
-
-  script:
-    # Load some envvars that depend on gitlab variables
-    - source ~/.profile
-    - 'echo "ccache directory: ${CCACHE_DIR}"'
-
-    - rm -f "$CCACHE_STATSLOG"
-    - pip wheel -v --no-build-isolation --no-deps --wheel-dir dist .
-    - ccache --show-log-stats -v
-
-  artifacts:
-    name: "aot-wheel-${CI_JOB_NAME}-${CI_COMMIT_SHORT_SHA}"
-    paths:
-      - dist/*.whl
-    expire_in: 1 week
-
-.aot-test-base:
-  extends: .aot-base
-
-  script:
-    # Load some envvars that depend on gitlab variables
-    - source ~/.profile
-    - 'echo "ccache directory: ${CCACHE_DIR}"'
-
-    - rm -f "$CCACHE_STATSLOG"
-    - pip install -v dist/*.whl
-    # Keep pytest.ini's `pythonpath = .` from shadowing the installed wheel
-    # while preserving checkout headers/source files used by tests.
-    - rm -f gsplat/__init__.py
-    - python -c "import gsplat; print('gsplat import:', gsplat.__file__)"
-    # pytest.ini testpaths covers tests/ and all colocated lib test directories.
-    - pytest -sv
-    - ccache --show-log-stats -v
-
-
-# Debug build: -O0, asserts enabled (NDEBUG undefined). Exercises the
-# assertion-rich path used to catch invariant violations during development.
-jit-test-debug:
+test-debug:
   extends: .test-base
   needs:
-    - code-format
+    - job: build-debug
+      artifacts: true
   variables:
-    DEBUG: 1
-    # gradcheck is build-mode-independent and jit-test-release runs it in full,
-    # so re-running it under the -O0 debug build adds no coverage.
+    # gradcheck is build-mode-independent and test-release runs it in full, so
+    # re-running it under the -O0 debug build adds no coverage.
     PYTEST_MARKER_EXPR: "not gradcheck"
 
-aot-build-debug:
-  extends: .aot-build-base
-  variables:
-    DEBUG: 1
-
-aot-test-debug:
-  extends: .aot-test-base
-  needs:
-    - job: aot-build-debug
-      artifacts: true
-  variables:
-    DEBUG: 1
-
-# Release build: -O3 -DNDEBUG. Mirrors what users actually run; the debug
-# job alone misses regressions that only surface with NDEBUG stripping
-# asserts.
-jit-test-release:
+test-release:
   extends: .test-base
-  # Superseded by aot-build-release, which compiles the release build ahead of
-  # time.
-  rules:
-    - when: never
   needs:
-    - code-format
-  variables:
-    DEBUG: 0
-
-aot-build-release:
-  extends: .aot-build-base
-  # Re-enabled (the shared .aot-base rule disables the AOT jobs) so the release
-  # wheel is built ahead of time for the docs job.
-  rules:
-    - when: on_success
-  variables:
-    DEBUG: 0
-
-aot-test-release:
-  extends: .aot-test-base
-  # Re-enabled (the shared .aot-base rule disables the AOT jobs) so the release
-  # suite runs against the built wheel instead of a per-job JIT build.
-  rules:
-    - when: on_success
-  needs:
-    - job: aot-build-release
+    - job: build-release
       artifacts: true
-  variables:
-    DEBUG: 0
+
+# Source-tree checks need no compiled binaries and no GPU: the workflow
+# configures and runs only the tests labeled "source".
+test-source:
+  stage: test
+  needs: []
+
+  tags:
+    - type/docker
+    - os/linux
+    - arch/x86_64
+
+  script:
+    - |
+      cmake \
+        --workflow \
+        --preset source-checks
 
 render-docs:
   stage: docs
 
-  # Reuse the release build's compiled wheel so the docs job loads a prebuilt
-  # extension instead of recompiling it, which would need the third_party
-  # submodules this job does not check out.
+  # Render as soon as lint passes; rendering doesn't depend on the test stage.
   needs:
     - code-format
-    - job: aot-build-release
-      artifacts: true
 
   variables:
-    # Nothing compiles here, so the docs job needs neither the submodules nor a
-    # build scope.
     GIT_SUBMODULE_STRATEGY: none
 
   tags:
@@ -242,10 +200,6 @@ render-docs:
     - arch/x86_64
 
   script:
-    # Install the compiled wheel, then drop the checkout's package so autodoc
-    # imports the installed extension rather than the source tree.
-    - pip install -v dist/*.whl
-    - rm -f gsplat/__init__.py
     - bash docs/render_docs.sh build/html
 
   artifacts:
