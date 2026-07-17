@@ -705,9 +705,11 @@ def _maybe_evaluate_sh(
             # features is already [..., C, N, D]
             pass
     else:
+        camtoworlds = torch.inverse(viewmats)  # [..., C, 4, 4]
+        dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]  # [..., C, N, 3]
         masks = (radii > 0).all(dim=-1)  # [..., C, N]
         features = spherical_harmonics(
-            sh_degree, means, viewmats, features, masks=masks
+            sh_degree, dirs, features, masks=masks
         )  # [..., C, N, D]
         if clamp:
             # make it apple-to-apple with Inria's CUDA Backend.
@@ -1193,7 +1195,7 @@ def _rasterization(
 #             # viewdirs = F.normalize(viewdirs, dim=-1).detach()
 #             if sh_degree is None:
 #                 sh_degree = int(math.sqrt(colors.shape[1]) - 1)
-#             colors = spherical_harmonics(sh_degree, means, viewmats, colors)
+#             colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]
 
 #         background = (
 #             backgrounds[cid]

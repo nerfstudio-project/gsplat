@@ -46,78 +46,35 @@ namespace
     constexpr double SH_C0 = 0.2820947917738781;
 
     void check_spherical_harmonics_inputs(
-        int64_t degrees_to_use,
-        const at::Tensor &means,
-        const at::Tensor &viewmats,
-        const at::Tensor &coeffs,
-        const at::optional<at::Tensor> &masks,
-        const at::optional<at::Tensor> &batch_ids,
-        const at::optional<at::Tensor> &camera_ids,
-        const at::optional<at::Tensor> &gaussian_ids,
-        const at::optional<at::Tensor> &viewmats_rs = c10::nullopt,
-        bool omit_l0                                = false
+        int64_t degrees_to_use, const at::Tensor &dirs, const at::Tensor &coeffs, const at::optional<at::Tensor> &masks
     )
     {
-        TORCH_CHECK(means.dim() >= 2 && means.size(-1) == 3, "means must have shape [..., N, 3], got ", means.sizes());
-        TORCH_CHECK(
-            viewmats.dim() == means.dim() + 1 && viewmats.size(-2) == 4 && viewmats.size(-1) == 4,
-            "viewmats must have shape [..., C, 4, 4], got ",
-            viewmats.sizes()
-        );
-        TORCH_CHECK(
-            means.sizes().slice(0, means.dim() - 2) == viewmats.sizes().slice(0, viewmats.dim() - 3),
-            "means and viewmats batch dimensions must match"
-        );
-        TORCH_CHECK(means.scalar_type() == at::kFloat, "means must be float32");
-        TORCH_CHECK(viewmats.scalar_type() == at::kFloat, "viewmats must be float32");
-        TORCH_CHECK(coeffs.dim() == 3, "coeffs must have shape [N, K, D] or [nnz, K, D], got ", coeffs.sizes());
+        TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
+        TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
+        TORCH_CHECK(coeffs.dim() == 3, "coeffs must have shape [N, K, D], got ", coeffs.sizes());
         TORCH_CHECK(coeffs.size(-1) >= 1, "coeffs last dim D must be >= 1, got ", coeffs.size(-1));
         TORCH_CHECK(
-            (degrees_to_use + 1) * (degrees_to_use + 1) - (omit_l0 ? 1 : 0) <= coeffs.size(-2),
+            dirs.size(-2) == coeffs.size(-3), "dirs N (", dirs.size(-2), ") must match coeffs N (", coeffs.size(-3), ")"
+        );
+        TORCH_CHECK(
+            (degrees_to_use + 1) * (degrees_to_use + 1) <= coeffs.size(-2),
             "degrees_to_use requires more SH coefficients than provided; degree ",
             degrees_to_use,
             ", coeffs shape ",
             coeffs.sizes()
         );
-        const bool packed = batch_ids.has_value() || camera_ids.has_value() || gaussian_ids.has_value();
-        TORCH_CHECK(
-            !packed || (batch_ids.has_value() && camera_ids.has_value() && gaussian_ids.has_value()),
-            "batch_ids, camera_ids, and gaussian_ids must either all be provided or all be None"
-        );
-        if(packed)
+        if(masks.has_value())
         {
-            const int64_t nnz = coeffs.size(0);
-            for(const auto &ids: {batch_ids.value(), camera_ids.value(), gaussian_ids.value()})
-            {
-                TORCH_CHECK(ids.dim() == 1 && ids.numel() == nnz, "packed ID tensors must have shape [nnz]");
-                TORCH_CHECK(ids.scalar_type() == at::kLong, "packed ID tensors must be int64");
-                CHECK_INPUT(ids);
-            }
-            if(masks.has_value())
-            {
-                TORCH_CHECK(
-                    masks.value().dim() == 1 && masks.value().numel() == nnz, "packed masks must have shape [nnz]"
-                );
-            }
+            at::DimVector mask_shape(dirs.sizes().slice(0, dirs.dim() - 1));
+            TORCH_CHECK(
+                masks.value().sizes() == mask_shape,
+                "masks must match dirs.shape[:-1]; got masks ",
+                masks.value().sizes(),
+                " and dirs ",
+                dirs.sizes()
+            );
         }
-        else
-        {
-            TORCH_CHECK(means.size(-2) == coeffs.size(0), "means N must match coeffs N in dense mode");
-            if(masks.has_value())
-            {
-                at::DimVector mask_shape(viewmats.sizes().slice(0, viewmats.dim() - 2));
-                mask_shape.push_back(means.size(-2));
-                TORCH_CHECK(masks.value().sizes() == mask_shape, "dense masks must have shape [..., C, N]");
-            }
-        }
-        CHECK_INPUT(means);
-        CHECK_INPUT(viewmats);
-        if(viewmats_rs.has_value())
-        {
-            TORCH_CHECK(viewmats_rs.value().sizes() == viewmats.sizes(), "viewmats_rs must match viewmats shape");
-            TORCH_CHECK(viewmats_rs.value().scalar_type() == at::kFloat, "viewmats_rs must be float32");
-            CHECK_INPUT(viewmats_rs.value());
-        }
+        CHECK_INPUT(dirs);
         CHECK_INPUT(coeffs);
         if(masks.has_value())
         {
@@ -126,21 +83,40 @@ namespace
     }
 
     void check_spherical_harmonics_l1_plus_inputs(
-        int64_t degrees_to_use,
-        const at::Tensor &means,
-        const at::Tensor &viewmats,
-        const at::Tensor &shN,
-        const at::optional<at::Tensor> &masks,
-        const at::optional<at::Tensor> &batch_ids,
-        const at::optional<at::Tensor> &camera_ids,
-        const at::optional<at::Tensor> &gaussian_ids,
-        const at::optional<at::Tensor> &viewmats_rs = c10::nullopt
+        int64_t degrees_to_use, const at::Tensor &dirs, const at::Tensor &shN, const at::optional<at::Tensor> &masks
     )
     {
+        TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
+        TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
         TORCH_CHECK(shN.dim() == 3, "shN must have shape [N, K - 1, D], got ", shN.sizes());
-        check_spherical_harmonics_inputs(
-            degrees_to_use, means, viewmats, shN, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs, true
+        TORCH_CHECK(shN.size(-1) >= 1, "shN last dim D must be >= 1, got ", shN.size(-1));
+        TORCH_CHECK(
+            dirs.size(-2) == shN.size(-3), "dirs N (", dirs.size(-2), ") must match shN N (", shN.size(-3), ")"
         );
+        TORCH_CHECK(
+            (degrees_to_use + 1) * (degrees_to_use + 1) - 1 <= shN.size(-2),
+            "degrees_to_use requires more l>=1 SH coefficients than provided; degree ",
+            degrees_to_use,
+            ", shN shape ",
+            shN.sizes()
+        );
+        if(masks.has_value())
+        {
+            at::DimVector mask_shape(dirs.sizes().slice(0, dirs.dim() - 1));
+            TORCH_CHECK(
+                masks.value().sizes() == mask_shape,
+                "masks must match dirs.shape[:-1]; got masks ",
+                masks.value().sizes(),
+                " and dirs ",
+                dirs.sizes()
+            );
+        }
+        CHECK_INPUT(dirs);
+        CHECK_INPUT(shN);
+        if(masks.has_value())
+        {
+            CHECK_INPUT(masks.value());
+        }
     }
 
     void check_spherical_harmonics_l0_inputs(const at::Tensor &sh0)
@@ -176,9 +152,7 @@ struct TorchArgDef<SphericalHarmonicsFwdResult>
 struct SphericalHarmonicsBwdResult
 {
     at::Tensor v_coeffs;
-    at::optional<at::Tensor> v_means;
-    at::optional<at::Tensor> v_viewmats;
-    at::optional<at::Tensor> v_viewmats_rs;
+    at::optional<at::Tensor> v_dirs;
 };
 
 template<>
@@ -186,7 +160,7 @@ struct TorchArgDef<SphericalHarmonicsBwdResult>
 {
     static auto to(const SphericalHarmonicsBwdResult &r)
     {
-        return to_torch_args(r.v_coeffs, r.v_means, r.v_viewmats, r.v_viewmats_rs);
+        return to_torch_args(r.v_coeffs, r.v_dirs);
     }
 };
 
@@ -214,35 +188,20 @@ struct TorchArgDef<SphericalHarmonicsGrad>
 
 SphericalHarmonicsFwdResult spherical_harmonics_fwd(
     int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &coeffs,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &coeffs,             // [N, K, D]
+    const at::optional<at::Tensor> &masks // [..., N]
 )
 {
-    DEVICE_GUARD(means);
-    check_spherical_harmonics_inputs(
-        degrees_to_use, means, viewmats, coeffs, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs
-    );
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
 
-    const bool packed = batch_ids.has_value();
-    auto out_shape    = packed ? std::vector<int64_t>{coeffs.size(0), coeffs.size(-1)} : viewmats.sizes().vec();
-    if(!packed)
-    {
-        out_shape.pop_back();
-        out_shape.pop_back();
-        out_shape.push_back(means.size(-2));
-        out_shape.push_back(coeffs.size(-1));
-    }
-    at::Tensor colors = at::empty(out_shape, means.options());
+    // colors dtype follows dirs; the kernel converts fp16 coeffs to fp32 on read.
+    auto out_shape    = dirs.sizes().vec();
+    out_shape.back()  = coeffs.size(-1);
+    at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
 
-    launch_spherical_harmonics_fwd_kernel(
-        degrees_to_use, means, viewmats, viewmats_rs, coeffs, masks, batch_ids, camera_ids, gaussian_ids, colors
-    );
+    launch_spherical_harmonics_fwd_kernel(degrees_to_use, dirs, coeffs, masks, colors);
     return SphericalHarmonicsFwdResult{
         .colors = colors,
     };
@@ -277,35 +236,19 @@ at::Tensor spherical_harmonics_l0_bwd(const at::Tensor &sh0, const at::Tensor &v
 
 SphericalHarmonicsFwdResult spherical_harmonics_l1_plus_fwd(
     int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &shN,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &shN,                // [N, K - 1, D]
+    const at::optional<at::Tensor> &masks // [..., N]
 )
 {
-    DEVICE_GUARD(means);
-    check_spherical_harmonics_l1_plus_inputs(
-        degrees_to_use, means, viewmats, shN, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs
-    );
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
 
-    const bool packed = batch_ids.has_value();
-    auto out_shape    = packed ? std::vector<int64_t>{shN.size(0), shN.size(-1)} : viewmats.sizes().vec();
-    if(!packed)
-    {
-        out_shape.pop_back();
-        out_shape.pop_back();
-        out_shape.push_back(means.size(-2));
-        out_shape.push_back(shN.size(-1));
-    }
-    at::Tensor colors = at::empty(out_shape, means.options());
+    auto out_shape    = dirs.sizes().vec();
+    out_shape.back()  = shN.size(-1);
+    at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
 
-    launch_spherical_harmonics_l1_plus_fwd_kernel(
-        degrees_to_use, means, viewmats, viewmats_rs, shN, masks, batch_ids, camera_ids, gaussian_ids, colors
-    );
+    launch_spherical_harmonics_l1_plus_fwd_kernel(degrees_to_use, dirs, shN, masks, colors);
     return SphericalHarmonicsFwdResult{
         .colors = colors,
     };
@@ -313,31 +256,19 @@ SphericalHarmonicsFwdResult spherical_harmonics_l1_plus_fwd(
 
 SphericalHarmonicsFwdResult spherical_harmonics_fwd_privateuseone(
     int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &coeffs,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &coeffs,             // [N, K, D]
+    const at::optional<at::Tensor> &masks // [..., N]
 )
 {
-    DEVICE_GUARD(means);
-    check_spherical_harmonics_inputs(
-        degrees_to_use, means, viewmats, coeffs, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs
-    );
-    TORCH_CHECK(!viewmats_rs.has_value(), "rolling-shutter spherical_harmonics is not supported on PrivateUse1");
-    TORCH_CHECK(!batch_ids.has_value(), "packed spherical_harmonics is not supported on PrivateUse1");
-    auto out_shape = viewmats.sizes().vec();
-    out_shape.pop_back();
-    out_shape.pop_back();
-    out_shape.push_back(means.size(-2));
-    out_shape.push_back(coeffs.size(-1));
-    at::Tensor colors = at::empty(out_shape, means.options());
-    launch_spherical_harmonics_fwd_kernels(
-        degrees_to_use, means, viewmats, coeffs, masks, batch_ids, camera_ids, gaussian_ids, colors
-    );
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
+
+    auto out_shape    = dirs.sizes().vec();
+    out_shape.back()  = coeffs.size(-1);
+    at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
+
+    launch_spherical_harmonics_fwd_kernels(degrees_to_use, dirs, coeffs, masks, colors);
     return SphericalHarmonicsFwdResult{
         .colors = colors,
     };
@@ -345,59 +276,39 @@ SphericalHarmonicsFwdResult spherical_harmonics_fwd_privateuseone(
 
 SphericalHarmonicsFwdResult spherical_harmonics_l1_plus_fwd_privateuseone(
     int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &shN,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs
+    const at::Tensor &dirs,               // [..., N, 3]
+    const at::Tensor &shN,                // [N, K - 1, D]
+    const at::optional<at::Tensor> &masks // [..., N]
 )
 {
-    DEVICE_GUARD(means);
-    check_spherical_harmonics_l1_plus_inputs(
-        degrees_to_use, means, viewmats, shN, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs
-    );
-    TORCH_CHECK(
-        !viewmats_rs.has_value(), "rolling-shutter spherical_harmonics_l1_plus is not supported on PrivateUse1"
-    );
-    TORCH_CHECK(!batch_ids.has_value(), "packed spherical_harmonics_l1_plus is not supported on PrivateUse1");
-    auto out_shape = viewmats.sizes().vec();
-    out_shape.pop_back();
-    out_shape.pop_back();
-    out_shape.push_back(means.size(-2));
-    out_shape.push_back(shN.size(-1));
-    at::Tensor colors = at::empty(out_shape, means.options());
-    launch_spherical_harmonics_l1_plus_fwd_kernels(
-        degrees_to_use, means, viewmats, shN, masks, batch_ids, camera_ids, gaussian_ids, colors
-    );
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
+
+    auto out_shape    = dirs.sizes().vec();
+    out_shape.back()  = shN.size(-1);
+    at::Tensor colors = at::empty(out_shape, dirs.options()); // [..., N, D]
+
+    launch_spherical_harmonics_l1_plus_fwd_kernels(degrees_to_use, dirs, shN, masks, colors);
     return SphericalHarmonicsFwdResult{
         .colors = colors,
     };
 }
 
 // Full backward for spherical_harmonics.
+// `compute_v_dirs` selects whether to compute the direction gradient. It is an
+// explicit argument rather than something inferred from a tensor's
+// requires_grad, so this functional op's behavior follows only from its inputs.
 SphericalHarmonicsBwdResult spherical_harmonics_bwd(
     int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &coeffs,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs,
+    const at::Tensor &dirs,                // [..., N, 3]
+    const at::Tensor &coeffs,              // [N, K, D]
+    const at::optional<at::Tensor> &masks, // [..., N]
     const SphericalHarmonicsGrad &grad,
-    bool compute_v_means,
-    bool compute_v_viewmats,
-    bool compute_v_viewmats_rs
+    bool compute_v_dirs
 )
 {
-    DEVICE_GUARD(means);
-    check_spherical_harmonics_inputs(
-        degrees_to_use, means, viewmats, coeffs, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs
-    );
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
     TORCH_INTERNAL_ASSERT(grad.colors.defined());
     CHECK_DENSE(grad.colors);
     at::Tensor grad_colors = grad.colors.contiguous();
@@ -415,68 +326,35 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
     // (batch, gaussian) elements atomic-add into the same slot. For fp32
     // coeffs the accumulator IS the output; for fp16 we cast at the end.
     at::Tensor v_coeffs_accum = at::zeros(coeffs.sizes(), coeffs.options().dtype(at::kFloat));
-    at::Tensor v_means, v_viewmats, v_viewmats_rs;
-    if(compute_v_means)
+    at::Tensor v_dirs;
+    if(compute_v_dirs)
     {
-        v_means = at::zeros_like(means);
-    }
-    if(compute_v_viewmats)
-    {
-        v_viewmats = at::zeros_like(viewmats);
-    }
-    if(compute_v_viewmats_rs)
-    {
-        TORCH_INTERNAL_ASSERT(viewmats_rs.has_value());
-        v_viewmats_rs = at::zeros_like(viewmats_rs.value());
+        v_dirs = at::zeros_like(dirs);
     }
 
     launch_spherical_harmonics_bwd_kernel(
-        degrees_to_use,
-        means,
-        viewmats,
-        viewmats_rs,
-        coeffs,
-        masks,
-        batch_ids,
-        camera_ids,
-        gaussian_ids,
-        grad_colors,
-        v_coeffs_accum,
-        as_optional_tensor(v_means),
-        as_optional_tensor(v_viewmats),
-        as_optional_tensor(v_viewmats_rs)
+        degrees_to_use, dirs, coeffs, masks, grad_colors, v_coeffs_accum, as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_coeffs
         = (coeffs.scalar_type() == at::kFloat) ? v_coeffs_accum : v_coeffs_accum.to(coeffs.scalar_type());
     return SphericalHarmonicsBwdResult{
-        .v_coeffs      = v_coeffs,
-        .v_means       = as_optional_tensor(v_means),
-        .v_viewmats    = as_optional_tensor(v_viewmats),
-        .v_viewmats_rs = as_optional_tensor(v_viewmats_rs),
+        .v_coeffs = v_coeffs,
+        .v_dirs   = as_optional_tensor(v_dirs),
     };
 }
 
 SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd(
     int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &shN,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs,
+    const at::Tensor &dirs,                // [..., N, 3]
+    const at::Tensor &shN,                 // [N, K - 1, D]
+    const at::optional<at::Tensor> &masks, // [..., N]
     const SphericalHarmonicsGrad &grad,
-    bool compute_v_means,
-    bool compute_v_viewmats,
-    bool compute_v_viewmats_rs
+    bool compute_v_dirs
 )
 {
-    DEVICE_GUARD(means);
-    check_spherical_harmonics_l1_plus_inputs(
-        degrees_to_use, means, viewmats, shN, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs
-    );
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
     TORCH_INTERNAL_ASSERT(grad.colors.defined());
     CHECK_DENSE(grad.colors);
     at::Tensor grad_colors = grad.colors.contiguous();
@@ -491,44 +369,20 @@ SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd(
     );
 
     at::Tensor v_shN_accum = at::zeros(shN.sizes(), shN.options().dtype(at::kFloat));
-    at::Tensor v_means, v_viewmats, v_viewmats_rs;
-    if(compute_v_means)
+    at::Tensor v_dirs;
+    if(compute_v_dirs)
     {
-        v_means = at::zeros_like(means);
-    }
-    if(compute_v_viewmats)
-    {
-        v_viewmats = at::zeros_like(viewmats);
-    }
-    if(compute_v_viewmats_rs)
-    {
-        TORCH_INTERNAL_ASSERT(viewmats_rs.has_value());
-        v_viewmats_rs = at::zeros_like(viewmats_rs.value());
+        v_dirs = at::zeros_like(dirs);
     }
 
     launch_spherical_harmonics_l1_plus_bwd_kernel(
-        degrees_to_use,
-        means,
-        viewmats,
-        viewmats_rs,
-        shN,
-        masks,
-        batch_ids,
-        camera_ids,
-        gaussian_ids,
-        grad_colors,
-        v_shN_accum,
-        as_optional_tensor(v_means),
-        as_optional_tensor(v_viewmats),
-        as_optional_tensor(v_viewmats_rs)
+        degrees_to_use, dirs, shN, masks, grad_colors, v_shN_accum, as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_shN = (shN.scalar_type() == at::kFloat) ? v_shN_accum : v_shN_accum.to(shN.scalar_type());
     return SphericalHarmonicsBwdResult{
-        .v_coeffs      = v_shN,
-        .v_means       = as_optional_tensor(v_means),
-        .v_viewmats    = as_optional_tensor(v_viewmats),
-        .v_viewmats_rs = as_optional_tensor(v_viewmats_rs),
+        .v_coeffs = v_shN,
+        .v_dirs   = as_optional_tensor(v_dirs),
     };
 }
 
@@ -536,29 +390,10 @@ SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd(
 // `gsplat::spherical_harmonics` op so the Python-side register_autograd kernel
 // makes it differentiable.
 at::Tensor spherical_harmonics(
-    int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &coeffs,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs
+    int64_t degrees_to_use, const at::Tensor &dirs, const at::Tensor &coeffs, const at::optional<at::Tensor> &masks
 )
 {
-    return call_torch_op<&spherical_harmonics_fwd>(
-               "gsplat::spherical_harmonics",
-               degrees_to_use,
-               means,
-               viewmats,
-               coeffs,
-               masks,
-               batch_ids,
-               camera_ids,
-               gaussian_ids,
-               viewmats_rs
-    )
+    return call_torch_op<&spherical_harmonics_fwd>("gsplat::spherical_harmonics", degrees_to_use, dirs, coeffs, masks)
         .colors;
 }
 
@@ -578,40 +413,33 @@ void assemble_proj_features_unpacked_fwd(
     bool has_depth,
     bool depth_is_zero,
     bool extra_has_c,
-    const at::Tensor &means,                     // [B, N, 3]
-    const at::Tensor &viewmats,                  // [B, C, 4, 4]
-    const at::optional<at::Tensor> &viewmats_rs, // [B, C, 4, 4]
-    const at::Tensor &coeffs,                    // [N, K, Dc]
-    const at::optional<at::Tensor> &extra,       // [B, C, N, E] or [B, N, E]
-    const at::optional<at::Tensor> &depths,      // [B, C, N]
-    const at::optional<at::Tensor> &masks,       // [B, C, N]
-    at::Tensor &out,                             // [B, C, N, Dc + E + has_depth]
-    const at::optional<at::Tensor> &relu_mask    // [B, C, N, Dc]
+    const at::Tensor &means,                  // [B, N, 3]
+    const at::Tensor &campos,                 // [B, C, 3]
+    const at::Tensor &coeffs,                 // [N, K, Dc]
+    const at::optional<at::Tensor> &extra,    // [B, C, N, E] or [B, N, E]
+    const at::optional<at::Tensor> &depths,   // [B, C, N]
+    const at::optional<at::Tensor> &masks,    // [B, C, N]
+    at::Tensor &out,                          // [B, C, N, Dc + E + has_depth]
+    const at::optional<at::Tensor> &relu_mask // [B, C, N, Dc]
 )
 {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
-    CHECK_INPUT(viewmats);
-    if(viewmats_rs.has_value())
-    {
-        CHECK_INPUT(viewmats_rs.value());
-        TORCH_CHECK(viewmats_rs.value().sizes() == viewmats.sizes(), "viewmats_rs must match viewmats shape");
-        TORCH_CHECK(viewmats_rs.value().scalar_type() == at::kFloat, "viewmats_rs must be float32");
-    }
+    CHECK_INPUT(campos);
     CHECK_INPUT(coeffs);
     CHECK_DEVICE(out);
     TORCH_CHECK(out.is_contiguous(), "out must be contiguous");
     TORCH_CHECK(means.scalar_type() == at::kFloat, "means must be float32");
-    TORCH_CHECK(viewmats.scalar_type() == at::kFloat, "viewmats must be float32");
+    TORCH_CHECK(campos.scalar_type() == at::kFloat, "campos must be float32");
     TORCH_CHECK(out.scalar_type() == at::kFloat, "out must be float32");
     TORCH_CHECK(means.size(-1) == 3, "means must have last dim 3");
-    TORCH_CHECK(viewmats.size(-2) == 4 && viewmats.size(-1) == 4, "viewmats must have last dims 4x4");
+    TORCH_CHECK(campos.size(-1) == 3, "campos must have last dim 3");
     TORCH_CHECK(coeffs.dim() == 3, "coeffs must be [N, K, Dc], got ", coeffs.sizes());
     TORCH_CHECK(coeffs.size(-3) == N, "coeffs N (", coeffs.size(-3), ") != N (", N, ")");
     TORCH_CHECK(coeffs.size(-1) == Dc, "coeffs Dc (", coeffs.size(-1), ") != Dc (", Dc, ")");
     const int64_t lead = B * C * N;
     TORCH_CHECK(means.numel() == B * N * 3, "means numel mismatch");
-    TORCH_CHECK(viewmats.numel() == B * C * 16, "viewmats numel mismatch");
+    TORCH_CHECK(campos.numel() == B * C * 3, "campos numel mismatch");
     const int64_t width = Dc + E + (has_depth ? 1 : 0);
     TORCH_CHECK(out.size(-1) == width, "out width (", out.size(-1), ") != ", width);
     TORCH_CHECK(out.numel() == lead * width, "out numel mismatch");
@@ -660,8 +488,7 @@ void assemble_proj_features_unpacked_fwd(
         depth_is_zero,
         extra_has_c,
         means,
-        viewmats,
-        viewmats_rs,
+        campos,
         coeffs,
         (E > 0) ? extra : c10::nullopt,
         (has_depth && !depth_is_zero) ? depths : c10::nullopt,
@@ -695,18 +522,15 @@ namespace
             bool depth_is_zero,
             bool extra_has_c,
             const at::Tensor &means,
-            const at::Tensor &viewmats,
-            const at::optional<at::Tensor> &viewmats_rs,
+            const at::Tensor &campos,
             const at::Tensor &coeffs,
             const at::optional<at::Tensor> &extra,
             const at::optional<at::Tensor> &depths,
             const at::optional<at::Tensor> &masks
         )
         {
-            at::Tensor means_c    = means.contiguous();
-            at::Tensor viewmats_c = viewmats.contiguous();
-            at::optional<at::Tensor> viewmats_rs_c
-                = viewmats_rs.has_value() ? at::optional<at::Tensor>(viewmats_rs.value().contiguous()) : c10::nullopt;
+            at::Tensor means_c  = means.contiguous();
+            at::Tensor campos_c = campos.contiguous();
             at::Tensor coeffs_c = coeffs.contiguous();
             at::optional<at::Tensor> extra_c
                 = (extra.has_value() && E > 0) ? at::optional<at::Tensor>(extra.value().contiguous()) : c10::nullopt;
@@ -726,17 +550,16 @@ namespace
 
             // Capture grad requirements now (the contiguous() copies above were made
             // under the Function's no-grad forward, so their requires_grad is false).
-            const bool need_means       = means.requires_grad();
-            const bool need_viewmats    = viewmats.requires_grad();
-            const bool need_viewmats_rs = viewmats_rs.has_value() && viewmats_rs.value().requires_grad();
-            const bool need_coeffs      = coeffs.requires_grad();
-            const bool need_extra       = extra.has_value() && extra.value().requires_grad();
-            const bool need_depths      = depths.has_value() && depths.value().requires_grad();
+            const bool need_means  = means.requires_grad();
+            const bool need_campos = campos.requires_grad();
+            const bool need_coeffs = coeffs.requires_grad();
+            const bool need_extra  = extra.has_value() && extra.value().requires_grad();
+            const bool need_depths = depths.has_value() && depths.value().requires_grad();
 
             // relu Jacobian mask (needed in backward for shift_relu) is emitted by
             // the kernel when any color input requires grad.
             at::optional<at::Tensor> relu_mask;
-            if(color_post == 2 && (need_means || need_viewmats || need_viewmats_rs || need_coeffs))
+            if(color_post == 2 && (need_means || need_campos || need_coeffs))
             {
                 std::vector<int64_t> rm_shape(means_c.sizes().begin(), means_c.sizes().end() - 2);
                 rm_shape.push_back(C);
@@ -758,8 +581,7 @@ namespace
                 depth_is_zero,
                 extra_has_c,
                 means_c,
-                viewmats_c,
-                viewmats_rs_c,
+                campos_c,
                 coeffs_c,
                 extra_c,
                 depths_c,
@@ -770,25 +592,23 @@ namespace
 
             ctx->save_for_backward(
                 {means_c,
-                 viewmats_c,
-                 viewmats_rs_c.has_value() ? viewmats_rs_c.value() : at::Tensor(),
+                 campos_c,
                  coeffs_c,
                  masks_c.has_value() ? masks_c.value() : at::Tensor(),
                  relu_mask.has_value() ? relu_mask.value() : at::Tensor()}
             );
-            ctx->saved_data["degrees_to_use"]   = degrees_to_use;
-            ctx->saved_data["Dc"]               = Dc;
-            ctx->saved_data["E"]                = E;
-            ctx->saved_data["color_post"]       = color_post;
-            ctx->saved_data["has_depth"]        = has_depth;
-            ctx->saved_data["depth_is_zero"]    = depth_is_zero;
-            ctx->saved_data["extra_has_c"]      = extra_has_c;
-            ctx->saved_data["need_means"]       = need_means;
-            ctx->saved_data["need_viewmats"]    = need_viewmats;
-            ctx->saved_data["need_viewmats_rs"] = need_viewmats_rs;
-            ctx->saved_data["need_coeffs"]      = need_coeffs;
-            ctx->saved_data["need_extra"]       = need_extra;
-            ctx->saved_data["need_depths"]      = need_depths;
+            ctx->saved_data["degrees_to_use"] = degrees_to_use;
+            ctx->saved_data["Dc"]             = Dc;
+            ctx->saved_data["E"]              = E;
+            ctx->saved_data["color_post"]     = color_post;
+            ctx->saved_data["has_depth"]      = has_depth;
+            ctx->saved_data["depth_is_zero"]  = depth_is_zero;
+            ctx->saved_data["extra_has_c"]    = extra_has_c;
+            ctx->saved_data["need_means"]     = need_means;
+            ctx->saved_data["need_campos"]    = need_campos;
+            ctx->saved_data["need_coeffs"]    = need_coeffs;
+            ctx->saved_data["need_extra"]     = need_extra;
+            ctx->saved_data["need_depths"]    = need_depths;
             return out;
         }
 
@@ -796,15 +616,12 @@ namespace
             torch::autograd::AutogradContext *ctx, torch::autograd::variable_list grad_outputs
         )
         {
-            const auto saved                = ctx->get_saved_variables();
-            const at::Tensor &means_c       = saved[0];
-            const at::Tensor &viewmats_c    = saved[1];
-            const at::Tensor &viewmats_rs_t = saved[2];
-            const at::Tensor &coeffs_c      = saved[3];
-            const at::Tensor &masks_t       = saved[4];
-            const at::Tensor &relu_mask     = saved[5];
-            at::optional<at::Tensor> viewmats_rs
-                = viewmats_rs_t.defined() ? at::optional<at::Tensor>(viewmats_rs_t) : c10::nullopt;
+            const auto saved               = ctx->get_saved_variables();
+            const at::Tensor &means_c      = saved[0];
+            const at::Tensor &campos_c     = saved[1];
+            const at::Tensor &coeffs_c     = saved[2];
+            const at::Tensor &masks_t      = saved[3];
+            const at::Tensor &relu_mask    = saved[4];
             at::optional<at::Tensor> masks = masks_t.defined() ? at::optional<at::Tensor>(masks_t) : c10::nullopt;
 
             const int64_t degrees_to_use = ctx->saved_data["degrees_to_use"].toInt();
@@ -817,17 +634,21 @@ namespace
 
             at::Tensor g = grad_outputs[0].contiguous();
 
-            const bool need_means       = ctx->saved_data["need_means"].toBool();
-            const bool need_viewmats    = ctx->saved_data["need_viewmats"].toBool();
-            const bool need_viewmats_rs = ctx->saved_data["need_viewmats_rs"].toBool();
-            const bool need_coeffs      = ctx->saved_data["need_coeffs"].toBool();
-            const bool need_extra       = ctx->saved_data["need_extra"].toBool();
-            const bool need_depths      = ctx->saved_data["need_depths"].toBool();
-            at::Tensor v_means, v_viewmats, v_viewmats_rs, v_coeffs, v_extra, v_depths;
+            const bool need_means  = ctx->saved_data["need_means"].toBool();
+            const bool need_campos = ctx->saved_data["need_campos"].toBool();
+            const bool need_coeffs = ctx->saved_data["need_coeffs"].toBool();
+            const bool need_extra  = ctx->saved_data["need_extra"].toBool();
+            const bool need_depths = ctx->saved_data["need_depths"].toBool();
+            const bool need_dir    = need_means || need_campos;
 
-            if(need_means || need_viewmats || need_viewmats_rs || need_coeffs)
+            at::Tensor v_means, v_campos, v_coeffs, v_extra, v_depths;
+
+            if(need_means || need_campos || need_coeffs)
             {
-                at::Tensor g_color = g.narrow(-1, 0, Dc);
+                const int64_t batch_ndim = means_c.dim() - 2;
+                // dirs = means[..., None, :, :] - campos[..., None, :] -> [*b, C, N, 3]
+                at::Tensor dirs          = means_c.unsqueeze(batch_ndim).sub(campos_c.unsqueeze(-2)).contiguous();
+                at::Tensor g_color       = g.narrow(-1, 0, Dc);
                 if(color_post == 2 && relu_mask.defined())
                 {
                     g_color = g_color.mul(relu_mask);
@@ -835,39 +656,35 @@ namespace
                 g_color = g_color.contiguous();
 
                 at::Tensor v_coeffs_accum = at::zeros(coeffs_c.sizes(), coeffs_c.options().dtype(at::kFloat));
-                if(need_means)
+                at::Tensor v_dirs;
+                if(need_dir)
                 {
-                    v_means = at::zeros_like(means_c);
-                }
-                if(need_viewmats)
-                {
-                    v_viewmats = at::zeros_like(viewmats_c);
-                }
-                if(need_viewmats_rs)
-                {
-                    TORCH_INTERNAL_ASSERT(viewmats_rs.has_value());
-                    v_viewmats_rs = at::zeros_like(viewmats_rs.value());
+                    v_dirs = at::zeros_like(dirs);
                 }
                 launch_spherical_harmonics_bwd_kernel(
                     static_cast<uint32_t>(degrees_to_use),
-                    means_c,
-                    viewmats_c,
-                    viewmats_rs,
+                    dirs,
                     coeffs_c,
                     masks,
-                    c10::nullopt,
-                    c10::nullopt,
-                    c10::nullopt,
                     g_color,
                     v_coeffs_accum,
-                    need_means ? at::optional<at::Tensor>(v_means) : c10::nullopt,
-                    need_viewmats ? at::optional<at::Tensor>(v_viewmats) : c10::nullopt,
-                    need_viewmats_rs ? at::optional<at::Tensor>(v_viewmats_rs) : c10::nullopt
+                    need_dir ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
                 );
                 if(need_coeffs)
                 {
                     v_coeffs = (coeffs_c.scalar_type() == at::kFloat) ? v_coeffs_accum
                                                                       : v_coeffs_accum.to(coeffs_c.scalar_type());
+                }
+                if(need_dir)
+                {
+                    if(need_means)
+                    {
+                        v_means = v_dirs.sum(batch_ndim); // reduce over C
+                    }
+                    if(need_campos)
+                    {
+                        v_campos = v_dirs.sum(-2).neg(); // reduce over N
+                    }
                 }
             }
 
@@ -884,13 +701,12 @@ namespace
             }
 
             // grads in forward-input order (non-tensor inputs -> undefined Tensor).
-            torch::autograd::variable_list grads(18);
+            torch::autograd::variable_list grads(17);
             grads[11] = v_means;
-            grads[12] = v_viewmats;
-            grads[13] = v_viewmats_rs;
-            grads[14] = v_coeffs;
-            grads[15] = v_extra;
-            grads[16] = v_depths;
+            grads[12] = v_campos;
+            grads[13] = v_coeffs;
+            grads[14] = v_extra;
+            grads[15] = v_depths;
             return grads;
         }
     };
@@ -909,8 +725,7 @@ at::Tensor assemble_proj_features(
     bool depth_is_zero,
     bool extra_has_c,
     const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::optional<at::Tensor> &viewmats_rs,
+    const at::Tensor &campos,
     const at::Tensor &coeffs,
     const at::optional<at::Tensor> &extra,
     const at::optional<at::Tensor> &depths,
@@ -930,8 +745,7 @@ at::Tensor assemble_proj_features(
         depth_is_zero,
         extra_has_c,
         means,
-        viewmats,
-        viewmats_rs,
+        campos,
         coeffs,
         extra,
         depths,
@@ -941,27 +755,15 @@ at::Tensor assemble_proj_features(
 
 SphericalHarmonicsBwdResult spherical_harmonics_bwd_privateuseone(
     int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &coeffs,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs,
+    const at::Tensor &dirs,                // [..., N, 3]
+    const at::Tensor &coeffs,              // [N, K, D]
+    const at::optional<at::Tensor> &masks, // [..., N]
     const SphericalHarmonicsGrad &grad,
-    bool compute_v_means,
-    bool compute_v_viewmats,
-    bool compute_v_viewmats_rs
+    bool compute_v_dirs
 )
 {
-    DEVICE_GUARD(means);
-    check_spherical_harmonics_inputs(
-        degrees_to_use, means, viewmats, coeffs, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs
-    );
-    TORCH_CHECK(!viewmats_rs.has_value(), "rolling-shutter spherical_harmonics is not supported on PrivateUse1");
-    TORCH_INTERNAL_ASSERT(!compute_v_viewmats_rs);
-    TORCH_CHECK(!batch_ids.has_value(), "packed spherical_harmonics is not supported on PrivateUse1");
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_inputs(degrees_to_use, dirs, coeffs, masks);
     TORCH_INTERNAL_ASSERT(grad.colors.defined());
     CHECK_DENSE(grad.colors);
     at::Tensor grad_colors = grad.colors.contiguous();
@@ -976,66 +778,35 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd_privateuseone(
     );
 
     at::Tensor v_coeffs_accum = at::empty(coeffs.sizes(), coeffs.options().dtype(at::kFloat));
-    at::Tensor v_means, v_viewmats;
-    if(compute_v_means)
+    at::Tensor v_dirs;
+    if(compute_v_dirs)
     {
-        v_means = at::empty_like(means);
-    }
-    if(compute_v_viewmats)
-    {
-        v_viewmats = at::zeros_like(viewmats);
+        v_dirs = at::empty_like(dirs);
     }
 
     launch_spherical_harmonics_bwd_kernels(
-        degrees_to_use,
-        means,
-        viewmats,
-        coeffs,
-        masks,
-        batch_ids,
-        camera_ids,
-        gaussian_ids,
-        grad_colors,
-        v_coeffs_accum,
-        as_optional_tensor(v_means),
-        as_optional_tensor(v_viewmats)
+        degrees_to_use, dirs, coeffs, masks, grad_colors, v_coeffs_accum, as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_coeffs
         = (coeffs.scalar_type() == at::kFloat) ? v_coeffs_accum : v_coeffs_accum.to(coeffs.scalar_type());
     return SphericalHarmonicsBwdResult{
-        .v_coeffs      = v_coeffs,
-        .v_means       = as_optional_tensor(v_means),
-        .v_viewmats    = as_optional_tensor(v_viewmats),
-        .v_viewmats_rs = c10::nullopt,
+        .v_coeffs = v_coeffs,
+        .v_dirs   = as_optional_tensor(v_dirs),
     };
 }
 
 SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd_privateuseone(
     int64_t degrees_to_use,
-    const at::Tensor &means,
-    const at::Tensor &viewmats,
-    const at::Tensor &shN,
-    const at::optional<at::Tensor> &masks,
-    const at::optional<at::Tensor> &batch_ids,
-    const at::optional<at::Tensor> &camera_ids,
-    const at::optional<at::Tensor> &gaussian_ids,
-    const at::optional<at::Tensor> &viewmats_rs,
+    const at::Tensor &dirs,                // [..., N, 3]
+    const at::Tensor &shN,                 // [N, K - 1, D]
+    const at::optional<at::Tensor> &masks, // [..., N]
     const SphericalHarmonicsGrad &grad,
-    bool compute_v_means,
-    bool compute_v_viewmats,
-    bool compute_v_viewmats_rs
+    bool compute_v_dirs
 )
 {
-    DEVICE_GUARD(means);
-    check_spherical_harmonics_l1_plus_inputs(
-        degrees_to_use, means, viewmats, shN, masks, batch_ids, camera_ids, gaussian_ids, viewmats_rs
-    );
-    TORCH_CHECK(
-        !viewmats_rs.has_value(), "rolling-shutter spherical_harmonics_l1_plus is not supported on PrivateUse1"
-    );
-    TORCH_INTERNAL_ASSERT(!compute_v_viewmats_rs);
-    TORCH_CHECK(!batch_ids.has_value(), "packed spherical_harmonics_l1_plus is not supported on PrivateUse1");
+    DEVICE_GUARD(dirs);
+    check_spherical_harmonics_l1_plus_inputs(degrees_to_use, dirs, shN, masks);
     TORCH_INTERNAL_ASSERT(grad.colors.defined());
     CHECK_DENSE(grad.colors);
     at::Tensor grad_colors = grad.colors.contiguous();
@@ -1050,37 +821,20 @@ SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd_privateuseone(
     );
 
     at::Tensor v_shN_accum = at::zeros(shN.sizes(), shN.options().dtype(at::kFloat));
-    at::Tensor v_means, v_viewmats;
-    if(compute_v_means)
+    at::Tensor v_dirs;
+    if(compute_v_dirs)
     {
-        v_means = at::zeros_like(means);
-    }
-    if(compute_v_viewmats)
-    {
-        v_viewmats = at::zeros_like(viewmats);
+        v_dirs = at::zeros_like(dirs);
     }
 
     launch_spherical_harmonics_l1_plus_bwd_kernels(
-        degrees_to_use,
-        means,
-        viewmats,
-        shN,
-        masks,
-        batch_ids,
-        camera_ids,
-        gaussian_ids,
-        grad_colors,
-        v_shN_accum,
-        as_optional_tensor(v_means),
-        as_optional_tensor(v_viewmats)
+        degrees_to_use, dirs, shN, masks, grad_colors, v_shN_accum, as_optional_tensor(v_dirs)
     );
 
     at::Tensor v_shN = (shN.scalar_type() == at::kFloat) ? v_shN_accum : v_shN_accum.to(shN.scalar_type());
     return SphericalHarmonicsBwdResult{
-        .v_coeffs      = v_shN,
-        .v_means       = as_optional_tensor(v_means),
-        .v_viewmats    = as_optional_tensor(v_viewmats),
-        .v_viewmats_rs = c10::nullopt,
+        .v_coeffs = v_shN,
+        .v_dirs   = as_optional_tensor(v_dirs),
     };
 }
 
