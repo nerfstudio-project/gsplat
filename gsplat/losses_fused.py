@@ -33,6 +33,7 @@ from gsplat.losses import (
     gaussian_z_scale_reg,
     node_semantic_loss,
     out_of_bound_loss,
+    semantic_cross_entropy_masked,
     torch_ssim_loss,
 )
 
@@ -501,13 +502,25 @@ class FusedCameraLosses(torch.nn.Module):
     ``factor > 0`` = active, ``factor == 0`` = no valid pixels,
     ``factor < 0`` = disabled.
 
+    The masked semantic cross-entropy loss (see
+    :func:`~gsplat.losses.semantic_cross_entropy_masked` for the exact
+    contract) can be folded into the same dispatch — one host op call
+    launching the whole group of kernels — by passing the optional
+    ``semantic_logits``/``semantic_targets``/``semantic_valid`` inputs
+    together. The forward then
+    returns a third output, the scalar CE loss, and the CE gradient flows to
+    ``semantic_logits`` only. The semantic row count is independent of the
+    camera ray count (the CE carries its own ``valid`` row mask). Omitting the
+    semantic inputs keeps the pre-fold two-output behavior bit-for-bit.
+
     Requires the compiled gsplat loss extension, which defines the per-ray
     flag vocabulary (:class:`LossFlag`); constructing the module raises
     ``RuntimeError`` if the extension is unavailable. With the extension built,
     CUDA inputs use the fused kernel and CPU inputs use an equivalent
     pure-PyTorch path.
 
-    All outputs are per-pixel (unreduced).
+    The camera outputs are per-pixel (unreduced); the optional semantic CE
+    output is a scalar (masked mean).
     """
 
     def __init__(self):
@@ -528,8 +541,13 @@ class FusedCameraLosses(torch.nn.Module):
         bg_pred: Tensor,  # [N]
         rgb_factor: float = 1.0,
         bg_factor: float = 1.0,
-    ) -> Tuple[Tensor, Tensor]:
-        """Returns ``(rgb_loss [N], bg_loss [N])``."""
+        semantic_logits: Optional[Tensor] = None,  # [M, C] fp32/fp64
+        semantic_targets: Optional[Tensor] = None,  # [M] uint8 or int64
+        semantic_valid: Optional[Tensor] = None,  # [M] bool
+        semantic_ignore_index: int = -100,
+    ) -> Tuple[Tensor, ...]:
+        """Returns ``(rgb_loss [N], bg_loss [N])``, plus a scalar
+        ``semantic_loss`` third element when the semantic inputs are given."""
         if rgb_gt.requires_grad:
             raise ValueError(
                 "FusedCameraLosses does not support gradients w.r.t. the "
@@ -538,13 +556,41 @@ class FusedCameraLosses(torch.nn.Module):
                 "fallback is held to the same contract to keep both paths "
                 "consistent."
             )
-        if self._cuda_available and _require_uniform_cuda(
+        semantic_inputs = (semantic_logits, semantic_targets, semantic_valid)
+        has_semantic = any(t is not None for t in semantic_inputs)
+        if has_semantic and any(t is None for t in semantic_inputs):
+            raise ValueError(
+                "FusedCameraLosses: semantic_logits, semantic_targets, and "
+                "semantic_valid enable the grouped semantic CE loss together; "
+                "pass all three or none."
+            )
+        use_cuda = self._cuda_available and _require_uniform_cuda(
             "FusedCameraLosses", (flags,), (rgb_pred, rgb_gt, bg_pred)
-        ):
+        )
+        if has_semantic and use_cuda:
+            # The CE kernels dispatch on the logits dtype independently of the
+            # camera trio, so fp64 CE may ride beside fp32 camera tensors:
+            # check the semantic group's uniformity separately (flags in both
+            # groups ties them to one device).
+            use_cuda = _require_uniform_cuda(
+                "FusedCameraLosses(semantic)",
+                (flags, semantic_targets, semantic_valid),
+                (semantic_logits,),
+            )
+        if use_cuda:
             from gsplat.cuda._losses_wrapper import _FusedCameraLosses
 
             return _FusedCameraLosses.apply(
-                flags, rgb_pred, rgb_gt, bg_pred, rgb_factor, bg_factor
+                flags,
+                rgb_pred,
+                rgb_gt,
+                bg_pred,
+                rgb_factor,
+                bg_factor,
+                semantic_logits,
+                semantic_targets,
+                semantic_valid,
+                semantic_ignore_index,
             )
 
         # Pure-PyTorch fallback
@@ -570,6 +616,14 @@ class FusedCameraLosses(torch.nn.Module):
             pred = bg_pred.clamp(0, 1)
             bg_loss = torch.where(mask, (pred - target).pow(2) * bg_factor, bg_loss)
 
+        if has_semantic:
+            semantic_loss = semantic_cross_entropy_masked(
+                semantic_logits,
+                semantic_targets,
+                semantic_valid,
+                ignore_index=semantic_ignore_index,
+            )
+            return rgb_loss, bg_loss, semantic_loss
         return rgb_loss, bg_loss
 
 

@@ -1720,3 +1720,102 @@ def deform_smoothness_loss(deformation: Tensor, mask: Tensor | None = None) -> T
         # (clamped denominator) instead of mean's 0/0 = NaN.
         return deformation.sum()
     return deformation.abs().sum() / deformation.numel()
+
+
+# ---------------------------------------------------------------------------
+# Masked semantic cross-entropy (scalar, training contract)
+# ---------------------------------------------------------------------------
+
+
+def semantic_cross_entropy_masked(
+    logits: Tensor,
+    targets: Tensor,
+    valid: Tensor,
+    ignore_index: int = -100,
+) -> Tensor:
+    """Masked-mean semantic cross-entropy over valid rows (scalar).
+
+    Unlike :func:`cross_entropy_loss`, which returns **unreduced** per-sample
+    values, this is the masked-mean *training-contract* variant matching the
+    fused CUDA kernels behind the optional semantic member of
+    :class:`gsplat.losses_fused.FusedCameraLosses` (and serving as their
+    pure-PyTorch reference/fallback):
+
+    - Rows with ``valid[i] == False`` contribute nothing — neither to the
+      numerator nor to the denominator.
+    - Rows with ``valid[i] == True`` whose ``targets[i] == ignore_index``
+      contribute zero to the numerator but **still count in the denominator**.
+    - The denominator is the number of valid rows, clamped to ``>= 1``, so an
+      all-invalid mask (or ``N == 0``) yields an exact, differentiable zero.
+
+    Gradients w.r.t. ``logits`` are ``(softmax - onehot) * upstream /
+    n_valid`` for contributing rows and **exact zeros** for invalid and
+    ignored rows. A *valid* row with a target outside ``[0, C)`` (other than
+    ``ignore_index``) is a caller bug: it fails loudly when
+    ``ENFORCE_CONTRACTS`` is enabled (mirroring the CUDA kernels' device
+    assert on assert-enabled builds) and is otherwise deterministically
+    skipped exactly like an ignored row — zero numerator contribution, still
+    counted in the denominator, exact-zero gradient row, logits never read —
+    so both paths agree on assert-free/default builds.
+
+    Row gating comes from the caller-provided ``valid`` mask; the fused
+    camera-loss dispatch launches the CUDA implementation of this contract
+    as an optional group member.
+
+    Args:
+        logits: Class logits ``[N, C]``. Any float dtype here; the fused CUDA
+            path supports ``fp32``/``fp64`` only.
+        targets: Target class indices ``[N]``, ``uint8`` or ``int64``. Only
+            ``int64`` targets can carry a negative ``ignore_index`` such as
+            the default ``-100``.
+        valid: Boolean row mask ``[N]``.
+        ignore_index: Target value excluding a valid row from the numerator
+            (default ``-100``, matching ``torch.nn.functional.cross_entropy``).
+            Compared against the raw target before the range check, so it may
+            also name a class index.
+
+    Returns:
+        Scalar loss tensor (shape ``[]``).
+    """
+    # Structural contract, enforced unconditionally (cheap, shape/dtype-only)
+    # and before any cast so a float `targets` is never silently truncated by
+    # `.long()` and a non-bool `valid` is never silently reinterpreted. The
+    # CUDA path rejects the same inputs in its own entry validation, so the
+    # fallback and the fused kernels refuse identical calls.
+    if logits.dim() != 2:
+        raise ValueError(f"logits must be [N, C], got {tuple(logits.shape)}")
+    if targets.dtype not in (torch.uint8, torch.int64):
+        raise TypeError(f"targets must be uint8 or int64, got {targets.dtype}")
+    if valid.dtype != torch.bool:
+        raise TypeError(f"valid must be bool, got {valid.dtype}")
+
+    valid = valid.reshape(-1)
+    target_idx = targets.reshape(-1).long()
+    in_range = (target_idx >= 0) & (target_idx < logits.shape[1])
+    if ENFORCE_CONTRACTS:
+        # Value-level check (data-dependent; forces a sync): a *valid* row
+        # whose target is neither `ignore_index` nor in [0, C) is a caller
+        # bug — fail loudly here, like the CUDA kernels' device assert on
+        # assert-enabled builds. When disabled (the default), such a row is
+        # deterministically skipped below, matching the assert-free kernels.
+        assert bool(
+            (~valid | in_range | (target_idx == ignore_index)).all()
+        ), "valid rows must have targets in [0, C) or equal to ignore_index"
+    contributing = valid & (target_idx != ignore_index) & in_range
+    # Gather-then-reduce: only contributing rows' logits (and targets) are
+    # ever read, so a non-finite value in a non-contributing row can never
+    # poison the loss or its gradient (parity with the CUDA kernels, which
+    # predicate every read on the contributing mask). The index backward
+    # scatters onto an exact-zero buffer, so non-contributing rows —
+    # invalid, ignored, and out-of-range alike — keep exact-zero gradients.
+    # With nothing contributing the sum-reduced cross entropy of the empty
+    # gather is an exact, differentiable zero.
+    numerator = F.cross_entropy(
+        logits[contributing], target_idx[contributing], reduction="sum"
+    )
+    # Every valid row counts in the denominator — including ignore_index (and
+    # skipped out-of-range) rows, which contribute zero to the numerator only.
+    # The clamp makes the all-invalid (or empty) case an exact zero instead
+    # of 0/0.
+    denominator = valid.sum().clamp(min=1).to(numerator.dtype)
+    return numerator / denominator

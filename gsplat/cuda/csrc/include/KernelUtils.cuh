@@ -21,17 +21,112 @@
 
 namespace gsplat
 {
-// Native warp/wave sum reduction. full_mask must contain every lane in the
-// native warp/wave, including lane 0; subset masks are unsupported. Every lane
-// must participate convergently, and lane 0 receives each sum.
-template<typename mask_t, typename... Ts>
+// Shuffle-direction policies for the shared warp tree reduction. ShflDown
+// converges each result into lane 0 — the shape for partials on their way to
+// a single atomic flush. ShflXor is the butterfly form, leaving each result
+// in every lane — reduce-and-broadcast in one tree, for row statistics that
+// all lanes consume afterwards. Both cost the same shuffle count; the choice
+// is the consumer's, not a performance trade.
+struct ShflDown
+{
+    template<int Width, typename mask_t, typename T>
+    __device__ __forceinline__ T operator()(mask_t full_mask, T value, int offset) const
+    {
+        return __shfl_down_sync(full_mask, value, offset, Width);
+    }
+};
+
+struct ShflXor
+{
+    template<int Width, typename mask_t, typename T>
+    __device__ __forceinline__ T operator()(mask_t full_mask, T value, int offset) const
+    {
+        return __shfl_xor_sync(full_mask, value, offset, Width);
+    }
+};
+
+// Combine policies. Max keeps the comparison written exactly as the scalar
+// loops it replaces (`other > value` picks other), so NaN propagation matches
+// the previously unshared code bit for bit.
+struct SumCombine
+{
+    template<typename T>
+    __device__ __forceinline__ T operator()(T value, T other) const
+    {
+        return value + other;
+    }
+};
+
+struct MaxCombine
+{
+    template<typename T>
+    __device__ __forceinline__ T operator()(T value, T other) const
+    {
+        return other > value ? other : value;
+    }
+};
+
+// The classic halving-offset warp/wave tree shared by every reduction below.
+// full_mask must contain every lane of the reduction group, including lane
+// 0; subset masks are unsupported. Every lane must participate convergently.
+// Variadic accumulators reduce in one interleaved tree; each value's fold
+// order is identical to reducing it alone.
+//
+// WaveSize is the LOGICAL reduction width, fixed at compile time so a
+// caller's lane layout and its tree provably share one constant (and the
+// unroll is guaranteed by the language). The default is 32 because every
+// consumer in this codebase lays out its lanes and masks by a literal 32:
+// on a 64-lane HIP wave, a WaveSize-32 tree reduces each 32-lane half
+// independently (xor/down offsets <= 16 never cross the halves, and HIP
+// ignores shuffle masks), which is exactly the grouping those layouts
+// assume. Do NOT use the native warpSize here - an adaptive width would
+// silently mix two 32-lane groups on wave64 hardware.
+template<int WaveSize = 32, typename Shfl, typename Combine, typename mask_t, typename... Ts>
+__device__ __forceinline__ void warp_tree_reduce(Shfl shfl, Combine combine, mask_t full_mask, Ts &...values)
+{
+    static_assert(WaveSize > 0 && (WaveSize & (WaveSize - 1)) == 0, "WaveSize must be a power of two");
+    // The mask must be wide enough to name every lane of the reduction group;
+    // this couples the mask width to the reduction width (a wave64 group needs
+    // a 64-bit mask, not a 32-bit one).
+    static_assert(
+        sizeof(mask_t) * 8 >= static_cast<unsigned>(WaveSize), "the shuffle mask must have at least WaveSize bits"
+    );
+#ifndef USE_ROCM
+    // CUDA build: the physical warp is always 32 lanes. A non-32 WaveSize would
+    // shuffle across nonexistent lanes (an offset >= 32, or a sub-warp shuffle
+    // width past the warp, reads the caller's own value) and silently double
+    // sums. A ROCm build (-DUSE_ROCM) targets its wavefront and is exempt; the
+    // mask-width assert above still holds there.
+    static_assert(WaveSize == 32, "non-32 WaveSize on a CUDA build corrupts reductions");
+#endif
+#pragma unroll
+    for(int offset = WaveSize / 2; offset > 0; offset >>= 1)
+    {
+        // WaveSize is passed as the shuffle width (a compile-time constant, so
+        // this is codegen-identical to the default on CUDA) so the shuffle
+        // wraps within the logical group rather than the native warp/wave.
+        ((values = combine(values, shfl.template operator()<WaveSize>(full_mask, values, offset))), ...);
+    }
+}
+
+// Warp/wave sum reduction; lane 0 of each WaveSize group receives each sum.
+template<int WaveSize = 32, typename mask_t, typename... Ts>
 __device__ __forceinline__ void warp_reduce_sum_all(mask_t full_mask, Ts &...values)
 {
-#pragma unroll
-    for(int offset = warpSize / 2; offset > 0; offset >>= 1)
-    {
-        ((values += __shfl_down_sync(full_mask, values, offset)), ...);
-    }
+    warp_tree_reduce<WaveSize>(ShflDown{}, SumCombine{}, full_mask, values...);
+}
+
+// Butterfly sum/max: every lane receives each result (no separate broadcast).
+template<int WaveSize = 32, typename mask_t, typename... Ts>
+__device__ __forceinline__ void warp_reduce_sum_all_lanes(mask_t full_mask, Ts &...values)
+{
+    warp_tree_reduce<WaveSize>(ShflXor{}, SumCombine{}, full_mask, values...);
+}
+
+template<int WaveSize = 32, typename mask_t, typename... Ts>
+__device__ __forceinline__ void warp_reduce_max_all_lanes(mask_t full_mask, Ts &...values)
+{
+    warp_tree_reduce<WaveSize>(ShflXor{}, MaxCombine{}, full_mask, values...);
 }
 
 template<typename scalar_t, typename mask_t>

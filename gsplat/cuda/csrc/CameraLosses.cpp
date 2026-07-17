@@ -26,8 +26,11 @@
 
 #    include <ATen/Functions.h>
 
+#    include <initializer_list>
+
 #    include "CameraLosses.h"
 #    include "Common.h"
+#    include "SemanticCELosses.h"
 
 namespace gsplat
 {
@@ -35,6 +38,42 @@ namespace gsplat
 // passed in as mutable arguments — keeps memory lifetime explicit on the
 // Python side so it can be reused by torch's caching allocator across training
 // steps.
+//
+// Fused camera dispatch: the host entries below launch the
+// RGB/background kernels and, when the trailing optional semantic-CE
+// arguments are present, additionally launch the masked semantic
+// cross-entropy kernels via the validation host entries in
+// SemanticCELosses.cpp — one host entry, a group of kernels. The semantic row
+// count is independent of the camera ray count (the CE port carries its own
+// `valid` row mask), but the semantic tensors must live on the camera
+// tensors' device so the whole group runs under one device guard/stream.
+
+namespace
+{
+    // The optional semantic-CE group member is enabled iff semantic_logits is
+    // present; the remaining optional semantic arguments must then all be
+    // present (and must all be absent otherwise).
+    inline bool check_semantic_group_presence(
+        const char *entry,
+        const at::optional<at::Tensor> &semantic_logits,
+        std::initializer_list<const at::optional<at::Tensor> *> companions
+    )
+    {
+        const bool enabled = semantic_logits.has_value();
+        for(const auto *companion: companions)
+        {
+            TORCH_CHECK(
+                companion->has_value() == enabled,
+                entry,
+                ": the optional semantic-CE arguments must be passed all together or not at all "
+                "(semantic_logits is ",
+                enabled ? "present" : "absent",
+                ")"
+            );
+        }
+        return enabled;
+    }
+} // namespace
 
 void camera_losses_fwd(
     const at::Tensor &flags,
@@ -44,9 +83,21 @@ void camera_losses_fwd(
     double rgb_factor,
     double bg_factor,
     at::Tensor rgb_loss,
-    at::Tensor bg_loss
+    at::Tensor bg_loss,
+    const at::optional<at::Tensor> &semantic_logits,
+    const at::optional<at::Tensor> &semantic_targets,
+    const at::optional<at::Tensor> &semantic_valid,
+    int64_t semantic_ignore_index,
+    at::optional<at::Tensor> semantic_loss_sum,
+    at::optional<at::Tensor> semantic_valid_count,
+    at::optional<at::Tensor> semantic_loss
 )
 {
+    const bool semantic_enabled = check_semantic_group_presence(
+        "camera_losses_fwd",
+        semantic_logits,
+        {&semantic_targets, &semantic_valid, &semantic_loss_sum, &semantic_valid_count, &semantic_loss}
+    );
     DEVICE_GUARD(flags);
     CHECK_INPUT(flags);
     CHECK_INPUT(rgb_pred);
@@ -79,6 +130,29 @@ void camera_losses_fwd(
         rgb_loss,
         bg_loss
     );
+
+    if(semantic_enabled)
+    {
+        // The semantic-CE group member shares the entry's device guard and
+        // current stream; semantic_ce_fwd revalidates its own inputs (shape,
+        // dtype, cross-tensor device) before launching.
+        TORCH_CHECK(
+            semantic_logits->device() == flags.device(),
+            "semantic_logits must be on the same device as flags (",
+            flags.device(),
+            "), got ",
+            semantic_logits->device()
+        );
+        semantic_ce_fwd(
+            *semantic_logits,
+            *semantic_targets,
+            *semantic_valid,
+            semantic_ignore_index,
+            *semantic_loss_sum,
+            *semantic_valid_count,
+            *semantic_loss
+        );
+    }
 }
 
 void camera_losses_bwd(
@@ -91,9 +165,21 @@ void camera_losses_bwd(
     const at::Tensor &v_rgb_loss,
     const at::Tensor &v_bg_loss,
     at::Tensor v_rgb_pred,
-    at::Tensor v_bg_pred
+    at::Tensor v_bg_pred,
+    const at::optional<at::Tensor> &semantic_logits,
+    const at::optional<at::Tensor> &semantic_targets,
+    const at::optional<at::Tensor> &semantic_valid,
+    int64_t semantic_ignore_index,
+    const at::optional<at::Tensor> &semantic_valid_count,
+    const at::optional<at::Tensor> &v_semantic_loss,
+    at::optional<at::Tensor> v_semantic_logits
 )
 {
+    const bool semantic_enabled = check_semantic_group_presence(
+        "camera_losses_bwd",
+        semantic_logits,
+        {&semantic_targets, &semantic_valid, &semantic_valid_count, &v_semantic_loss, &v_semantic_logits}
+    );
     DEVICE_GUARD(flags);
     CHECK_INPUT(flags);
     CHECK_INPUT(rgb_pred);
@@ -142,6 +228,28 @@ void camera_losses_bwd(
         v_rgb_pred,
         v_bg_pred
     );
+
+    if(semantic_enabled)
+    {
+        // Mirrors the forward: same device guard/stream, full validation
+        // inside semantic_ce_bwd.
+        TORCH_CHECK(
+            semantic_logits->device() == flags.device(),
+            "semantic_logits must be on the same device as flags (",
+            flags.device(),
+            "), got ",
+            semantic_logits->device()
+        );
+        semantic_ce_bwd(
+            *semantic_logits,
+            *semantic_targets,
+            *semantic_valid,
+            semantic_ignore_index,
+            *semantic_valid_count,
+            *v_semantic_loss,
+            *v_semantic_logits
+        );
+    }
 }
 
 void register_camera_losses_cuda_impl(torch::Library &m)
