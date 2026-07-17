@@ -14,6 +14,12 @@
 # limitations under the License.
 
 from .components.base import Scene
+from .components.background_scene import BackgroundScene
+from .components.env_map_background import (
+    EnvMapBackground,
+    EnvMapBackgroundConfig,
+    EnvMapType,
+)
 from .components.gaussian_scene import GaussianScene
 from .components.gaussian_inference_scene import GaussianInferenceScene
 from .components.transforms import (
@@ -31,6 +37,10 @@ from .sh_compression import SHCompressionMode
 __all__ = [
     "functional",
     "Scene",
+    "BackgroundScene",
+    "EnvMapBackground",
+    "EnvMapBackgroundConfig",
+    "EnvMapType",
     "GaussianScene",
     "GaussianInferenceScene",
     "SHCompressionMode",

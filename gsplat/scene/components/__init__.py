@@ -14,7 +14,21 @@
 # limitations under the License.
 
 from .base import Scene
+from .background_scene import BackgroundScene
+from .env_map_background import (
+    EnvMapBackground,
+    EnvMapBackgroundConfig,
+    EnvMapType,
+)
 from .gaussian_scene import GaussianScene
 from .gaussian_inference_scene import GaussianInferenceScene
 
-__all__ = ["Scene", "GaussianScene", "GaussianInferenceScene"]
+__all__ = [
+    "Scene",
+    "BackgroundScene",
+    "EnvMapBackground",
+    "EnvMapBackgroundConfig",
+    "EnvMapType",
+    "GaussianScene",
+    "GaussianInferenceScene",
+]

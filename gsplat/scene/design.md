@@ -16,12 +16,26 @@ The scene code lives under:
 
 - `gsplat/scene/components/base.py`
 - `gsplat/scene/components/gaussian_scene.py`
+- `gsplat/scene/components/gaussian_inference_scene.py`
+- `gsplat/scene/components/background_scene.py`
+- `gsplat/scene/components/env_map_background.py`
 
-The package exports:
+The package exports (see `gsplat/scene/__init__.py`):
 
 ```python
-from gsplat.scene import Scene, GaussianScene
+from gsplat.scene import (
+    BackgroundScene,
+    EnvMapBackground,
+    EnvMapBackgroundConfig,
+    EnvMapType,
+    GaussianInferenceScene,
+    GaussianScene,
+    Scene,
+)
 ```
+
+`GaussianInferenceScene` is the activated, packed inference counterpart of the raw
+log-space training `GaussianScene`; see `design-transforms.md` for its details.
 
 ## Base `Scene`
 
@@ -414,6 +428,101 @@ The trainer and render paths remain responsible for:
 
 That keeps the scene object focused on storage and bookkeeping.
 
+## Background Scene Components
+
+Not all scene representations are point clouds. A background component models the content seen by rays that pass through (or miss) all Gaussians — typically infinite-distance environments like sky, studio backdrops, or synthetic surrounds.
+
+### Relationship to `GaussianScene`
+
+A background component is a **sibling** of `GaussianScene` on the trainer, not a subset inside it. It occupies the same `Scene` ABC contract, so the trainer can treat both through the same interface, but the two types are composed externally (the trainer alpha-composites them), not internally.
+
+The important naming distinction: the Gaussian `"background"` component inside a `GaussianScene` models close-range static geometry; a `BackgroundScene` models infinite-distance, direction-dependent radiance. These are different things.
+
+### `BackgroundScene` — abstract base class
+
+`BackgroundScene` extends `Scene` with one abstract sampling method plus a default
+compositing helper:
+
+```python
+class BackgroundScene(Scene):
+    @abstractmethod
+    def sample(self, rays_d: Tensor) -> Tensor:
+        """Map world-space ray directions [N,3] to background RGB [N,3]."""
+
+    def composite(
+        self,
+        gaussian_rgb: Tensor,   # [N, 3]  Gaussian-accumulated color
+        opacity: Tensor,        # [N]     Gaussian-accumulated alpha
+        rays_d: Tensor,         # [N, 3]  world-space ray directions
+        is_training: bool = False,
+    ) -> Tensor:
+        """Default: over-compositing. Subclasses may override.
+
+        ``is_training`` enables per-step tracking in subclasses that need it
+        (e.g. EnvMapBackground); the side-effect-free default path ignores it.
+        """
+        return self._blend_background(gaussian_rgb, self.sample(rays_d), opacity)
+
+    def _blend_background(self, gaussian_rgb, bg_rgb, opacity) -> Tensor:
+        # reshape(-1, 1), not unsqueeze(-1): unsqueeze on an [N, 1] opacity
+        # yields [N, 1, 1] and broadcasts the blend to [N, N, 3]. Shared with
+        # subclasses that sample/track before blending (e.g. EnvMapBackground).
+        return gaussian_rgb + bg_rgb * (1.0 - opacity.reshape(-1, 1))
+```
+
+Regularizers (e.g. spatial TV) do **not** live on the scene. They are free functions
+in `gsplat/losses.py` that the trainer calls explicitly, consistent with how all
+Gaussian regularizers are handled. See `design-bg-env-map.md` § "Why losses do not
+live on the scene".
+
+Topology hooks (`on_duplicate`, `on_split`, etc.) are inherited as no-ops — a background has no rows to permute or remove.
+
+`put(name, value)` and `get(name)` store/retrieve named tensors or parameters (e.g. `"textures"`), giving a consistent interface across scene types without enforcing Gaussian-specific semantics.
+
+### Compositing responsibility
+
+Compositing is **the trainer's responsibility**, not Stage's. This is consistent with Stage's existing "no multi-scene composition" stance. The expected training pattern is shown below.
+
+> **Intended usage, not code in this repo.** This `bg_scene.composite(...)` pattern is
+> how the external AV trainer (sister MR `nre!4012`) consumes the background component.
+> This repo ships `BackgroundScene` / `EnvMapBackground` and their tests only — there are
+> no in-repo trainer call sites of `.composite(...)`.
+
+```
+renders, alphas, info = stage.render("scene", ...)   # 3DGS rasterization 3-tuple
+final_renders = bg_scene.composite(
+    renders.reshape(-1, 3), alphas.reshape(-1), rays_d, is_training=True
+).reshape(renders.shape)
+loss = photometric_loss(final_renders, gt_images)
+```
+
+`is_training=True` activates per-step gradient/inpaint tracking; the shipped default
+is `False`, so evaluation/inference should call `composite(...)` with `is_training=False`
+(the default).
+
+The background therefore participates in the same backward pass as the Gaussians — no separate training stage is needed.
+
+### Optimizer integration
+
+A background scene owns `nn.Parameter` tensors that need their own optimizer param group (typically at a lower learning rate than Gaussian positions). Mirroring how the trainer registers `GaussianScene` params via `scene.splats.values()`, the background exposes its trainable tensors through a plain `parameters()` accessor (not `nn.Module.parameters()` — see § "State persistence" in `design-bg-env-map.md`):
+
+```python
+optimizer.add_param_group({"params": list(bg_scene.parameters()), "lr": bg_lr})
+```
+
+### Checkpoint persistence
+
+`EnvMapBackground` is a plain `Scene` (not an `nn.Module`), so it provides a hand-written `state_dict()` / `from_state_dict()` pair returning a plain dict, mirroring `GaussianScene`. Trainers using it should persist `bg_scene.state_dict()` alongside the Gaussian scene. Serialization is not part of the generic `BackgroundScene` contract — the base ABC defines only sampling/compositing/`put`/`get`; only `EnvMapBackground` implements persistence. The per-scene state dict pattern is the right path forward for all non-trivial scenes.
+
+### Implementations
+
+| Class | Representation | Status | Notes |
+|---|---|---|---|
+| `EnvMapBackground` | Learnable cubemap or equirectangular texture | Implemented | Sampling backed by a fused CUDA kernel in `gsplat/scene/kernels/` (pure-`torch` reference oracle for tests); see `design-bg-env-map.md` |
+| `ConstantBackground` | Single learnable RGB vector | Planned | Degenerate case; already partially served by `rasterization(backgrounds=...)` |
+
+---
+
 ## Current Scope
 
 Included today:
@@ -425,6 +534,7 @@ Included today:
 - exclusive components via `component_index`
 - sidecar update hooks for topology changes
 - AV checkpoint evaluation support from saved splats
+- `BackgroundScene` ABC and `EnvMapBackground` implementation, whose texture sampling is backed by a fused CUDA kernel in `gsplat/scene/kernels/` with a pure-`torch` reference oracle for tests (see `design-bg-env-map.md`)
 
 Explicitly not standardized yet:
 
