@@ -147,9 +147,6 @@ build-release:
       mkdir -p "${test_root}"
       cd "${test_root}"
 
-      if python -m pip show gsplat >/dev/null 2>&1; then
-        python -m pip uninstall --yes gsplat
-      fi
       python -m pip install "${wheel_file}[test]"
       python -c "import gsplat; print('gsplat:', gsplat.__version__, gsplat.__file__)"
       gsplat-test
