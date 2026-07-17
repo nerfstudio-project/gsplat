@@ -46,6 +46,31 @@ def test_mcmc_strategy_positional_constructor():
     assert strategy.noise_opacity_k == 30.0
 
 
+@pytest.mark.parametrize("operation", ["relocate", "add"])
+def test_mcmc_strategy_rejects_empty_live_set(operation):
+    from gsplat.strategy import MCMCStrategy
+
+    n_gaussians = 20
+    params = torch.nn.ParameterDict(
+        {
+            "means": torch.zeros(n_gaussians, 3),
+            "scales": torch.zeros(n_gaussians, 3),
+            "quats": torch.zeros(n_gaussians, 4),
+            "opacities": torch.logit(torch.full((n_gaussians,), 0.001)),
+        }
+    )
+    strategy = MCMCStrategy(cap_max=n_gaussians + 1, min_opacity=0.005)
+    binoms = strategy.initialize_state()["binoms"]
+
+    with pytest.raises(RuntimeError, match=r"no live Gaussians.*min_opacity=0\.005"):
+        if operation == "relocate":
+            strategy._relocate_gs(params, {}, binoms)
+        else:
+            strategy._add_new_gs(params, {}, binoms)
+
+    assert len(params["means"]) == n_gaussians
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy():
