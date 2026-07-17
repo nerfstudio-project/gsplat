@@ -309,10 +309,11 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
         ")"
     );
 
-    // Always accumulate v_coeffs in fp32 to avoid precision loss when multiple
-    // (batch, gaussian) elements atomic-add into the same slot. For fp32
-    // coeffs the accumulator IS the output; for fp16 we cast at the end.
-    at::Tensor v_coeffs_accum = at::zeros(coeffs.sizes(), coeffs.options().dtype(at::kFloat));
+    // The kernel reduces the coeff gradient over all (batch, gaussian) elements
+    // in fp32 registers and writes v_coeffs directly in the coeff dtype with a
+    // single store, so no fp32 scratch buffer, zero-init, or fp32->coeff cast is
+    // required (accumulation is still in fp32, preserving precision).
+    at::Tensor v_coeffs = at::empty(coeffs.sizes(), coeffs.options());
     at::Tensor v_dirs;
     if(compute_v_dirs)
     {
@@ -320,11 +321,9 @@ SphericalHarmonicsBwdResult spherical_harmonics_bwd(
     }
 
     launch_spherical_harmonics_bwd_kernel(
-        degrees_to_use, dirs, coeffs, masks, grad_colors, v_coeffs_accum, as_optional_tensor(v_dirs)
+        degrees_to_use, dirs, coeffs, masks, grad_colors, v_coeffs, as_optional_tensor(v_dirs)
     );
 
-    at::Tensor v_coeffs
-        = (coeffs.scalar_type() == at::kFloat) ? v_coeffs_accum : v_coeffs_accum.to(coeffs.scalar_type());
     return SphericalHarmonicsBwdResult{
         .v_coeffs = v_coeffs,
         .v_dirs   = as_optional_tensor(v_dirs),
@@ -355,7 +354,9 @@ SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd(
         ")"
     );
 
-    at::Tensor v_shN_accum = at::zeros(shN.sizes(), shN.options().dtype(at::kFloat));
+    // Kernel writes v_shN directly in the coeff dtype (fp32 register accumulation,
+    // single store), so no fp32 scratch buffer or cast is needed.
+    at::Tensor v_shN = at::empty(shN.sizes(), shN.options());
     at::Tensor v_dirs;
     if(compute_v_dirs)
     {
@@ -363,10 +364,9 @@ SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd(
     }
 
     launch_spherical_harmonics_l1_plus_bwd_kernel(
-        degrees_to_use, dirs, shN, masks, grad_colors, v_shN_accum, as_optional_tensor(v_dirs)
+        degrees_to_use, dirs, shN, masks, grad_colors, v_shN, as_optional_tensor(v_dirs)
     );
 
-    at::Tensor v_shN = (shN.scalar_type() == at::kFloat) ? v_shN_accum : v_shN_accum.to(shN.scalar_type());
     return SphericalHarmonicsBwdResult{
         .v_coeffs = v_shN,
         .v_dirs   = as_optional_tensor(v_dirs),
@@ -642,7 +642,9 @@ namespace
                 }
                 g_color = g_color.contiguous();
 
-                at::Tensor v_coeffs_accum = at::zeros(coeffs_c.sizes(), coeffs_c.options().dtype(at::kFloat));
+                // The kernel writes v_coeffs directly in the coeff dtype (fp32
+                // register accumulation, single store) so no fp32 scratch or cast.
+                at::Tensor v_coeffs_out = at::empty(coeffs_c.sizes(), coeffs_c.options());
                 at::Tensor v_dirs;
                 if(need_dir)
                 {
@@ -654,13 +656,12 @@ namespace
                     coeffs_c,
                     masks,
                     g_color,
-                    v_coeffs_accum,
+                    v_coeffs_out,
                     need_dir ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
                 );
                 if(need_coeffs)
                 {
-                    v_coeffs = (coeffs_c.scalar_type() == at::kFloat) ? v_coeffs_accum
-                                                                      : v_coeffs_accum.to(coeffs_c.scalar_type());
+                    v_coeffs = v_coeffs_out;
                 }
                 if(need_dir)
                 {
@@ -761,7 +762,9 @@ std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_bwd_private
         ")"
     );
 
-    at::Tensor v_coeffs_accum = at::zeros(coeffs.sizes(), coeffs.options().dtype(at::kFloat));
+    // Kernel writes v_coeffs directly in the coeff dtype (fp32 register
+    // accumulation, single store), so no fp32 scratch buffer or cast is needed.
+    at::Tensor v_coeffs = at::empty(coeffs.sizes(), coeffs.options());
     at::Tensor v_dirs;
     if(compute_v_dirs)
     {
@@ -774,12 +777,10 @@ std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_bwd_private
         coeffs,
         masks,
         v_colors,
-        v_coeffs_accum,
+        v_coeffs,
         v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
     );
 
-    at::Tensor v_coeffs
-        = (coeffs.scalar_type() == at::kFloat) ? v_coeffs_accum : v_coeffs_accum.to(coeffs.scalar_type());
     return std::make_tuple(v_coeffs, as_optional_tensor(v_dirs));
 }
 
@@ -804,7 +805,9 @@ std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_l1_plus_bwd
         ")"
     );
 
-    at::Tensor v_shN_accum = at::zeros(shN.sizes(), shN.options().dtype(at::kFloat));
+    // Kernel writes v_shN directly in the coeff dtype (fp32 register accumulation,
+    // single store), so no fp32 scratch buffer or cast is needed.
+    at::Tensor v_shN = at::empty(shN.sizes(), shN.options());
     at::Tensor v_dirs;
     if(compute_v_dirs)
     {
@@ -817,11 +820,10 @@ std::tuple<at::Tensor, at::optional<at::Tensor>> spherical_harmonics_l1_plus_bwd
         shN,
         masks,
         v_colors,
-        v_shN_accum,
+        v_shN,
         v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
     );
 
-    at::Tensor v_shN = (shN.scalar_type() == at::kFloat) ? v_shN_accum : v_shN_accum.to(shN.scalar_type());
     return std::make_tuple(v_shN, as_optional_tensor(v_dirs));
 }
 
