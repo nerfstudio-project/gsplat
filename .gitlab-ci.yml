@@ -87,24 +87,16 @@ code-format:
       - dist/*.whl
       - build/${CMAKE_PRESET}/*-trace.json
 
-build-debug:
-  extends: .build-base
-  variables:
-    CMAKE_PRESET: ci-debug
-
 build-release:
   extends: .build-base
   variables:
     CMAKE_PRESET: ci-release
 
-.test-base:
+# Shared skeleton for GPU jobs: the runner tags plus the before_script every GPU
+# job needs (device probe, cache-disk cleanup, CUDA JIT cache, optional pytest
+# marker). test-release reaches it through .test-base.
+.gpu-base:
   stage: test
-
-  variables:
-    GIT_STRATEGY: empty
-    GIT_SUBMODULE_STRATEGY: none
-    # Optional pytest marker expression to narrow test selection (empty = all).
-    PYTEST_MARKER_EXPR: ""
 
   tags:
     - type/docker
@@ -135,9 +127,19 @@ build-release:
     # Apply the optional marker (PYTEST_MARKER_EXPR) via PYTEST_ADDOPTS, which
     # pytest shlex-parses so the quoted expression survives.
     - |
-      if [ -n "${PYTEST_MARKER_EXPR}" ]; then
+      if [ -n "${PYTEST_MARKER_EXPR:-}" ]; then
         export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -m '${PYTEST_MARKER_EXPR}'"
       fi
+
+# Install the built wheel and run the pytest suite through gsplat-test.
+.test-base:
+  extends: .gpu-base
+
+  variables:
+    GIT_STRATEGY: empty
+    GIT_SUBMODULE_STRATEGY: none
+    # Optional pytest marker expression to narrow test selection (empty = all).
+    PYTEST_MARKER_EXPR: ""
 
   script:
     - |
@@ -151,15 +153,33 @@ build-release:
       python -c "import gsplat; print('gsplat:', gsplat.__version__, gsplat.__file__)"
       gsplat-test
 
+# The debug path builds and runs the whole ctest suite on a GPU runner instead
+# of the wheel + gsplat-test path release uses. Only ctest exercises the C++/CUDA
+# gtests and the cmake/cuda checks, so this is the one place they get real GPU
+# coverage (the pytest-on-wheel path never runs them).
 test-debug:
-  extends: .test-base
+  extends: .gpu-base
+
   needs:
-    - job: build-debug
-      artifacts: true
+    - code-format
+
   variables:
+    CMAKE_PRESET: ci-debug
     # gradcheck is build-mode-independent and test-release runs it in full, so
     # re-running it under the -O0 debug build adds no coverage.
     PYTEST_MARKER_EXPR: "not gradcheck"
+
+  script:
+    # ccache persists across jobs in the runner-preserved CI_BUILDS_DIR/.ci-keep
+    # (git clean keeps .ci-keep); the build pins it via GSPLAT_CCACHE_DIR.
+    - mkdir -p "$CI_BUILDS_DIR/.ci-keep/ccache"
+    # Configure + build the reduced ci-debug tree, then run the entire ctest
+    # suite (C++ gtests, cmake/cuda checks, python_* groups) on the GPU.
+    - |
+      cmake --preset "${CMAKE_PRESET}" -B build/ \
+        -DGSPLAT_CCACHE_DIR="${CI_BUILDS_DIR}/.ci-keep/ccache"
+      cmake --build build/
+      ctest --test-dir build/ --output-on-failure
 
 test-release:
   extends: .test-base
