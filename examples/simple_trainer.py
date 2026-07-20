@@ -472,10 +472,6 @@ class Runner:
                 f"Post-processing ({cfg.post_processing}) requires single-GPU training, "
                 f"but world_size={world_size}."
             )
-        if cfg.post_processing == "ppisp" and isinstance(cfg.strategy, DefaultStrategy):
-            raise ValueError(
-                f"PPISP post-processing requires MCMCStrategy at the moment."
-            )
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
@@ -935,13 +931,17 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            self.cfg.strategy.step_pre_backward(
-                params=self.splats,
-                optimizers=self.optimizers,
-                state=self.strategy_state,
-                step=step,
-                info=info,
-            )
+            # While Gaussians are frozen for PPISP controller distillation the render
+            # output has requires_grad=False, so densification bookkeeping (e.g.
+            # DefaultStrategy's retain_grad) is both invalid and unnecessary.
+            if not self._gaussians_frozen:
+                self.cfg.strategy.step_pre_backward(
+                    params=self.splats,
+                    optimizers=self.optimizers,
+                    state=self.strategy_state,
+                    step=step,
+                    info=info,
+                )
 
             # loss
             if masks is not None:
@@ -1148,8 +1148,11 @@ class Runner:
             for scheduler in schedulers:
                 scheduler.step()
 
-            # Run post-backward steps after backward and optimizer
-            if isinstance(self.cfg.strategy, DefaultStrategy):
+            # Run post-backward steps after backward and optimizer.
+            # Skip structural updates while Gaussians are frozen for PPISP controller distillation.
+            if self._gaussians_frozen:
+                pass
+            elif isinstance(self.cfg.strategy, DefaultStrategy):
                 self.cfg.strategy.step_post_backward(
                     params=self.splats,
                     optimizers=self.optimizers,
