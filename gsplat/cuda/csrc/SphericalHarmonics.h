@@ -27,10 +27,8 @@ class Tensor;
 
 namespace gsplat
 {
-// Maximum number of SH coefficients the backward register accumulators support:
-// (degree + 1)^2 for the highest supported degree (4). Shared by the SH and L1+
-// backward kernels so their per-thread accumulators stay in lockstep.
-inline constexpr int SH_MAX_COEFFS = 25;
+// Highest SH degree supported by the CUDA evaluation and backward kernels.
+inline constexpr int SH_MAX_DEGREE = 4;
 
 // Autograd-aware SH color evaluation; declared here for cross-TU orchestration
 // callers (Rendering.cpp). Returns colors only.

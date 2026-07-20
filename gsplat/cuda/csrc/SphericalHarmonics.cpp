@@ -36,10 +36,22 @@ namespace
 {
     constexpr double SH_C0 = 0.2820947917738781;
 
+    void check_spherical_harmonics_degree(int64_t degrees_to_use)
+    {
+        TORCH_CHECK(
+            degrees_to_use >= 0 && degrees_to_use <= SH_MAX_DEGREE,
+            "degrees_to_use must be between 0 and ",
+            SH_MAX_DEGREE,
+            ", got ",
+            degrees_to_use
+        );
+    }
+
     void check_spherical_harmonics_inputs(
         int64_t degrees_to_use, const at::Tensor &dirs, const at::Tensor &coeffs, const at::optional<at::Tensor> &masks
     )
     {
+        check_spherical_harmonics_degree(degrees_to_use);
         TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
         TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
         TORCH_CHECK(coeffs.dim() == 3, "coeffs must have shape [N, K, D], got ", coeffs.sizes());
@@ -77,6 +89,7 @@ namespace
         int64_t degrees_to_use, const at::Tensor &dirs, const at::Tensor &shN, const at::optional<at::Tensor> &masks
     )
     {
+        check_spherical_harmonics_degree(degrees_to_use);
         TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
         TORCH_CHECK(dirs.dim() >= 2, "dirs must have shape [..., N, 3], got ", dirs.sizes());
         TORCH_CHECK(shN.dim() == 3, "shN must have shape [N, K - 1, D], got ", shN.sizes());
@@ -410,6 +423,7 @@ void assemble_proj_features_unpacked_fwd(
     const at::optional<at::Tensor> &relu_mask // [B, C, N, Dc]
 )
 {
+    check_spherical_harmonics_degree(degrees_to_use);
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     CHECK_INPUT(campos);
@@ -720,6 +734,7 @@ at::Tensor assemble_proj_features(
     const at::optional<at::Tensor> &masks
 )
 {
+    check_spherical_harmonics_degree(degrees_to_use);
     return AssembleProjFeaturesAutograd::apply(
         degrees_to_use,
         B,

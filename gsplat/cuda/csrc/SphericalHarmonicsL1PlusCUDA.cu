@@ -26,6 +26,7 @@
 #include <cooperative_groups.h>
 
 #include "Common.h"
+#include "Dispatch.h"
 #include "SphericalHarmonics.h"
 #include "Utils.cuh"
 
@@ -587,7 +588,7 @@ void launch_spherical_harmonics_l1_plus_fwd_kernels(
     merge_streams();
 }
 
-template<typename scalar_t, typename opmath_t>
+template<typename scalar_t, typename opmath_t, int DEGREE>
 __global__ void spherical_harmonics_l1_plus_bwd_kernel(
     const int64_t gaussian_offset,
     const int64_t gaussian_count,
@@ -595,7 +596,6 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
     const uint32_t N,
     const uint32_t K,
     const uint32_t D,
-    const uint32_t degrees_to_use,
     const vec3 *__restrict__ dirs,         // [..., N, 3]
     const scalar_t *__restrict__ coeffs,   // [N, K - 1, D]
     const bool *__restrict__ masks,        // [..., N]
@@ -616,10 +616,11 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
     const int64_t gaussian_id = idx / D + gaussian_offset;
     const uint32_t c          = static_cast<uint32_t>(idx % D); // output channel
 
-    // fp32 register accumulator, one slot per l1+ coefficient (K-1 <= 24).
-    constexpr int MAX_K = SH_MAX_COEFFS;
+    // The degree is a template parameter, so each kernel variant uses only the
+    // register accumulator slots it needs (L1+ excludes the DC coefficient).
+    constexpr int MAX_K = (DEGREE + 1) * (DEGREE + 1) - 1;
 
-    if(degrees_to_use == 0)
+    if constexpr(DEGREE == 0)
     {
         // No l1+ coefficients contribute; write zeros so the output is defined.
         scalar_t *v_coeffs_ptr = v_coeffs + gaussian_id * K * D;
@@ -651,7 +652,7 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
 
         vec3 v_dir = {0.f, 0.f, 0.f};
         sh_l1_plus_coeffs_to_color_fast_vjp<scalar_t>(
-            degrees_to_use,
+            DEGREE,
             D,
             c,
             dirs[elem_id],
@@ -724,28 +725,35 @@ void launch_spherical_harmonics_l1_plus_bwd_kernel(
         AT_WRAP(
             [&]()
             {
-                using opmath_t     = at::opmath_type<scalar_t>;
-                auto *dirs_ptr     = reinterpret_cast<const vec3 *>(dirs.const_data_ptr<opmath_t>());
-                auto *masks_ptr    = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
-                auto *v_colors_ptr = v_colors.const_data_ptr<opmath_t>();
-                auto *v_dirs_ptr   = v_dirs.has_value() ? v_dirs.value().data_ptr<opmath_t>() : nullptr;
-
-                spherical_harmonics_l1_plus_bwd_kernel<scalar_t, opmath_t><<<blocks, threads, 0, stream>>>(
-                    0,
-                    N,
-                    B,
-                    N,
-                    K,
-                    D,
-                    degrees_to_use,
-                    dirs_ptr,
-                    coeffs.const_data_ptr<scalar_t>(),
-                    masks_ptr,
-                    v_colors_ptr,
-                    v_coeffs.data_ptr<scalar_t>(),
-                    v_dirs_ptr
+                using opmath_t        = at::opmath_type<scalar_t>;
+                auto *dirs_ptr        = reinterpret_cast<const vec3 *>(dirs.const_data_ptr<opmath_t>());
+                auto *masks_ptr       = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
+                auto *v_colors_ptr    = v_colors.const_data_ptr<opmath_t>();
+                auto *v_dirs_ptr      = v_dirs.has_value() ? v_dirs.value().data_ptr<opmath_t>() : nullptr;
+                const bool dispatched = dispatch::dispatch(
+                    dispatch::IntParam<0, 1, 2, 3, 4>{static_cast<int>(degrees_to_use)},
+                    [&]<typename DegConst>()
+                    {
+                        constexpr int DEGREE = DegConst::value;
+                        spherical_harmonics_l1_plus_bwd_kernel<scalar_t, opmath_t, DEGREE>
+                            <<<blocks, threads, 0, stream>>>(
+                                0,
+                                N,
+                                B,
+                                N,
+                                K,
+                                D,
+                                dirs_ptr,
+                                coeffs.const_data_ptr<scalar_t>(),
+                                masks_ptr,
+                                v_colors_ptr,
+                                v_coeffs.data_ptr<scalar_t>(),
+                                v_dirs_ptr
+                            );
+                        C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    }
                 );
-                C10_CUDA_KERNEL_LAUNCH_CHECK();
+                TORCH_CHECK(dispatched, "Unsupported SH degree: ", degrees_to_use);
             }
         ),
         at::kFloat,
@@ -789,28 +797,35 @@ void launch_spherical_harmonics_l1_plus_bwd_kernels(
                 AT_WRAP(
                     [&]()
                     {
-                        using opmath_t     = at::opmath_type<scalar_t>;
-                        auto *dirs_ptr     = reinterpret_cast<const vec3 *>(dirs.const_data_ptr<opmath_t>());
-                        auto *masks_ptr    = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
-                        auto *v_colors_ptr = v_colors.const_data_ptr<opmath_t>();
-                        auto *v_dirs_ptr   = v_dirs.has_value() ? v_dirs.value().data_ptr<opmath_t>() : nullptr;
-
-                        spherical_harmonics_l1_plus_bwd_kernel<scalar_t, opmath_t><<<blocks, threads, 0, stream>>>(
-                            gaussian_offset,
-                            gaussian_count,
-                            B,
-                            N,
-                            K,
-                            D,
-                            degrees_to_use,
-                            dirs_ptr,
-                            coeffs.const_data_ptr<scalar_t>(),
-                            masks_ptr,
-                            v_colors_ptr,
-                            v_coeffs.data_ptr<scalar_t>(),
-                            v_dirs_ptr
+                        using opmath_t        = at::opmath_type<scalar_t>;
+                        auto *dirs_ptr        = reinterpret_cast<const vec3 *>(dirs.const_data_ptr<opmath_t>());
+                        auto *masks_ptr       = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
+                        auto *v_colors_ptr    = v_colors.const_data_ptr<opmath_t>();
+                        auto *v_dirs_ptr      = v_dirs.has_value() ? v_dirs.value().data_ptr<opmath_t>() : nullptr;
+                        const bool dispatched = dispatch::dispatch(
+                            dispatch::IntParam<0, 1, 2, 3, 4>{static_cast<int>(degrees_to_use)},
+                            [&]<typename DegConst>()
+                            {
+                                constexpr int DEGREE = DegConst::value;
+                                spherical_harmonics_l1_plus_bwd_kernel<scalar_t, opmath_t, DEGREE>
+                                    <<<blocks, threads, 0, stream>>>(
+                                        gaussian_offset,
+                                        gaussian_count,
+                                        B,
+                                        N,
+                                        K,
+                                        D,
+                                        dirs_ptr,
+                                        coeffs.const_data_ptr<scalar_t>(),
+                                        masks_ptr,
+                                        v_colors_ptr,
+                                        v_coeffs.data_ptr<scalar_t>(),
+                                        v_dirs_ptr
+                                    );
+                                C10_CUDA_KERNEL_LAUNCH_CHECK();
+                            }
                         );
-                        C10_CUDA_KERNEL_LAUNCH_CHECK();
+                        TORCH_CHECK(dispatched, "Unsupported SH degree: ", degrees_to_use);
                     }
                 ),
                 at::kFloat,

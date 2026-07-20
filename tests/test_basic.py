@@ -6609,6 +6609,21 @@ def test_sh_k16_misaligned_coeffs(dtype, sh_degree, storage_offset):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sh_degree", [-1, 5])
+def test_sh_rejects_unsupported_degree(sh_degree: int):
+    from gsplat.cuda._wrapper import spherical_harmonics, spherical_harmonics_l1_plus
+
+    N, K, D = 4, 36, 3
+    dirs = torch.randn(N, 3, device=device)
+    coeffs = torch.randn(N, K, D, device=device)
+
+    with pytest.raises(RuntimeError, match="degrees_to_use must be between 0 and 4"):
+        spherical_harmonics(sh_degree, dirs, coeffs)
+    with pytest.raises(RuntimeError, match="degrees_to_use must be between 0 and 4"):
+        spherical_harmonics_l1_plus(sh_degree, dirs, coeffs[:, 1:])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 4])
 @pytest.mark.parametrize("K", [26, 30])
 def test_sh_backward_zeros_padded_k_gt_max_supported(sh_degree: int, K: int):
