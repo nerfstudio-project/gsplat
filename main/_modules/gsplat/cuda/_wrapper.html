@@ -1636,9 +1636,9 @@
 <span class="sd">        - **active_tiles**. Int32 [AT]. Ascending dense tile ids of tiles holding</span>
 <span class="sd">          at least one active pixel. Equals ``nonzero(active_tile_mask.flatten())``.</span>
 <span class="sd">        - **active_tile_mask**. Bool [n_images, tile_height, tile_width].</span>
-<span class="sd">        - **tile_pixel_mask**. Int64 [AT, words_per_tile], ``words_per_tile =</span>
+<span class="sd">        - **tile_pixel_mask**. UInt64 [AT, words_per_tile], ``words_per_tile =</span>
 <span class="sd">          ceil(tile_size**2 / 64)``. Raster-order bitmask of active pixels in each</span>
-<span class="sd">          active tile (stored as the int64 two&#39;s-complement bit pattern).</span>
+<span class="sd">          active tile.</span>
 <span class="sd">        - **tile_pixel_cumsum**. Int64 [AT]. *Inclusive* prefix sum of the</span>
 <span class="sd">          active-pixel count per active tile; consumers read ``cumsum[t-1]`` as</span>
 <span class="sd">          the start of active tile ``t``.</span>
