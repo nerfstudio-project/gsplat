@@ -18,14 +18,27 @@
 
 #pragma once
 
-#include <ATen/cuda/Atomic.cuh>
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 
 #include "Common.h"
 
 namespace gsplat
 {
-__device__ __forceinline__ vec3 view_direction_from_world_to_camera(
-    const float *__restrict__ mean, const float *__restrict__ viewmat, const float *__restrict__ viewmat_rs = nullptr
+namespace sh_cg = cooperative_groups;
+
+__device__ __forceinline__ bool reduce_view_direction_channels(const int64_t elem_id, vec3 &v_dir)
+{
+    auto active_threads = sh_cg::coalesced_threads();
+    auto elem_threads   = sh_cg::labeled_partition(active_threads, static_cast<int>(elem_id));
+    v_dir.x             = sh_cg::reduce(elem_threads, v_dir.x, sh_cg::plus<float>());
+    v_dir.y             = sh_cg::reduce(elem_threads, v_dir.y, sh_cg::plus<float>());
+    v_dir.z             = sh_cg::reduce(elem_threads, v_dir.z, sh_cg::plus<float>());
+    return elem_threads.thread_rank() == 0;
+}
+
+__device__ __forceinline__ vec3 camera_offset_from_world_to_camera(
+    const float *__restrict__ viewmat, const float *__restrict__ viewmat_rs = nullptr
 )
 {
     const float tx = viewmat[3];
@@ -48,51 +61,38 @@ __device__ __forceinline__ vec3 view_direction_from_world_to_camera(
         );
         camera_offset *= 0.5f;
     }
-    return vec3(mean[0], mean[1], mean[2]) + camera_offset;
+    return camera_offset;
 }
 
-__device__ __forceinline__ void accumulate_viewmat_vjp(
-    const vec3 &v_dir, const float scale, const float *__restrict__ viewmat, float *__restrict__ v_viewmat
-)
+__device__ __forceinline__ vec3
+    view_direction_from_world_to_camera(const float *__restrict__ mean, const float *__restrict__ viewmat)
 {
-    if(viewmat == nullptr || v_viewmat == nullptr)
-    {
-        return;
-    }
-
-    const float v[3] = {scale * v_dir.x, scale * v_dir.y, scale * v_dir.z};
-#pragma unroll
-    for(int row = 0; row < 3; ++row)
-    {
-        const float t = viewmat[row * 4 + 3];
-#pragma unroll
-        for(int col = 0; col < 3; ++col)
-        {
-            atomicAdd_system(v_viewmat + row * 4 + col, t * v[col]);
-        }
-        atomicAdd_system(
-            v_viewmat + row * 4 + 3, viewmat[row * 4] * v[0] + viewmat[row * 4 + 1] * v[1] + viewmat[row * 4 + 2] * v[2]
-        );
-    }
+    return vec3(mean[0], mean[1], mean[2]) + camera_offset_from_world_to_camera(viewmat);
 }
 
-__device__ __forceinline__ void accumulate_view_direction_vjp(
-    const vec3 &v_dir,
-    const float *__restrict__ viewmat,
-    float *__restrict__ v_mean,
-    float *__restrict__ v_viewmat,
-    const float *__restrict__ viewmat_rs = nullptr,
-    float *__restrict__ v_viewmat_rs     = nullptr
+__device__ __forceinline__ vec3
+    view_direction_from_camera_offset(const float *__restrict__ mean, const float *__restrict__ camera_offset)
+{
+    return vec3(mean[0] + camera_offset[0], mean[1] + camera_offset[1], mean[2] + camera_offset[2]);
+}
+
+__device__ __forceinline__ vec3 view_direction_from_camera_data(
+    const float *__restrict__ mean, const float *__restrict__ viewmat, const float *__restrict__ camera_offset
 )
 {
-    if(v_mean != nullptr)
-    {
-        gpuAtomicAdd(v_mean, v_dir.x);
-        gpuAtomicAdd(v_mean + 1, v_dir.y);
-        gpuAtomicAdd(v_mean + 2, v_dir.z);
-    }
-    const float viewmat_scale = viewmat_rs == nullptr ? 1.f : 0.5f;
-    accumulate_viewmat_vjp(v_dir, viewmat_scale, viewmat, v_viewmat);
-    accumulate_viewmat_vjp(v_dir, 0.5f, viewmat_rs, v_viewmat_rs);
+    return camera_offset == nullptr ? view_direction_from_world_to_camera(mean, viewmat)
+                                    : view_direction_from_camera_offset(mean, camera_offset);
+}
+
+__device__ __forceinline__ vec3 view_direction_from_camera_data(
+    const float *__restrict__ mean,
+    const float *__restrict__ viewmats,
+    const float *__restrict__ camera_offsets,
+    const int64_t view_id
+)
+{
+    return view_direction_from_camera_data(
+        mean, viewmats + view_id * 16, camera_offsets == nullptr ? nullptr : camera_offsets + view_id * 3
+    );
 }
 } // namespace gsplat

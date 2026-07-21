@@ -140,6 +140,35 @@ void launch_spherical_harmonics_l1_plus_bwd_kernel(
     at::optional<at::Tensor> v_viewmats_rs
 );
 
+// Precompute R^T t, averaged across shutter endpoints when viewmats_rs is
+// present, once per image. The result is flattened as [num_viewmats, 3].
+at::Tensor precompute_spherical_harmonics_camera_offsets(
+    const at::Tensor viewmats, const at::optional<at::Tensor> viewmats_rs
+);
+
+// Reduce intermediate view-direction gradients into world-to-camera matrix
+// gradients. The regular CUDA path assigns the result; the multi-GPU path
+// atomically accumulates one Gaussian chunk.
+enum class ViewmatGradientUpdate
+{
+    Assign,
+    SystemAtomicAdd
+};
+
+template<ViewmatGradientUpdate Update>
+void launch_spherical_harmonics_view_direction_vjp_reduction(
+    const int64_t N,
+    const int64_t gaussian_offset,
+    const int64_t gaussian_count,
+    const at::Tensor viewmats,
+    const at::Tensor v_viewdirs,
+    at::optional<at::Tensor> v_viewmats,
+    const at::optional<at::Tensor> viewmats_rs = c10::nullopt,
+    const at::optional<at::Tensor> batch_ids   = c10::nullopt,
+    const at::optional<at::Tensor> camera_ids  = c10::nullopt,
+    at::optional<at::Tensor> v_viewmats_rs     = c10::nullopt
+);
+
 // Fused forward assembly of proj_features = [SH colors | extra | (depth)] for
 // the unpacked rasterization path. Writes each complete output row in one
 // coalesced pass, replacing the SH-eval + cat(color, extra) + cat(.., depth)

@@ -20,10 +20,13 @@
 #include <ATen/OpMathType.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
+#include <ATen/ops/empty.h>
+#include <ATen/ops/zeros.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
 #include <array>
 #include <cooperative_groups.h>
+#include <vector>
 
 #include "Common.h"
 #include "Dispatch.h"
@@ -446,7 +449,7 @@ __global__ void spherical_harmonics_l1_plus_fwd_kernel(
     const uint32_t degrees_to_use,
     const float *__restrict__ means,
     const float *__restrict__ viewmats,
-    const float *__restrict__ viewmats_rs,
+    const float *__restrict__ camera_offsets,
     const scalar_t *__restrict__ coeffs, // [N, K - 1, D]
     const bool *__restrict__ masks,      // [..., N]
     const int64_t *__restrict__ batch_ids,
@@ -480,9 +483,9 @@ __global__ void spherical_harmonics_l1_plus_fwd_kernel(
         colors[output_id * D + c] = 0;
         return;
     }
-    const float *viewmat    = viewmats + (batch_id * C + camera_id) * 16;
-    const float *viewmat_rs = viewmats_rs == nullptr ? nullptr : viewmats_rs + (batch_id * C + camera_id) * 16;
-    const vec3 dir = view_direction_from_world_to_camera(means + (batch_id * N + gaussian_id) * 3, viewmat, viewmat_rs);
+    const int64_t image_offset = batch_id * C + camera_id;
+    const float *mean          = means + (batch_id * N + gaussian_id) * 3;
+    const vec3 dir             = view_direction_from_camera_data(mean, viewmats, camera_offsets, image_offset);
     sh_l1_plus_coeffs_to_color_fast<scalar_t>(
         degrees_to_use, D, c, dir, coeffs + coeff_id * K * D, colors + output_id * D
     );
@@ -523,6 +526,12 @@ void launch_spherical_harmonics_l1_plus_fwd_kernel(
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
+    at::Tensor camera_offsets;
+    if(viewmats_rs.has_value())
+    {
+        camera_offsets = precompute_spherical_harmonics_camera_offsets(viewmats, viewmats_rs);
+    }
+
     // Dispatch on the coeff dtype (fp16/fp32); colors use opmath_t (float).
     AT_DISPATCH_V2(
         coeffs.scalar_type(),
@@ -545,7 +554,7 @@ void launch_spherical_harmonics_l1_plus_fwd_kernel(
                     degrees_to_use,
                     means.const_data_ptr<float>(),
                     viewmats.const_data_ptr<float>(),
-                    viewmats_rs.has_value() ? viewmats_rs.value().const_data_ptr<float>() : nullptr,
+                    camera_offsets.defined() ? camera_offsets.const_data_ptr<float>() : nullptr,
                     coeffs.const_data_ptr<scalar_t>(),
                     masks_ptr,
                     batch_ids.has_value() ? batch_ids.value().const_data_ptr<int64_t>() : nullptr,
@@ -646,7 +655,7 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
     const uint32_t D,
     const float *__restrict__ means,
     const float *__restrict__ viewmats,
-    const float *__restrict__ viewmats_rs,
+    const float *__restrict__ camera_offsets,
     const scalar_t *__restrict__ coeffs, // [N, K - 1, D]
     const bool *__restrict__ masks,      // [..., N]
     const int64_t *__restrict__ batch_ids,
@@ -655,8 +664,7 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
     const opmath_t *__restrict__ v_colors, // [..., N, D]
     scalar_t *__restrict__ v_coeffs,       // [N, K - 1, D] (coeff dtype)
     float *__restrict__ v_means,
-    float *__restrict__ v_viewmats,
-    float *__restrict__ v_viewmats_rs
+    float *__restrict__ v_viewdirs // [..., N, 3] optional
 )
 {
     // One thread per (coefficient row, channel). Dense mode reduces over all
@@ -708,15 +716,13 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
             continue;
         }
 
-        const int64_t batch_id   = packed ? batch_ids[output_id] : dense_image_id / C;
-        const int64_t camera_id  = packed ? camera_ids[output_id] : dense_image_id % C;
-        const int64_t gaussian_id = packed ? gaussian_ids[output_id] : coeff_id;
-        const float *viewmat      = viewmats + (batch_id * C + camera_id) * 16;
-        const float *viewmat_rs
-            = viewmats_rs == nullptr ? nullptr : viewmats_rs + (batch_id * C + camera_id) * 16;
-        const vec3 dir
-            = view_direction_from_world_to_camera(means + (batch_id * N + gaussian_id) * 3, viewmat, viewmat_rs);
-        vec3 v_dir = {0.f, 0.f, 0.f};
+        const int64_t batch_id     = packed ? batch_ids[output_id] : dense_image_id / C;
+        const int64_t camera_id    = packed ? camera_ids[output_id] : dense_image_id % C;
+        const int64_t gaussian_id  = packed ? gaussian_ids[output_id] : coeff_id;
+        const int64_t image_offset = batch_id * C + camera_id;
+        const float *mean          = means + (batch_id * N + gaussian_id) * 3;
+        const vec3 dir             = view_direction_from_camera_data(mean, viewmats, camera_offsets, image_offset);
+        vec3 v_dir                 = {0.f, 0.f, 0.f};
         sh_l1_plus_coeffs_to_color_fast_vjp<scalar_t>(
             DEGREE,
             D,
@@ -725,19 +731,27 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
             coeffs_ptr,
             v_colors + output_id * D,
             acc.data(),
-            v_means == nullptr && v_viewmats == nullptr && v_viewmats_rs == nullptr ? nullptr : &v_dir
+            v_means == nullptr && v_viewdirs == nullptr ? nullptr : &v_dir
         );
 
-        if(v_means != nullptr || v_viewmats != nullptr || v_viewmats_rs != nullptr)
+        // Adjacent threads handle channels of the same coefficient row. Combine
+        // their direction gradients before touching the geometry outputs.
+        if((v_means != nullptr || v_viewdirs != nullptr) && reduce_view_direction_channels(coeff_id, v_dir))
         {
-            accumulate_view_direction_vjp(
-                v_dir,
-                viewmat,
-                v_means == nullptr ? nullptr : v_means + (batch_id * N + gaussian_id) * 3,
-                v_viewmats == nullptr ? nullptr : v_viewmats + (batch_id * C + camera_id) * 16,
-                viewmat_rs,
-                v_viewmats_rs == nullptr ? nullptr : v_viewmats_rs + (batch_id * C + camera_id) * 16
-            );
+            if(v_means != nullptr)
+            {
+                float *v_mean = v_means + (batch_id * N + gaussian_id) * 3;
+                gpuAtomicAdd(v_mean, v_dir.x);
+                gpuAtomicAdd(v_mean + 1, v_dir.y);
+                gpuAtomicAdd(v_mean + 2, v_dir.z);
+            }
+            if(v_viewdirs != nullptr)
+            {
+                float *v_dir_out = v_viewdirs + output_id * 3;
+                gpuAtomicAdd(v_dir_out, v_dir.x);
+                gpuAtomicAdd(v_dir_out + 1, v_dir.y);
+                gpuAtomicAdd(v_dir_out + 2, v_dir.z);
+            }
         }
     }
 
@@ -783,7 +797,8 @@ void launch_spherical_harmonics_l1_plus_bwd_kernel(
     const uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2));
     const uint32_t E = batch_ids.has_value() ? coeffs.size(0) : B * C * N;
 
-    auto stream = at::cuda::getCurrentCUDAStream();
+    auto stream                 = at::cuda::getCurrentCUDAStream();
+    const bool needs_v_viewdirs = v_viewmats.has_value() || v_viewmats_rs.has_value();
 
     // One thread per (coefficient row, channel). Dense mode loops over B * C
     // images internally; packed mode has one coefficient row per output.
@@ -796,6 +811,20 @@ void launch_spherical_harmonics_l1_plus_bwd_kernel(
     {
         // skip the kernel launch if there are no elements
         return;
+    }
+
+    at::Tensor v_viewdirs;
+    if(needs_v_viewdirs)
+    {
+        auto v_viewdirs_sizes   = v_colors.sizes().vec();
+        v_viewdirs_sizes.back() = 3;
+        v_viewdirs              = at::zeros(v_viewdirs_sizes, means.options());
+    }
+
+    at::Tensor camera_offsets;
+    if(viewmats_rs.has_value())
+    {
+        camera_offsets = precompute_spherical_harmonics_camera_offsets(viewmats, viewmats_rs);
     }
 
     // Dispatch on the coeff dtype (fp16/fp32). v_coeffs is written in the coeff
@@ -825,7 +854,7 @@ void launch_spherical_harmonics_l1_plus_bwd_kernel(
                                 D,
                                 means.const_data_ptr<float>(),
                                 viewmats.const_data_ptr<float>(),
-                                viewmats_rs.has_value() ? viewmats_rs.value().const_data_ptr<float>() : nullptr,
+                                camera_offsets.defined() ? camera_offsets.const_data_ptr<float>() : nullptr,
                                 coeffs.const_data_ptr<scalar_t>(),
                                 masks_ptr,
                                 batch_ids.has_value() ? batch_ids.value().const_data_ptr<int64_t>() : nullptr,
@@ -834,8 +863,7 @@ void launch_spherical_harmonics_l1_plus_bwd_kernel(
                                 v_colors_ptr,
                                 v_coeffs.data_ptr<scalar_t>(),
                                 v_means.has_value() ? v_means.value().data_ptr<float>() : nullptr,
-                                v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr,
-                                v_viewmats_rs.has_value() ? v_viewmats_rs.value().data_ptr<float>() : nullptr
+                                needs_v_viewdirs ? v_viewdirs.data_ptr<float>() : nullptr
                             );
                         C10_CUDA_KERNEL_LAUNCH_CHECK();
                     }
@@ -846,6 +874,13 @@ void launch_spherical_harmonics_l1_plus_bwd_kernel(
         at::kFloat,
         at::kHalf
     );
+
+    if(needs_v_viewdirs)
+    {
+        launch_spherical_harmonics_view_direction_vjp_reduction<ViewmatGradientUpdate::Assign>(
+            N, 0, N, viewmats, v_viewdirs, v_viewmats, viewmats_rs, batch_ids, camera_ids, v_viewmats_rs
+        );
+    }
 }
 
 void launch_spherical_harmonics_l1_plus_bwd_kernels(
@@ -874,10 +909,138 @@ void launch_spherical_harmonics_l1_plus_bwd_kernels(
 
     constexpr unsigned int threads = 256;
 
+    if(N == 0)
+    {
+        return;
+    }
+
+    at::Tensor v_viewdirs;
+    if(v_viewmats.has_value())
+    {
+        auto v_viewdirs_sizes   = v_colors.sizes().vec();
+        v_viewdirs_sizes.back() = 3;
+        v_viewdirs              = at::empty(v_viewdirs_sizes, means.options());
+    }
+
+    std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for(const auto device_id: c10::irange(c10::cuda::device_count()))
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getStreamFromPool(false, device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+
+        int64_t gaussian_offset, gaussian_count;
+        std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
+
+        if(gaussian_count > 0)
+        {
+            std::vector<void *> prefetch_ptrs;
+            std::vector<size_t> prefetch_sizes;
+            auto append_prefetch_range
+                = [&prefetch_ptrs,
+                   &prefetch_sizes](const at::Tensor &tensor, int64_t row_offset, int64_t row_count, int64_t row_stride)
+            {
+                prefetch_ptrs.emplace_back(
+                    static_cast<char *>(tensor.data_ptr()) + row_offset * row_stride * tensor.element_size()
+                );
+                prefetch_sizes.emplace_back(row_count * row_stride * tensor.element_size());
+            };
+
+            append_prefetch_range(v_coeffs, gaussian_offset, gaussian_count, v_coeffs.stride(-3));
+            for(const auto batch_id: c10::irange(B))
+            {
+                const int64_t row_offset = static_cast<int64_t>(batch_id) * N + gaussian_offset;
+                if(v_means.has_value())
+                {
+                    append_prefetch_range(v_means.value(), row_offset, gaussian_count, v_means.value().stride(-2));
+                }
+            }
+            for(const auto image_id: c10::irange(B * C))
+            {
+                const int64_t row_offset = static_cast<int64_t>(image_id) * N + gaussian_offset;
+                append_prefetch_range(v_colors, row_offset, gaussian_count, v_colors.stride(-2));
+                if(v_viewmats.has_value())
+                {
+                    append_prefetch_range(v_viewdirs, row_offset, gaussian_count, v_viewdirs.stride(-2));
+                }
+            }
+
+#if CUDART_VERSION < 13000
+            for(const auto range_id: c10::irange(prefetch_ptrs.size()))
+            {
+                C10_CUDA_CHECK(
+                    cudaMemPrefetchAsync(prefetch_ptrs[range_id], prefetch_sizes[range_id], device_id, stream)
+                );
+            }
+#else
+            const cudaMemLocation location                  = {cudaMemLocationTypeDevice, device_id};
+            std::vector<cudaMemLocation> prefetch_locations = {location};
+            std::vector<size_t> prefetch_location_indices   = {0};
+            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(
+                prefetch_ptrs.data(),
+                prefetch_sizes.data(),
+                prefetch_ptrs.size(),
+                prefetch_locations.data(),
+                prefetch_location_indices.data(),
+                prefetch_locations.size(),
+                0,
+                stream
+            ));
+#endif
+
+            C10_CUDA_CHECK(cudaMemsetAsync(
+                static_cast<char *>(v_coeffs.data_ptr())
+                    + gaussian_offset * v_coeffs.stride(-3) * v_coeffs.element_size(),
+                0,
+                gaussian_count * v_coeffs.stride(-3) * v_coeffs.element_size(),
+                stream
+            ));
+            if(v_means.has_value())
+            {
+                for(const auto batch_id: c10::irange(B))
+                {
+                    const int64_t row_offset = static_cast<int64_t>(batch_id) * N + gaussian_offset;
+                    C10_CUDA_CHECK(cudaMemsetAsync(
+                        static_cast<char *>(v_means.value().data_ptr())
+                            + row_offset * v_means.value().stride(-2) * v_means.value().element_size(),
+                        0,
+                        gaussian_count * v_means.value().stride(-2) * v_means.value().element_size(),
+                        stream
+                    ));
+                }
+            }
+            if(v_viewmats.has_value())
+            {
+                for(const auto image_id: c10::irange(B * C))
+                {
+                    const int64_t row_offset = static_cast<int64_t>(image_id) * N + gaussian_offset;
+                    C10_CUDA_CHECK(cudaMemsetAsync(
+                        static_cast<char *>(v_viewdirs.data_ptr())
+                            + row_offset * v_viewdirs.stride(-2) * v_viewdirs.element_size(),
+                        0,
+                        gaussian_count * v_viewdirs.stride(-2) * v_viewdirs.element_size(),
+                        stream
+                    ));
+                }
+            }
+        }
+        C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
+    }
+
+    for(const auto device_id: c10::irange(c10::cuda::device_count()))
+    {
+        C10_CUDA_CHECK(cudaSetDevice(device_id));
+        auto stream = c10::cuda::getCurrentCUDAStream(device_id);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[device_id]));
+        C10_CUDA_CHECK(cudaEventDestroy(events[device_id]));
 
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
@@ -919,13 +1082,19 @@ void launch_spherical_harmonics_l1_plus_bwd_kernels(
                                         v_colors_ptr,
                                         v_coeffs.data_ptr<scalar_t>(),
                                         v_means.has_value() ? v_means.value().data_ptr<float>() : nullptr,
-                                        v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr,
-                                        nullptr
+                                        v_viewmats.has_value() ? v_viewdirs.data_ptr<float>() : nullptr
                                     );
                                 C10_CUDA_KERNEL_LAUNCH_CHECK();
                             }
                         );
                         TORCH_CHECK(dispatched, "Unsupported SH degree: ", degrees_to_use);
+
+                        if(v_viewmats.has_value())
+                        {
+                            launch_spherical_harmonics_view_direction_vjp_reduction<
+                                ViewmatGradientUpdate::SystemAtomicAdd
+                            >(N, gaussian_offset, gaussian_count, viewmats, v_viewdirs, v_viewmats);
+                        }
                     }
                 ),
                 at::kFloat,

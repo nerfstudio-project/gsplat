@@ -1061,7 +1061,7 @@ SphericalHarmonicsBwdResult spherical_harmonics_l1_plus_bwd_privateuseone(
     at::Tensor v_means, v_viewmats;
     if(compute_v_means)
     {
-        v_means = at::zeros_like(means);
+        v_means = at::empty_like(means);
     }
     if(compute_v_viewmats)
     {

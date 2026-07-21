@@ -20,6 +20,8 @@
 #include <ATen/OpMathType.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
+#include <ATen/ops/empty.h>
+#include <ATen/ops/zeros.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
 #include <array>
@@ -450,7 +452,7 @@ __global__ void spherical_harmonics_fwd_kernel(
     const uint32_t degrees_to_use,
     const float *__restrict__ means,
     const float *__restrict__ viewmats,
-    const float *__restrict__ viewmats_rs,
+    const float *__restrict__ camera_offsets,
     const scalar_t *__restrict__ coeffs, // [N, K, D]
     const bool *__restrict__ masks,      // [..., N]
     const int64_t *__restrict__ batch_ids,
@@ -479,9 +481,9 @@ __global__ void spherical_harmonics_fwd_kernel(
     {
         return;
     }
-    const float *viewmat    = viewmats + (batch_id * C + camera_id) * 16;
-    const float *viewmat_rs = viewmats_rs == nullptr ? nullptr : viewmats_rs + (batch_id * C + camera_id) * 16;
-    const vec3 dir = view_direction_from_world_to_camera(means + (batch_id * N + gaussian_id) * 3, viewmat, viewmat_rs);
+    const int64_t image_offset = batch_id * C + camera_id;
+    const float *mean          = means + (batch_id * N + gaussian_id) * 3;
+    const vec3 dir             = view_direction_from_camera_data(mean, viewmats, camera_offsets, image_offset);
     sh_coeffs_to_color_fast<scalar_t>(degrees_to_use, D, c, dir, coeffs + coeff_id * K * D, colors + output_id * D);
 }
 
@@ -497,7 +499,7 @@ __global__ void __launch_bounds__(256, 4) spherical_harmonics_fwd_kernel_k16_3ch
     const uint32_t E,
     const float *__restrict__ means,
     const float *__restrict__ viewmats,
-    const float *__restrict__ viewmats_rs,
+    const float *__restrict__ camera_offsets,
     const scalar_t *__restrict__ coeffs, // [N, 16, 3]
     const bool *__restrict__ masks,      // [..., N]
     const int64_t *__restrict__ batch_ids,
@@ -554,9 +556,9 @@ __global__ void __launch_bounds__(256, 4) spherical_harmonics_fwd_kernel_k16_3ch
     }
 
     // K=16 path is gated on D=3 in the host launcher; pass D=3 explicitly here.
-    const float *viewmat    = viewmats + (batch_id * C + camera_id) * 16;
-    const float *viewmat_rs = viewmats_rs == nullptr ? nullptr : viewmats_rs + (batch_id * C + camera_id) * 16;
-    const vec3 dir = view_direction_from_world_to_camera(means + (batch_id * N + gaussian_id) * 3, viewmat, viewmat_rs);
+    const uint32_t image_offset = batch_id * C + camera_id;
+    const float *mean           = means + (batch_id * N + gaussian_id) * 3;
+    const vec3 dir              = view_direction_from_camera_data(mean, viewmats, camera_offsets, image_offset);
     sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 0, dir, sh_coeffs, out_color);
     sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 1, dir, sh_coeffs, out_color);
     sh_coeffs_to_color_fast<opmath_t>(DEGREE, 3, 2, dir, sh_coeffs, out_color);
@@ -595,6 +597,12 @@ void launch_spherical_harmonics_fwd_kernel(
     }
 
     auto stream = at::cuda::getCurrentCUDAStream();
+
+    at::Tensor camera_offsets;
+    if(viewmats_rs.has_value())
+    {
+        camera_offsets = precompute_spherical_harmonics_camera_offsets(viewmats, viewmats_rs);
+    }
 
     // K=16 wide loads need D == 3 and natural alignment; misaligned tensors
     // fall through to the scalar generic kernel.
@@ -640,7 +648,7 @@ void launch_spherical_harmonics_fwd_kernel(
                     E,
                     means.const_data_ptr<float>(),
                     viewmats.const_data_ptr<float>(),
-                    viewmats_rs.has_value() ? viewmats_rs.value().const_data_ptr<float>() : nullptr,
+                    camera_offsets.defined() ? camera_offsets.const_data_ptr<float>() : nullptr,
                     coeffs.const_data_ptr<CoeffT>(),
                     masks_ptr,
                     batch_ids.has_value() ? batch_ids.value().const_data_ptr<int64_t>() : nullptr,
@@ -683,7 +691,7 @@ void launch_spherical_harmonics_fwd_kernel(
                         degrees_to_use,
                         means.const_data_ptr<float>(),
                         viewmats.const_data_ptr<float>(),
-                        viewmats_rs.has_value() ? viewmats_rs.value().const_data_ptr<float>() : nullptr,
+                        camera_offsets.defined() ? camera_offsets.const_data_ptr<float>() : nullptr,
                         coeffs.const_data_ptr<scalar_t>(),
                         masks_ptr,
                         batch_ids.has_value() ? batch_ids.value().const_data_ptr<int64_t>() : nullptr,
@@ -785,7 +793,7 @@ __global__ void spherical_harmonics_bwd_kernel(
     const uint32_t D,
     const float *__restrict__ means,
     const float *__restrict__ viewmats,
-    const float *__restrict__ viewmats_rs,
+    const float *__restrict__ camera_offsets,
     const scalar_t *__restrict__ coeffs, // [N, K, D]
     const bool *__restrict__ masks,      // [..., N]
     const int64_t *__restrict__ batch_ids,
@@ -794,8 +802,7 @@ __global__ void spherical_harmonics_bwd_kernel(
     const opmath_t *__restrict__ v_colors, // [..., N, D]
     scalar_t *__restrict__ v_coeffs,       // [N, K, D] (coeff dtype)
     float *__restrict__ v_means,
-    float *__restrict__ v_viewmats,
-    float *__restrict__ v_viewmats_rs
+    float *__restrict__ v_viewdirs // [..., N, 3] optional
 )
 {
     // One thread per (coefficient row, channel). Dense mode reduces over all
@@ -827,15 +834,13 @@ __global__ void spherical_harmonics_bwd_kernel(
             continue;
         }
 
-        const int64_t batch_id   = packed ? batch_ids[output_id] : dense_image_id / C;
-        const int64_t camera_id  = packed ? camera_ids[output_id] : dense_image_id % C;
-        const int64_t gaussian_id = packed ? gaussian_ids[output_id] : coeff_id;
-        const float *viewmat      = viewmats + (batch_id * C + camera_id) * 16;
-        const float *viewmat_rs
-            = viewmats_rs == nullptr ? nullptr : viewmats_rs + (batch_id * C + camera_id) * 16;
-        const vec3 dir
-            = view_direction_from_world_to_camera(means + (batch_id * N + gaussian_id) * 3, viewmat, viewmat_rs);
-        vec3 v_dir = {0.f, 0.f, 0.f};
+        const int64_t batch_id     = packed ? batch_ids[output_id] : dense_image_id / C;
+        const int64_t camera_id    = packed ? camera_ids[output_id] : dense_image_id % C;
+        const int64_t gaussian_id  = packed ? gaussian_ids[output_id] : coeff_id;
+        const int64_t image_offset = batch_id * C + camera_id;
+        const float *mean          = means + (batch_id * N + gaussian_id) * 3;
+        const vec3 dir             = view_direction_from_camera_data(mean, viewmats, camera_offsets, image_offset);
+        vec3 v_dir                 = {0.f, 0.f, 0.f};
         sh_coeffs_to_color_fast_vjp<scalar_t>(
             DEGREE,
             D,
@@ -844,19 +849,27 @@ __global__ void spherical_harmonics_bwd_kernel(
             coeffs_ptr,
             v_colors + output_id * D,
             acc.data(),
-            v_means == nullptr && v_viewmats == nullptr && v_viewmats_rs == nullptr ? nullptr : &v_dir
+            v_means == nullptr && v_viewdirs == nullptr ? nullptr : &v_dir
         );
 
-        if(v_means != nullptr || v_viewmats != nullptr || v_viewmats_rs != nullptr)
+        // Adjacent threads handle channels of the same coefficient row. Combine
+        // their direction gradients before touching the geometry outputs.
+        if((v_means != nullptr || v_viewdirs != nullptr) && reduce_view_direction_channels(coeff_id, v_dir))
         {
-            accumulate_view_direction_vjp(
-                v_dir,
-                viewmat,
-                v_means == nullptr ? nullptr : v_means + (batch_id * N + gaussian_id) * 3,
-                v_viewmats == nullptr ? nullptr : v_viewmats + (batch_id * C + camera_id) * 16,
-                viewmat_rs,
-                v_viewmats_rs == nullptr ? nullptr : v_viewmats_rs + (batch_id * C + camera_id) * 16
-            );
+            if(v_means != nullptr)
+            {
+                float *v_mean = v_means + (batch_id * N + gaussian_id) * 3;
+                gpuAtomicAdd(v_mean, v_dir.x);
+                gpuAtomicAdd(v_mean + 1, v_dir.y);
+                gpuAtomicAdd(v_mean + 2, v_dir.z);
+            }
+            if(v_viewdirs != nullptr)
+            {
+                float *v_dir_out = v_viewdirs + output_id * 3;
+                gpuAtomicAdd(v_dir_out, v_dir.x);
+                gpuAtomicAdd(v_dir_out + 1, v_dir.y);
+                gpuAtomicAdd(v_dir_out + 2, v_dir.z);
+            }
         }
     }
 
@@ -902,7 +915,8 @@ void launch_spherical_harmonics_bwd_kernel(
     const uint32_t B = c10::multiply_integers(means.sizes().slice(0, means.dim() - 2));
     const uint32_t E = batch_ids.has_value() ? coeffs.size(0) : B * C * N;
 
-    auto stream = at::cuda::getCurrentCUDAStream();
+    auto stream                 = at::cuda::getCurrentCUDAStream();
+    const bool needs_v_viewdirs = v_viewmats.has_value() || v_viewmats_rs.has_value();
 
     // One thread per (coefficient row, channel). Dense mode loops over B * C
     // images internally; packed mode has one coefficient row per output.
@@ -915,6 +929,20 @@ void launch_spherical_harmonics_bwd_kernel(
     {
         // skip the kernel launch if there are no elements
         return;
+    }
+
+    at::Tensor v_viewdirs;
+    if(needs_v_viewdirs)
+    {
+        auto v_viewdirs_sizes   = v_colors.sizes().vec();
+        v_viewdirs_sizes.back() = 3;
+        v_viewdirs              = at::zeros(v_viewdirs_sizes, means.options());
+    }
+
+    at::Tensor camera_offsets;
+    if(viewmats_rs.has_value())
+    {
+        camera_offsets = precompute_spherical_harmonics_camera_offsets(viewmats, viewmats_rs);
     }
 
     // Dispatch on the coeff dtype (fp16/fp32). v_coeffs is written in the coeff
@@ -943,7 +971,7 @@ void launch_spherical_harmonics_bwd_kernel(
                             D,
                             means.const_data_ptr<float>(),
                             viewmats.const_data_ptr<float>(),
-                            viewmats_rs.has_value() ? viewmats_rs.value().const_data_ptr<float>() : nullptr,
+                            camera_offsets.defined() ? camera_offsets.const_data_ptr<float>() : nullptr,
                             coeffs.const_data_ptr<scalar_t>(),
                             masks_ptr,
                             batch_ids.has_value() ? batch_ids.value().const_data_ptr<int64_t>() : nullptr,
@@ -952,8 +980,7 @@ void launch_spherical_harmonics_bwd_kernel(
                             v_colors_ptr,
                             v_coeffs.data_ptr<scalar_t>(),
                             v_means.has_value() ? v_means.value().data_ptr<float>() : nullptr,
-                            v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr,
-                            v_viewmats_rs.has_value() ? v_viewmats_rs.value().data_ptr<float>() : nullptr
+                            needs_v_viewdirs ? v_viewdirs.data_ptr<float>() : nullptr
                         );
                         C10_CUDA_KERNEL_LAUNCH_CHECK();
                     }
@@ -964,6 +991,13 @@ void launch_spherical_harmonics_bwd_kernel(
         at::kFloat,
         at::kHalf
     );
+
+    if(needs_v_viewdirs)
+    {
+        launch_spherical_harmonics_view_direction_vjp_reduction<ViewmatGradientUpdate::Assign>(
+            N, 0, N, viewmats, v_viewdirs, v_viewmats, viewmats_rs, batch_ids, camera_ids, v_viewmats_rs
+        );
+    }
 }
 
 // ===========================================================================
@@ -1062,23 +1096,23 @@ __global__ void __launch_bounds__(256) assemble_proj_features_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const uint32_t degrees_to_use,         // runtime SH degree (generic path only)
-    const uint32_t K,                      // SH bands (coeffs dim -2); 16 when K16FAST
-    const uint32_t Dc,                     // SH color channels; 3 when K16FAST
-    const uint32_t E,                      // extra-signal channels
-    const uint32_t width,                  // dc + E + (HAS_DEPTH ? 1 : 0)
-    const uint32_t color_post,             // SHPostOp applied to colors
-    const uint32_t extra_post,             // SHPostOp applied to extra
-    const bool extra_has_c,                // extra indexed by (b,c,n) vs broadcast (b,n)
-    const float *__restrict__ means,       // [B, N, 3]
-    const float *__restrict__ viewmats,    // [B, C, 4, 4]
-    const float *__restrict__ viewmats_rs, // [B, C, 4, 4] or null
-    const scalar_t *__restrict__ coeffs,   // [N, K, Dc]
-    const opmath_t *__restrict__ extra,    // [B, C, N, E] or [B, N, E]; null if E == 0
-    const opmath_t *__restrict__ depths,   // [B, C, N]; null when DEPTH_ZERO or !HAS_DEPTH
-    const bool *__restrict__ masks,        // [B, C, N]; null when !HAS_MASK
-    opmath_t *__restrict__ out,            // [B, C, N, width]
-    bool *__restrict__ relu_mask           // [B, C, N, dc]; null when !EMIT_RELU
+    const uint32_t degrees_to_use,            // runtime SH degree (generic path only)
+    const uint32_t K,                         // SH bands (coeffs dim -2); 16 when K16FAST
+    const uint32_t Dc,                        // SH color channels; 3 when K16FAST
+    const uint32_t E,                         // extra-signal channels
+    const uint32_t width,                     // dc + E + (HAS_DEPTH ? 1 : 0)
+    const uint32_t color_post,                // SHPostOp applied to colors
+    const uint32_t extra_post,                // SHPostOp applied to extra
+    const bool extra_has_c,                   // extra indexed by (b,c,n) vs broadcast (b,n)
+    const float *__restrict__ means,          // [B, N, 3]
+    const float *__restrict__ viewmats,       // [B, C, 4, 4]
+    const float *__restrict__ camera_offsets, // [B * C, 3] or null
+    const scalar_t *__restrict__ coeffs,      // [N, K, Dc]
+    const opmath_t *__restrict__ extra,       // [B, C, N, E] or [B, N, E]; null if E == 0
+    const opmath_t *__restrict__ depths,      // [B, C, N]; null when DEPTH_ZERO or !HAS_DEPTH
+    const bool *__restrict__ masks,           // [B, C, N]; null when !HAS_MASK
+    opmath_t *__restrict__ out,               // [B, C, N, width]
+    bool *__restrict__ relu_mask              // [B, C, N, dc]; null when !EMIT_RELU
 )
 {
     constexpr uint32_t TILE_ROWS = 64;
@@ -1147,8 +1181,8 @@ __global__ void __launch_bounds__(256) assemble_proj_features_kernel(
     __syncthreads();
 
     // --- per-row SH evaluation out of shared ---
-    const float *viewmat    = viewmats + static_cast<size_t>(bc) * 16;
-    const float *viewmat_rs = viewmats_rs == nullptr ? nullptr : viewmats_rs + static_cast<size_t>(bc) * 16;
+    const float *viewmat       = viewmats + static_cast<size_t>(bc) * 16;
+    const float *camera_offset = camera_offsets == nullptr ? nullptr : camera_offsets + static_cast<size_t>(bc) * 3;
     for(uint32_t lr = tid; lr < rows; lr += THREADS)
     {
         const uint32_t n  = rowBase + lr;
@@ -1162,7 +1196,7 @@ __global__ void __launch_bounds__(256) assemble_proj_features_kernel(
         if(active)
         {
             const float *mp = smem_means + lr * 3;
-            const vec3 dir  = view_direction_from_world_to_camera(mp, viewmat, viewmat_rs);
+            const vec3 dir  = view_direction_from_camera_data(mp, viewmat, camera_offset);
             if constexpr(K16FAST)
             {
                 opmath_t col[3];
@@ -1247,14 +1281,20 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
     const uint32_t width = static_cast<uint32_t>(out.size(-1));
     auto stream          = at::cuda::getCurrentCUDAStream();
 
-    auto *masks_ptr       = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
-    auto *extra_ptr       = extra.has_value() ? extra.value().const_data_ptr<float>() : nullptr;
-    auto *depths_ptr      = depths.has_value() ? depths.value().const_data_ptr<float>() : nullptr;
-    auto *means_ptr       = means.const_data_ptr<float>();
-    auto *viewmats_ptr    = viewmats.const_data_ptr<float>();
-    auto *viewmats_rs_ptr = viewmats_rs.has_value() ? viewmats_rs.value().const_data_ptr<float>() : nullptr;
-    auto *out_ptr         = out.data_ptr<float>();
-    auto *relu_mask_ptr   = relu_mask.has_value() ? relu_mask.value().data_ptr<bool>() : nullptr;
+    at::Tensor camera_offsets;
+    if(viewmats_rs.has_value())
+    {
+        camera_offsets = precompute_spherical_harmonics_camera_offsets(viewmats, viewmats_rs);
+    }
+
+    auto *masks_ptr          = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
+    auto *extra_ptr          = extra.has_value() ? extra.value().const_data_ptr<float>() : nullptr;
+    auto *depths_ptr         = depths.has_value() ? depths.value().const_data_ptr<float>() : nullptr;
+    auto *means_ptr          = means.const_data_ptr<float>();
+    auto *viewmats_ptr       = viewmats.const_data_ptr<float>();
+    auto *camera_offsets_ptr = camera_offsets.defined() ? camera_offsets.const_data_ptr<float>() : nullptr;
+    auto *out_ptr            = out.data_ptr<float>();
+    auto *relu_mask_ptr      = relu_mask.has_value() ? relu_mask.value().data_ptr<bool>() : nullptr;
 
     // Single tiled kernel for every shape: a block stages one (b,c) n-tile
     // through shared memory, so global coeff alignment is irrelevant (the wide
@@ -1358,7 +1398,7 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
                     extra_has_c,
                     means_ptr,
                     viewmats_ptr,
-                    viewmats_rs_ptr,
+                    camera_offsets_ptr,
                     coeffs.const_data_ptr<CoeffT>(),
                     extra_ptr,
                     depths_ptr,
@@ -1449,7 +1489,7 @@ void launch_assemble_proj_features_unpacked_fwd_kernel(
                     extra_has_c,
                     means_ptr,
                     viewmats_ptr,
-                    viewmats_rs_ptr,
+                    camera_offsets_ptr,
                     coeffs.const_data_ptr<CoeffT>(),
                     extra_ptr,
                     depths_ptr,
@@ -1493,6 +1533,14 @@ void launch_spherical_harmonics_bwd_kernels(
     if(N == 0)
     {
         return;
+    }
+
+    at::Tensor v_viewdirs;
+    if(v_viewmats.has_value())
+    {
+        auto v_viewdirs_sizes   = v_colors.sizes().vec();
+        v_viewdirs_sizes.back() = 3;
+        v_viewdirs              = at::empty(v_viewdirs_sizes, means.options());
     }
 
     std::vector<cudaEvent_t> events(c10::cuda::device_count());
@@ -1540,6 +1588,10 @@ void launch_spherical_harmonics_bwd_kernels(
             {
                 const int64_t row_offset = static_cast<int64_t>(image_id) * N + gaussian_offset;
                 append_prefetch_range(v_colors, row_offset, gaussian_count, v_colors.stride(-2));
+                if(v_viewmats.has_value())
+                {
+                    append_prefetch_range(v_viewdirs, row_offset, gaussian_count, v_viewdirs.stride(-2));
+                }
             }
 
 #if CUDART_VERSION < 13000
@@ -1575,6 +1627,20 @@ void launch_spherical_harmonics_bwd_kernels(
                             + row_offset * v_means.value().stride(-2) * v_means.value().element_size(),
                         0,
                         gaussian_count * v_means.value().stride(-2) * v_means.value().element_size(),
+                        stream
+                    ));
+                }
+            }
+            if(v_viewmats.has_value())
+            {
+                for(const auto image_id: c10::irange(B * C))
+                {
+                    const int64_t row_offset = static_cast<int64_t>(image_id) * N + gaussian_offset;
+                    C10_CUDA_CHECK(cudaMemsetAsync(
+                        static_cast<char *>(v_viewdirs.data_ptr())
+                            + row_offset * v_viewdirs.stride(-2) * v_viewdirs.element_size(),
+                        0,
+                        gaussian_count * v_viewdirs.stride(-2) * v_viewdirs.element_size(),
                         stream
                     ));
                 }
@@ -1630,13 +1696,19 @@ void launch_spherical_harmonics_bwd_kernels(
                                         v_colors_ptr,
                                         v_coeffs.data_ptr<scalar_t>(),
                                         v_means.has_value() ? v_means.value().data_ptr<float>() : nullptr,
-                                        v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr,
-                                        nullptr
+                                        v_viewmats.has_value() ? v_viewdirs.data_ptr<float>() : nullptr
                                     );
                                 C10_CUDA_KERNEL_LAUNCH_CHECK();
                             }
                         );
                         TORCH_CHECK(dispatched, "Unsupported SH degree: ", degrees_to_use);
+
+                        if(v_viewmats.has_value())
+                        {
+                            launch_spherical_harmonics_view_direction_vjp_reduction<
+                                ViewmatGradientUpdate::SystemAtomicAdd
+                            >(N, gaussian_offset, gaussian_count, viewmats, v_viewdirs, v_viewmats);
+                        }
                     }
                 ),
                 at::kFloat,
