@@ -252,6 +252,7 @@ __device__ __forceinline__ void process_batch_gaussians_fwd(
         scales,
         opacities,
         colors,
+        false, // weighted-median hit distance is MixedBatch-only
         C,
         N,
         // Per-pixel rays and accumulation state.

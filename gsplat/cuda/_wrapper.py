@@ -2131,6 +2131,7 @@ def rasterize_to_pixels_eval3d(
     use_hit_distance: bool = False,
     return_normals: bool = False,
     renderer_config: Any = None,
+    use_median_hit_distance: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -2186,6 +2187,7 @@ def rasterize_to_pixels_eval3d(
         return_last_ids=False,
         return_sample_counts=False,
         use_hit_distance=use_hit_distance,
+        use_median_hit_distance=use_median_hit_distance,
         return_normals=return_normals,
         renderer_config=renderer_config,
     )
@@ -2227,6 +2229,7 @@ def rasterize_to_pixels_eval3d_extra(
     renderer_config: Any = None,
     return_last_ids: bool = True,
     unsafe_masked_tile_outputs: bool = False,
+    use_median_hit_distance: bool = False,
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
@@ -2317,6 +2320,7 @@ def rasterize_to_pixels_eval3d_extra(
         renderer_config,
         return_last_ids,
         unsafe_masked_tile_outputs,
+        use_median_hit_distance,
     )
 
     return render_colors, render_alphas, last_ids, sample_counts, render_normals

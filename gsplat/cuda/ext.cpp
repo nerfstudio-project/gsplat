@@ -1137,7 +1137,7 @@ TORCH_LIBRARY(gsplat, m)
         "__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, "
         "__torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, bool "
         "global_z_order, bool use_hit_distance, bool return_normals, int renderer_config, str? process_group_name, int "
-        "world_size) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, "
+        "world_size, bool use_median_hit_distance=False) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, "
         "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, int)"
     );
 #endif
@@ -1230,7 +1230,8 @@ TORCH_LIBRARY(gsplat, m)
         "__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, "
         "__torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor "
         "tile_offsets, Tensor flatten_ids, bool return_sample_counts, bool use_hit_distance, bool return_normals, int "
-        "renderer_config, bool return_last_ids, bool unsafe_masked_tile_outputs=False) -> (Tensor, Tensor, Tensor?, "
+        "renderer_config, bool return_last_ids, bool unsafe_masked_tile_outputs=False, bool "
+        "use_median_hit_distance=False) -> (Tensor, Tensor, Tensor?, "
         "Tensor?, Tensor?)"
     );
 
