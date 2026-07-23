@@ -41,6 +41,8 @@ import math
 import pytest
 import torch
 
+from gsplat._helper import expect_grad_reference_close, expect_group
+from gsplat.geometry.kernels.quaternion_ops import SLERP_SMALL_ANGLE_DOT_THRESHOLD
 from gsplat.sensors.kernels.common import DynamicPose, Pose
 from gsplat.sensors.kernels.lidars.ops import (
     _GenerateSpinningLidarRays,
@@ -174,6 +176,85 @@ def _quat_rotation_matrix(qwxyz, device):
             ],
         ],
         device=device,
+        dtype=qwxyz.dtype,
+    )
+
+
+def _slerp_branch_control_rotations(branch, device, dtype):
+    """Return two wxyz unit quaternions that exercise a specific SLERP branch."""
+    q0 = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device, dtype=dtype)
+    if branch == "nlerp":
+        half_angle = 0.01
+        q1 = torch.tensor(
+            [math.cos(half_angle), 0.0, 0.0, math.sin(half_angle)],
+            device=device,
+            dtype=dtype,
+        )
+    elif branch == "full_theta":
+        half_angle = math.pi / 4.0
+        q1 = torch.tensor(
+            [math.cos(half_angle), 0.0, 0.0, math.sin(half_angle)],
+            device=device,
+            dtype=dtype,
+        )
+    elif branch == "hemisphere_flip":
+        half_angle = math.pi / 4.0
+        q1 = -torch.tensor(
+            [math.cos(half_angle), 0.0, 0.0, math.sin(half_angle)],
+            device=device,
+            dtype=dtype,
+        )
+    elif branch == "coincident_identity":
+        # q0 == q1 exercises the small-angle path where sin(theta) would be zero.
+        # Unit quaternions cannot hit the clamp-only path separately.
+        q1 = q0.clone()
+    else:
+        raise ValueError(f"unknown SLERP branch case: {branch}")
+    return torch.stack([q0, q1 / q1.norm()])
+
+
+def _assert_slerp_branch_predicate(control_rotations, branch):
+    """Guard that branch-targeted quaternions still hit the intended SLERP path."""
+    dot = float((control_rotations[0] * control_rotations[1]).sum().item())
+    hemisphere_dot = abs(dot)
+    if branch == "hemisphere_flip":
+        assert dot < 0.0
+        assert hemisphere_dot <= SLERP_SMALL_ANGLE_DOT_THRESHOLD
+    elif branch == "full_theta":
+        assert dot >= 0.0
+        assert hemisphere_dot <= SLERP_SMALL_ANGLE_DOT_THRESHOLD
+    elif branch in ("nlerp", "coincident_identity"):
+        assert dot >= 0.0
+        assert hemisphere_dot > SLERP_SMALL_ANGLE_DOT_THRESHOLD
+    else:
+        raise ValueError(f"unknown SLERP branch case: {branch}")
+
+
+def _slerp_wxyz_torch(q0, q1, alpha):
+    """Torch reference matching the CUDA xyzw SLERP math, exposed as wxyz."""
+    dot = (q0 * q1).sum()
+    sign = torch.where(dot < 0, q0.new_tensor(-1.0), q0.new_tensor(1.0))
+    q1e = sign * q1
+    c = (q0 * q1e).sum().clamp(-1.0, 1.0)
+    if bool(c > SLERP_SMALL_ANGLE_DOT_THRESHOLD):
+        out = (1 - alpha) * q0 + alpha * q1e
+        return out / out.norm()
+    theta = torch.acos(c)
+    sin_theta = torch.sin(theta)
+    w0 = torch.sin((1 - alpha) * theta) / sin_theta
+    w1 = torch.sin(alpha * theta) / sin_theta
+    return w0 * q0 + w1 * q1e
+
+
+def _rotate_x_axis_wxyz(q):
+    """Reference direction for zero-elevation, zero-azimuth generated rays."""
+    qw, qx, qy, qz = q.unbind()
+    return torch.stack(
+        [
+            1 - 2 * (qy * qy + qz * qz),
+            2 * (qx * qy + qz * qw),
+            2 * (qx * qz - qy * qw),
+        ]
     )
 
 
@@ -309,11 +390,33 @@ def test_elements_table_grad_accumulates_on_shared_index(lidar_projection_from_j
     angles.backward(torch.ones_like(angles))
     # elevation output is column 0 -> d(elevation)/d(row_elevations[0]) = 1 per
     # element reading row 0; n_share elements all read row 0.
-    assert re.grad[0].item() == pytest.approx(float(n_share))
-    assert re.grad[1:].abs().sum().item() == pytest.approx(0.0)
-    assert torch.allclose(
-        ca.grad[:n_share], torch.ones(n_share, device=ca.device), atol=1e-6
-    )
+    expected_re_grad = torch.zeros_like(re)
+    expected_re_grad[0] = float(n_share)
+    expected_ca_grad = torch.zeros_like(ca)
+    expected_ca_grad[:n_share] = 1.0
+    with expect_group("elements_to_sensor_angles table gradients"):
+        expect_grad_reference_close(
+            re.grad,
+            expected_re_grad,
+            rtol=0.0,
+            atol=0.0,
+            max_rel_l2=0.0,
+            max_rel_l1=0.0,
+            min_cosine=1.0 - 1e-15,
+            max_signed_bias=0.0,
+            msg="row_elevations shared-index gradient",
+        )
+        expect_grad_reference_close(
+            ca.grad,
+            expected_ca_grad,
+            rtol=0.0,
+            atol=1e-6,
+            max_rel_l2=1e-6,
+            max_rel_l1=1e-6,
+            min_cosine=1.0 - 1e-12,
+            max_signed_bias=1e-6,
+            msg="column_azimuths gathered gradient",
+        )
 
 
 def test_projection_bindings_readonly(lidar_projection_from_json):
@@ -411,6 +514,48 @@ def test_generate_timestamps_monotonic_with_column(lidar_projection_from_json):
     assert bool((diffs > 0).any())
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize(
+    "branch", ["nlerp", "full_theta", "hemisphere_flip", "coincident_identity"]
+)
+def test_generate_slerp_branches_match_torch_reference(sensor_device, dtype, branch):
+    """Lock CUDA SLERP branch outputs to the Torch reference across dtypes."""
+    re = torch.zeros(1, device=sensor_device, dtype=dtype)
+    ca = torch.zeros(3, device=sensor_device, dtype=dtype)
+    ro = torch.zeros(0, device=sensor_device, dtype=dtype)
+    proj = RowOffsetStructuredSpinningLidarProjection(
+        re.float(), ca.float(), ro.float(), 0.0, 0.0, -3.14159, 6.28318, 0, False
+    )
+    elements = torch.tensor(
+        [[0, 0], [0, 1], [0, 2]], device=sensor_device, dtype=torch.int32
+    )
+    control_translations = torch.zeros(2, 3, device=sensor_device, dtype=dtype)
+    control_rotations = _slerp_branch_control_rotations(branch, sensor_device, dtype)
+    _assert_slerp_branch_predicate(control_rotations, branch)
+
+    world_rays, _, poses_translation, poses_rotation = _GenerateSpinningLidarRays.apply(
+        elements, re, ca, ro, control_translations, control_rotations, proj, 0, 1000
+    )
+
+    alphas = torch.tensor([0.0, 0.5, 1.0], device=sensor_device, dtype=dtype)
+    expected_rotations = torch.stack(
+        [
+            _slerp_wxyz_torch(control_rotations[0], control_rotations[1], alpha)
+            for alpha in alphas
+        ]
+    )
+    expected_dirs = torch.stack([_rotate_x_axis_wxyz(q) for q in expected_rotations])
+    atol = 1e-5 if dtype == torch.float32 else 1e-8
+    assert torch.allclose(
+        world_rays[:, :3], torch.zeros_like(world_rays[:, :3]), atol=atol
+    )
+    assert torch.allclose(world_rays[:, 3:], expected_dirs, atol=atol)
+    assert torch.allclose(
+        poses_translation, torch.zeros_like(poses_translation), atol=atol
+    )
+    assert torch.allclose(poses_rotation, expected_rotations, atol=atol)
+
+
 # ===========================================================================
 # Op3: inverse_project_spinning_lidar
 # ===========================================================================
@@ -501,7 +646,7 @@ def test_inverse_rejects_out_of_range_max_iterations(
 
 
 # ===========================================================================
-# fp64 gradcheck (opt-in via -m gradcheck)
+# fp64 gradcheck. Runs in the default suite; use `-m gradcheck` to select only these.
 # ===========================================================================
 
 
@@ -611,6 +756,39 @@ def test_generate_fp64_gradcheck(sensor_device):
 
 
 @pytest.mark.gradcheck
+@pytest.mark.parametrize("branch", ["nlerp", "full_theta", "hemisphere_flip"])
+def test_generate_slerp_branch_fp64_gradcheck(sensor_device, branch):
+    """Guard gradient stability in each CUDA SLERP branch."""
+    re = torch.tensor([0.0], device=sensor_device, dtype=torch.float64)
+    ca = torch.tensor([-0.2, 0.0, 0.2], device=sensor_device, dtype=torch.float64)
+    ro = torch.tensor([0.0], device=sensor_device, dtype=torch.float64)
+    proj = RowOffsetStructuredSpinningLidarProjection(
+        re.float(), ca.float(), ro.float(), 0.0, 0.0, -3.14159, 6.28318, 0, True
+    )
+    elements = torch.tensor([[0, 1]], device=sensor_device, dtype=torch.int32)
+    control_translations = torch.zeros(2, 3, device=sensor_device, dtype=torch.float64)
+    control_rotations = _slerp_branch_control_rotations(
+        branch, sensor_device, torch.float64
+    )
+    _assert_slerp_branch_predicate(control_rotations, branch)
+
+    re_g = re.clone().requires_grad_(True)
+    ca_g = ca.clone().requires_grad_(True)
+    ro_g = ro.clone().requires_grad_(True)
+    ct_g = control_translations.clone().requires_grad_(True)
+    cr_g = control_rotations.clone().requires_grad_(True)
+
+    def fn(a, b, c, t, r):
+        return _GenerateSpinningLidarRays.apply(elements, a, b, c, t, r, proj, 0, 1000)[
+            0
+        ]
+
+    assert torch.autograd.gradcheck(
+        fn, (re_g, ca_g, ro_g, ct_g, cr_g), **GRADCHECK_KWARGS
+    )
+
+
+@pytest.mark.gradcheck
 def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
     """fp64 verification of the inverse IFT VJP for world_points + the two control poses.
 
@@ -670,9 +848,30 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
         0,
         100000,
     )
-    angles2.sum().backward()
-    for table_grad in (re_g.grad, ca_g.grad, ro_g.grad):
-        assert table_grad is None or table_grad.abs().max() == 0
+    table_grads = torch.autograd.grad(
+        angles2.sum(),
+        (re_g, ca_g, ro_g),
+        allow_unused=True,
+    )
+    for name, source, table_grad in (
+        ("row_elevations", re_g, table_grads[0]),
+        ("column_azimuths", ca_g, table_grads[1]),
+        ("row_offsets", ro_g, table_grads[2]),
+    ):
+        materialized_grad = (
+            torch.zeros_like(source) if table_grad is None else table_grad
+        )
+        expect_grad_reference_close(
+            materialized_grad,
+            torch.zeros_like(source),
+            rtol=0.0,
+            atol=0.0,
+            max_rel_l2=0.0,
+            max_rel_l1=0.0,
+            min_cosine=1.0,
+            max_signed_bias=0.0,
+            msg=f"inverse lidar {name} table grad",
+        )
 
     # retrieve the exact converged alpha (scratch) the CUDA forward saved.
     with torch.no_grad():
@@ -695,7 +894,7 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
         s = torch.where(dot < 0, -1.0, 1.0)
         sx, sy, sz, sw = s * x1, s * y1, s * z1, s * w1
         c = (x0 * sx + y0 * sy + z0 * sz + w0 * sw).clamp(-1.0, 1.0)
-        if float(c) > 0.9995:
+        if float(c) > SLERP_SMALL_ANGLE_DOT_THRESHOLD:
             om = 1 - alpha
             rx, ry, rz, rw = (
                 om * x0 + alpha * sx,
@@ -752,6 +951,20 @@ def test_inverse_fp64_gradcheck_world_points_and_poses(sensor_device):
     crr = cr.clone().requires_grad_(True)
     sa_ref = fn_ref(wpr, ctr, crr)
     sa_ref.backward(upstream)
-    assert (g_wp_cuda - wpr.grad).abs().max().item() < 1e-6
-    assert (g_ct_cuda - ctr.grad).abs().max().item() < 1e-6
-    assert (g_cr_cuda - crr.grad).abs().max().item() < 1e-6
+    with expect_group("inverse lidar frozen-alpha VJP gradients"):
+        for name, actual, expected in (
+            ("world_points", g_wp_cuda, wpr.grad),
+            ("control_translations", g_ct_cuda, ctr.grad),
+            ("control_rotations", g_cr_cuda, crr.grad),
+        ):
+            expect_grad_reference_close(
+                actual,
+                expected,
+                rtol=0.0,
+                atol=1e-6,
+                max_rel_l2=1e-6,
+                max_rel_l1=1e-6,
+                min_cosine=1.0 - 1e-12,
+                max_signed_bias=1e-6,
+                msg=f"inverse lidar {name} VJP",
+            )

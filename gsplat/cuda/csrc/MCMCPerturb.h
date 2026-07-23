@@ -5,19 +5,21 @@
 
 #pragma once
 
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-
+namespace gsplat
+{
 void launch_mcmc_perturb_positions_kernel(
-    at::Tensor positions,   // [N, 3] in-place, float32
+    at::Tensor positions,        // [N, 3] in-place, float32
     const at::Tensor &quats,     // [N, 4] wxyz pre-activation
     const at::Tensor &scales,    // [N, 3] log-scale
     const at::Tensor &opacities, // [N] logit
     const at::Tensor &noise,     // [N, 3] standard normal
-    float scaler
+    float noise_scale,
+    float t,
+    float k
 );
-
 } // namespace gsplat

@@ -18,7 +18,7 @@ requires = [
     "setuptools>=42",
     "wheel",
     "ninja",
-    "torch",
+    "torch>=2.7",
     "numpy",
     "rich",
 ]

@@ -8,6 +8,7 @@ Branch: vnath_gsharp. Seed is set to 42 by the autouse fixture in
 import pytest
 import torch
 
+from gsplat._helper import expect_grad_reference_close
 from gsplat.contrib.dynamic.deformation import DeformationTable, DeformNetwork
 
 
@@ -102,10 +103,20 @@ def test_deform_net_zero_init_blocks_trunk_gradient_at_init():
     out_m, out_q, out_o = net(means, quats, opacities, t, features)
     (out_m.sum() + out_q.sum() + out_o.sum()).backward()
 
-    for p in net.trunk.parameters():
-        assert p.grad is None or p.grad.abs().sum() == 0, (
-            "Trunk gradient must be zero at init; otherwise zero-init heads "
-            "are no longer a strict identity."
+    for param_idx, p in enumerate(net.trunk.parameters()):
+        materialized_grad = torch.zeros_like(p) if p.grad is None else p.grad
+        expect_grad_reference_close(
+            materialized_grad,
+            torch.zeros_like(p),
+            rtol=0.0,
+            atol=0.0,
+            max_rel_l2=0.0,
+            max_rel_l1=0.0,
+            min_cosine=1.0,
+            max_signed_bias=0.0,
+            msg=(
+                "DeformNetwork zero-init trunk gradient " f"for parameter {param_idx}"
+            ),
         )
     # Head weight gradients ARE non-zero (they receive trunk_out as input).
     assert net.pos_head.weight.grad is not None

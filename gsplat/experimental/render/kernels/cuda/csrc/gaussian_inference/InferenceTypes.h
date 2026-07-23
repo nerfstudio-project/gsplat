@@ -37,7 +37,14 @@ class IIntersectionStage
 public:
     virtual ~IIntersectionStage() = default;
 
-    virtual void execute(const at::Tensor &means2d, const at::Tensor &depths, const at::Tensor &conics,
-                         const at::Tensor &visible, int32_t tile_size, int32_t tile_width, int32_t tile_height,
-                         cudaStream_t stream) = 0;
+    virtual void execute(
+        const at::Tensor &means2d,
+        const at::Tensor &depths,
+        const at::Tensor &conics,
+        const at::Tensor &visible,
+        int32_t tile_size,
+        int32_t tile_width,
+        int32_t tile_height,
+        cudaStream_t stream
+    ) = 0;
 };

@@ -18,6 +18,8 @@
 
 #include <torch/extension.h>
 
+#include <cmath>
+
 #include "Cameras.h"
 #include "ExternalDistortion.h"
 #include "csrc/Config.h"
@@ -25,27 +27,36 @@
 #include "csrc/Rasterization.h"
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
-#include "CameraWrappers.h"
-#include "ExternalDistortionWrappers.h"
+#    include "CameraWrappers.h"
+#    include "ExternalDistortionWrappers.h"
 #endif
 
-namespace gsplat {
-
+namespace gsplat
+{
 void register_adam_cuda_impl(torch::Library &m);
 void register_external_distortion_wrappers_cuda_impl(torch::Library &m);
 void register_gaussian_losses_cuda_impl(torch::Library &m);
 void register_intersect_cuda_impl(torch::Library &m);
+void register_intersect_privateuseone_impl(torch::Library &m);
 void register_mcmc_perturb_cuda_impl(torch::Library &m);
 void register_projection_cuda_impl(torch::Library &m);
+void register_projection_privateuseone_impl(torch::Library &m);
 void register_quat_scale_to_covar_cuda_impl(torch::Library &m);
+void register_quat_scale_to_covar_privateuseone_impl(torch::Library &m);
 void register_rasterization_cuda_impl(torch::Library &m);
 void register_rasterization_autograd_cuda_impl(torch::Library &m);
+void register_rendering_cuda_impl(torch::Library &m);
+void register_rendering_autograd_cuda_impl(torch::Library &m);
+void register_rendering_privateuseone_impl(torch::Library &m);
+void register_rendering_autograd_privateuseone_impl(torch::Library &m);
+void register_rasterization_privateuseone_impl(torch::Library &m);
 void register_relocation_cuda_impl(torch::Library &m);
 void register_spherical_harmonics_cuda_impl(torch::Library &m);
-
+void register_spherical_harmonics_privateuseone_impl(torch::Library &m);
 } // namespace gsplat
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+{
 
     // We define exported types as being "module_local"
     // so that they don't clash with other modules that export
@@ -70,21 +81,25 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("BIVARIATE_WINDSHIELD", gsplat::extdist::ModelType::BIVARIATE_WINDSHIELD);
 
     m.def("null", &gsplat::null);
-    m.def("build_config", []() {
-        py::dict config;
-        config["3dgs"] = static_cast<bool>(GSPLAT_BUILD_3DGS);
-        config["2dgs"] = static_cast<bool>(GSPLAT_BUILD_2DGS);
-        config["3dgut"] = static_cast<bool>(GSPLAT_BUILD_3DGUT);
-        config["adam"] = static_cast<bool>(GSPLAT_BUILD_ADAM);
-        config["reloc"] = static_cast<bool>(GSPLAT_BUILD_RELOC);
-        config["losses"] = static_cast<bool>(GSPLAT_BUILD_LOSSES);
-        config["camera_wrappers"] = static_cast<bool>(GSPLAT_BUILD_CAMERA_WRAPPERS);
-        return config;
-    });
+    m.def(
+        "build_config",
+        []()
+        {
+            py::dict config;
+            config["3dgs"]            = static_cast<bool>(GSPLAT_BUILD_3DGS);
+            config["2dgs"]            = static_cast<bool>(GSPLAT_BUILD_2DGS);
+            config["3dgut"]           = static_cast<bool>(GSPLAT_BUILD_3DGUT);
+            config["adam"]            = static_cast<bool>(GSPLAT_BUILD_ADAM);
+            config["reloc"]           = static_cast<bool>(GSPLAT_BUILD_RELOC);
+            config["losses"]          = static_cast<bool>(GSPLAT_BUILD_LOSSES);
+            config["camera_wrappers"] = static_cast<bool>(GSPLAT_BUILD_CAMERA_WRAPPERS);
+            return config;
+        }
+    );
 }
 
-namespace {
-
+namespace
+{
 // Unpacks a def_pickle state into a version + data-element vector.
 //
 // Versioned pickles lead with an int64 version slot followed by the data
@@ -96,127 +111,116 @@ namespace {
 // the older typed-tuple schema; torch materializes those as List[Any]
 // under an IValue setstate).
 inline std::pair<int64_t, std::vector<c10::IValue>> unpack_versioned_state(
-    const c10::IValue &state,
-    const char *class_name
-) {
+    const c10::IValue &state, const char *class_name
+)
+{
     std::vector<c10::IValue> elems;
-    if (state.isTuple()) {
+    if(state.isTuple())
+    {
         const auto &tup_elems = state.toTuple()->elements();
         elems.assign(tup_elems.begin(), tup_elems.end());
-    } else if (state.isList()) {
+    }
+    else if(state.isList())
+    {
         const auto list = state.toList();
         elems.reserve(list.size());
-        for (const auto ivalue_ref : list) {
+        for(const auto ivalue_ref: list)
+        {
             elems.push_back(static_cast<c10::IValue>(ivalue_ref));
         }
-    } else {
-        TORCH_CHECK(
-            false, class_name,
-            ": pickle state must be Tuple or List, got ", state.tagKind()
-        );
     }
-    TORCH_CHECK(
-        !elems.empty() && elems[0].isInt(), class_name,
-        ": versioned pickle must lead with int64 version"
-    );
+    else
+    {
+        TORCH_CHECK(false, class_name, ": pickle state must be Tuple or List, got ", state.tagKind());
+    }
+    TORCH_CHECK(!elems.empty() && elems[0].isInt(), class_name, ": versioned pickle must lead with int64 version");
     const int64_t version = elems[0].toInt();
     std::vector<c10::IValue> data(elems.begin() + 1, elems.end());
     return {version, std::move(data)};
 }
-
 } // namespace
 
-TORCH_LIBRARY(gsplat, m) {
+TORCH_LIBRARY(gsplat, m)
+{
     m.class_<UnscentedTransformParameters>("UnscentedTransformParameters")
         .def(
-            torch::init([](double alpha,
-                           double beta,
-                           double kappa,
-                           double in_image_margin_factor,
-                           bool require_all_sigma_points_valid) {
-                return c10::make_intrusive<UnscentedTransformParameters>(
-                    static_cast<float>(alpha),
-                    static_cast<float>(beta),
-                    static_cast<float>(kappa),
-                    static_cast<float>(in_image_margin_factor),
-                    require_all_sigma_points_valid
-                );
-            }),
+            torch::init(
+                [](double alpha,
+                   double beta,
+                   double kappa,
+                   double in_image_margin_factor,
+                   bool require_all_sigma_points_valid)
+                {
+                    return c10::make_intrusive<UnscentedTransformParameters>(
+                        static_cast<float>(alpha),
+                        static_cast<float>(beta),
+                        static_cast<float>(kappa),
+                        static_cast<float>(in_image_margin_factor),
+                        require_all_sigma_points_valid
+                    );
+                }
+            ),
             "Dataclass constructor",
-            {torch::arg("alpha") = 0.1,
-             torch::arg("beta") = 2.,
-             torch::arg("kappa") = 0.,
-             torch::arg("in_image_margin_factor") = 0.1,
+            {torch::arg("alpha")                          = 0.1,
+             torch::arg("beta")                           = 2.,
+             torch::arg("kappa")                          = 0.,
+             torch::arg("in_image_margin_factor")         = 0.1,
              torch::arg("require_all_sigma_points_valid") = false}
         )
         .def_property(
             "alpha",
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self) {
-                return static_cast<double>(self->alpha);
-            },
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self,
-               double alpha) { self->alpha = static_cast<float>(alpha); }
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self)
+            { return static_cast<double>(std::sqrt(self->alpha2)); },
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self, double alpha)
+            { self->alpha2 = static_cast<float>(alpha * alpha); }
         )
         .def_property(
             "beta",
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self) {
-                return static_cast<double>(self->beta);
-            },
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self,
-               double beta) { self->beta = static_cast<float>(beta); }
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self)
+            { return static_cast<double>(self->beta); },
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self, double beta)
+            { self->beta = static_cast<float>(beta); }
         )
         .def_property(
             "kappa",
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self) {
-                return static_cast<double>(self->kappa);
-            },
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self,
-               double kappa) { self->kappa = static_cast<float>(kappa); }
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self)
+            { return static_cast<double>(self->kappa); },
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self, double kappa)
+            { self->kappa = static_cast<float>(kappa); }
         )
         .def_property(
             "in_image_margin_factor",
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self) {
-                return static_cast<double>(self->in_image_margin_factor);
-            },
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self,
-               double in_image_margin_factor) {
-                self->in_image_margin_factor =
-                    static_cast<float>(in_image_margin_factor);
-            }
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self)
+            { return static_cast<double>(self->in_image_margin_factor); },
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self, double in_image_margin_factor)
+            { self->in_image_margin_factor = static_cast<float>(in_image_margin_factor); }
         )
-        .def_readwrite(
-            "require_all_sigma_points_valid",
-            &UnscentedTransformParameters::require_all_sigma_points_valid
-        )
+        .def_readwrite("require_all_sigma_points_valid", &UnscentedTransformParameters::require_all_sigma_points_valid)
         .def_pickle(
             // __getstate__ — emits the v1 6-tuple (int64 version + 5 doubles).
-            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self)
-                -> c10::IValue {
-                return c10::IValue(c10::ivalue::Tuple::create({
-                    c10::IValue(static_cast<int64_t>(1)),
-                    c10::IValue(static_cast<double>(self->alpha)),
-                    c10::IValue(static_cast<double>(self->beta)),
-                    c10::IValue(static_cast<double>(self->kappa)),
-                    c10::IValue(static_cast<double>(self->in_image_margin_factor)),
-                    c10::IValue(static_cast<double>(self->require_all_sigma_points_valid ? 1.0 : 0.0))
-                }));
+            [](const c10::intrusive_ptr<UnscentedTransformParameters> &self) -> c10::IValue
+            {
+                return c10::IValue(
+                    c10::ivalue::Tuple::create(
+                        {c10::IValue(static_cast<int64_t>(1)),
+                         c10::IValue(static_cast<double>(std::sqrt(self->alpha2))),
+                         c10::IValue(static_cast<double>(self->beta)),
+                         c10::IValue(static_cast<double>(self->kappa)),
+                         c10::IValue(static_cast<double>(self->in_image_margin_factor)),
+                         c10::IValue(static_cast<double>(self->require_all_sigma_points_valid ? 1.0 : 0.0))}
+                    )
+                );
             },
             // __setstate__ — accepts v1 versioned pickles (6-tuple leading
             // with an int64 version + 5 doubles).
-            [](c10::IValue state)
-                -> c10::intrusive_ptr<UnscentedTransformParameters> {
-                auto [version, data] = unpack_versioned_state(
-                    state, "UnscentedTransformParameters"
+            [](c10::IValue state) -> c10::intrusive_ptr<UnscentedTransformParameters>
+            {
+                auto [version, data] = unpack_versioned_state(state, "UnscentedTransformParameters");
+                TORCH_CHECK(
+                    version == 1, "UnscentedTransformParameters: unsupported pickle version ", version, " (expected 1)"
                 );
                 TORCH_CHECK(
-                    version == 1,
-                    "UnscentedTransformParameters: unsupported pickle version ",
-                    version, " (expected 1)"
-                );
-                TORCH_CHECK(
-                    data.size() == 5,
-                    "UnscentedTransformParameters: v1 expects 5 data elements, got ",
-                    data.size()
+                    data.size() == 5, "UnscentedTransformParameters: v1 expects 5 data elements, got ", data.size()
                 );
                 return c10::make_intrusive<UnscentedTransformParameters>(
                     static_cast<float>(data[0].toDouble()),
@@ -228,120 +232,120 @@ TORCH_LIBRARY(gsplat, m) {
             }
         );
 
-    using FThetaPolynomialType = FThetaCameraDistortionParameters::PolynomialType;
+    using FThetaPolynomialType            = FThetaCameraDistortionParameters::PolynomialType;
     constexpr auto FThetaPolynomialDegree = FThetaCameraDistortionParameters::PolynomialDegree;
     m.class_<FThetaCameraDistortionParameters>("FThetaCameraDistortionParameters")
         .def(
-            torch::init([](int64_t reference_poly,
-                           std::array<double, FThetaPolynomialDegree> pixeldist_to_angle_poly,
-                           std::array<double, FThetaPolynomialDegree> angle_to_pixeldist_poly,
-                           double max_angle,
-                           std::array<double, 3> linear_cde) {
-                std::array<float, FThetaPolynomialDegree> pixeldist_to_angle_poly_f;
-                for (size_t i = 0; i < FThetaPolynomialDegree; ++i)
-                    pixeldist_to_angle_poly_f[i] =
-                        static_cast<float>(pixeldist_to_angle_poly[i]);
+            torch::init(
+                [](int64_t reference_poly,
+                   std::array<double, FThetaPolynomialDegree> pixeldist_to_angle_poly,
+                   std::array<double, FThetaPolynomialDegree> angle_to_pixeldist_poly,
+                   double max_angle,
+                   std::array<double, 3> linear_cde)
+                {
+                    std::array<float, FThetaPolynomialDegree> pixeldist_to_angle_poly_f;
+                    for(size_t i = 0; i < FThetaPolynomialDegree; ++i)
+                    {
+                        pixeldist_to_angle_poly_f[i] = static_cast<float>(pixeldist_to_angle_poly[i]);
+                    }
 
-                std::array<float, FThetaPolynomialDegree> angle_to_pixeldist_poly_f;
-                for (size_t i = 0; i < FThetaPolynomialDegree; ++i)
-                    angle_to_pixeldist_poly_f[i] =
-                        static_cast<float>(angle_to_pixeldist_poly[i]);
+                    std::array<float, FThetaPolynomialDegree> angle_to_pixeldist_poly_f;
+                    for(size_t i = 0; i < FThetaPolynomialDegree; ++i)
+                    {
+                        angle_to_pixeldist_poly_f[i] = static_cast<float>(angle_to_pixeldist_poly[i]);
+                    }
 
-                std::array<float, 3> linear_cde_f = {
-                    static_cast<float>(linear_cde[0]),
-                    static_cast<float>(linear_cde[1]),
-                    static_cast<float>(linear_cde[2])
-                };
+                    std::array<float, 3> linear_cde_f
+                        = {static_cast<float>(linear_cde[0]),
+                           static_cast<float>(linear_cde[1]),
+                           static_cast<float>(linear_cde[2])};
 
-                return c10::make_intrusive<FThetaCameraDistortionParameters>(
-                    static_cast<FThetaPolynomialType>(reference_poly),
-                    pixeldist_to_angle_poly_f,
-                    angle_to_pixeldist_poly_f,
-                    static_cast<float>(max_angle),
-                    linear_cde_f
-                );
-            }),
+                    return c10::make_intrusive<FThetaCameraDistortionParameters>(
+                        static_cast<FThetaPolynomialType>(reference_poly),
+                        pixeldist_to_angle_poly_f,
+                        angle_to_pixeldist_poly_f,
+                        static_cast<float>(max_angle),
+                        linear_cde_f
+                    );
+                }
+            ),
             "Dataclass constructor",
-            {torch::arg("reference_poly") = 0,
+            {torch::arg("reference_poly")          = 0,
              torch::arg("pixeldist_to_angle_poly") = std::array<double, FThetaPolynomialDegree>{},
              torch::arg("angle_to_pixeldist_poly") = std::array<double, FThetaPolynomialDegree>{},
-             torch::arg("max_angle") = 0.,
-             torch::arg("linear_cde") = std::array<double, 3>{}}
+             torch::arg("max_angle")               = 0.,
+             torch::arg("linear_cde")              = std::array<double, 3>{}}
         )
         .def_property(
             "reference_poly",
-            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self
-            ) { return static_cast<int64_t>(self->reference_poly); },
-            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self,
-               int64_t reference_poly) {
-                self->reference_poly =
-                    static_cast<FThetaPolynomialType>(reference_poly);
-            }
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self)
+            { return static_cast<int64_t>(self->reference_poly); },
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self, int64_t reference_poly)
+            { self->reference_poly = static_cast<FThetaPolynomialType>(reference_poly); }
         )
         .def_property(
             "pixeldist_to_angle_poly",
-            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self
-            ) {
-                std::array<double, FThetaPolynomialDegree>
-                    pixeldist_to_angle_poly;
-                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
-                    pixeldist_to_angle_poly[i] =
-                        static_cast<double>(self->pixeldist_to_angle_poly[i]);
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self)
+            {
+                std::array<double, FThetaPolynomialDegree> pixeldist_to_angle_poly;
+                for(size_t i = 0; i < FThetaPolynomialDegree; ++i)
+                {
+                    pixeldist_to_angle_poly[i] = static_cast<double>(self->pixeldist_to_angle_poly[i]);
                 }
                 return pixeldist_to_angle_poly;
             },
             [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self,
-               const std::array<double, FThetaPolynomialDegree>
-                   &pixeldist_to_angle_poly) {
-                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
-                    self->pixeldist_to_angle_poly[i] =
-                        static_cast<float>(pixeldist_to_angle_poly[i]);
+               const std::array<double, FThetaPolynomialDegree> &pixeldist_to_angle_poly)
+            {
+                for(size_t i = 0; i < FThetaPolynomialDegree; ++i)
+                {
+                    self->pixeldist_to_angle_poly[i] = static_cast<float>(pixeldist_to_angle_poly[i]);
                 }
             }
         )
         .def_property(
             "angle_to_pixeldist_poly",
-            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self
-            ) {
-                std::array<double, FThetaPolynomialDegree>
-                    angle_to_pixeldist_poly;
-                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
-                    angle_to_pixeldist_poly[i] =
-                        static_cast<double>(self->angle_to_pixeldist_poly[i]);
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self)
+            {
+                std::array<double, FThetaPolynomialDegree> angle_to_pixeldist_poly;
+                for(size_t i = 0; i < FThetaPolynomialDegree; ++i)
+                {
+                    angle_to_pixeldist_poly[i] = static_cast<double>(self->angle_to_pixeldist_poly[i]);
                 }
                 return angle_to_pixeldist_poly;
             },
             [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self,
-               const std::array<double, FThetaPolynomialDegree>
-                   &angle_to_pixeldist_poly) {
-                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
-                    self->angle_to_pixeldist_poly[i] =
-                        static_cast<float>(angle_to_pixeldist_poly[i]);
+               const std::array<double, FThetaPolynomialDegree> &angle_to_pixeldist_poly)
+            {
+                for(size_t i = 0; i < FThetaPolynomialDegree; ++i)
+                {
+                    self->angle_to_pixeldist_poly[i] = static_cast<float>(angle_to_pixeldist_poly[i]);
                 }
             }
         )
         .def_property(
             "max_angle",
-            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self
-            ) { return static_cast<double>(self->max_angle); },
-            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self,
-               double max_angle) {
-                self->max_angle = static_cast<float>(max_angle);
-            }
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self)
+            { return static_cast<double>(self->max_angle); },
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self, double max_angle)
+            { self->max_angle = static_cast<float>(max_angle); }
         )
         .def_property(
             "linear_cde",
-            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self
-            ) {
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self)
+            {
                 std::array<double, 3> linear_cde;
-                for (int i = 0; i < 3; ++i) {
+                for(int i = 0; i < 3; ++i)
+                {
                     linear_cde[i] = static_cast<double>(self->linear_cde[i]);
                 }
                 return linear_cde;
             },
             [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self,
-               const std::array<double, 3> &linear_cde) {
-                for (int i = 0; i < 3; ++i) {
+               const std::array<double, 3> &linear_cde)
+            {
+                for(int i = 0; i < 3; ++i)
+                {
                     self->linear_cde[i] = static_cast<float>(linear_cde[i]);
                 }
             }
@@ -349,51 +353,55 @@ TORCH_LIBRARY(gsplat, m) {
         .def_pickle(
             // __getstate__ — emits the v1 6-tuple
             // (int64 version, ref_poly, p2a, a2p, max_angle, cde).
-            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self)
-                -> c10::IValue {
+            [](const c10::intrusive_ptr<FThetaCameraDistortionParameters> &self) -> c10::IValue
+            {
                 c10::List<double> p2a_list, a2p_list;
-                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
+                for(size_t i = 0; i < FThetaPolynomialDegree; ++i)
+                {
                     p2a_list.push_back(static_cast<double>(self->pixeldist_to_angle_poly[i]));
                     a2p_list.push_back(static_cast<double>(self->angle_to_pixeldist_poly[i]));
                 }
                 c10::List<double> cde_list;
-                for (int i = 0; i < 3; ++i)
+                for(int i = 0; i < 3; ++i)
+                {
                     cde_list.push_back(static_cast<double>(self->linear_cde[i]));
-                return c10::IValue(c10::ivalue::Tuple::create({
-                    c10::IValue(static_cast<int64_t>(1)),
-                    c10::IValue(static_cast<int64_t>(self->reference_poly)),
-                    c10::IValue(p2a_list),
-                    c10::IValue(a2p_list),
-                    c10::IValue(static_cast<double>(self->max_angle)),
-                    c10::IValue(cde_list)
-                }));
+                }
+                return c10::IValue(
+                    c10::ivalue::Tuple::create(
+                        {c10::IValue(static_cast<int64_t>(1)),
+                         c10::IValue(static_cast<int64_t>(self->reference_poly)),
+                         c10::IValue(p2a_list),
+                         c10::IValue(a2p_list),
+                         c10::IValue(static_cast<double>(self->max_angle)),
+                         c10::IValue(cde_list)}
+                    )
+                );
             },
             // __setstate__ — accepts v1 versioned pickles.
-            [](c10::IValue state)
-                -> c10::intrusive_ptr<FThetaCameraDistortionParameters> {
-                auto [version, data] = unpack_versioned_state(
-                    state, "FThetaCameraDistortionParameters"
-                );
+            [](c10::IValue state) -> c10::intrusive_ptr<FThetaCameraDistortionParameters>
+            {
+                auto [version, data] = unpack_versioned_state(state, "FThetaCameraDistortionParameters");
                 TORCH_CHECK(
                     version == 1,
                     "FThetaCameraDistortionParameters: unsupported pickle version ",
-                    version, " (expected 1)"
+                    version,
+                    " (expected 1)"
                 );
                 TORCH_CHECK(
-                    data.size() == 5,
-                    "FThetaCameraDistortionParameters: v1 expects 5 data elements, got ",
-                    data.size()
+                    data.size() == 5, "FThetaCameraDistortionParameters: v1 expects 5 data elements, got ", data.size()
                 );
                 const int64_t ref_poly = data[0].toInt();
-                const auto p2a_list = data[1].toDoubleList();
-                const auto a2p_list = data[2].toDoubleList();
+                const auto p2a_list    = data[1].toDoubleList();
+                const auto a2p_list    = data[2].toDoubleList();
                 const double max_angle = data[3].toDouble();
-                const auto cde_list = data[4].toDoubleList();
+                const auto cde_list    = data[4].toDoubleList();
                 TORCH_CHECK(
-                    p2a_list.size() == FThetaCameraDistortionParameters::PolynomialDegree &&
-                    a2p_list.size() == FThetaCameraDistortionParameters::PolynomialDegree,
+                    p2a_list.size() == FThetaCameraDistortionParameters::PolynomialDegree
+                        && a2p_list.size() == FThetaCameraDistortionParameters::PolynomialDegree,
                     "FThetaCameraDistortionParameters: polynomial list length ",
-                    p2a_list.size(), "/", a2p_list.size(),
+                    p2a_list.size(),
+                    "/",
+                    a2p_list.size(),
                     " (expected ",
                     FThetaCameraDistortionParameters::PolynomialDegree,
                     ")"
@@ -401,23 +409,21 @@ TORCH_LIBRARY(gsplat, m) {
                 TORCH_CHECK(
                     cde_list.size() == 3,
                     "FThetaCameraDistortionParameters: linear_cde length ",
-                    cde_list.size(), " (expected 3)"
+                    cde_list.size(),
+                    " (expected 3)"
                 );
                 std::array<float, FThetaPolynomialDegree> p2a_f, a2p_f;
-                for (size_t i = 0; i < FThetaPolynomialDegree; ++i) {
+                for(size_t i = 0; i < FThetaPolynomialDegree; ++i)
+                {
                     p2a_f[i] = static_cast<float>(p2a_list.get(i));
                     a2p_f[i] = static_cast<float>(a2p_list.get(i));
                 }
-                std::array<float, 3> cde_f = {
-                    static_cast<float>(cde_list.get(0)),
-                    static_cast<float>(cde_list.get(1)),
-                    static_cast<float>(cde_list.get(2))
-                };
+                std::array<float, 3> cde_f
+                    = {static_cast<float>(cde_list.get(0)),
+                       static_cast<float>(cde_list.get(1)),
+                       static_cast<float>(cde_list.get(2))};
                 return c10::make_intrusive<FThetaCameraDistortionParameters>(
-                    static_cast<FThetaPolynomialType>(ref_poly),
-                    p2a_f, a2p_f,
-                    static_cast<float>(max_angle),
-                    cde_f
+                    static_cast<FThetaPolynomialType>(ref_poly), p2a_f, a2p_f, static_cast<float>(max_angle), cde_f
                 );
             }
         );
@@ -426,66 +432,67 @@ TORCH_LIBRARY(gsplat, m) {
         .def(torch::init<>())
         .def_readwrite("horizontal_poly", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly)
         .def_readwrite("vertical_poly", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly)
-        .def_readwrite("horizontal_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly_inverse)
-        .def_readwrite("vertical_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly_inverse)
+        .def_readwrite(
+            "horizontal_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly_inverse
+        )
+        .def_readwrite(
+            "vertical_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly_inverse
+        )
         .def_property(
             "reference_poly",
-            [](const c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> &self
-            ) { return static_cast<int64_t>(self->reference_poly); },
+            [](const c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> &self)
+            { return static_cast<int64_t>(self->reference_poly); },
             [](const c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> &self,
-               int64_t reference_poly) {
-                self->reference_poly =
-                    static_cast<gsplat::extdist::ReferencePolynomialType>(reference_poly);
-            }
+               int64_t reference_poly)
+            { self->reference_poly = static_cast<gsplat::extdist::ReferencePolynomialType>(reference_poly); }
         )
         // torch::Library is designed for operators, not standalone constants.
         // We expose these compile-time constants via static getters so Python
         // can query them from the authoritative C++ definition.
-        .def_static("get_max_order",
-            []() -> int64_t {
-                return gsplat::extdist::BivariateWindshieldModelParameters::MAX_ORDER;
-            })
-        .def_static("get_max_coeffs",
-            []() -> int64_t {
-                return gsplat::extdist::BivariateWindshieldModelParameters::MAX_COEFFS;
-            })
+        .def_static(
+            "get_max_order", []() -> int64_t { return gsplat::extdist::BivariateWindshieldModelParameters::MAX_ORDER; }
+        )
+        .def_static(
+            "get_max_coeffs",
+            []() -> int64_t { return gsplat::extdist::BivariateWindshieldModelParameters::MAX_COEFFS; }
+        )
         .def_pickle(
             // __getstate__ — emits the v1 6-tuple
             // (int64 version, h_poly, v_poly, h_poly_inv, v_poly_inv, ref_poly).
-            [](const c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> &self)
-                -> c10::IValue {
-                return c10::IValue(c10::ivalue::Tuple::create({
-                    c10::IValue(static_cast<int64_t>(1)),
-                    c10::IValue(self->horizontal_poly),
-                    c10::IValue(self->vertical_poly),
-                    c10::IValue(self->horizontal_poly_inverse),
-                    c10::IValue(self->vertical_poly_inverse),
-                    c10::IValue(static_cast<int64_t>(self->reference_poly))
-                }));
+            [](const c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> &self) -> c10::IValue
+            {
+                return c10::IValue(
+                    c10::ivalue::Tuple::create(
+                        {c10::IValue(static_cast<int64_t>(1)),
+                         c10::IValue(self->horizontal_poly),
+                         c10::IValue(self->vertical_poly),
+                         c10::IValue(self->horizontal_poly_inverse),
+                         c10::IValue(self->vertical_poly_inverse),
+                         c10::IValue(static_cast<int64_t>(self->reference_poly))}
+                    )
+                );
             },
             // __setstate__ — accepts v1 versioned pickles.
-            [](c10::IValue state)
-                -> c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters> {
-                auto [version, data] = unpack_versioned_state(
-                    state, "BivariateWindshieldModelParameters"
-                );
+            [](c10::IValue state) -> c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>
+            {
+                auto [version, data] = unpack_versioned_state(state, "BivariateWindshieldModelParameters");
                 TORCH_CHECK(
                     version == 1,
                     "BivariateWindshieldModelParameters: unsupported pickle version ",
-                    version, " (expected 1)"
+                    version,
+                    " (expected 1)"
                 );
                 TORCH_CHECK(
                     data.size() == 5,
                     "BivariateWindshieldModelParameters: v1 expects 5 data elements, got ",
                     data.size()
                 );
-                auto obj = c10::make_intrusive<gsplat::extdist::BivariateWindshieldModelParameters>();
-                obj->horizontal_poly         = data[0].toTensor();
-                obj->vertical_poly           = data[1].toTensor();
+                auto obj             = c10::make_intrusive<gsplat::extdist::BivariateWindshieldModelParameters>();
+                obj->horizontal_poly = data[0].toTensor();
+                obj->vertical_poly   = data[1].toTensor();
                 obj->horizontal_poly_inverse = data[2].toTensor();
                 obj->vertical_poly_inverse   = data[3].toTensor();
-                obj->reference_poly =
-                    static_cast<gsplat::extdist::ReferencePolynomialType>(data[4].toInt());
+                obj->reference_poly          = static_cast<gsplat::extdist::ReferencePolynomialType>(data[4].toInt());
                 return obj;
             }
         );
@@ -493,11 +500,10 @@ TORCH_LIBRARY(gsplat, m) {
     // Lidar sensor support
     m.class_<gsplat::FOV>("FOV")
         .def(
-            torch::init([](double start, double span) {
-                return c10::make_intrusive<gsplat::FOV>(
-                    static_cast<float>(start), static_cast<float>(span)
-                );
-            }),
+            torch::init(
+                [](double start, double span)
+                { return c10::make_intrusive<gsplat::FOV>(static_cast<float>(start), static_cast<float>(span)); }
+            ),
             "Constructor",
             {torch::arg("start") = 0., torch::arg("span") = 0.}
         )
@@ -512,40 +518,46 @@ TORCH_LIBRARY(gsplat, m) {
             [](const c10::intrusive_ptr<gsplat::FOV> &self, double span) { self->span = static_cast<float>(span); }
         );
 
-    m.class_<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt>("RowOffsetStructuredSpinningLidarModelParametersExt")
+    m.class_<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt>(
+         "RowOffsetStructuredSpinningLidarModelParametersExt"
+    )
         .def(
-            torch::init([](at::Tensor row_elevations_rad,
-                           at::Tensor column_azimuths_rad,
-                           at::Tensor row_azimuth_offsets_rad,
-                           int64_t spinning_direction,
-                           double spinning_frequency_hz,
-                           c10::intrusive_ptr<gsplat::FOV> fov_vert_rad,
-                           c10::intrusive_ptr<gsplat::FOV> fov_horiz_rad,
-                           double fov_eps_rad,
-                           at::Tensor angles_to_columns_map,
-                           int64_t n_bins_azimuth,
-                           int64_t n_bins_elevation,
-                           at::Tensor cdf_elevation,
-                           at::Tensor cdf_dense_ray_mask,
-                           at::Tensor tiles_pack_info,
-                           at::Tensor tiles_to_elements_map) {
-                return c10::make_intrusive<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt>(
-                    std::move(row_elevations_rad),
-                    std::move(column_azimuths_rad),
-                    std::move(row_azimuth_offsets_rad),
-                    static_cast<gsplat::SpinningDirection>(spinning_direction),
-                    static_cast<float>(spinning_frequency_hz),
-                    std::move(fov_vert_rad),
-                    std::move(fov_horiz_rad),
-                    static_cast<float>(fov_eps_rad),
-                    std::move(angles_to_columns_map),
-                    static_cast<int>(n_bins_azimuth),
-                    static_cast<int>(n_bins_elevation),
-                    std::move(cdf_elevation),
-                    std::move(cdf_dense_ray_mask),
-                    std::move(tiles_pack_info),
-                    std::move(tiles_to_elements_map));
-            }),
+            torch::init(
+                [](at::Tensor row_elevations_rad,
+                   at::Tensor column_azimuths_rad,
+                   at::Tensor row_azimuth_offsets_rad,
+                   int64_t spinning_direction,
+                   double spinning_frequency_hz,
+                   c10::intrusive_ptr<gsplat::FOV> fov_vert_rad,
+                   c10::intrusive_ptr<gsplat::FOV> fov_horiz_rad,
+                   double fov_eps_rad,
+                   at::Tensor angles_to_columns_map,
+                   int64_t n_bins_azimuth,
+                   int64_t n_bins_elevation,
+                   at::Tensor cdf_elevation,
+                   at::Tensor cdf_dense_ray_mask,
+                   at::Tensor tiles_pack_info,
+                   at::Tensor tiles_to_elements_map)
+                {
+                    return c10::make_intrusive<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt>(
+                        std::move(row_elevations_rad),
+                        std::move(column_azimuths_rad),
+                        std::move(row_azimuth_offsets_rad),
+                        static_cast<gsplat::SpinningDirection>(spinning_direction),
+                        static_cast<float>(spinning_frequency_hz),
+                        std::move(fov_vert_rad),
+                        std::move(fov_horiz_rad),
+                        static_cast<float>(fov_eps_rad),
+                        std::move(angles_to_columns_map),
+                        static_cast<int>(n_bins_azimuth),
+                        static_cast<int>(n_bins_elevation),
+                        std::move(cdf_elevation),
+                        std::move(cdf_dense_ray_mask),
+                        std::move(tiles_pack_info),
+                        std::move(tiles_to_elements_map)
+                    );
+                }
+            ),
             "Constructor",
             {torch::arg("row_elevations_rad"),
              torch::arg("column_azimuths_rad"),
@@ -563,84 +575,83 @@ TORCH_LIBRARY(gsplat, m) {
              torch::arg("tiles_pack_info"),
              torch::arg("tiles_to_elements_map")}
         )
-        .def_readwrite("row_elevations_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::row_elevations_rad)
-        .def_readwrite("column_azimuths_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::column_azimuths_rad)
-        .def_readwrite("row_azimuth_offsets_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::row_azimuth_offsets_rad)
+        .def_readwrite(
+            "row_elevations_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::row_elevations_rad
+        )
+        .def_readwrite(
+            "column_azimuths_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::column_azimuths_rad
+        )
+        .def_readwrite(
+            "row_azimuth_offsets_rad",
+            &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::row_azimuth_offsets_rad
+        )
         .def_property(
             "spinning_direction",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<int64_t>(self->spinning_direction);
-            },
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, int64_t v) {
-                self->spinning_direction = static_cast<gsplat::SpinningDirection>(v);
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<int64_t>(self->spinning_direction); },
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, int64_t v)
+            { self->spinning_direction = static_cast<gsplat::SpinningDirection>(v); }
         )
         .def_property(
             "spinning_frequency_hz",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<double>(self->spinning_frequency_hz);
-            },
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, double v) {
-                self->spinning_frequency_hz = static_cast<float>(v);
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<double>(self->spinning_frequency_hz); },
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, double v)
+            { self->spinning_frequency_hz = static_cast<float>(v); }
         )
         .def_readwrite("fov_vert_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::fov_vert_rad)
         .def_readwrite("fov_horiz_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::fov_horiz_rad)
         .def_property(
             "fov_eps_rad",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<double>(self->fov_eps_rad);
-            },
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, double v) {
-                self->fov_eps_rad = static_cast<float>(v);
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<double>(self->fov_eps_rad); },
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, double v)
+            { self->fov_eps_rad = static_cast<float>(v); }
         )
-        .def_readwrite("angles_to_columns_map", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::angles_to_columns_map)
+        .def_readwrite(
+            "angles_to_columns_map", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::angles_to_columns_map
+        )
         .def_property(
             "n_rows",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<int64_t>(self->n_rows());
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<int64_t>(self->n_rows()); }
         )
         .def_property(
             "n_columns",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<int64_t>(self->n_columns());
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<int64_t>(self->n_columns()); }
         )
         .def_property(
             "n_bins_azimuth",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<int64_t>(self->n_bins_azimuth);
-            },
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, int64_t v) {
-                self->n_bins_azimuth = static_cast<int>(v);
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<int64_t>(self->n_bins_azimuth); },
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, int64_t v)
+            { self->n_bins_azimuth = static_cast<int>(v); }
         )
         .def_property(
             "n_bins_elevation",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<int64_t>(self->n_bins_elevation);
-            },
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, int64_t v) {
-                self->n_bins_elevation = static_cast<int>(v);
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<int64_t>(self->n_bins_elevation); },
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, int64_t v)
+            { self->n_bins_elevation = static_cast<int>(v); }
         )
         .def_readwrite("cdf_elevation", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::cdf_elevation)
-        .def_readwrite("cdf_dense_ray_mask", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::cdf_dense_ray_mask)
+        .def_readwrite(
+            "cdf_dense_ray_mask", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::cdf_dense_ray_mask
+        )
         .def_readwrite("tiles_pack_info", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::tiles_pack_info)
-        .def_readwrite("tiles_to_elements_map", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::tiles_to_elements_map)
+        .def_readwrite(
+            "tiles_to_elements_map", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::tiles_to_elements_map
+        )
         .def_property(
             "cdf_resolution_elevation",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<int64_t>(self->cdf_resolution_elevation());
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<int64_t>(self->cdf_resolution_elevation()); }
         )
         .def_property(
             "cdf_resolution_azimuth",
-            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
-                return static_cast<int64_t>(self->cdf_resolution_azimuth());
-            }
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self)
+            { return static_cast<int64_t>(self->cdf_resolution_azimuth()); }
         );
 
     // ==================== Camera Model Bindings ====================
@@ -651,9 +662,8 @@ TORCH_LIBRARY(gsplat, m) {
             "camera_ray_to_image_point",
             [](const c10::intrusive_ptr<gsplat::PyBaseCameraModel<>> &self,
                const torch::Tensor &camera_ray,
-               double margin_factor) {
-                return self->camera_ray_to_image_point(camera_ray, static_cast<float>(margin_factor));
-            },
+               double margin_factor)
+            { return self->camera_ray_to_image_point(camera_ray, static_cast<float>(margin_factor)); },
             "Project camera rays to image points",
             {torch::arg("camera_ray"), torch::arg("margin_factor") = 0.0}
         )
@@ -681,28 +691,32 @@ TORCH_LIBRARY(gsplat, m) {
                const torch::Tensor &world_points,
                const torch::Tensor &pose_start,
                const torch::Tensor &pose_end,
-               double margin_factor) {
+               double margin_factor)
+            {
                 return self->world_point_to_image_point_shutter_pose(
                     world_points, pose_start, pose_end, static_cast<float>(margin_factor)
                 );
             },
             "Project world points to image with rolling shutter",
-            {torch::arg("world_points"), torch::arg("pose_start"), torch::arg("pose_end"), torch::arg("margin_factor") = 0.0
-            }
+            {torch::arg("world_points"),
+             torch::arg("pose_start"),
+             torch::arg("pose_end"),
+             torch::arg("margin_factor") = 0.0}
         )
         .def_property(
             "width",
-            [](const c10::intrusive_ptr<gsplat::PyBaseCameraModel<>> &self) { return static_cast<int64_t>(self->width()); }
+            [](const c10::intrusive_ptr<gsplat::PyBaseCameraModel<>> &self)
+            { return static_cast<int64_t>(self->width()); }
         )
         .def_property(
             "height",
-            [](const c10::intrusive_ptr<gsplat::PyBaseCameraModel<>> &self) { return static_cast<int64_t>(self->height()); }
+            [](const c10::intrusive_ptr<gsplat::PyBaseCameraModel<>> &self)
+            { return static_cast<int64_t>(self->height()); }
         )
         .def_property(
             "rs_type",
-            [](const c10::intrusive_ptr<gsplat::PyBaseCameraModel<>> &self) {
-                return static_cast<int64_t>(self->rs_type());
-            }
+            [](const c10::intrusive_ptr<gsplat::PyBaseCameraModel<>> &self)
+            { return static_cast<int64_t>(self->rs_type()); }
         )
         .def_property("principal_points", &gsplat::PyBaseCameraModel<>::principal_points)
         .def_property("focal_lengths", &gsplat::PyBaseCameraModel<>::focal_lengths)
@@ -717,8 +731,10 @@ TORCH_LIBRARY(gsplat, m) {
                const std::optional<torch::Tensor> &tangential_coeffs,
                const std::optional<torch::Tensor> &thin_prism_coeffs,
                const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
-               const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs,
-               int64_t rs_type) {
+               const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>>
+                   &external_distortion_coeffs,
+               int64_t rs_type)
+            {
                 return gsplat::PyBaseCameraModel<>::create(
                     width,
                     height,
@@ -738,16 +754,25 @@ TORCH_LIBRARY(gsplat, m) {
 
     m.class_<gsplat::PyPerfectPinholeCameraModel>("PerfectPinholeCameraModel")
         .def(
-            torch::init([](int64_t width,
-                           int64_t height,
-                           const torch::Tensor &focal_lengths,
-                           const torch::Tensor &principal_points,
-                           int64_t rs_type,
-                           const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs) {
-                return c10::make_intrusive<gsplat::PyPerfectPinholeCameraModel>(
-                    width, height, focal_lengths, principal_points, static_cast<ShutterType>(rs_type), external_distortion_coeffs
-                );
-            }),
+            torch::init(
+                [](int64_t width,
+                   int64_t height,
+                   const torch::Tensor &focal_lengths,
+                   const torch::Tensor &principal_points,
+                   int64_t rs_type,
+                   const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>>
+                       &external_distortion_coeffs)
+                {
+                    return c10::make_intrusive<gsplat::PyPerfectPinholeCameraModel>(
+                        width,
+                        height,
+                        focal_lengths,
+                        principal_points,
+                        static_cast<ShutterType>(rs_type),
+                        external_distortion_coeffs
+                    );
+                }
+            ),
             "Constructor",
             {torch::arg("width"),
              torch::arg("height"),
@@ -759,27 +784,31 @@ TORCH_LIBRARY(gsplat, m) {
 
     m.class_<gsplat::PyOpenCVPinholeCameraModel>("OpenCVPinholeCameraModel")
         .def(
-            torch::init([](int64_t width,
-                           int64_t height,
-                           const torch::Tensor &focal_lengths,
-                           const torch::Tensor &principal_points,
-                           const std::optional<torch::Tensor> &radial_coeffs,
-                           const std::optional<torch::Tensor> &tangential_coeffs,
-                           const std::optional<torch::Tensor> &thin_prism_coeffs,
-                           int64_t rs_type,
-                           const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs) {
-                return c10::make_intrusive<gsplat::PyOpenCVPinholeCameraModel>(
-                    width,
-                    height,
-                    focal_lengths,
-                    principal_points,
-                    radial_coeffs,
-                    tangential_coeffs,
-                    thin_prism_coeffs,
-                    static_cast<ShutterType>(rs_type),
-                    external_distortion_coeffs
-                );
-            }),
+            torch::init(
+                [](int64_t width,
+                   int64_t height,
+                   const torch::Tensor &focal_lengths,
+                   const torch::Tensor &principal_points,
+                   const std::optional<torch::Tensor> &radial_coeffs,
+                   const std::optional<torch::Tensor> &tangential_coeffs,
+                   const std::optional<torch::Tensor> &thin_prism_coeffs,
+                   int64_t rs_type,
+                   const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>>
+                       &external_distortion_coeffs)
+                {
+                    return c10::make_intrusive<gsplat::PyOpenCVPinholeCameraModel>(
+                        width,
+                        height,
+                        focal_lengths,
+                        principal_points,
+                        radial_coeffs,
+                        tangential_coeffs,
+                        thin_prism_coeffs,
+                        static_cast<ShutterType>(rs_type),
+                        external_distortion_coeffs
+                    );
+                }
+            ),
             "Constructor",
             {torch::arg("width"),
              torch::arg("height"),
@@ -794,17 +823,27 @@ TORCH_LIBRARY(gsplat, m) {
 
     m.class_<gsplat::PyOpenCVFisheyeCameraModel>("OpenCVFisheyeCameraModel")
         .def(
-            torch::init([](int64_t width,
-                           int64_t height,
-                           const torch::Tensor &focal_lengths,
-                           const torch::Tensor &principal_points,
-                           const std::optional<torch::Tensor> &radial_coeffs, // [..., 4]
-                           int64_t rs_type,
-                           const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs) {
-                return c10::make_intrusive<gsplat::PyOpenCVFisheyeCameraModel>(
-                    width, height, focal_lengths, principal_points, radial_coeffs, static_cast<ShutterType>(rs_type), external_distortion_coeffs
-                );
-            }),
+            torch::init(
+                [](int64_t width,
+                   int64_t height,
+                   const torch::Tensor &focal_lengths,
+                   const torch::Tensor &principal_points,
+                   const std::optional<torch::Tensor> &radial_coeffs, // [..., 4]
+                   int64_t rs_type,
+                   const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>>
+                       &external_distortion_coeffs)
+                {
+                    return c10::make_intrusive<gsplat::PyOpenCVFisheyeCameraModel>(
+                        width,
+                        height,
+                        focal_lengths,
+                        principal_points,
+                        radial_coeffs,
+                        static_cast<ShutterType>(rs_type),
+                        external_distortion_coeffs
+                    );
+                }
+            ),
             "Constructor",
             {torch::arg("width"),
              torch::arg("height"),
@@ -817,29 +856,33 @@ TORCH_LIBRARY(gsplat, m) {
 
     m.class_<gsplat::PyFThetaCameraModel>("FThetaCameraModel")
         .def(
-            torch::init([](int64_t width,
-                           int64_t height,
-                           const torch::Tensor &principal_points,
-                           const torch::Tensor &pixeldist_to_angle_poly,
-                           const torch::Tensor &angle_to_pixeldist_poly,
-                           const torch::Tensor &linear_cde,
-                           int64_t reference_poly,
-                           const torch::Tensor &max_angle,
-                           int64_t rs_type,
-                           const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>> &external_distortion_coeffs) {
-                return c10::make_intrusive<gsplat::PyFThetaCameraModel>(
-                    width,
-                    height,
-                    principal_points,
-                    pixeldist_to_angle_poly,
-                    angle_to_pixeldist_poly,
-                    linear_cde,
-                    static_cast<FThetaCameraDistortionParameters::PolynomialType>(reference_poly),
-                    max_angle,
-                    static_cast<ShutterType>(rs_type),
-                    external_distortion_coeffs
-                );
-            }),
+            torch::init(
+                [](int64_t width,
+                   int64_t height,
+                   const torch::Tensor &principal_points,
+                   const torch::Tensor &pixeldist_to_angle_poly,
+                   const torch::Tensor &angle_to_pixeldist_poly,
+                   const torch::Tensor &linear_cde,
+                   int64_t reference_poly,
+                   const torch::Tensor &max_angle,
+                   int64_t rs_type,
+                   const std::optional<c10::intrusive_ptr<gsplat::extdist::BivariateWindshieldModelParameters>>
+                       &external_distortion_coeffs)
+                {
+                    return c10::make_intrusive<gsplat::PyFThetaCameraModel>(
+                        width,
+                        height,
+                        principal_points,
+                        pixeldist_to_angle_poly,
+                        angle_to_pixeldist_poly,
+                        linear_cde,
+                        static_cast<FThetaCameraDistortionParameters::PolynomialType>(reference_poly),
+                        max_angle,
+                        static_cast<ShutterType>(rs_type),
+                        external_distortion_coeffs
+                    );
+                }
+            ),
             "Constructor",
             {torch::arg("width"),
              torch::arg("height"),
@@ -855,9 +898,8 @@ TORCH_LIBRARY(gsplat, m) {
 
     m.class_<gsplat::PyRowOffsetStructuredSpinningLidarModel>("RowOffsetStructuredSpinningLidarModel")
         .def(
-            torch::init([](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &params) {
-                return c10::make_intrusive<gsplat::PyRowOffsetStructuredSpinningLidarModel>(*params);
-            }),
+            torch::init([](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &params)
+                        { return c10::make_intrusive<gsplat::PyRowOffsetStructuredSpinningLidarModel>(*params); }),
             "Constructor",
             {torch::arg("params")}
         )
@@ -865,27 +907,22 @@ TORCH_LIBRARY(gsplat, m) {
             "camera_ray_to_image_point",
             [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self,
                const torch::Tensor &camera_ray,
-               double margin_factor) {
-                return self->camera_ray_to_image_point(camera_ray, static_cast<float>(margin_factor));
-            },
+               double margin_factor)
+            { return self->camera_ray_to_image_point(camera_ray, static_cast<float>(margin_factor)); },
             "Project camera rays to image points",
             {torch::arg("camera_ray"), torch::arg("margin_factor") = 0.0}
         )
         .def(
             "image_point_to_camera_ray",
             [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self,
-               const torch::Tensor &image_points) {
-                return self->image_point_to_camera_ray(image_points);
-            },
+               const torch::Tensor &image_points) { return self->image_point_to_camera_ray(image_points); },
             "Unproject image points to camera rays",
             {torch::arg("image_points")}
         )
         .def(
             "shutter_relative_frame_time",
             [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self,
-               const torch::Tensor &image_points) {
-                return self->shutter_relative_frame_time(image_points);
-            },
+               const torch::Tensor &image_points) { return self->shutter_relative_frame_time(image_points); },
             "Compute relative frame time for rolling shutter",
             {torch::arg("image_points")}
         )
@@ -894,9 +931,8 @@ TORCH_LIBRARY(gsplat, m) {
             [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self,
                const torch::Tensor &image_points,
                const torch::Tensor &pose_start,
-               const torch::Tensor &pose_end) {
-                return self->image_point_to_world_ray_shutter_pose(image_points, pose_start, pose_end);
-            },
+               const torch::Tensor &pose_end)
+            { return self->image_point_to_world_ray_shutter_pose(image_points, pose_start, pose_end); },
             "Unproject image point to world ray with rolling shutter",
             {torch::arg("image_points"), torch::arg("pose_start"), torch::arg("pose_end")}
         )
@@ -906,108 +942,331 @@ TORCH_LIBRARY(gsplat, m) {
                const torch::Tensor &world_points,
                const torch::Tensor &pose_start,
                const torch::Tensor &pose_end,
-               double margin_factor) {
+               double margin_factor)
+            {
                 return self->world_point_to_image_point_shutter_pose(
                     world_points, pose_start, pose_end, static_cast<float>(margin_factor)
                 );
             },
             "Project world points to image with rolling shutter",
-            {torch::arg("world_points"), torch::arg("pose_start"), torch::arg("pose_end"), torch::arg("margin_factor") = 0.0}
+            {torch::arg("world_points"),
+             torch::arg("pose_start"),
+             torch::arg("pose_end"),
+             torch::arg("margin_factor") = 0.0}
         )
         .def_property(
             "width",
-            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self) { return static_cast<int64_t>(self->width()); }
+            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self)
+            { return static_cast<int64_t>(self->width()); }
         )
         .def_property(
             "height",
-            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self) { return static_cast<int64_t>(self->height()); }
+            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self)
+            { return static_cast<int64_t>(self->height()); }
         )
         .def_property(
             "rs_type",
-            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self) {
-                return static_cast<int64_t>(self->rs_type());
-            }
+            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self)
+            { return static_cast<int64_t>(self->rs_type()); }
         )
         .def_property(
             "principal_points",
-            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self) { return self->principal_points(); }
+            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self)
+            { return self->principal_points(); }
         )
         .def_property(
             "focal_lengths",
-            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self) { return self->focal_lengths(); }
+            [](const c10::intrusive_ptr<gsplat::PyRowOffsetStructuredSpinningLidarModel> &self)
+            { return self->focal_lengths(); }
         );
 #endif
 
-
 #if GSPLAT_BUILD_3DGS
-    m.def("quat_scale_to_covar_preci_fwd(Tensor quats, Tensor scales, bool compute_covar, bool compute_preci, bool triu) -> (Tensor, Tensor)");
-    m.def("quat_scale_to_covar_preci_bwd(Tensor quats, Tensor scales, bool triu, Tensor? v_covars, Tensor? v_precis) -> (Tensor, Tensor)");
+    m.def(
+        "quat_scale_to_covar_preci(Tensor quats, Tensor scales, bool compute_covar, bool compute_preci, bool triu) -> "
+        "(Tensor?, Tensor?)"
+    );
+    m.def(
+        "quat_scale_to_covar_preci_bwd(Tensor quats, Tensor scales, bool triu, Tensor? v_covars, Tensor? v_precis) -> "
+        "(Tensor, Tensor)"
+    );
 #endif
 
-    m.def("spherical_harmonics_fwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks) -> Tensor");
-    m.def("spherical_harmonics_bwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks, Tensor v_colors, bool compute_v_dirs) -> (Tensor, Tensor)");
+    m.def("spherical_harmonics(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks) -> Tensor");
+    m.def(
+        "spherical_harmonics_bwd(int degrees_to_use, Tensor dirs, Tensor coeffs, Tensor? masks, Tensor v_colors, bool "
+        "compute_v_dirs) -> (Tensor, Tensor?)"
+    );
+    m.def(
+        "assemble_proj_features_unpacked_fwd(int degrees_to_use, int B, int C, int N, int Dc, int E, int color_post, "
+        "int extra_post, bool has_depth, bool depth_is_zero, bool extra_has_c, Tensor means, Tensor campos, Tensor "
+        "coeffs, Tensor? extra, Tensor? depths, Tensor? masks, Tensor(a!) out, Tensor(b!)? relu_mask) -> ()"
+    );
 
-    m.def("intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? conics, Tensor? opacities, Tensor? image_ids, Tensor? gaussian_ids, int I, int tile_size, int tile_width, int tile_height, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
+    m.def(
+        "intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? conics, Tensor? opacities, Tensor? "
+        "image_ids, Tensor? gaussian_ids, int? n_images, int tile_size, int tile_width, int tile_height, bool sort, "
+        "bool segmented) -> (Tensor, Tensor, Tensor)"
+    );
     m.def("intersect_offset(Tensor isect_ids, int I, int tile_width, int tile_height) -> Tensor");
-    m.def("intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int I, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
+    m.def(
+        "intersect_tile_sparse(Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor tile_mask, "
+        "Tensor active_tiles, int I, int tile_size, int tile_width, int tile_height) -> (Tensor, Tensor)"
+    );
+    m.def(
+        "build_sparse_tile_layout(Tensor pixels, Tensor image_ids, int n_images, int tile_size, int tile_width, int "
+        "tile_height) -> (Tensor, Tensor, Tensor, Tensor, Tensor)"
+    );
+    m.def(
+        "intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, "
+        "Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int? n_images, bool "
+        "sort, bool segmented) -> (Tensor, Tensor, Tensor)"
+    );
 
 #if GSPLAT_BUILD_3DGS
-    m.def("projection_ewa_simple_fwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> (Tensor, Tensor)");
-    m.def("projection_ewa_simple_bwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model, Tensor v_means2d, Tensor v_covars2d) -> (Tensor, Tensor)");
+    m.def(
+        "projection_ewa_simple(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> "
+        "(Tensor, Tensor)"
+    );
+    m.def(
+        "projection_ewa_simple_bwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model, "
+        "Tensor v_means2d, Tensor v_covars2d) -> (Tensor, Tensor)"
+    );
 
-    m.def("projection_ewa_3dgs_fused_fwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("projection_ewa_3dgs_fused_bwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, int camera_model, Tensor radii, Tensor conics, Tensor? compensations, Tensor v_means2d, Tensor v_depths, Tensor v_conics, Tensor? v_compensations, bool viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def(
+        "projection_ewa_3dgs_fused(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, "
+        "Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float "
+        "far_plane, float radius_clip, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, "
+        "Tensor?)"
+    );
+    m.def(
+        "projection_ewa_3dgs_fused_bwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor viewmats, "
+        "Tensor Ks, int image_width, int image_height, float eps2d, int camera_model, Tensor radii, Tensor conics, "
+        "Tensor? compensations, Tensor v_means2d, Tensor v_depths, Tensor v_conics, Tensor? v_compensations, bool "
+        "viewmats_requires_grad) -> (Tensor, Tensor?, Tensor?, Tensor?, Tensor?)"
+    );
 
-    m.def("projection_ewa_3dgs_packed_fwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("projection_ewa_3dgs_packed_bwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, int camera_model, Tensor batch_ids, Tensor camera_ids, Tensor gaussian_ids, Tensor conics, Tensor? compensations, Tensor v_means2d, Tensor v_depths, Tensor v_conics, Tensor? v_compensations, bool viewmats_requires_grad, bool sparse_grad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
+    m.def(
+        "projection_ewa_3dgs_packed(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor? opacities, "
+        "Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float "
+        "far_plane, float radius_clip, bool sparse_grad, bool calc_compensations, int camera_model) -> (Tensor, "
+        "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)"
+    );
+    m.def(
+        "projection_ewa_3dgs_packed_bwd(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor viewmats, "
+        "Tensor Ks, int image_width, int image_height, float eps2d, int camera_model, bool sparse_grad, Tensor "
+        "batch_ids, Tensor camera_ids, Tensor gaussian_ids, Tensor conics, Tensor? compensations, Tensor v_means2d, "
+        "Tensor v_depths, Tensor v_conics, Tensor? v_compensations, bool viewmats_requires_grad) -> (Tensor, Tensor?, "
+        "Tensor?, Tensor?, Tensor?)"
+    );
 
-    m.def("rasterize_to_pixels_3dgs_fwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor isect_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_3dgs_bwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, bool absgrad) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_indices_3dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor conics, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor)");
-    m.def("rasterize_num_contributing_gaussians(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size) -> (Tensor, Tensor)");
-    m.def("rasterize_contributing_gaussian_ids(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size, Tensor num_contributing_gaussians) -> (Tensor, Tensor)");
-    m.def("rasterize_top_contributing_gaussian_ids(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, Tensor flatten_ids, int image_width, int image_height, int tile_size, int num_depth_samples) -> (Tensor, Tensor)");
+    m.def(
+        "rasterize_to_pixels_3dgs(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? backgrounds, "
+        "Tensor? masks, int image_width, int image_height, int tile_size, Tensor isect_offsets, Tensor flatten_ids, "
+        "bool packed, bool absgrad) -> (Tensor, Tensor, Tensor, Tensor)"
+    );
+    m.def(
+        "rasterize_to_pixels_3dgs_bwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? "
+        "backgrounds, Tensor? masks, Tensor tile_offsets, Tensor flatten_ids, Tensor render_alphas, Tensor last_ids, "
+        "int image_width, int image_height, int tile_size, bool absgrad, Tensor v_render_colors, Tensor "
+        "v_render_alphas, bool compute_v_backgrounds) -> (Tensor?, Tensor, Tensor, Tensor, Tensor, Tensor?)"
+    );
+    m.def(
+        "rasterize_to_pixels_sparse(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? "
+        "backgrounds, Tensor? masks, Tensor image_ids, int image_width, int image_height, int tile_size, int "
+        "tile_width, int tile_height, Tensor active_tiles, Tensor tile_offsets, Tensor flatten_ids, Tensor "
+        "tile_pixel_mask, Tensor tile_pixel_cumsum, Tensor pixel_map, bool packed, bool absgrad) -> (Tensor, Tensor, "
+        "Tensor, Tensor)"
+    );
+    m.def(
+        "rasterize_to_pixels_sparse_bwd(Tensor means2d, Tensor conics, Tensor colors, Tensor opacities, Tensor? "
+        "backgrounds, Tensor? masks, Tensor image_ids, Tensor active_tiles, Tensor tile_offsets, Tensor flatten_ids, "
+        "Tensor tile_pixel_mask, Tensor tile_pixel_cumsum, Tensor pixel_map, Tensor render_alphas, Tensor last_ids, "
+        "int image_width, int image_height, int tile_size, int tile_width, int tile_height, bool absgrad, Tensor "
+        "v_render_colors, Tensor v_render_alphas, bool compute_v_backgrounds) -> (Tensor?, Tensor, Tensor, Tensor, "
+        "Tensor, Tensor?)"
+    );
+    m.def(
+        "rasterize_to_indices_3dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor "
+        "conics, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor "
+        "flatten_ids) -> (Tensor, Tensor, Tensor)"
+    );
+    m.def(
+        "rasterize_num_contributing_gaussians(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, "
+        "Tensor flatten_ids, int image_width, int image_height, int tile_size) -> (Tensor, Tensor)"
+    );
+    m.def(
+        "rasterize_num_contributing_gaussians_sparse(Tensor means2d, Tensor conics, Tensor opacities, int image_width, "
+        "int image_height, int tile_size, int tile_width, int tile_height, Tensor active_tiles, Tensor tile_offsets, "
+        "Tensor flatten_ids, Tensor tile_pixel_mask, Tensor tile_pixel_cumsum, Tensor pixel_map) -> (Tensor, Tensor)"
+    );
+    m.def(
+        "rasterize_contributing_gaussian_ids(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, "
+        "Tensor flatten_ids, int image_width, int image_height, int tile_size, Tensor num_contributing_gaussians) -> "
+        "(Tensor, Tensor)"
+    );
+    m.def(
+        "rasterize_contributing_gaussian_ids_sparse(Tensor means2d, Tensor conics, Tensor opacities, int image_width, "
+        "int image_height, int tile_size, int tile_width, int tile_height, Tensor active_tiles, Tensor tile_offsets, "
+        "Tensor flatten_ids, Tensor tile_pixel_mask, Tensor tile_pixel_cumsum, Tensor pixel_map, Tensor "
+        "num_contributing_gaussians) -> (Tensor, Tensor)"
+    );
+    m.def(
+        "rasterize_top_contributing_gaussian_ids(Tensor means2d, Tensor conics, Tensor opacities, Tensor tile_offsets, "
+        "Tensor flatten_ids, int image_width, int image_height, int tile_size, int num_depth_samples) -> (Tensor, "
+        "Tensor)"
+    );
+    m.def(
+        "rasterize_top_contributing_gaussian_ids_sparse(Tensor means2d, Tensor conics, Tensor opacities, int "
+        "image_width, int image_height, int tile_size, int tile_width, int tile_height, int num_depth_samples, Tensor "
+        "active_tiles, Tensor tile_offsets, Tensor flatten_ids, Tensor tile_pixel_mask, Tensor tile_pixel_cumsum, "
+        "Tensor pixel_map) -> (Tensor, Tensor)"
+    );
+#endif
+
+#if GSPLAT_BUILD_3DGS || GSPLAT_BUILD_3DGUT
+    m.def(
+        "rasterization_3dgs(Tensor means, Tensor? covars, Tensor? quats, Tensor? scales, Tensor opacities, Tensor? "
+        "colors, Tensor viewmats, Tensor Ks, int image_width, int image_height, int tile_size, float eps2d, float "
+        "near_plane, float far_plane, float radius_clip, Tensor? backgrounds, bool packed, bool sparse_grad, bool "
+        "absgrad, bool calc_compensations, bool rasterize_mode_is_classic, int camera_model, bool segmented, int "
+        "channel_chunk, bool has_color, int sh_degree, Tensor? extra_signals, int extra_signals_sh_degree, bool "
+        "append_depth, bool expected_depth, bool with_eval3d, bool with_ut, Tensor? rays, Tensor? viewmats_rs, "
+        "__torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rolling_shutter, Tensor? "
+        "radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, "
+        "__torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, "
+        "__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, "
+        "__torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, bool "
+        "global_z_order, bool use_hit_distance, bool return_normals, int renderer_config, str? process_group_name, int "
+        "world_size) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, "
+        "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, int)"
+    );
 #endif
 
 #if GSPLAT_BUILD_2DGS
-    m.def("projection_2dgs_fused_fwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("projection_2dgs_fused_bwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, Tensor radii, Tensor ray_transforms, Tensor v_means2d, Tensor v_depths, Tensor v_normals, Tensor v_ray_transforms, bool viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor)");
+    m.def(
+        "projection_2dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, "
+        "int image_height, float eps2d, float near_plane, float far_plane, float radius_clip) -> (Tensor, Tensor, "
+        "Tensor, Tensor, Tensor)"
+    );
+    m.def(
+        "projection_2dgs_fused_bwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int "
+        "image_width, int image_height, Tensor radii, Tensor ray_transforms, Tensor v_means2d, Tensor v_depths, Tensor "
+        "v_ray_transforms, Tensor v_normals, bool viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor?)"
+    );
 
-    m.def("projection_2dgs_packed_fwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, float near_plane, float far_plane, float radius_clip) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("projection_2dgs_packed_bwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int image_width, int image_height, Tensor batch_ids, Tensor camera_ids, Tensor gaussian_ids, Tensor ray_transforms, Tensor v_means2d, Tensor v_depths, Tensor v_ray_transforms, Tensor v_normals, bool viewmats_requires_grad, bool sparse_grad) -> (Tensor, Tensor, Tensor, Tensor)");
+    m.def(
+        "projection_2dgs_packed(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int "
+        "image_width, int image_height, float near_plane, float far_plane, float radius_clip, bool sparse_grad) -> "
+        "(Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
+    );
+    m.def(
+        "projection_2dgs_packed_bwd(Tensor means, Tensor quats, Tensor scales, Tensor viewmats, Tensor Ks, int "
+        "image_width, int image_height, bool sparse_grad, Tensor batch_ids, Tensor camera_ids, Tensor gaussian_ids, "
+        "Tensor ray_transforms, Tensor v_means2d, Tensor v_depths, Tensor v_ray_transforms, Tensor v_normals, bool "
+        "viewmats_requires_grad) -> (Tensor, Tensor, Tensor, Tensor?)"
+    );
 
-    m.def("rasterize_to_pixels_2dgs_fwd(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor normals, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_2dgs_bwd(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor normals, Tensor densify, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids, Tensor render_colors, Tensor render_alphas, Tensor last_ids, Tensor median_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor v_render_normals, Tensor v_render_distort, Tensor v_render_median, bool absgrad) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_indices_2dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor ray_transforms, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, Tensor flatten_ids) -> (Tensor, Tensor)");
+    m.def(
+        "rasterize_to_pixels_2dgs(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor "
+        "normals, Tensor densify, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int "
+        "tile_size, Tensor tile_offsets, Tensor flatten_ids, bool packed, bool absgrad, bool distloss) -> (Tensor, "
+        "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
+    );
+    m.def(
+        "rasterize_to_pixels_2dgs_bwd(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor "
+        "normals, Tensor densify, Tensor? backgrounds, Tensor? masks, Tensor tile_offsets, Tensor flatten_ids, Tensor "
+        "render_colors, Tensor render_alphas, Tensor last_ids, Tensor median_ids, int image_width, int image_height, "
+        "int tile_size, bool absgrad, Tensor v_render_colors, Tensor v_render_alphas, Tensor v_render_normals, Tensor "
+        "v_render_distort, Tensor v_render_median, bool compute_v_backgrounds) -> (Tensor?, Tensor, Tensor, Tensor, "
+        "Tensor, Tensor, Tensor, Tensor?)"
+    );
+    m.def(
+        "rasterize_to_indices_2dgs(int range_start, int range_end, Tensor transmittances, Tensor means2d, Tensor "
+        "ray_transforms, Tensor opacities, int image_width, int image_height, int tile_size, Tensor tile_offsets, "
+        "Tensor flatten_ids) -> (Tensor, Tensor, Tensor)"
+    );
+    m.def(
+        "rasterization_2dgs(Tensor means, Tensor quats, Tensor scales, Tensor opacities, Tensor colors, Tensor "
+        "viewmats, Tensor Ks, int image_width, int image_height, int tile_size, float eps2d, float near_plane, float "
+        "far_plane, float radius_clip, Tensor? backgrounds, bool packed, bool sparse_grad, bool absgrad, bool "
+        "distloss, int? sh_degree, str render_mode, str depth_mode) -> (Tensor, Tensor, Tensor, Tensor?, Tensor, "
+        "Tensor, Tensor, Tensor?, Tensor?, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, "
+        "Tensor, Tensor, int, int, int)"
+    );
 #endif
 
 #if GSPLAT_BUILD_ADAM
-    m.def("adam(Tensor(a!) param, Tensor param_grad, Tensor(b!) exp_avg, Tensor(c!) exp_avg_sq, Tensor? valid, float lr, float b1, float b2, float eps) -> ()");
+    m.def(
+        "adam(Tensor(a!) param, Tensor param_grad, Tensor(b!) exp_avg, Tensor(c!) exp_avg_sq, Tensor? valid, float lr, "
+        "float b1, float b2, float eps) -> ()"
+    );
 #endif
 
 #if GSPLAT_BUILD_RELOC
-    m.def("relocation(Tensor opacities, Tensor scales, Tensor ratios, Tensor binoms, int n_max) -> (Tensor, Tensor)");
+    m.def(
+        "relocation(Tensor opacities, Tensor scales, Tensor ratios, Tensor binoms, int n_max, float min_opacity=0.0) "
+        "-> (Tensor, Tensor)"
+    );
 #endif
 
-    m.def("projection_ut_3dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor? opacities, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model, bool global_z_order, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_from_world_3dgs(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool return_sample_counts, bool use_hit_distance, bool return_normals, int renderer_config, bool return_last_ids, bool unsafe_masked_tile_outputs=False) -> (Tensor, Tensor, Tensor?, Tensor?, Tensor?)");
+    m.def(
+        "projection_ut_3dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor? opacities, Tensor viewmats0, "
+        "Tensor? viewmats1, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float "
+        "far_plane, float radius_clip, bool calc_compensations, int camera_model, bool global_z_order, "
+        "__torch__.torch.classes.gsplat.UnscentedTransformParameters? ut_params, int rs_type, Tensor? radial_coeffs, "
+        "Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, "
+        "__torch__.torch.classes.gsplat.FThetaCameraDistortionParameters? ftheta_coeffs, "
+        "__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, "
+        "__torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params) -> (Tensor, "
+        "Tensor, Tensor, Tensor, Tensor?)"
+    );
+    m.def(
+        "rasterize_to_pixels_from_world_3dgs(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor "
+        "opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor "
+        "viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, "
+        "__torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? "
+        "radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, "
+        "__torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, "
+        "__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, "
+        "__torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor "
+        "tile_offsets, Tensor flatten_ids, bool return_sample_counts, bool use_hit_distance, bool return_normals, int "
+        "renderer_config, bool return_last_ids, bool unsafe_masked_tile_outputs=False) -> (Tensor, Tensor, Tensor?, "
+        "Tensor?, Tensor?)"
+    );
 
 #if GSPLAT_BUILD_3DGS
-    m.def("mcmc_perturb_positions(Tensor(a!) positions, Tensor quats, Tensor scales, Tensor opacities, Tensor noise, float scaler) -> ()");
+    m.def(
+        "mcmc_perturb_positions(Tensor(a!) positions, Tensor quats, Tensor scales, Tensor opacities, Tensor noise, "
+        "float noise_scale, float t=0.005, float k=100.0) -> ()"
+    );
 #endif
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
-    m.def("distort_camera_rays(Tensor rays, Tensor h_poly, Tensor v_poly, Tensor h_inv_poly, Tensor v_inv_poly, int reference_poly, bool inverse) -> Tensor");
+    m.def(
+        "distort_camera_rays(Tensor rays, Tensor h_poly, Tensor v_poly, Tensor h_inv_poly, Tensor v_inv_poly, int "
+        "reference_poly, bool inverse) -> Tensor"
+    );
     m.def("eval_bivariate_poly(Tensor x, Tensor y, Tensor poly_coeffs, int order) -> Tensor");
 #endif
 
 #if GSPLAT_BUILD_LOSSES
-    m.def("gaussian_losses_fwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, Tensor? visibility, float z_scale_threshold, Tensor(a!) loss_scale, Tensor(b!) loss_density, Tensor(c!) loss_z_scale, Tensor(d!) loss_oob) -> ()");
-    m.def("gaussian_losses_bwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, Tensor? visibility, float z_scale_threshold, Tensor v_loss_scale, Tensor v_loss_density, Tensor v_loss_z_scale, Tensor v_loss_oob, Tensor(a!) v_scales, Tensor(b!) v_densities, Tensor(c!) v_z_scales, Tensor(d!) v_positions) -> ()");
+    m.def(
+        "gaussian_losses_fwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, "
+        "Tensor? visibility, float z_scale_threshold, Tensor(a!) loss_scale, Tensor(b!) loss_density, Tensor(c!) "
+        "loss_z_scale, Tensor(d!) loss_oob) -> ()"
+    );
+    m.def(
+        "gaussian_losses_bwd(Tensor scales, Tensor densities, Tensor z_scales, Tensor positions, Tensor cuboid_dims, "
+        "Tensor? visibility, float z_scale_threshold, Tensor v_loss_scale, Tensor v_loss_density, Tensor "
+        "v_loss_z_scale, Tensor v_loss_oob, Tensor(a!) v_scales, Tensor(b!) v_densities, Tensor(c!) v_z_scales, "
+        "Tensor(d!) v_positions) -> ()"
+    );
 #endif
 }
 
-TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
+TORCH_LIBRARY_IMPL(gsplat, CUDA, m)
+{
 #if GSPLAT_BUILD_3DGS
     gsplat::register_quat_scale_to_covar_cuda_impl(m);
 #endif
@@ -1016,6 +1275,7 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
     gsplat::register_spherical_harmonics_cuda_impl(m);
     gsplat::register_projection_cuda_impl(m);
     gsplat::register_rasterization_cuda_impl(m);
+    gsplat::register_rendering_cuda_impl(m);
 
 #if GSPLAT_BUILD_ADAM
     gsplat::register_adam_cuda_impl(m);
@@ -1038,6 +1298,30 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
 #endif
 }
 
-TORCH_LIBRARY_IMPL(gsplat, AutogradCUDA, m) {
+TORCH_LIBRARY_IMPL(gsplat, PrivateUse1, m)
+{
+#if GSPLAT_BUILD_3DGS
+    gsplat::register_quat_scale_to_covar_privateuseone_impl(m);
+#endif
+
+    gsplat::register_intersect_privateuseone_impl(m);
+    gsplat::register_spherical_harmonics_privateuseone_impl(m);
+
+#if GSPLAT_BUILD_3DGS
+    gsplat::register_projection_privateuseone_impl(m);
+    gsplat::register_rasterization_privateuseone_impl(m);
+#endif
+
+    gsplat::register_rendering_privateuseone_impl(m);
+}
+
+TORCH_LIBRARY_IMPL(gsplat, AutogradCUDA, m)
+{
     gsplat::register_rasterization_autograd_cuda_impl(m);
+    gsplat::register_rendering_autograd_cuda_impl(m);
+}
+
+TORCH_LIBRARY_IMPL(gsplat, AutogradPrivateUse1, m)
+{
+    gsplat::register_rendering_autograd_privateuseone_impl(m);
 }

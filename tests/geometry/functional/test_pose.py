@@ -24,11 +24,13 @@ relaxed tolerances. ``frame_transform_poses_tquat`` is not registered for
 autograd (frame transform is passed as Python floats), so it has no gradcheck.
 """
 
+import math
 import unittest
 import warnings
 
 import torch
 
+from gsplat._helper import expect_grad_reference_close
 import gsplat.geometry.functional as geom
 from gsplat.geometry.kernels.pose_ops import (
     SE3PoseFromMatrixFunction,
@@ -52,6 +54,8 @@ quat_from_axis_angle = geom.quat_from_axis_angle
 quat_rotate_vector = geom.quat_rotate_vector
 quat_slerp = geom.quat_slerp
 quat_to_matrix = geom.quat_to_matrix
+se3_interpolate_tracks = geom.se3_interpolate_tracks
+se3pose_compose = geom.se3pose_compose
 se3pose_from_matrix = geom.se3pose_from_matrix
 se3pose_inverse_transform_direction = geom.se3pose_inverse_transform_direction
 se3pose_inverse_transform_point = geom.se3pose_inverse_transform_point
@@ -941,6 +945,80 @@ class TestSE3Pose(unittest.TestCase):
 
         self.assertTrue(torch.allclose(result_matrix, result_sequential, atol=ATOL))
 
+    def test_se3pose_compose_known_values(self):
+        """Row-wise pose composition matches explicit SE(3) cases."""
+        dtype = torch.float32
+        q_identity = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device, dtype=dtype)
+        q_z90 = quat_from_axis_angle(
+            torch.tensor([[0.0, 0.0, 1.0]], device=device, dtype=dtype),
+            torch.tensor([[math.pi / 2.0]], device=device, dtype=dtype),
+        )[0]
+        q_z180 = quat_from_axis_angle(
+            torch.tensor([[0.0, 0.0, 1.0]], device=device, dtype=dtype),
+            torch.tensor([[math.pi]], device=device, dtype=dtype),
+        )[0]
+
+        parent_t = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 2.0, 0.0],
+                [1.0, 2.0, 3.0],
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        parent_q = torch.stack([q_identity, q_z90, q_z90], dim=0)
+        child_t = torch.tensor(
+            [
+                [3.0, 4.0, 5.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 2.0, 0.0],
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        child_q = torch.stack([q_z90, q_identity, q_z90], dim=0)
+
+        composed_t, composed_q = se3pose_compose(parent_t, parent_q, child_t, child_q)
+
+        expected_t = torch.tensor(
+            [
+                [3.0, 4.0, 5.0],
+                [1.0, 3.0, 0.0],
+                [-1.0, 2.0, 3.0],
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        expected_q = torch.stack([q_z90, q_z90, q_z180], dim=0)
+
+        torch.testing.assert_close(composed_t, expected_t, atol=ATOL_STRICT, rtol=RTOL)
+        torch.testing.assert_close(composed_q, expected_q, atol=ATOL, rtol=RTOL)
+
+    def test_se3pose_compose_gradcheck(self):
+        n = GC_SE3_BATCH
+        parent_t, parent_q_raw, _ = _se3_gradcheck_tensors(n, device)
+        child_t, child_q_raw, _ = _se3_gradcheck_tensors(n, device)
+
+        def fn(pt, pq, ct, cq):
+            out_t, out_q = se3pose_compose(
+                pt,
+                _se3_normalized_quat(pq),
+                ct,
+                _se3_normalized_quat(cq),
+            )
+            return torch.cat([out_t, out_q], dim=-1)
+
+        self.assertTrue(
+            torch.autograd.gradcheck(
+                fn,
+                (parent_t, parent_q_raw, child_t, child_q_raw),
+                eps=GC_SE3_EPS,
+                atol=GC_SE3_ATOL,
+                rtol=GC_SE3_RTOL,
+            )
+        )
+
     def test_se3_transform_point_backward(self):
         """Test that gradients flow correctly through SE3 point transformation"""
         N = NUM_POSES_SMALL
@@ -991,6 +1069,875 @@ class TestSE3Pose(unittest.TestCase):
         self.assertIsNotNone(rotations.grad)
         self.assertTrue(torch.any(translations.grad != 0))
         self.assertTrue(torch.any(rotations.grad != 0))
+
+
+class TestPackedSE3TrackInterpolation(unittest.TestCase):
+    """Tests for packed variable-length SE3 pose track interpolation."""
+
+    def setUp(self):
+        torch.manual_seed(TEST_SEED)
+        torch.cuda.manual_seed_all(TEST_SEED)
+
+    def _z_quat(
+        self, degrees: float, dtype: torch.dtype = torch.float32
+    ) -> torch.Tensor:
+        axis = torch.tensor([[0.0, 0.0, 1.0]], device=device, dtype=dtype)
+        angle = torch.tensor([[math.radians(degrees)]], device=device, dtype=dtype)
+        return quat_from_axis_angle(axis, angle)[0]
+
+    def _pose(
+        self,
+        translation: list[float],
+        yaw_degrees: float,
+        dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        return torch.cat(
+            [
+                torch.tensor(translation, device=device, dtype=dtype),
+                self._z_quat(yaw_degrees, dtype=dtype),
+            ]
+        )
+
+    def _split_poses(self, poses: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return poses[:, :3], poses[:, 3:7]
+
+    def _two_pose_track(
+        self, dtype: torch.dtype = torch.float32
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        poses = torch.stack(
+            [
+                self._pose([0.0, 0.0, 0.0], 0.0, dtype=dtype),
+                self._pose([2.0, 0.0, 0.0], 90.0, dtype=dtype),
+            ],
+            dim=0,
+        )
+        pose_times = torch.tensor([0.0, 1.0], device=device, dtype=dtype)
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([2], device=device, dtype=torch.int32)
+        pose_translations, pose_rotations = self._split_poses(poses)
+        return pose_translations, pose_rotations, pose_times, pose_offsets, pose_counts
+
+    def test_interpolate_tracks_variable_counts_and_per_track_times(self):
+        dtype = torch.float32
+        q0 = self._z_quat(0.0, dtype=dtype)
+        q90 = self._z_quat(90.0, dtype=dtype)
+        q180 = self._z_quat(180.0, dtype=dtype)
+
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q0]),
+                torch.cat([torch.tensor([2.0, 0.0, 0.0], device=device), q90]),
+                torch.cat([torch.tensor([4.0, 0.0, 0.0], device=device), q180]),
+                torch.cat([torch.tensor([5.0, 6.0, 7.0], device=device), q90]),
+                torch.cat([torch.tensor([10.0, 0.0, 0.0], device=device), q0]),
+                torch.cat([torch.tensor([20.0, 0.0, 0.0], device=device), q180]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_times = torch.tensor(
+            [0.0, 1.0, 2.0, 4.0, 0.0, 10.0], device=device, dtype=dtype
+        )
+        pose_offsets = torch.tensor([0, 3, 4], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([3, 1, 2], device=device, dtype=torch.int32)
+        query_times = torch.tensor([0.5, 123.0, -5.0], device=device, dtype=dtype)
+        pose_translations, pose_rotations = self._split_poses(poses)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+        )
+
+        expected_q0 = quat_slerp(q0.reshape(1, 4), q90.reshape(1, 4), 0.5)[0]
+        self.assertEqual(out_t.shape, (3, 3))
+        self.assertEqual(out_q.shape, (3, 4))
+        self.assertTrue(
+            torch.allclose(
+                out_t[0],
+                torch.tensor([1.0, 0.0, 0.0], device=device, dtype=dtype),
+                atol=ATOL_STRICT,
+            )
+        )
+        self.assertTrue(torch.allclose(out_q[0], expected_q0, atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_t[1], poses[3, :3], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_q[1], poses[3, 3:], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_t[2], poses[4, :3], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_q[2], poses[4, 3:], atol=ATOL_STRICT))
+
+    def test_interpolate_tracks_clamps_to_last_pose(self):
+        dtype = torch.float32
+        q0 = self._z_quat(0.0, dtype=dtype)
+        q90 = self._z_quat(90.0, dtype=dtype)
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([1.0, 0.0, 0.0], device=device), q0]),
+                torch.cat([torch.tensor([3.0, 0.0, 0.0], device=device), q90]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_times = torch.tensor([0.0, 1.0], device=device, dtype=dtype)
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int64)
+        pose_counts = torch.tensor([2], device=device, dtype=torch.int64)
+        pose_translations, pose_rotations = self._split_poses(poses)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            4.0,
+        )
+
+        self.assertTrue(torch.allclose(out_t[0], poses[1, :3], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_q[0], poses[1, 3:], atol=ATOL_STRICT))
+
+    def test_interpolate_tracks_duplicate_timestamp_uses_first_match(self):
+        dtype = torch.float32
+        q = self._z_quat(0.0, dtype=dtype)
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([10.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([11.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([20.0, 0.0, 0.0], device=device), q]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_times = torch.tensor([0.0, 1.0, 1.0, 2.0], device=device, dtype=dtype)
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([4], device=device, dtype=torch.int32)
+        pose_translations, pose_rotations = self._split_poses(poses)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            1.0,
+        )
+
+        self.assertTrue(torch.isfinite(out_t).all())
+        self.assertTrue(torch.isfinite(out_q).all())
+        self.assertTrue(torch.allclose(out_t[0], poses[1, :3], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_q[0], poses[1, 3:], atol=ATOL_STRICT))
+
+    def test_interpolate_tracks_duplicate_terminal_timestamp_uses_first_match(self):
+        dtype = torch.float32
+        q = self._z_quat(0.0, dtype=dtype)
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([10.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([11.0, 0.0, 0.0], device=device), q]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_times = torch.tensor([0.0, 1.0, 1.0], device=device, dtype=dtype)
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([3], device=device, dtype=torch.int32)
+        pose_translations, pose_rotations = self._split_poses(poses)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            1.0,
+        )
+
+        self.assertTrue(torch.allclose(out_t[0], poses[1, :3], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_q[0], poses[1, 3:], atol=ATOL_STRICT))
+
+    def test_interpolate_then_compose_gaussian_local_poses(self):
+        """Integration-style check for the intended track-to-Gaussian flow."""
+        dtype = torch.float32
+        track_poses = torch.stack(
+            [
+                self._pose([0.0, 0.0, 0.0], 0.0, dtype=dtype),
+                self._pose([2.0, 0.0, 0.0], 90.0, dtype=dtype),
+                self._pose([0.0, 10.0, 0.0], 0.0, dtype=dtype),
+                self._pose([0.0, 20.0, 0.0], 0.0, dtype=dtype),
+            ],
+            dim=0,
+        )
+        pose_translations, pose_rotations = self._split_poses(track_poses)
+        pose_times = torch.tensor([0.0, 1.0, 0.0, 1.0], device=device, dtype=dtype)
+        pose_offsets = torch.tensor([0, 2], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([2, 2], device=device, dtype=torch.int32)
+
+        track_t, track_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            0.5,
+        )
+
+        gaussian_track_ids = torch.tensor([0, 0, 1], device=device, dtype=torch.long)
+        local_t = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [3.0, 0.0, 0.0],
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        local_q = torch.stack(
+            [
+                self._z_quat(0.0, dtype=dtype),
+                self._z_quat(45.0, dtype=dtype),
+                self._z_quat(90.0, dtype=dtype),
+            ],
+            dim=0,
+        )
+
+        world_t, world_q = se3pose_compose(
+            track_t[gaussian_track_ids],
+            track_q[gaussian_track_ids],
+            local_t,
+            local_q,
+        )
+
+        sqrt_half = math.sqrt(0.5)
+        expected_t = torch.tensor(
+            [
+                [1.0 + sqrt_half, sqrt_half, 0.0],
+                [1.0 - sqrt_half, sqrt_half, 0.0],
+                [3.0, 15.0, 0.0],
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        expected_q0 = self._z_quat(45.0, dtype=dtype)
+        expected_q1 = self._z_quat(90.0, dtype=dtype)
+        expected_q2 = self._z_quat(90.0, dtype=dtype)
+        expected_q = torch.stack([expected_q0, expected_q1, expected_q2], dim=0)
+
+        self.assertTrue(
+            torch.allclose(
+                track_t[0],
+                torch.tensor([1.0, 0.0, 0.0], device=device),
+                atol=ATOL_STRICT,
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                track_t[1],
+                torch.tensor([0.0, 15.0, 0.0], device=device),
+                atol=ATOL_STRICT,
+            )
+        )
+        self.assertTrue(torch.allclose(world_t, expected_t, atol=ATOL))
+        self.assertTrue(torch.allclose(world_q, expected_q, atol=ATOL))
+
+    def test_interpolate_tracks_empty_track_set(self):
+        pose_translations = torch.empty(
+            (0, 3), device=device, dtype=torch.float32, requires_grad=True
+        )
+        pose_rotations = torch.empty(
+            (0, 4), device=device, dtype=torch.float32, requires_grad=True
+        )
+        pose_times = torch.empty((0,), device=device, dtype=torch.float32)
+        pose_offsets = torch.empty((0,), device=device, dtype=torch.int32)
+        pose_counts = torch.empty((0,), device=device, dtype=torch.int32)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            0.0,
+        )
+
+        self.assertEqual(out_t.shape, (0, 3))
+        self.assertEqual(out_q.shape, (0, 4))
+        self.assertEqual(out_t.device, pose_translations.device)
+        self.assertEqual(out_q.device, pose_rotations.device)
+        self.assertEqual(out_t.dtype, pose_translations.dtype)
+        self.assertEqual(out_q.dtype, pose_rotations.dtype)
+        (out_t.sum() + out_q.sum()).backward()
+        self.assertIsNotNone(pose_translations.grad)
+        self.assertIsNotNone(pose_rotations.grad)
+        self.assertEqual(pose_translations.grad.shape, pose_translations.shape)
+        self.assertEqual(pose_rotations.grad.shape, pose_rotations.shape)
+
+    def test_interpolate_tracks_float64_correctness(self):
+        dtype = torch.float64
+        (
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+        ) = self._two_pose_track(dtype=dtype)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            0.25,
+        )
+
+        expected_q = quat_slerp(
+            pose_rotations[0:1],
+            pose_rotations[1:2],
+            torch.tensor([0.25], device=device),
+        )[0]
+        self.assertEqual(out_t.dtype, dtype)
+        self.assertEqual(out_q.dtype, dtype)
+        self.assertTrue(
+            torch.allclose(
+                out_t[0],
+                torch.tensor([0.5, 0.0, 0.0], device=device, dtype=dtype),
+                atol=1e-12,
+                rtol=1e-12,
+            )
+        )
+        self.assertTrue(torch.allclose(out_q[0], expected_q, atol=1e-12, rtol=1e-12))
+
+    def test_interpolate_tracks_preserves_large_integer_time_precision(self):
+        dtype = torch.float32
+        q0 = self._z_quat(0.0, dtype=dtype)
+        q90 = self._z_quat(90.0, dtype=dtype)
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q0]),
+                torch.cat([torch.tensor([10.0, 0.0, 0.0], device=device), q90]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_translations, pose_rotations = self._split_poses(poses)
+        base_time_ns = 10**18
+        pose_times = torch.tensor(
+            [base_time_ns, base_time_ns + 10],
+            device=device,
+            dtype=torch.int64,
+        )
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([2], device=device, dtype=torch.int32)
+        query_time = torch.tensor([base_time_ns + 5], device=device, dtype=torch.int64)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_time,
+        )
+
+        expected_q = quat_slerp(
+            q0.reshape(1, 4),
+            q90.reshape(1, 4),
+            torch.tensor([[0.5]], device=device, dtype=dtype),
+        )[0]
+        self.assertTrue(
+            torch.allclose(
+                out_t[0],
+                torch.tensor([5.0, 0.0, 0.0], device=device, dtype=dtype),
+                atol=ATOL_STRICT,
+            )
+        )
+        self.assertTrue(torch.allclose(out_q[0], expected_q, atol=ATOL_STRICT))
+
+    def test_interpolate_tracks_integer_query_uses_float_pose_time_precision(self):
+        dtype = torch.float32
+        q = self._z_quat(0.0, dtype=dtype)
+        base_time = 2**24
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([10.0, 0.0, 0.0], device=device), q]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_translations, pose_rotations = self._split_poses(poses)
+        pose_times = torch.tensor(
+            [base_time, base_time + 2],
+            device=device,
+            dtype=dtype,
+        )
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([2], device=device, dtype=torch.int32)
+        query_time = torch.tensor([base_time + 1], device=device, dtype=torch.int64)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_time,
+        )
+
+        self.assertTrue(torch.allclose(out_t[0], poses[0, :3], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_q[0], poses[0, 3:], atol=ATOL_STRICT))
+
+    def test_interpolate_tracks_integer_time_delta_extreme_span_no_overflow(self):
+        dtype = torch.float32
+        q = self._z_quat(0.0, dtype=dtype)
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([10.0, 0.0, 0.0], device=device), q]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_translations, pose_rotations = self._split_poses(poses)
+        pose_times = torch.tensor(
+            [torch.iinfo(torch.int64).min, torch.iinfo(torch.int64).max],
+            device=device,
+            dtype=torch.int64,
+        )
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([2], device=device, dtype=torch.int32)
+        query_time = torch.tensor([0], device=device, dtype=torch.int64)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_time,
+        )
+
+        self.assertTrue(
+            torch.allclose(
+                out_t[0],
+                torch.tensor([5.0, 0.0, 0.0], device=device, dtype=dtype),
+                atol=ATOL_STRICT,
+            )
+        )
+        self.assertTrue(torch.allclose(out_q[0], q, atol=ATOL_STRICT))
+
+    def test_interpolate_tracks_exact_middle_and_last_keyframes(self):
+        dtype = torch.float32
+        poses = torch.stack(
+            [
+                self._pose([0.0, 0.0, 0.0], 0.0, dtype=dtype),
+                self._pose([5.0, 0.0, 0.0], 90.0, dtype=dtype),
+                self._pose([9.0, 0.0, 0.0], 180.0, dtype=dtype),
+            ],
+            dim=0,
+        )
+        pose_times = torch.tensor([0.0, 1.0, 2.0], device=device, dtype=dtype)
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([3], device=device, dtype=torch.int32)
+        pose_translations, pose_rotations = self._split_poses(poses)
+
+        out_middle_t, out_middle_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            1.0,
+        )
+        out_last_t, out_last_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            2.0,
+        )
+
+        self.assertTrue(torch.allclose(out_middle_t[0], poses[1, :3], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_middle_q[0], poses[1, 3:], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_last_t[0], poses[2, :3], atol=ATOL_STRICT))
+        self.assertTrue(torch.allclose(out_last_q[0], poses[2, 3:], atol=ATOL_STRICT))
+
+    def test_interpolate_tracks_accepts_column_times_offsets_and_counts(self):
+        dtype = torch.float32
+        poses = torch.stack(
+            [
+                self._pose([0.0, 0.0, 0.0], 0.0, dtype=dtype),
+                self._pose([2.0, 0.0, 0.0], 90.0, dtype=dtype),
+                self._pose([10.0, 0.0, 0.0], 0.0, dtype=dtype),
+                self._pose([20.0, 0.0, 0.0], 180.0, dtype=dtype),
+            ],
+            dim=0,
+        )
+        pose_times = torch.tensor(
+            [[0.0], [1.0], [0.0], [2.0]], device=device, dtype=dtype
+        )
+        pose_offsets = torch.tensor([[0], [2]], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([[2], [2]], device=device, dtype=torch.int32)
+        query_times = torch.tensor([0.5, 1.0], device=device, dtype=dtype)
+        pose_translations, pose_rotations = self._split_poses(poses)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+        )
+
+        self.assertEqual(out_t.shape, (2, 3))
+        self.assertEqual(out_q.shape, (2, 4))
+        self.assertTrue(
+            torch.allclose(
+                out_t[0],
+                torch.tensor([1.0, 0.0, 0.0], device=device, dtype=dtype),
+                atol=ATOL_STRICT,
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                out_t[1],
+                torch.tensor([15.0, 0.0, 0.0], device=device, dtype=dtype),
+                atol=ATOL_STRICT,
+            )
+        )
+
+    def test_interpolate_tracks_duplicate_timestamp_neighbor_segments(self):
+        dtype = torch.float32
+        q = self._z_quat(0.0, dtype=dtype)
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([10.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([11.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([31.0, 0.0, 0.0], device=device), q]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_times = torch.tensor([0.0, 1.0, 1.0, 3.0], device=device, dtype=dtype)
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([4], device=device, dtype=torch.int32)
+        pose_translations, pose_rotations = self._split_poses(poses)
+
+        out_left_t, _ = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            0.5,
+        )
+        out_right_t, _ = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            2.0,
+        )
+
+        self.assertTrue(
+            torch.allclose(
+                out_left_t[0],
+                torch.tensor([5.0, 0.0, 0.0], device=device, dtype=dtype),
+                atol=ATOL_STRICT,
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                out_right_t[0],
+                torch.tensor([21.0, 0.0, 0.0], device=device, dtype=dtype),
+                atol=ATOL_STRICT,
+            )
+        )
+
+    def test_interpolate_tracks_validation_failures(self):
+        (
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+        ) = self._two_pose_track()
+        invalid_cases = [
+            (
+                "bad pose_translations shape",
+                pose_translations[:, :2],
+                pose_rotations,
+                pose_times,
+                pose_offsets,
+                pose_counts,
+                0.5,
+            ),
+            (
+                "bad pose_rotations shape",
+                pose_translations,
+                pose_rotations[:, :3],
+                pose_times,
+                pose_offsets,
+                pose_counts,
+                0.5,
+            ),
+            (
+                "bad pose_times shape",
+                pose_translations,
+                pose_rotations,
+                pose_times.reshape(1, 2),
+                pose_offsets,
+                pose_counts,
+                0.5,
+            ),
+            (
+                "bad pose_offsets shape",
+                pose_translations,
+                pose_rotations,
+                pose_times,
+                torch.tensor([[0, 1]], device=device, dtype=torch.int32),
+                pose_counts,
+                0.5,
+            ),
+            (
+                "bad pose_counts shape",
+                pose_translations,
+                pose_rotations,
+                pose_times,
+                pose_offsets,
+                torch.tensor([[2, 2]], device=device, dtype=torch.int32),
+                0.5,
+            ),
+            (
+                "cpu tensor",
+                pose_translations.cpu(),
+                pose_rotations,
+                pose_times,
+                pose_offsets,
+                pose_counts,
+                0.5,
+            ),
+            (
+                "mismatched pose rows",
+                pose_translations,
+                pose_rotations[:1],
+                pose_times,
+                pose_offsets,
+                pose_counts,
+                0.5,
+            ),
+            (
+                "unsupported float16 times",
+                pose_translations,
+                pose_rotations,
+                pose_times.to(dtype=torch.float16),
+                pose_offsets,
+                pose_counts,
+                0.5,
+            ),
+        ]
+
+        for (
+            name,
+            case_translations,
+            case_rotations,
+            case_times,
+            case_offsets,
+            case_counts,
+            query,
+        ) in invalid_cases:
+            with self.subTest(name=name), self.assertRaises((TypeError, ValueError)):
+                se3_interpolate_tracks(
+                    case_translations,
+                    case_rotations,
+                    case_times,
+                    case_offsets,
+                    case_counts,
+                    query,
+                )
+
+    def test_interpolate_tracks_invalid_ranges_are_defensive_noop(self):
+        (
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            _pose_offsets,
+            _pose_counts,
+        ) = self._two_pose_track()
+        pose_offsets = torch.tensor([-1, 0, 999], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([2, 0, 1], device=device, dtype=torch.int32)
+        query_time = torch.full((3,), 0.5, device=device, dtype=pose_times.dtype)
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_time,
+        )
+
+        self.assertTrue(torch.allclose(out_t, torch.zeros_like(out_t)))
+        expected_q = torch.tensor(
+            [[0.0, 0.0, 0.0, 1.0]], device=device, dtype=out_q.dtype
+        ).expand_as(out_q)
+        self.assertTrue(torch.allclose(out_q, expected_q))
+
+    def test_interpolate_tracks_query_time_shape_mismatch_raises(self):
+        (
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+        ) = self._two_pose_track()
+        bad_query_times = torch.tensor([0.25, 0.75], device=device)
+
+        with self.assertRaises(ValueError):
+            se3_interpolate_tracks(
+                pose_translations,
+                pose_rotations,
+                pose_times,
+                pose_offsets,
+                pose_counts,
+                bad_query_times,
+            )
+
+    def test_interpolate_tracks_backward_selected_segment(self):
+        dtype = torch.float64
+        q = self._z_quat(0.0, dtype=dtype)
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([4.0, 0.0, 0.0], device=device), q]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_translations, pose_rotations = self._split_poses(poses)
+        pose_translations = pose_translations.clone().requires_grad_(True)
+        pose_rotations = pose_rotations.clone().requires_grad_(True)
+        pose_times = torch.tensor([0.0, 1.0], device=device, dtype=dtype)
+        pose_offsets = torch.tensor([0], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([2], device=device, dtype=torch.int32)
+        query_time = torch.tensor(
+            [0.25], device=device, dtype=dtype, requires_grad=True
+        )
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_time,
+        )
+        (out_t[:, 0].sum() + out_q[:, 0].sum()).backward()
+
+        self.assertIsNotNone(pose_translations.grad)
+        self.assertIsNotNone(pose_rotations.grad)
+        self.assertIsNotNone(query_time.grad)
+        self.assertTrue(torch.isfinite(pose_translations.grad).all())
+        self.assertTrue(torch.isfinite(pose_rotations.grad).all())
+        self.assertTrue(torch.isfinite(query_time.grad).all())
+        self.assertTrue(
+            torch.allclose(
+                query_time.grad, torch.tensor([4.0], device=device, dtype=dtype)
+            )
+        )
+
+    def test_interpolate_tracks_boundary_backward_time_grads_are_zero(self):
+        dtype = torch.float64
+        q = self._z_quat(0.0, dtype=dtype)
+        poses = torch.stack(
+            [
+                torch.cat([torch.tensor([0.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([10.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([20.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([30.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([40.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([50.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([60.0, 0.0, 0.0], device=device), q]),
+                torch.cat([torch.tensor([70.0, 0.0, 0.0], device=device), q]),
+            ],
+            dim=0,
+        ).to(dtype=dtype)
+        pose_translations, pose_rotations = self._split_poses(poses)
+        pose_translations = pose_translations.clone().requires_grad_(True)
+        pose_rotations = pose_rotations.clone().requires_grad_(True)
+        pose_times = torch.tensor(
+            [0.0, 1.0, 2.0, 0.0, 1.0, 0.0, 1.0, 3.0],
+            device=device,
+            dtype=dtype,
+            requires_grad=True,
+        )
+        pose_offsets = torch.tensor([0, 3, 5, 7], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([3, 2, 2, 1], device=device, dtype=torch.int32)
+        query_times = torch.tensor(
+            [1.0, -2.0, 5.0, 9.0],
+            device=device,
+            dtype=dtype,
+            requires_grad=True,
+        )
+
+        out_t, out_q = se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+        )
+        (out_t.sum() + out_q.sum()).backward()
+
+        self.assertTrue(torch.isfinite(pose_translations.grad).all())
+        self.assertTrue(torch.isfinite(pose_rotations.grad).all())
+        self.assertTrue(torch.isfinite(pose_times.grad).all())
+        self.assertTrue(torch.isfinite(query_times.grad).all())
+        torch.testing.assert_close(pose_times.grad, torch.zeros_like(pose_times))
+        torch.testing.assert_close(query_times.grad, torch.zeros_like(query_times))
+
+    def test_interpolate_tracks_gradcheck_overlapping_tracks(self):
+        dtype = torch.float64
+        poses = torch.stack(
+            [
+                self._pose([0.0, 0.0, 0.0], 0.0, dtype=dtype),
+                self._pose([2.0, 0.5, 0.0], 45.0, dtype=dtype),
+                self._pose([4.0, 1.0, 0.0], 90.0, dtype=dtype),
+                self._pose([6.0, 1.5, 0.0], 135.0, dtype=dtype),
+            ],
+            dim=0,
+        )
+        pose_translations, pose_rotations = self._split_poses(poses)
+        pose_translations = pose_translations.clone().requires_grad_(True)
+        pose_rotations = pose_rotations.clone().requires_grad_(True)
+        pose_times = torch.tensor(
+            [0.0, 1.0, 2.5, 4.0], device=device, dtype=dtype, requires_grad=True
+        )
+        pose_offsets = torch.tensor([0, 1], device=device, dtype=torch.int32)
+        pose_counts = torch.tensor([3, 3], device=device, dtype=torch.int32)
+        query_times = torch.tensor(
+            [0.75, 3.25], device=device, dtype=dtype, requires_grad=True
+        )
+
+        def fn(translations, rotations, times, queries):
+            return se3_interpolate_tracks(
+                translations,
+                rotations,
+                times,
+                pose_offsets,
+                pose_counts,
+                queries,
+            )
+
+        self.assertTrue(
+            torch.autograd.gradcheck(
+                fn,
+                (pose_translations, pose_rotations, pose_times, query_times),
+                eps=GC_SE3_EPS,
+                atol=GC_SE3_ATOL,
+                rtol=GC_SE3_RTOL,
+                nondet_tol=1e-7,
+            )
+        )
 
 
 class TestTrajectory2Poses(unittest.TestCase):
@@ -1334,9 +2281,23 @@ class TestTrajectory2Poses(unittest.TestCase):
 
         grad_output = torch.randn_like(result["point"])
         result["point"].backward(grad_output)
-        self.assertTrue(torch.all(time0.grad == 0))
-        self.assertTrue(torch.all(time1.grad == 0))
-        self.assertTrue(torch.all(query_time.grad == 0))
+        for name, time_tensor in (
+            ("time0", time0),
+            ("time1", time1),
+            ("query_time", query_time),
+        ):
+            self.assertIsNotNone(time_tensor.grad)
+            expect_grad_reference_close(
+                time_tensor.grad,
+                torch.zeros_like(time_tensor),
+                rtol=0.0,
+                atol=0.0,
+                max_rel_l2=0.0,
+                max_rel_l1=0.0,
+                min_cosine=1.0,
+                max_signed_bias=0.0,
+                msg=f"trajectory transform {name}.grad",
+            )
 
     def test_trajectory_transform_point_backward(self):
         """Test that gradients flow correctly through trajectory transformation"""

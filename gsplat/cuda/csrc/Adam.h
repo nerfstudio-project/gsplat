@@ -19,12 +19,13 @@
 
 #include <cstdint>
 
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-
+namespace gsplat
+{
 void launch_adam_kernel(
     at::Tensor &param,                    // [N, ...]
     const at::Tensor &param_grad,         // [N, ...]
@@ -36,5 +37,4 @@ void launch_adam_kernel(
     const float b2,
     const float eps
 );
-
 }

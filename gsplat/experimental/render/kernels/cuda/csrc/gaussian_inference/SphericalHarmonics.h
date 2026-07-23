@@ -22,22 +22,27 @@
 #include <ATen/core/Tensor.h>
 #include <cstdint>
 
-namespace higs {
-
+namespace higs
+{
 struct SHDecodeParams; // forward declaration (defined in SHCompression.h)
 
 void launch_spherical_harmonics_fwd_kernel(
     // inputs
     int32_t degrees_to_use,
     const at::Tensor means, // [3, N] float — gaussian centers (planar)
-    float cam_x, float cam_y, float cam_z,
+    float cam_x,
+    float cam_y,
+    float cam_z,
     const at::Tensor coeffs,              // [..., K, 3] OR packed int32 when compressed
     const at::optional<at::Tensor> masks, // [...]
-    float bias, float min_value,
+    float bias,
+    float min_value,
     // outputs
     at::Tensor colors, // [..., 4] half {R,G,B,0}
     // compressed-SH path: mode != NONE activates on-the-fly decode (requires degree 3, K=16).
-    SHCompressionMode mode = SHCompressionMode::NONE, const SHDecodeParams *decode_params = nullptr);
+    SHCompressionMode mode              = SHCompressionMode::NONE,
+    const SHDecodeParams *decode_params = nullptr
+);
 
 void launch_spherical_harmonics_viewmat_fwd_kernel(
     // inputs
@@ -46,9 +51,9 @@ void launch_spherical_harmonics_viewmat_fwd_kernel(
     const at::Tensor viewmat, // [4, 4] float row-major world-to-camera transform
     const at::Tensor coeffs,  // [N, K, 3] float
     const at::optional<at::Tensor> masks,
-    float bias, float min_value,
+    float bias,
+    float min_value,
     // outputs
     at::Tensor colors // [N, 4] half {R,G,B,0}
 );
-
 } // namespace higs
