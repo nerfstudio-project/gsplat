@@ -63,6 +63,7 @@ _POST_CODE = {"none": 0, "shift": 1, "shift_relu": 2}
 # Hit distance modes (d/Ed): compute along-ray distance in rasterization
 RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"]
 RasterizeMode = Literal["classic", "antialiased"]
+LidarReturnMode = Literal["expected", "median"]
 
 
 class RendererConfig:
@@ -287,6 +288,7 @@ def rasterization(
         int
     ] = None,  # Currently only None or 3 is accepted.
     renderer_config: Optional[RendererConfig] = None,
+    lidar_return_mode: LidarReturnMode = "expected",
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -470,6 +472,10 @@ def rasterization(
             The shape should be [..., C, 4] if provided.
         ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras.
             Default is None. See `FThetaCameraDistortionParameters` for details.
+        lidar_return_mode: LiDAR hit-distance reduction. ``"expected"`` keeps the
+            opacity-weighted mean; ``"median"`` selects the front-to-back hit whose
+            contribution crosses cumulative opacity 0.5. Median mode is inference-only
+            and requires LiDAR Eval3D hit-distance rendering with MixedBatch.
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
@@ -547,6 +553,32 @@ def rasterization(
             f"{type(renderer_config).__name__} requires with_eval3d=True; "
             "the non-eval3d path only supports RendererConfig_MixedBatch."
         )
+    if lidar_return_mode not in {"expected", "median"}:
+        raise ValueError(
+            "lidar_return_mode must be either 'expected' or 'median', "
+            f"got {lidar_return_mode!r}"
+        )
+    use_median_hit_distance = lidar_return_mode == "median"
+    if use_median_hit_distance:
+        if camera_model != "lidar":
+            raise ValueError(
+                "lidar_return_mode='median' requires camera_model='lidar'"
+            )
+        if not with_eval3d:
+            raise ValueError("lidar_return_mode='median' requires with_eval3d=True")
+        if not render_mode_has_hit_distance(render_mode):
+            raise ValueError(
+                "lidar_return_mode='median' requires a hit-distance render_mode"
+            )
+        if not isinstance(renderer_config, RendererConfig_MixedBatch):
+            raise ValueError(
+                "lidar_return_mode='median' only supports RendererConfig_MixedBatch"
+            )
+        if torch.is_grad_enabled():
+            raise ValueError(
+                "lidar_return_mode='median' is inference-only; use "
+                "torch.inference_mode() or torch.no_grad()"
+            )
     renderer_config_impl = _renderer_config_type(renderer_config)
 
     # Both paths run the single C++ orchestrator. `distributed` is honored as
@@ -641,6 +673,7 @@ def rasterization(
         renderer_config_impl,
         process_group_name,
         world_size,
+        use_median_hit_distance,
     )
 
     if absgrad and not with_eval3d:

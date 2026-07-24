@@ -64,6 +64,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
+    const bool use_median_hit_distance,
     const bool unsafe_masked_tile_outputs,
     // CSR batch structure (precomputed by caller, shared with bwd)
     const at::Tensor batches_per_tile, // [num_tiles] int32

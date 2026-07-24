@@ -5958,6 +5958,129 @@ def test_rasterization_cpp_ut_lidar_absgrad_forward_neutral(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
+    ("lidar_return_mode", "expected_message"),
+    [
+        ("invalid", "lidar_return_mode"),
+        ("median", "camera_model='lidar'"),
+    ],
+)
+def test_rasterization_validates_lidar_return_mode(
+    lidar_return_mode: str, expected_message: str
+):
+    scene = _make_cpp_classic_rasterization_scene(n_channels=3, n_cameras=1)
+
+    with pytest.raises(ValueError, match=expected_message):
+        gsplat.rasterization(
+            **scene,
+            width=48,
+            height=40,
+            tile_size=8,
+            render_mode="RGB-Ed",
+            packed=False,
+            with_ut=True,
+            with_eval3d=True,
+            lidar_return_mode=lidar_return_mode,
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+def test_rasterization_lidar_median_selects_threshold_crossing_hit():
+    from gsplat.cuda._lidar import (
+        RowOffsetStructuredSpinningLidarModelParameters,
+        SpinningDirection,
+        compute_angles_to_columns_map,
+        compute_tiling,
+    )
+
+    n_rows, n_columns = 8, 64
+    lidar_params = RowOffsetStructuredSpinningLidarModelParameters(
+        row_elevations_rad=torch.linspace(0.2, -0.2, n_rows, device=device),
+        column_azimuths_rad=torch.linspace(
+            math.pi, -math.pi, n_columns, device=device
+        ),
+        row_azimuth_offsets_rad=torch.zeros(n_rows, device=device),
+        spinning_frequency_hz=10.0,
+        spinning_direction=SpinningDirection.CLOCKWISE,
+    )
+    angles_to_columns_map = compute_angles_to_columns_map(lidar_params).to(device)
+    tiling = compute_tiling(
+        lidar_params,
+        n_bins_elevation=4,
+        max_pts_per_tile=8 * 8,
+        resolution_elevation=1600,
+        densification_factor_azimuth=8,
+    )
+    lidar_coeffs = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(
+        lidar_params, angles_to_columns_map, tiling
+    )
+    row = lidar_coeffs.n_rows // 2
+    col = lidar_coeffs.n_columns // 2
+    elevation = lidar_coeffs.row_elevations_rad[row]
+    azimuth = (
+        lidar_coeffs.column_azimuths_rad[col]
+        + lidar_coeffs.row_azimuth_offsets_rad[row]
+    )
+    ray = torch.stack(
+        [
+            torch.cos(azimuth) * torch.cos(elevation),
+            torch.sin(azimuth) * torch.cos(elevation),
+            torch.sin(elevation),
+        ]
+    )
+
+    distances = torch.tensor([2.0, 8.0], device=device)
+    means = distances[:, None] * ray[None, :]
+    quats = torch.zeros(2, 4, device=device)
+    quats[:, 0] = 1.0
+    scales = torch.full((2, 3), 0.05, device=device)
+    opacities = torch.full((2,), 0.6, device=device)
+    viewmats = torch.eye(4, device=device).unsqueeze(0)
+    Ks = torch.eye(3, device=device).unsqueeze(0)
+    kwargs = dict(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=None,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=lidar_coeffs.n_columns,
+        height=lidar_coeffs.n_rows,
+        render_mode="Ed",
+        packed=False,
+        with_ut=True,
+        with_eval3d=True,
+        global_z_order=False,
+        camera_model="lidar",
+        lidar_coeffs=lidar_coeffs,
+    )
+
+    with torch.inference_mode():
+        expected, expected_alpha, _ = gsplat.rasterization(
+            **kwargs, lidar_return_mode="expected"
+        )
+        median, median_alpha, _ = gsplat.rasterization(
+            **kwargs, lidar_return_mode="median"
+        )
+        low_opacity_median, low_opacity_alpha, _ = gsplat.rasterization(
+            **{**kwargs, "opacities": torch.full((2,), 0.2, device=device)},
+            lidar_return_mode="median",
+        )
+
+    expected_distance = expected[0, row, col, 0]
+    median_distance = median[0, row, col, 0]
+    torch.testing.assert_close(expected_alpha, median_alpha)
+    assert 2.0 < expected_distance.item() < 8.0
+    torch.testing.assert_close(median_distance, distances[0], rtol=1e-4, atol=1e-4)
+    assert median_alpha[0, row, col, 0].item() >= 0.5
+    assert low_opacity_alpha[0, row, col, 0].item() < 0.5
+    assert low_opacity_median[0, row, col, 0].item() == 0.0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
     "width,height,expected_tile_size",
     [
         (540, 540, 8),  # well below 1080p
