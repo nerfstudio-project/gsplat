@@ -1749,6 +1749,119 @@ public:
     }
 };
 
+
+
+
+template <typename ExternalDistortionModel>
+struct EUCMCameraModel : BaseCameraModel<EUCMCameraModel<ExternalDistortionModel>, ExternalDistortionModel> {
+    // EUCM camera model
+
+    using Base = BaseCameraModel<EUCMCameraModel, ExternalDistortionModel>;
+
+    struct KernelParameters : Base::KernelParameters {
+        const float *__restrict__ Ks;
+        const float *__restrict__ tangential_coeffs;
+    };
+
+    struct Parameters : Base::Parameters {
+        std::array<float, 2> principal_point;
+        std::array<float, 2> focal_length;
+        std::array<float, 2> tangential_coeffs = {0.f};
+
+        inline __device__ Parameters(const KernelParameters& kernel_parameters, int camera_index)
+            : Base::Parameters(kernel_parameters, camera_index)
+            , principal_point({kernel_parameters.Ks[camera_index * 9 + 2], kernel_parameters.Ks[camera_index * 9 + 5]})
+            , focal_length({kernel_parameters.Ks[camera_index * 9 + 0], kernel_parameters.Ks[camera_index * 9 + 4]})
+            , tangential_coeffs(
+                kernel_parameters.tangential_coeffs
+                ? make_array<float, 2>(kernel_parameters.tangential_coeffs + camera_index * 2)
+                : std::array<float, 2>{0.f, 0.f}
+            ) {}
+    };
+
+    inline __device__ EUCMCameraModel(const KernelParameters& kernel_parameters, int camera_index)
+        : parameters(kernel_parameters, camera_index)
+    {
+    }
+
+    Parameters parameters;
+
+    inline __device__ auto camera_ray_to_image_point_impl(
+        glm::fvec3 const &cam_ray, float margin_factor
+    ) const -> typename Base::ImagePointReturn {
+        auto image_point = glm::fvec2{0.f, 0.f};
+        const float eps = 1e-8f;
+
+        // Treat all the points behind the camera plane to invalid / projecting
+        // to origin
+        if (cam_ray.z <= 0.f)
+            return {image_point, false};
+
+        float alpha = parameters.tangential_coeffs[0];
+        float beta = parameters.tangential_coeffs[1];
+
+        float rho2 = beta * (cam_ray.x * cam_ray.x + cam_ray.y * cam_ray.y) +
+                     cam_ray.z * cam_ray.z;
+        float rho = std::sqrt(rho2);
+        float den = alpha * rho + (1.f - alpha) * cam_ray.z;
+        if (std::fabs(den) < eps)
+            return {image_point, false};
+
+        image_point =
+            (glm::fvec2(cam_ray.x, cam_ray.y) / den) *
+                glm::fvec2(
+                    parameters.focal_length[0], parameters.focal_length[1]
+                ) +
+            glm::fvec2(
+                parameters.principal_point[0], parameters.principal_point[1]
+            );
+
+        // Check if the image points fall within the image, set points that have
+        // too large distortion or fall outside the image sensor to invalid
+        auto valid = true;
+        valid &= image_point_in_image_bounds_margin(
+            image_point, parameters.resolution, margin_factor
+        );
+
+        return {image_point, valid};
+    }
+
+    inline __device__ CameraRay image_point_to_camera_ray_impl(glm::fvec2 image_point
+    ) const {
+        const float eps = 1e-8f;
+        // Transform the image point to uv coordinate
+        auto const uv =
+            (image_point -
+             glm::fvec2{
+                 parameters.principal_point[0], parameters.principal_point[1]
+             }) /
+            glm::fvec2{parameters.focal_length[0], parameters.focal_length[1]};
+
+        float r2 = uv.x * uv.x + uv.y * uv.y;
+
+        float alpha = parameters.tangential_coeffs[0];
+        float beta = parameters.tangential_coeffs[1];
+        float gamma = 1.0f - alpha;
+        float radicand = 1.0f - (alpha - gamma) * beta * r2;
+        if (radicand < 0.f)
+            return {{0.f, 0.f, 0.f}, false};
+
+        float helper_den = alpha * std::sqrt(radicand) + gamma;
+        if (std::fabs(helper_den) < eps)
+            return {{0.f, 0.f, 0.f}, false};
+
+        float helper = (1.0f - alpha * alpha * beta * r2) / helper_den;
+        if (std::fabs(helper) < eps)
+            return {{0.f, 0.f, 0.f}, false};
+
+        // Unproject the image point to camera ray
+        auto const camera_ray = glm::fvec3{uv.x/helper, uv.y/helper, 1.f};
+
+        // Make sure ray is normalized
+        return {camera_ray / length(camera_ray), true};
+    }
+};
+
 // ---------------------------------------------------------------------------------------------
 
 // Gaussian projections
@@ -1952,7 +2065,8 @@ using CameraModelWrappers = TypeList<
     CameraModelWrapper<OrthographicCameraModel>,
     CameraModelWrapper<OpenCVPinholeCameraModel>,
     CameraModelWrapper<OpenCVFisheyeCameraModel>,
-    CameraModelWrapper<FThetaCameraModel>
+    CameraModelWrapper<FThetaCameraModel>,
+    CameraModelWrapper<EUCMCameraModel>
 >;
 
 // All camera model types: every camera instantiated with every distortion model.
