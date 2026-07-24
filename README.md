@@ -91,6 +91,15 @@ the examples (requires installing some extra dependencies via `pip install -r ex
 - [Render a large scene in real-time.](https://docs.gsplat.studio/main/examples/large_scale.html)
 - [Train on an NCore v4 capture.](https://docs.gsplat.studio/main/examples/ncore.html)
 
+## Docker
+
+We provide a script for building docker image
+
+```bash
+bash docker/build_image.sh
+```
+
+Then you can run task in docker container
 
 ## Inference Rendering
 
