@@ -21,6 +21,59 @@ from typing import Literal, Optional
 import numpy as np
 import torch
 
+# PLY header comment used to record the rasterization mode a splat model was
+# trained/exported with, so viewers can render it with a matching mode. The
+# convention (``SplatRenderMode: mip`` / ``SplatRenderMode: default``) is shared
+# with other splat tooling (e.g. the Brush viewer). ``mip`` corresponds to
+# gsplat's ``antialiased`` rasterize mode; ``default`` to ``classic``.
+SPLAT_RENDER_MODE_COMMENT_PREFIX = "SplatRenderMode:"
+
+
+def _render_mode_comment_line(antialiased: Optional[bool]) -> bytes:
+    """Return the ``comment SplatRenderMode: ...`` header line, or empty bytes.
+
+    Args:
+        antialiased: ``True`` for mip-splatting (antialiased) mode, ``False`` for
+            the default (classic) mode, or ``None`` to omit the comment entirely.
+
+    Returns:
+        The encoded PLY comment line (including trailing newline) when
+        ``antialiased`` is not ``None``, otherwise empty bytes.
+    """
+    if antialiased is None:
+        return b""
+    mode = "mip" if antialiased else "default"
+    return f"comment {SPLAT_RENDER_MODE_COMMENT_PREFIX} {mode}\n".encode()
+
+
+def parse_render_mode_comment(comments) -> Optional[str]:
+    """Parse a ``SplatRenderMode`` PLY header comment into a rasterize mode.
+
+    Args:
+        comments: Iterable of PLY header comment strings (as exposed by
+            ``plyfile.PlyData.comments``, i.e. without the leading ``comment``
+            keyword). Matching is case-insensitive.
+
+    Returns:
+        ``"antialiased"`` if the file declares ``SplatRenderMode: mip``,
+        ``"classic"`` if it declares ``SplatRenderMode: default``, or ``None``
+        when no (recognized) ``SplatRenderMode`` comment is present. The last
+        matching comment wins.
+    """
+    result: Optional[str] = None
+    prefix = SPLAT_RENDER_MODE_COMMENT_PREFIX.lower()
+    for comment in comments or []:
+        text = comment.strip()
+        lowered = text.lower()
+        if not lowered.startswith(prefix):
+            continue
+        value = text[len(prefix):].strip().lower()
+        if value == "mip":
+            result = "antialiased"
+        elif value == "default":
+            result = "classic"
+    return result
+
 
 def sh2rgb(sh: torch.Tensor) -> torch.Tensor:
     """Convert Sphere Harmonics to RGB
@@ -215,6 +268,7 @@ def splat2ply_bytes_compressed(
     shN: torch.Tensor,
     chunk_max_size: int = 256,
     opacity_threshold: float = 1 / 255,
+    antialiased: Optional[bool] = None,
 ) -> bytes:
     """Return the binary compressed Ply file. Used by Supersplat viewer.
 
@@ -227,6 +281,11 @@ def splat2ply_bytes_compressed(
         shN (torch.Tensor): Spherical harmonics. Shape (N, K*3)
         chunk_max_size (int): Maximum number of splats per chunk. Default: 256
         opacity_threshold (float): Opacity threshold. Default: 1 / 255
+        antialiased (Optional[bool]): Whether the splats were trained/rendered
+            with antialiased (mip-splatting) rasterization. When not ``None`` a
+            ``SplatRenderMode`` header comment is written (``mip`` when
+            antialiased, ``default`` otherwise) so viewers can pick the matching
+            rasterization mode. Default: ``None`` (no comment written).
 
     Returns:
         bytes: Binary compressed Ply file representing the model.
@@ -278,6 +337,7 @@ def splat2ply_bytes_compressed(
     # Write PLY header
     buffer.write(b"ply\n")
     buffer.write(b"format binary_little_endian 1.0\n")
+    buffer.write(_render_mode_comment_line(antialiased))
     buffer.write(f"element chunk {n_chunks}\n".encode())
     for prop in float_properties:
         buffer.write(f"property float {prop}\n".encode())
@@ -382,6 +442,7 @@ def splat2ply_bytes(
     opacities: torch.Tensor,
     sh0: torch.Tensor,
     shN: torch.Tensor,
+    antialiased: Optional[bool] = None,
 ) -> bytes:
     """Return the binary Ply file. Supported by almost all viewers.
 
@@ -392,6 +453,11 @@ def splat2ply_bytes(
         opacities (torch.Tensor): Splat opacities. Shape (N,)
         sh0 (torch.Tensor): Spherical harmonics. Shape (N, 3)
         shN (torch.Tensor): Spherical harmonics. Shape (N, K*3)
+        antialiased (Optional[bool]): Whether the splats were trained/rendered
+            with antialiased (mip-splatting) rasterization. When not ``None`` a
+            ``SplatRenderMode`` header comment is written (``mip`` when
+            antialiased, ``default`` otherwise) so viewers can pick the matching
+            rasterization mode. Default: ``None`` (no comment written).
 
     Returns:
         bytes: Binary Ply file representing the model.
@@ -403,6 +469,7 @@ def splat2ply_bytes(
     # Write PLY header
     buffer.write(b"ply\n")
     buffer.write(b"format binary_little_endian 1.0\n")
+    buffer.write(_render_mode_comment_line(antialiased))
     buffer.write(f"element vertex {num_splats}\n".encode())
     buffer.write(b"property float x\n")
     buffer.write(b"property float y\n")
@@ -458,6 +525,11 @@ def load_ply_to_splats(path: str) -> dict:
             - ``shN``: ``(N, K-1, 3)`` higher-order SH coefficients
               (basis-major). Empty along dim 1 when the file only stores
               the DC term (SH degree 0).
+        And one metadata entry:
+            - ``rasterize_mode``: ``"antialiased"`` or ``"classic"`` when the
+              file carries a ``SplatRenderMode`` header comment (``mip`` maps to
+              ``"antialiased"``, ``default`` to ``"classic"``), otherwise
+              ``None`` when the comment is absent or unrecognized.
     """
     try:
         from plyfile import PlyData
@@ -468,6 +540,7 @@ def load_ply_to_splats(path: str) -> dict:
         ) from exc
 
     ply = PlyData.read(str(path))
+    rasterize_mode = parse_render_mode_comment(ply.comments)
     vertex = ply.elements[0]
     n_splats = len(vertex)
 
@@ -527,6 +600,7 @@ def load_ply_to_splats(path: str) -> dict:
         "opacities": torch.from_numpy(np.ascontiguousarray(opacities)).float(),
         "sh0": torch.from_numpy(np.ascontiguousarray(sh0[:, None, :])).float(),
         "shN": torch.from_numpy(np.ascontiguousarray(f_rest)).float(),
+        "rasterize_mode": rasterize_mode,
     }
 
 
@@ -594,6 +668,7 @@ def export_splats(
     shN: torch.Tensor,
     format: Literal["ply", "splat", "ply_compressed"] = "ply",
     save_to: Optional[str] = None,
+    antialiased: Optional[bool] = None,
 ) -> bytes:
     """Export a Gaussian Splats model to bytes.
     The three supported formats are:
@@ -610,6 +685,12 @@ def export_splats(
         shN (torch.Tensor): Spherical harmonics. Shape (N, K, 3)
         format (str): Export format. Options: "ply", "splat", "ply_compressed". Default: "ply"
         save_to (str): Output file path. If provided, the bytes will be written to file.
+        antialiased (Optional[bool]): Whether the model was trained/rendered with
+            antialiased (mip-splatting) rasterization. When not ``None`` and the
+            format is a PLY variant, a ``SplatRenderMode`` header comment is
+            written (``mip`` when antialiased, ``default`` otherwise) so viewers
+            can select the matching rasterization mode. Ignored for the
+            ``splat`` format (which has no header). Default: ``None``.
     """
     total_splats = means.shape[0]
     assert means.shape == (total_splats, 3), "Means must be of shape (N, 3)"
@@ -651,11 +732,15 @@ def export_splats(
     shN = shN[valid_mask]
 
     if format == "ply":
-        data = splat2ply_bytes(means, scales, quats, opacities, sh0, shN)
+        data = splat2ply_bytes(
+            means, scales, quats, opacities, sh0, shN, antialiased=antialiased
+        )
     elif format == "splat":
         data = splat2splat_bytes(means, scales, quats, opacities, sh0)
     elif format == "ply_compressed":
-        data = splat2ply_bytes_compressed(means, scales, quats, opacities, sh0, shN)
+        data = splat2ply_bytes_compressed(
+            means, scales, quats, opacities, sh0, shN, antialiased=antialiased
+        )
     else:
         raise ValueError(f"Unsupported format: {format}")
 

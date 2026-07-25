@@ -44,8 +44,16 @@ def main(local_rank: int, world_rank, world_size: int, args):
     torch.manual_seed(42)
     device = torch.device("cuda", local_rank)
 
+    # Rasterize mode read from a loaded PLY's `SplatRenderMode` comment, if any.
+    # Only the PLY-loading path can set this; other sources leave it None.
+    ply_rasterize_mode = None
+
     if args.ply is not None:
         splats_dict = load_ply_to_splats(args.ply)
+        # If the PLY records how it was trained via a `SplatRenderMode` comment,
+        # honor it in the viewer and freeze the Anti-Aliasing control so it
+        # can't be toggled to a mode the splats weren't built for.
+        ply_rasterize_mode = splats_dict.get("rasterize_mode")
         means = splats_dict["means"].to(device)
         quats = F.normalize(splats_dict["quats"].to(device), p=2, dim=-1)
         scales_raw = splats_dict["scales"].to(device)
@@ -320,6 +328,10 @@ def main(local_rank: int, world_rank, world_size: int, args):
     )
     if args.use_gaussian_render_inference_scene:
         viewer_kwargs["render_modes"] = ("rgb",)
+    if ply_rasterize_mode is not None:
+        # Initialize the viewer's Anti-Aliasing control from the PLY and freeze it.
+        viewer_kwargs["rasterize_mode"] = ply_rasterize_mode
+        viewer_kwargs["lock_rasterize_mode"] = True
     _ = GsplatViewer(**viewer_kwargs)
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(100000)
