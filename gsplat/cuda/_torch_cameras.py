@@ -1966,15 +1966,15 @@ class _FThetaCameraModel(_BaseCameraModel):
             margin_factor: Margin for image bounds checking
 
         Returns:
-            image_point: [M, 2] projected image coordinates
+            image_point: [M, 2] projected image coordinates. Only meaningful
+                where `valid` is True. Rays outside the `max_angle` cone are
+                still projected after being clamped to the cone, so invalid
+                entries contain plausible-looking coordinates, not sentinels.
             valid: [M] validity mask
         """
         # Preconditions
         M = cam_ray.shape[:-1]
         assert_shape("cam_ray", cam_ray, M + (3,))
-
-        # Points behind camera are invalid
-        not_behind_camera = cam_ray[..., 2] > 0.0  # [M]
 
         # Compute norm of xy components using numerically stable method
         cam_ray_xy_norm = _numerically_stable_norm2(
@@ -2047,12 +2047,7 @@ class _FThetaCameraModel(_BaseCameraModel):
         # Mark FOV-clamped points as invalid. Compare against the pre-clamp
         # `theta_full`; comparing `theta` here would be a tautology because
         # `theta = min(theta_full, max_angle)` above.
-        valid = (
-            not_behind_camera & (theta_full < self.max_angle[..., None]) & valid_bounds
-        )
-
-        # Zero out image_points for rays behind the camera.
-        image_point = image_point * not_behind_camera[..., None]
+        valid = (theta_full < self.max_angle[..., None]) & valid_bounds
 
         # Postconditions
         assert_shape("image_point", image_point, M + (2,))

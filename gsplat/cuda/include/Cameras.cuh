@@ -1607,13 +1607,12 @@ public:
     inline __device__ auto camera_ray_to_image_point_impl(const glm::fvec3 &cam_ray, float margin_factor) const ->
         typename Base::ImagePointReturn
     {
-        if(cam_ray.z <= 0.f)
-        {
-            return {
-                {0.f, 0.f},
-                false
-            };
-        }
+        // No z <= 0 guard here, unlike the other models in this header:
+        //  - FTheta calibrations with max_angle > pi/2 model beyond-180-degree FOV.
+        //  - A ray with z <= 0 has theta_full >= pi/2 and stays valid while
+        //    theta_full < max_angle and its projection lands in bounds.
+        //  - Rays outside the cone are clamped to max_angle below and marked
+        //    invalid there.
 
         // Make sure norm is non-vanishing (norm vanishes for points along the principal-axis)
         auto cam_ray_xy_norm = numerically_stable_norm2(cam_ray.x, cam_ray.y);
