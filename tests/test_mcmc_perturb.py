@@ -19,7 +19,16 @@ import gsplat
 device = torch.device("cuda:0")
 
 
-def _pytorch_mcmc_perturb(positions, quats, scales_log, opacities_logit, noise, scaler):
+def _pytorch_mcmc_perturb(
+    positions,
+    quats,
+    scales_log,
+    opacities_logit,
+    noise,
+    noise_scale,
+    t=0.005,
+    k=100.0,
+):
     """Pure-PyTorch reference matching the CUDA kernel logic."""
     from gsplat import quat_scale_to_covar_preci
 
@@ -30,10 +39,7 @@ def _pytorch_mcmc_perturb(positions, quats, scales_log, opacities_logit, noise, 
 
     density = torch.sigmoid(opacities_logit)
 
-    def op_sigmoid(x, k=100, x0=0.995):
-        return 1.0 / (1.0 + torch.exp(-k * (x - x0)))
-
-    w = op_sigmoid(1.0 - density) * scaler
+    w = torch.sigmoid(-float(k) * (density - float(t))) * noise_scale
     weighted_noise = noise * w.unsqueeze(-1)
     delta = torch.einsum("bij,bj->bi", covars, weighted_noise)
     return positions + delta
@@ -49,7 +55,16 @@ def _make_inputs(N=1024, seed=42):
     return positions, quats, scales_log, opacities_logit, noise
 
 
-def _cuda_mcmc_perturb(positions, quats, scales_log, opacities_logit, noise, scaler):
+def _cuda_mcmc_perturb(
+    positions,
+    quats,
+    scales_log,
+    opacities_logit,
+    noise,
+    noise_scale,
+    t=0.005,
+    k=100.0,
+):
     """Call the fused CUDA kernel via torch.ops.gsplat."""
     pos = positions.clone()
     torch.ops.gsplat.mcmc_perturb_positions(
@@ -58,7 +73,9 @@ def _cuda_mcmc_perturb(positions, quats, scales_log, opacities_logit, noise, sca
         scales_log.contiguous(),
         opacities_logit.flatten().contiguous(),
         noise.contiguous(),
-        float(scaler),
+        float(noise_scale),
+        float(t),
+        float(k),
     )
     return pos
 
@@ -93,6 +110,26 @@ class TestMCMCPerturbCUDA:
         )
 
         torch.testing.assert_close(actual, expected, atol=1e-4, rtol=1e-3)
+
+    def test_cuda_matches_pytorch_custom_gate(self):
+        """Consistency when overriding the default t/k opacity-gate parameters."""
+        positions, quats, scales_log, opacities_logit, noise = _make_inputs()
+        scaler = 0.25
+        t = 0.25
+        k = 8.0
+
+        expected = _pytorch_mcmc_perturb(
+            positions, quats, scales_log, opacities_logit, noise, scaler, t=t, k=k
+        )
+        actual = _cuda_mcmc_perturb(
+            positions, quats, scales_log, opacities_logit, noise, scaler, t=t, k=k
+        )
+        default_actual = _cuda_mcmc_perturb(
+            positions, quats, scales_log, opacities_logit, noise, scaler
+        )
+
+        torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-4)
+        assert not torch.allclose(actual, default_actual, rtol=1e-4, atol=1e-5)
 
     def test_in_place_modification(self):
         """Kernel should modify positions in-place."""
@@ -280,7 +317,7 @@ class TestMCMCPerturbFallback:
 
         rng_state = torch.cuda.get_rng_state(device)
         gsplat_ops.inject_noise_to_position(
-            params, optimizers={}, state={}, scaler=scaler
+            params, optimizers={}, state={}, noise_scale=scaler, t=0.25, k=8.0
         )
 
         torch.cuda.set_rng_state(rng_state, device)
@@ -292,6 +329,8 @@ class TestMCMCPerturbFallback:
             params["opacities"].detach(),
             noise,
             scaler,
+            t=0.25,
+            k=8.0,
         )
         torch.testing.assert_close(means.detach(), expected, atol=1e-5, rtol=1e-4)
 

@@ -23,8 +23,7 @@ import torch.nn.functional as F
 
 import gsplat.losses as _losses_module
 
-_losses_module.ENFORCE_CONTRACTS = True
-
+from gsplat._helper import assert_grad_reference_close
 from gsplat.losses import (
     create_ssim_window,
     depth_l1_loss,
@@ -40,6 +39,41 @@ from gsplat.losses import (
     torch_ssim_loss,
     total_variation_loss,
 )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _enforce_contracts():
+    """Enable losses-module contract checks for this module's tests only.
+
+    pytest imports every test module during collection, so setting
+    ``ENFORCE_CONTRACTS = True`` at module scope leaks into unrelated test
+    modules for the whole session. Scoping the override to an autouse fixture
+    (and restoring the prior, env-driven value on teardown) keeps it local.
+    """
+    prev = _losses_module.ENFORCE_CONTRACTS
+    _losses_module.ENFORCE_CONTRACTS = True
+    try:
+        yield
+    finally:
+        _losses_module.ENFORCE_CONTRACTS = prev
+
+
+def _assert_loss_grad_close(actual, expected, *, name, atol=0.0, rtol=0.0):
+    """Check a small analytic loss gradient with value and vector metrics."""
+
+    expected = torch.as_tensor(expected, dtype=actual.dtype, device=actual.device)
+    aggregate_tol = max(float(atol), float(rtol), 1e-12)
+    assert_grad_reference_close(
+        actual,
+        expected,
+        rtol=rtol,
+        atol=atol,
+        max_rel_l2=aggregate_tol,
+        max_rel_l1=aggregate_tol,
+        min_cosine=1.0 - aggregate_tol,
+        max_signed_bias=aggregate_tol,
+        msg=name,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +110,9 @@ class TestL1Loss:
         target = torch.tensor([1.0, 1.0])
         l1_loss(pred, target).sum().backward()
         # L1 gradient is sign(pred - target): [+1, -1]
-        assert torch.allclose(pred.grad, torch.tensor([1.0, -1.0]))
+        _assert_loss_grad_close(
+            pred.grad, torch.tensor([1.0, -1.0]), name="l1_loss pred.grad"
+        )
 
 
 class TestMSELoss:
@@ -108,7 +144,9 @@ class TestMSELoss:
         target = torch.tensor([1.0, 1.0])
         mse_loss(pred, target).sum().backward()
         # MSE gradient is 2*(pred - target): [4.0, 0.0]
-        assert torch.allclose(pred.grad, torch.tensor([4.0, 0.0]))
+        _assert_loss_grad_close(
+            pred.grad, torch.tensor([4.0, 0.0]), name="mse_loss pred.grad"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +591,11 @@ class TestOpacityRegLoss:
         x = torch.zeros(1, requires_grad=True)
         opacity_reg_loss(x).backward()
         # d/dx sigmoid(x).mean() at x=0: sigmoid(0)*(1-sigmoid(0)) = 0.25
-        assert torch.isclose(x.grad, torch.tensor(0.25))
+        _assert_loss_grad_close(
+            x.grad,
+            torch.full_like(x, 0.25),
+            name="opacity_reg_loss x.grad",
+        )
 
 
 class TestScaleRegLoss:
@@ -574,7 +616,11 @@ class TestScaleRegLoss:
         x = torch.zeros(1, 1, requires_grad=True)
         scale_reg_loss(x).backward()
         # d/dx exp(x).mean() at x=0: exp(0) = 1.0
-        assert torch.isclose(x.grad, torch.tensor([[1.0]]))
+        _assert_loss_grad_close(
+            x.grad,
+            torch.ones_like(x),
+            name="scale_reg_loss x.grad",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +671,12 @@ class TestHuberLoss:
         pred = torch.tensor([1.3], requires_grad=True)
         target = torch.tensor([1.0])
         huber_loss(pred, target).sum().backward()
-        assert torch.isclose(pred.grad, torch.tensor([0.3]), atol=1e-6)
+        _assert_loss_grad_close(
+            pred.grad,
+            torch.tensor([0.3]),
+            atol=1e-6,
+            name="huber_loss pred.grad",
+        )
 
 
 class TestSmoothL1Loss:
@@ -817,7 +868,11 @@ class TestLogL1:
         # d/dx log(1+|x|) at x=1: 1/(1+1) * sign(1) = 0.5
         x = torch.tensor([1.0], requires_grad=True)
         log_l1(x, torch.tensor([0.0])).backward()
-        assert torch.isclose(x.grad, torch.tensor([0.5]))
+        _assert_loss_grad_close(
+            x.grad,
+            torch.tensor([0.5]),
+            name="log_l1 x.grad",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -877,9 +932,11 @@ class TestReluSum:
         # Only elements above eps should have nonzero gradient
         x = torch.tensor([0.1, 0.5, 0.9], requires_grad=True)
         relu_sum(x, eps=0.4).backward()
-        assert x.grad[0].item() == 0.0  # below eps
-        assert x.grad[1].item() == 1.0  # above eps
-        assert x.grad[2].item() == 1.0  # above eps
+        _assert_loss_grad_close(
+            x.grad,
+            torch.tensor([0.0, 1.0, 1.0]),
+            name="relu_sum x.grad",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1116,9 +1173,11 @@ class TestReduceMean:
         reduce_mean(x, mask).backward()
         # Grad for masked elements should be 1/mask_sum = 0.5
         # Grad for unmasked should be 0
-        assert torch.isclose(x.grad[0], torch.tensor(0.5))
-        assert torch.isclose(x.grad[1], torch.tensor(0.0))
-        assert torch.isclose(x.grad[2], torch.tensor(0.5))
+        _assert_loss_grad_close(
+            x.grad,
+            torch.tensor([0.5, 0.0, 0.5]),
+            name="reduce_mean masked x.grad",
+        )
 
 
 class TestReduceQuantile:
@@ -1176,7 +1235,11 @@ class TestReduceSum:
         x = torch.tensor([2.0, 3.0, 5.0], requires_grad=True)
         reduce_sum(x).backward()
         # Gradient of sum is all ones
-        assert torch.allclose(x.grad, torch.ones(3))
+        _assert_loss_grad_close(
+            x.grad,
+            torch.ones_like(x),
+            name="reduce_sum x.grad",
+        )
 
     def test_negative_values(self):
         x = torch.tensor([-1.0, 2.0, -3.0])
@@ -1314,9 +1377,11 @@ class TestGaussianScaleReg:
         vis = torch.tensor([1.0, 0.0, 1.0, 0.0])
         gaussian_scale_reg(scales, visibility=vis).sum().backward()
         # Masked Gaussians should have zero gradient
-        assert (scales.grad[1] == 0).all()
-        assert (scales.grad[3] == 0).all()
-        assert scales.grad[0].abs().sum() > 0
+        _assert_loss_grad_close(
+            scales.grad,
+            vis.view(-1, 1).expand_as(scales),
+            name="gaussian_scale_reg visibility scales.grad",
+        )
 
 
 class TestGaussianDensityReg:
@@ -1374,8 +1439,11 @@ class TestGaussianZScaleReg:
     def test_gradient_selective(self):
         z = torch.tensor([0.3, 0.7], requires_grad=True)
         gaussian_z_scale_reg(z, threshold=0.5).sum().backward()
-        assert z.grad[0].item() == 0.0  # below threshold
-        assert z.grad[1].item() == 1.0  # above threshold
+        _assert_loss_grad_close(
+            z.grad,
+            torch.tensor([0.0, 1.0]),
+            name="gaussian_z_scale_reg z.grad",
+        )
 
 
 class TestOutOfBoundLoss:
@@ -1416,9 +1484,11 @@ class TestOutOfBoundLoss:
         pos = torch.tensor([[2.0, 0.0, 0.0]], requires_grad=True)
         dims = torch.tensor([[2.0, 2.0, 2.0]])
         out_of_bound_loss(pos, dims).sum().backward()
-        assert pos.grad[0, 0].item() == 1.0  # outside: grad = sign(pos) = 1
-        assert pos.grad[0, 1].item() == 0.0  # inside: grad = 0
-        assert pos.grad[0, 2].item() == 0.0
+        _assert_loss_grad_close(
+            pos.grad,
+            torch.tensor([[1.0, 0.0, 0.0]]),
+            name="out_of_bound_loss pos.grad",
+        )
 
 
 class TestBilateralGridDriftLoss:

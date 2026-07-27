@@ -61,6 +61,7 @@ python examples/av_trainer.py \
 | `--cameras` | all | Comma-separated camera IDs (NCore) |
 | `--duration` | full | Clip duration in seconds (NCore) |
 | `--downscale` | 1 | Image downscale factor (NCore) |
+| `--rigid-dynamic-track-class-ids` | unset | Comma-separated NCore cuboid class IDs to load as rigid dynamic tracks; moving-object returns remain in static init |
 | `--max-lidar` | 150000 | Max LiDAR init points |
 | `--max-steps` | 15000 | Training iterations |
 | `--lr` | 0.005 | Base learning rate |

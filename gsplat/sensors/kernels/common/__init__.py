@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Common types shared between camera and sensor kernels.
+
+Exports pose dataclasses (Pose, Trajectory, DynamicPose) and cross-layer
+utility helpers (quaternion swizzles, SE(3) matrix construction, valid-index
+extraction).
+"""
+
+from .pose import DynamicPose, Pose, Trajectory
+from .pose_interp import (
+    unpack_dynamic_pose_components,
+)
+from .tensor_ops import (
+    raise_or_target_device,
+    timestamp_bounds,
+    to_dev,
+    zero_like,
+)
+from .utils import (
+    poses_to_matrix,
+    valid_flags_to_indices,
+    wxyz_to_xyzw,
+    xyzw_to_wxyz,
+)
+
+__all__ = [
+    "DynamicPose",
+    "Pose",
+    "Trajectory",
+    "poses_to_matrix",
+    "raise_or_target_device",
+    "timestamp_bounds",
+    "to_dev",
+    "unpack_dynamic_pose_components",
+    "valid_flags_to_indices",
+    "wxyz_to_xyzw",
+    "xyzw_to_wxyz",
+    "zero_like",
+]

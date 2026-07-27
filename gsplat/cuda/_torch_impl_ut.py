@@ -339,7 +339,7 @@ def _fully_fused_projection_with_ut(
 
     .. note::
         Currently supports:
-        - Pinhole camera model
+        - Camera models: "pinhole", "ortho", "fisheye", "ftheta", "lidar"
         - Radial distortion
         - Rolling shutter
 
@@ -357,7 +357,7 @@ def _fully_fused_projection_with_ut(
         far_plane: Far plane distance
         radius_clip: Gaussians with projected radii smaller than this are culled
         calc_compensations: If True, compute opacity compensation
-        camera_model: Camera model ("pinhole", "fisheye", "ftheta" - ortho not supported in UT)
+        camera_model: Camera model ("pinhole", "ortho", "fisheye", "ftheta", "lidar")
         ut_params: Unscented Transform parameters
         radial_coeffs: [..., C, 4] or [..., C, 6] radial distortion coefficients (pinhole/fisheye)
         tangential_coeffs: [..., C, 2] tangential distortion coefficients (pinhole only)
@@ -399,11 +399,10 @@ def _fully_fused_projection_with_ut(
     assert Ks.dtype == torch.float32, f"Ks must be float32, got {Ks.dtype}"
 
     # Validate camera model support
-    if camera_model not in ["pinhole", "fisheye", "ftheta", "lidar"]:
+    if camera_model not in ["pinhole", "ortho", "fisheye", "ftheta", "lidar"]:
         raise ValueError(
             f"Camera model '{camera_model}' not supported in UT projection. "
-            f"UT supports: pinhole, fisheye, ftheta. "
-            f"For ortho, use non-UT projection (with_ut=False)."
+            f"UT supports: pinhole, ortho, fisheye, ftheta, lidar."
         )
 
     # Extract focal lengths and principal points from K matrix
@@ -516,12 +515,12 @@ def _fully_fused_projection_with_ut(
     # Compute conics (inverse of 2D covariance)
     # This is more robust than manual formula, especially for non-symmetric matrices
     # (numerical errors in weighted sum can break exact symmetry)
-    # Add a small epsilon to the diagonal to prevent torch.linalg.inv from
+    # Add a small epsilon to the diagonal to prevent torch.linalg.inv_ex from
     # producing NaN on singular matrices (invalid Gaussians are masked out
-    # by valid_gaussian anyway, but autograd still propagates through inv).
-    cov_2d_inv = torch.linalg.inv(
+    # by valid_gaussian anyway, but autograd still propagates through the inverse).
+    cov_2d_inv = torch.linalg.inv_ex(
         cov_2d + 1e-6 * torch.eye(2, dtype=cov_2d.dtype, device=cov_2d.device)
-    )  # [B, C, N, 2, 2]
+    ).inverse  # [B, C, N, 2, 2]
 
     # Apply opacity-based culling
     # Reference: https://arxiv.org/pdf/2402.00525 Section B.2

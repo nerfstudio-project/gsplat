@@ -25,7 +25,7 @@ from .base import Strategy
 from .ops import duplicate, remove, reset_opa, split
 
 if TYPE_CHECKING:
-    from gsplat_scene import Scene
+    from gsplat.scene import Scene
 
 
 @dataclass

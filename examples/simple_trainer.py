@@ -61,13 +61,13 @@ from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization, RasterizeMode
 
 try:
-    from gsplat_scene import GaussianScene
-    from gsplat_stage import Stage
+    from gsplat.scene import GaussianScene
+    from gsplat.stage import Stage
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
-        f"{e.name} is not installed. The example trainers require the local "
-        "scene/stage helper libraries. Install them with:\n"
-        "    python -m pip install -e libs/scene -e libs/stage"
+        f"{e.name} is not installed. The example trainers require the "
+        "scene/stage helper packages, which ship with gsplat. Install gsplat with:\n"
+        "    python -m pip install -e ."
     ) from e
 from gsplat.cuda._wrapper import CameraModel
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
@@ -106,6 +106,9 @@ class Config:
     camera_model: CameraModel = "pinhole"
     # Load EXIF exposure metadata from images (if available)
     load_exposure: bool = True
+    # Backend to train on: "cuda" for standard multi-process training,
+    # or "dgx" for torch-dgx single-process multi-GPU training.
+    backend: str = "cuda"
 
     # --- NCore-specific options (only used when data_type="ncore") ---
     # Camera sensor IDs to load (auto-detected from sequence if empty)
@@ -155,6 +158,9 @@ class Config:
     init_extent: float = 3.0
     # Degree of spherical harmonics
     sh_degree: int = 3
+    # Cast SH coefficients to fp16 before feeding the SH kernel.
+    # Parameters and Adam state stay fp32.
+    sh_fp16: bool = False
     # Turn on another SH degree every this steps
     sh_degree_interval: int = 1000
     # Initial opacity of GS
@@ -384,7 +390,7 @@ class Runner:
         self.world_rank = world_rank
         self.local_rank = local_rank
         self.world_size = world_size
-        self.device = f"cuda:{local_rank}"
+        self.device = f"{cfg.backend}:{local_rank}"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -465,10 +471,6 @@ class Runner:
             raise ValueError(
                 f"Post-processing ({cfg.post_processing}) requires single-GPU training, "
                 f"but world_size={world_size}."
-            )
-        if cfg.post_processing == "ppisp" and isinstance(cfg.strategy, DefaultStrategy):
-            raise ValueError(
-                f"PPISP post-processing requires MCMCStrategy at the moment."
             )
 
         # Model
@@ -678,7 +680,13 @@ class Runner:
             colors = colors + splats["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
+            # Cast before the cat so both the cat and the SH kernel run on fp16.
+            if self.cfg.sh_fp16:
+                colors = torch.cat(
+                    [splats["sh0"].half(), splats["shN"].half()], 1
+                )  # [N, K, 3]
+            else:
+                colors = torch.cat([splats["sh0"], splats["shN"]], 1)  # [N, K, 3]
 
         if rasterize_mode is None:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -717,7 +725,7 @@ class Runner:
             scales=scales,
             opacities=opacities,
             colors=colors,
-            viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+            viewmats=torch.linalg.inv_ex(camtoworlds).inverse,  # [C, 4, 4]
             Ks=Ks,  # [C, 3, 3]
             width=width,
             height=height,
@@ -923,13 +931,17 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            self.cfg.strategy.step_pre_backward(
-                params=self.splats,
-                optimizers=self.optimizers,
-                state=self.strategy_state,
-                step=step,
-                info=info,
-            )
+            # While Gaussians are frozen for PPISP controller distillation the render
+            # output has requires_grad=False, so densification bookkeeping (e.g.
+            # DefaultStrategy's retain_grad) is both invalid and unnecessary.
+            if not self._gaussians_frozen:
+                self.cfg.strategy.step_pre_backward(
+                    params=self.splats,
+                    optimizers=self.optimizers,
+                    state=self.strategy_state,
+                    step=step,
+                    info=info,
+                )
 
             # loss
             if masks is not None:
@@ -1136,8 +1148,11 @@ class Runner:
             for scheduler in schedulers:
                 scheduler.step()
 
-            # Run post-backward steps after backward and optimizer
-            if isinstance(self.cfg.strategy, DefaultStrategy):
+            # Run post-backward steps after backward and optimizer.
+            # Skip structural updates while Gaussians are frozen for PPISP controller distillation.
+            if self._gaussians_frozen:
+                pass
+            elif isinstance(self.cfg.strategy, DefaultStrategy):
                 self.cfg.strategy.step_post_backward(
                     params=self.splats,
                     optimizers=self.optimizers,
@@ -1577,6 +1592,8 @@ if __name__ == "__main__":
         ),
     }
     cfg = tyro.extras.overridable_config_cli(configs)
+    if cfg.backend == "dgx":
+        import torch_dgx  # noqa: F401
     cfg.adjust_steps(cfg.steps_scaler)
 
     # try import extra dependencies

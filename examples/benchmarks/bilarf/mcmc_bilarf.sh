@@ -1,3 +1,8 @@
+#!/bin/sh
+
+SDIR=$(cd -- "$(dirname "$0")" && pwd -P)
+
+EXAMPLES_DIR=$SDIR/../..
 SCENE_DIR="data/bilarf/bilarf_data/editscenes"
 SCENE_LIST="rawnerf_windowlegovary rawnerf_sharpshadow scibldg"
 
@@ -13,7 +18,7 @@ do
     echo "Running $SCENE"
 
     # train without eval
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+    CUDA_VISIBLE_DEVICES=0 python $EXAMPLES_DIR/simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
         --post_processing bilateral_grid \
         --render_traj_path $RENDER_TRAJ_PATH \
         --data_dir $SCENE_DIR/$SCENE/ \

@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r docs/requirements.txt
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           BUILD_NO_CUDA=1 pip install .
       
       # Get version (read from source to avoid importing gsplat; BUILD_NO_CUDA=1
@@ -50,9 +50,16 @@ jobs:
         if: github.event_name == 'push'
 
       - name: Sphinx build
-        # fail on warnings: "-W --keep-going"
+        env:
+          NUM_CHANNELS: "3"
+          BUILD_3DGUT: "0"
+          BUILD_2DGS: "0"
+          BUILD_ADAM: "0"
+          BUILD_RELOC: "0"
+          BUILD_LOSSES: "0"
+          BUILD_CAMERA_WRAPPERS: "0"
         run: |
-          sphinx-build docs/source _build
+          bash docs/render_docs.sh _build
 
       # Deploy to version-dependent subdirectory.
       - name: Deploy to GitHub Pages

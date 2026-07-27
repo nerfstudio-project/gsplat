@@ -1,0 +1,1353 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Device-side pose / SE3 / trajectory math. Paired with pose.cu (kernels,
+// launches, exports). Includes quaternion.cuh for shared quaternion device
+// helpers without a separate third header.
+#pragma once
+
+#include <cmath>
+#include <cstdint>
+
+#include <cuda_runtime.h>
+
+#include "quaternion.cuh"
+
+namespace gsplat_geometry
+{
+// -----------------------------------------------------------------------------
+// se3pose_from_matrix with normalize-safe quaternion recovery.
+// Shared quaternion primitives: quaternion.cuh (QuatNormEps, quat_normalize_safe_*_write, quat_to_matrix_fwd_write).
+// Row-major 4x4 flat: upper 3x3 at 0,1,2,4,5,6,8,9,10; translation at 3,7,11
+// -----------------------------------------------------------------------------
+
+// Shepperd: row-major R (r00..r22) → quaternion (xyzw) before optional safe normalize; *branch_out ∈ {0,1,2,3} for VJP.
+template<typename scalar_t>
+__device__ void shepperd_from_matrix_fwd(
+    scalar_t r00,
+    scalar_t r01,
+    scalar_t r02,
+    scalar_t r10,
+    scalar_t r11,
+    scalar_t r12,
+    scalar_t r20,
+    scalar_t r21,
+    scalar_t r22,
+    scalar_t *__restrict__ qx,
+    scalar_t *__restrict__ qy,
+    scalar_t *__restrict__ qz,
+    scalar_t *__restrict__ qw,
+    int *__restrict__ branch_out
+)
+{
+    const scalar_t trace = r00 + r11 + r22;
+    int br               = 3;
+    if(trace > r00 && trace > r11 && trace > r22)
+    {
+        br = 3;
+    }
+    else if(r00 > r11 && r00 > r22)
+    {
+        br = 0;
+    }
+    else if(r11 > r22)
+    {
+        br = 1;
+    }
+    else
+    {
+        br = 2;
+    }
+    *branch_out = br;
+
+    if(br == 3)
+    {
+        const scalar_t f     = scalar_t(1) + trace;
+        const scalar_t s     = sqrt(f) * scalar_t(2);
+        const scalar_t inv_s = scalar_t(1) / s;
+        *qx                  = (r21 - r12) * inv_s;
+        *qy                  = (r02 - r20) * inv_s;
+        *qz                  = (r10 - r01) * inv_s;
+        *qw                  = scalar_t(0.25) * s;
+    }
+    else if(br == 0)
+    {
+        const scalar_t f     = scalar_t(1) + r00 - r11 - r22;
+        const scalar_t s     = sqrt(f) * scalar_t(2);
+        const scalar_t inv_s = scalar_t(1) / s;
+        *qx                  = scalar_t(0.25) * s;
+        *qy                  = (r01 + r10) * inv_s;
+        *qz                  = (r02 + r20) * inv_s;
+        *qw                  = (r21 - r12) * inv_s;
+    }
+    else if(br == 1)
+    {
+        const scalar_t f     = scalar_t(1) + r11 - r00 - r22;
+        const scalar_t s     = sqrt(f) * scalar_t(2);
+        const scalar_t inv_s = scalar_t(1) / s;
+        *qx                  = (r01 + r10) * inv_s;
+        *qy                  = scalar_t(0.25) * s;
+        *qz                  = (r12 + r21) * inv_s;
+        *qw                  = (r02 - r20) * inv_s;
+    }
+    else
+    {
+        const scalar_t f     = scalar_t(1) + r22 - r00 - r11;
+        const scalar_t s     = sqrt(f) * scalar_t(2);
+        const scalar_t inv_s = scalar_t(1) / s;
+        *qx                  = (r02 + r20) * inv_s;
+        *qy                  = (r12 + r21) * inv_s;
+        *qz                  = scalar_t(0.25) * s;
+        *qw                  = (r10 - r01) * inv_s;
+    }
+}
+
+// Shepperd VJP: (gqx,gqy,gqz,gqw)=∂L/∂q̂ and fixed `br` from forward → g[9] row-major ∂L/∂R (accumulate into g).
+template<typename scalar_t>
+__device__ void shepperd_from_matrix_bwd(
+    int br,
+    scalar_t r00,
+    scalar_t r01,
+    scalar_t r02,
+    scalar_t r10,
+    scalar_t r11,
+    scalar_t r12,
+    scalar_t r20,
+    scalar_t r21,
+    scalar_t r22,
+    scalar_t gqx,
+    scalar_t gqy,
+    scalar_t gqz,
+    scalar_t gqw,
+    scalar_t *__restrict__ g
+)
+{
+    for(int k = 0; k < 9; ++k)
+    {
+        g[k] = scalar_t(0);
+    }
+    if(br == 3)
+    {
+        const scalar_t trace       = r00 + r11 + r22;
+        const scalar_t f           = scalar_t(1) + trace;
+        const scalar_t s2          = sqrt(f);
+        const scalar_t inv_s       = scalar_t(1) / (scalar_t(2) * s2);
+        const scalar_t A           = r21 - r12;
+        const scalar_t B           = r02 - r20;
+        const scalar_t C           = r10 - r01;
+        const scalar_t d_inv_s_df  = -scalar_t(1) / (scalar_t(4) * f * s2);
+        const scalar_t d_qw_df     = scalar_t(1) / (scalar_t(4) * s2);
+        const scalar_t dL_d_inv_s  = A * gqx + B * gqy + C * gqz;
+        const scalar_t dL_df       = dL_d_inv_s * d_inv_s_df + gqw * d_qw_df;
+        g[0]                      += dL_df;
+        g[4]                      += dL_df;
+        g[8]                      += dL_df;
+        g[7]                      += inv_s * gqx;
+        g[5]                      -= inv_s * gqx;
+        g[2]                      += inv_s * gqy;
+        g[6]                      -= inv_s * gqy;
+        g[3]                      += inv_s * gqz;
+        g[1]                      -= inv_s * gqz;
+    }
+    else if(br == 0)
+    {
+        const scalar_t f           = scalar_t(1) + r00 - r11 - r22;
+        const scalar_t s2          = sqrt(f);
+        const scalar_t inv_s       = scalar_t(1) / (scalar_t(2) * s2);
+        const scalar_t D           = r01 + r10;
+        const scalar_t E           = r02 + r20;
+        const scalar_t Fv          = r21 - r12;
+        const scalar_t d_inv_s_df  = -scalar_t(1) / (scalar_t(4) * f * s2);
+        const scalar_t d_qx_df     = scalar_t(1) / (scalar_t(4) * s2);
+        const scalar_t dL_d_inv_s  = D * gqy + E * gqz + Fv * gqw;
+        const scalar_t dL_df       = dL_d_inv_s * d_inv_s_df + gqx * d_qx_df;
+        g[0]                      += dL_df;
+        g[4]                      -= dL_df;
+        g[8]                      -= dL_df;
+        g[1]                      += inv_s * gqy;
+        g[3]                      += inv_s * gqy;
+        g[2]                      += inv_s * gqz;
+        g[6]                      += inv_s * gqz;
+        g[7]                      += inv_s * gqw;
+        g[5]                      -= inv_s * gqw;
+    }
+    else if(br == 1)
+    {
+        const scalar_t f           = scalar_t(1) + r11 - r00 - r22;
+        const scalar_t s2          = sqrt(f);
+        const scalar_t inv_s       = scalar_t(1) / (scalar_t(2) * s2);
+        const scalar_t D           = r01 + r10;
+        const scalar_t E           = r12 + r21;
+        const scalar_t Fv          = r02 - r20;
+        const scalar_t d_inv_s_df  = -scalar_t(1) / (scalar_t(4) * f * s2);
+        const scalar_t d_qy_df     = scalar_t(1) / (scalar_t(4) * s2);
+        const scalar_t dL_d_inv_s  = D * gqx + E * gqz + Fv * gqw;
+        const scalar_t dL_df       = dL_d_inv_s * d_inv_s_df + gqy * d_qy_df;
+        g[0]                      -= dL_df;
+        g[4]                      += dL_df;
+        g[8]                      -= dL_df;
+        g[1]                      += inv_s * gqx;
+        g[3]                      += inv_s * gqx;
+        g[5]                      += inv_s * gqz;
+        g[7]                      += inv_s * gqz;
+        g[2]                      += inv_s * gqw;
+        g[6]                      -= inv_s * gqw;
+    }
+    else
+    {
+        const scalar_t f           = scalar_t(1) + r22 - r00 - r11;
+        const scalar_t s2          = sqrt(f);
+        const scalar_t inv_s       = scalar_t(1) / (scalar_t(2) * s2);
+        const scalar_t D           = r02 + r20;
+        const scalar_t E           = r12 + r21;
+        const scalar_t Fv          = r10 - r01;
+        const scalar_t d_inv_s_df  = -scalar_t(1) / (scalar_t(4) * f * s2);
+        const scalar_t d_qz_df     = scalar_t(1) / (scalar_t(4) * s2);
+        const scalar_t dL_d_inv_s  = D * gqx + E * gqy + Fv * gqw;
+        const scalar_t dL_df       = dL_d_inv_s * d_inv_s_df + gqz * d_qz_df;
+        g[0]                      -= dL_df;
+        g[4]                      -= dL_df;
+        g[8]                      += dL_df;
+        g[2]                      += inv_s * gqx;
+        g[6]                      += inv_s * gqx;
+        g[5]                      += inv_s * gqy;
+        g[7]                      += inv_s * gqy;
+        g[3]                      += inv_s * gqw;
+        g[1]                      -= inv_s * gqw;
+    }
+}
+
+// Time-interpolation chain rule: grad_alpha = ∂L/∂α with α=(qt-t_min)/(t_max-t_min), d=t_max-t_min.
+// Outputs *g_t0,*g_t1,*g_qt for ∂L/∂time0, ∂L/∂time1, ∂L/∂query_time (handles t0>t1 swap).
+__forceinline__ __device__ void trajectory_alpha_time_grads_f(
+    float t0s, float t1s, float qt, float d, float grad_alpha, float *g_t0, float *g_t1, float *g_qt
+)
+{
+    if(d <= 0.0f)
+    {
+        *g_t0 = *g_t1 = *g_qt = 0.0f;
+        return;
+    }
+    const float inv_d = 1.0f / d;
+    *g_qt             = grad_alpha * inv_d;
+    if(t0s <= t1s)
+    {
+        const float d2 = d * d;
+        *g_t0          = grad_alpha * (qt - t1s) / d2;
+        *g_t1          = -grad_alpha * (qt - t0s) / d2;
+    }
+    else
+    {
+        const float d2 = d * d;
+        *g_t1          = grad_alpha * (qt - t0s) / d2;
+        *g_t0          = -grad_alpha * (qt - t1s) / d2;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Float32 trajectory: two-keyframe SLERP + helpers; OOB flags when query time leaves the span.
+// -----------------------------------------------------------------------------
+
+// Row i: interpolate pose between keyframes 0/1 at query_time. trans* (N,3), rot* xyzw (N,4), time* indexed by strides st0/st1; query_time stride sqt.
+// result_point (N,3) = R(qi)(point) + ti; result_oob[i]∈{0,1} if qt outside [min(t0,t1), max(t0,t1)].
+__forceinline__ __device__ void trajectory_transform_point_2poses_fwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st0,
+    int64_t st1,
+    int64_t sqt,
+    const float *__restrict__ trans0,
+    const float *__restrict__ rot0,
+    const float *__restrict__ time0,
+    const float *__restrict__ trans1,
+    const float *__restrict__ rot1,
+    const float *__restrict__ time1,
+    const float *__restrict__ point,
+    const float *__restrict__ query_time,
+    float *__restrict__ result_point,
+    float *__restrict__ result_oob
+)
+{
+    const int64_t o3  = i * 3;
+    const int64_t o4  = i * 4;
+    const float t0s   = time0[i * st0];
+    const float t1s   = time1[i * st1];
+    const float qt    = query_time[i * sqt];
+    const float t_min = fminf(t0s, t1s);
+    const float t_max = fmaxf(t0s, t1s);
+    const bool oob    = (qt < t_min) || (qt > t_max);
+    const float d     = t_max - t_min;
+    const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
+
+    float tx0 = trans0[o3 + 0], ty0 = trans0[o3 + 1], tz0 = trans0[o3 + 2];
+    float tx1 = trans1[o3 + 0], ty1 = trans1[o3 + 1], tz1 = trans1[o3 + 2];
+    float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
+    float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
+    float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
+
+    float tix, tiy, tiz;
+    float qix, qiy, qiz, qiw;
+    if(t0s <= t1s)
+    {
+        const float om = 1.0f - alpha;
+        tix            = om * tx0 + alpha * tx1;
+        tiy            = om * ty0 + alpha * ty1;
+        tiz            = om * tz0 + alpha * tz1;
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+    else
+    {
+        const float om = 1.0f - alpha;
+        tix            = om * tx1 + alpha * tx0;
+        tiy            = om * ty1 + alpha * ty0;
+        tiz            = om * tz1 + alpha * tz0;
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+    float rx, ry, rz;
+    quat_rotate_vector_fwd_impl<float>(qix, qiy, qiz, qiw, px, py, pz, &rx, &ry, &rz);
+    result_point[o3 + 0] = rx + tix;
+    result_point[o3 + 1] = ry + tiy;
+    result_point[o3 + 2] = rz + tiz;
+    result_oob[i]        = oob ? 1.0f : 0.0f;
+}
+
+// VJP for 2-pose point transform: grad_result_point (N,3) → grads for trans0/1, rot0/1 (xyzw), time strides, point, query_time.
+__forceinline__ __device__ void trajectory_transform_point_2poses_bwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st0,
+    int64_t st1,
+    int64_t sqt,
+    const float *__restrict__ trans0,
+    const float *__restrict__ rot0,
+    const float *__restrict__ time0,
+    const float *__restrict__ trans1,
+    const float *__restrict__ rot1,
+    const float *__restrict__ time1,
+    const float *__restrict__ point,
+    const float *__restrict__ query_time,
+    const float *__restrict__ grad_result_point,
+    float *__restrict__ grad_trans0,
+    float *__restrict__ grad_rot0,
+    float *__restrict__ grad_time0,
+    float *__restrict__ grad_trans1,
+    float *__restrict__ grad_rot1,
+    float *__restrict__ grad_time1,
+    float *__restrict__ grad_point,
+    float *__restrict__ grad_query_time
+)
+{
+    const int64_t o3  = i * 3;
+    const int64_t o4  = i * 4;
+    const float t0s   = time0[i * st0];
+    const float t1s   = time1[i * st1];
+    const float qt    = query_time[i * sqt];
+    const float t_min = fminf(t0s, t1s);
+    const float t_max = fmaxf(t0s, t1s);
+    const float d     = t_max - t_min;
+    const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
+
+    float tx0 = trans0[o3 + 0], ty0 = trans0[o3 + 1], tz0 = trans0[o3 + 2];
+    float tx1 = trans1[o3 + 0], ty1 = trans1[o3 + 1], tz1 = trans1[o3 + 2];
+    float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
+    float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
+    float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
+
+    float qix, qiy, qiz, qiw;
+    if(t0s <= t1s)
+    {
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+    else
+    {
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+
+    const float gtx = grad_result_point[o3 + 0];
+    const float gty = grad_result_point[o3 + 1];
+    const float gtz = grad_result_point[o3 + 2];
+
+    float gqix, gqiy, gqiz, gqiw;
+    float gpx, gpy, gpz;
+    quat_rotate_vector_bwd_impl<float>(
+        qix, qiy, qiz, qiw, px, py, pz, gtx, gty, gtz, &gqix, &gqiy, &gqiz, &gqiw, &gpx, &gpy, &gpz
+    );
+
+    grad_point[o3 + 0] = gpx;
+    grad_point[o3 + 1] = gpy;
+    grad_point[o3 + 2] = gpz;
+
+    float grad_alpha = 0.0f;
+
+    if(t0s <= t1s)
+    {
+        grad_trans0[o3 + 0]  = (1.0f - alpha) * gtx;
+        grad_trans0[o3 + 1]  = (1.0f - alpha) * gty;
+        grad_trans0[o3 + 2]  = (1.0f - alpha) * gtz;
+        grad_trans1[o3 + 0]  = alpha * gtx;
+        grad_trans1[o3 + 1]  = alpha * gty;
+        grad_trans1[o3 + 2]  = alpha * gtz;
+        grad_alpha          += gtx * (tx1 - tx0) + gty * (ty1 - ty0) + gtz * (tz1 - tz0);
+    }
+    else
+    {
+        grad_trans1[o3 + 0]  = (1.0f - alpha) * gtx;
+        grad_trans1[o3 + 1]  = (1.0f - alpha) * gty;
+        grad_trans1[o3 + 2]  = (1.0f - alpha) * gtz;
+        grad_trans0[o3 + 0]  = alpha * gtx;
+        grad_trans0[o3 + 1]  = alpha * gty;
+        grad_trans0[o3 + 2]  = alpha * gtz;
+        grad_alpha          += gtx * (tx0 - tx1) + gty * (ty0 - ty1) + gtz * (tz0 - tz1);
+    }
+
+    float gq1x, gq1y, gq1z, gq1w, gq2x, gq2y, gq2z, gq2w, ga_slerp = 0.0f;
+    if(t0s <= t1s)
+    {
+        quat_slerp_pair_bwd_with_time_grad<float>(
+            qx0,
+            qy0,
+            qz0,
+            qw0,
+            qx1,
+            qy1,
+            qz1,
+            qw1,
+            alpha,
+            qix,
+            qiy,
+            qiz,
+            qiw,
+            gqix,
+            gqiy,
+            gqiz,
+            gqiw,
+            &gq1x,
+            &gq1y,
+            &gq1z,
+            &gq1w,
+            &gq2x,
+            &gq2y,
+            &gq2z,
+            &gq2w,
+            &ga_slerp
+        );
+        grad_rot0[o4 + 0] = gq1x;
+        grad_rot0[o4 + 1] = gq1y;
+        grad_rot0[o4 + 2] = gq1z;
+        grad_rot0[o4 + 3] = gq1w;
+        grad_rot1[o4 + 0] = gq2x;
+        grad_rot1[o4 + 1] = gq2y;
+        grad_rot1[o4 + 2] = gq2z;
+        grad_rot1[o4 + 3] = gq2w;
+    }
+    else
+    {
+        quat_slerp_pair_bwd_with_time_grad<float>(
+            qx1,
+            qy1,
+            qz1,
+            qw1,
+            qx0,
+            qy0,
+            qz0,
+            qw0,
+            alpha,
+            qix,
+            qiy,
+            qiz,
+            qiw,
+            gqix,
+            gqiy,
+            gqiz,
+            gqiw,
+            &gq1x,
+            &gq1y,
+            &gq1z,
+            &gq1w,
+            &gq2x,
+            &gq2y,
+            &gq2z,
+            &gq2w,
+            &ga_slerp
+        );
+        grad_rot1[o4 + 0] = gq1x;
+        grad_rot1[o4 + 1] = gq1y;
+        grad_rot1[o4 + 2] = gq1z;
+        grad_rot1[o4 + 3] = gq1w;
+        grad_rot0[o4 + 0] = gq2x;
+        grad_rot0[o4 + 1] = gq2y;
+        grad_rot0[o4 + 2] = gq2z;
+        grad_rot0[o4 + 3] = gq2w;
+    }
+    grad_alpha += ga_slerp;
+
+    float g_t0 = 0.0f, g_t1 = 0.0f, g_qt = 0.0f;
+    trajectory_alpha_time_grads_f(t0s, t1s, qt, d, grad_alpha, &g_t0, &g_t1, &g_qt);
+    grad_time0[i * st0]      = g_t0;
+    grad_time1[i * st1]      = g_t1;
+    grad_query_time[i * sqt] = g_qt;
+}
+
+// Row i: SLERP rot0/rot1 at query_time (same α and OOB semantics as 2-pose point); result_quat (N,4) xyzw.
+__forceinline__ __device__ void trajectory_get_rotation_2poses_fwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st0,
+    int64_t st1,
+    int64_t sqt,
+    const float *__restrict__ time0,
+    const float *__restrict__ time1,
+    const float *__restrict__ query_time,
+    const float *__restrict__ rot0,
+    const float *__restrict__ rot1,
+    float *__restrict__ result_quat,
+    float *__restrict__ result_oob
+)
+{
+    const int64_t o4  = i * 4;
+    const float t0s   = time0[i * st0];
+    const float t1s   = time1[i * st1];
+    const float qt    = query_time[i * sqt];
+    const float t_min = fminf(t0s, t1s);
+    const float t_max = fmaxf(t0s, t1s);
+    const bool oob    = (qt < t_min) || (qt > t_max);
+    const float d     = t_max - t_min;
+    const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
+    float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
+    float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
+    float ox, oy, oz, ow;
+    if(t0s <= t1s)
+    {
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &ox, &oy, &oz, &ow);
+    }
+    else
+    {
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &ox, &oy, &oz, &ow);
+    }
+    result_quat[o4 + 0] = ox;
+    result_quat[o4 + 1] = oy;
+    result_quat[o4 + 2] = oz;
+    result_quat[o4 + 3] = ow;
+    result_oob[i]       = oob ? 1.0f : 0.0f;
+}
+
+// VJP: grad_result_quat (N,4) → grad_rot0, grad_rot1; time grads via trajectory_alpha_time_grads_f on SLERP ∂L/∂α.
+__forceinline__ __device__ void trajectory_get_rotation_2poses_bwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st0,
+    int64_t st1,
+    int64_t sqt,
+    const float *__restrict__ time0,
+    const float *__restrict__ time1,
+    const float *__restrict__ query_time,
+    const float *__restrict__ rot0,
+    const float *__restrict__ rot1,
+    const float *__restrict__ grad_result_quat,
+    float *__restrict__ grad_rot0,
+    float *__restrict__ grad_rot1,
+    float *__restrict__ grad_time0,
+    float *__restrict__ grad_time1,
+    float *__restrict__ grad_query_time
+)
+{
+    const int64_t o4  = i * 4;
+    const float t0s   = time0[i * st0];
+    const float t1s   = time1[i * st1];
+    const float qt    = query_time[i * sqt];
+    const float t_min = fminf(t0s, t1s);
+    const float t_max = fmaxf(t0s, t1s);
+    const float d     = t_max - t_min;
+    const float alpha = d > 0.0f ? (qt - t_min) / d : 0.0f;
+
+    float qx0 = rot0[o4 + 0], qy0 = rot0[o4 + 1], qz0 = rot0[o4 + 2], qw0 = rot0[o4 + 3];
+    float qx1 = rot1[o4 + 0], qy1 = rot1[o4 + 1], qz1 = rot1[o4 + 2], qw1 = rot1[o4 + 3];
+
+    float qix, qiy, qiz, qiw;
+    if(t0s <= t1s)
+    {
+        quat_slerp_pair_fwd<float>(qx0, qy0, qz0, qw0, qx1, qy1, qz1, qw1, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+    else
+    {
+        quat_slerp_pair_fwd<float>(qx1, qy1, qz1, qw1, qx0, qy0, qz0, qw0, alpha, &qix, &qiy, &qiz, &qiw);
+    }
+
+    const float gx = grad_result_quat[o4 + 0];
+    const float gy = grad_result_quat[o4 + 1];
+    const float gz = grad_result_quat[o4 + 2];
+    const float gw = grad_result_quat[o4 + 3];
+
+    float gq1x, gq1y, gq1z, gq1w, gq2x, gq2y, gq2z, gq2w, ga_slerp = 0.0f;
+    if(t0s <= t1s)
+    {
+        quat_slerp_pair_bwd_with_time_grad<float>(
+            qx0,
+            qy0,
+            qz0,
+            qw0,
+            qx1,
+            qy1,
+            qz1,
+            qw1,
+            alpha,
+            qix,
+            qiy,
+            qiz,
+            qiw,
+            gx,
+            gy,
+            gz,
+            gw,
+            &gq1x,
+            &gq1y,
+            &gq1z,
+            &gq1w,
+            &gq2x,
+            &gq2y,
+            &gq2z,
+            &gq2w,
+            &ga_slerp
+        );
+        grad_rot0[o4 + 0] = gq1x;
+        grad_rot0[o4 + 1] = gq1y;
+        grad_rot0[o4 + 2] = gq1z;
+        grad_rot0[o4 + 3] = gq1w;
+        grad_rot1[o4 + 0] = gq2x;
+        grad_rot1[o4 + 1] = gq2y;
+        grad_rot1[o4 + 2] = gq2z;
+        grad_rot1[o4 + 3] = gq2w;
+    }
+    else
+    {
+        quat_slerp_pair_bwd_with_time_grad<float>(
+            qx1,
+            qy1,
+            qz1,
+            qw1,
+            qx0,
+            qy0,
+            qz0,
+            qw0,
+            alpha,
+            qix,
+            qiy,
+            qiz,
+            qiw,
+            gx,
+            gy,
+            gz,
+            gw,
+            &gq1x,
+            &gq1y,
+            &gq1z,
+            &gq1w,
+            &gq2x,
+            &gq2y,
+            &gq2z,
+            &gq2w,
+            &ga_slerp
+        );
+        grad_rot1[o4 + 0] = gq1x;
+        grad_rot1[o4 + 1] = gq1y;
+        grad_rot1[o4 + 2] = gq1z;
+        grad_rot1[o4 + 3] = gq1w;
+        grad_rot0[o4 + 0] = gq2x;
+        grad_rot0[o4 + 1] = gq2y;
+        grad_rot0[o4 + 2] = gq2z;
+        grad_rot0[o4 + 3] = gq2w;
+    }
+
+    float g_t0 = 0.0f, g_t1 = 0.0f, g_qt = 0.0f;
+    trajectory_alpha_time_grads_f(t0s, t1s, qt, d, ga_slerp, &g_t0, &g_t1, &g_qt);
+    grad_time0[i * st0]      = g_t0;
+    grad_time1[i * st1]      = g_t1;
+    grad_query_time[i * sqt] = g_qt;
+}
+
+// -----------------------------------------------------------------------------
+// Single-keyframe trajectory (float32): OOB = (query_time != keyframe time), transform still applied.
+// -----------------------------------------------------------------------------
+
+// Row i: result = R(rot_i) point_i + trans_i; result_oob[i]=1 if query_time[i*sqt] != time[i*st] (exact float compare).
+__forceinline__ __device__ void trajectory_transform_point_1pose_fwd_device(
+    int64_t i,
+    int64_t n,
+    int64_t st,
+    int64_t sqt,
+    const float *__restrict__ trans,
+    const float *__restrict__ rot,
+    const float *__restrict__ time,
+    const float *__restrict__ point,
+    const float *__restrict__ query_time,
+    float *__restrict__ result_point,
+    float *__restrict__ result_oob
+)
+{
+    const int64_t o3 = i * 3;
+    const int64_t o4 = i * 4;
+    const float tt   = time[i * st];
+    const float qt   = query_time[i * sqt];
+    const bool oob   = (qt != tt);
+
+    const float qx = rot[o4 + 0], qy = rot[o4 + 1], qz = rot[o4 + 2], qw = rot[o4 + 3];
+    const float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
+    const float tx = trans[o3 + 0], ty = trans[o3 + 1], tz = trans[o3 + 2];
+    float rx = 0, ry = 0, rz = 0;
+    quat_rotate_vector_fwd_impl<float>(qx, qy, qz, qw, px, py, pz, &rx, &ry, &rz);
+    result_point[o3 + 0] = rx + tx;
+    result_point[o3 + 1] = ry + ty;
+    result_point[o3 + 2] = rz + tz;
+    result_oob[i]        = oob ? 1.0f : 0.0f;
+}
+
+// VJP: grad_result_point → grad_trans, grad_rot (xyzw), grad_point; grad_time/grad_query_time not populated by device body (kernel may ignore).
+__forceinline__ __device__ void trajectory_transform_point_1pose_bwd_device(
+    int64_t i,
+    int64_t n,
+    const float *__restrict__ trans,
+    const float *__restrict__ rot,
+    const float *__restrict__ time,
+    const float *__restrict__ point,
+    const float *__restrict__ query_time,
+    const float *__restrict__ grad_result_point,
+    float *__restrict__ grad_trans,
+    float *__restrict__ grad_rot,
+    float *__restrict__ grad_time,
+    float *__restrict__ grad_point,
+    float *__restrict__ grad_query_time
+)
+{
+    const int64_t o3 = i * 3;
+    const int64_t o4 = i * 4;
+    const float qx = rot[o4 + 0], qy = rot[o4 + 1], qz = rot[o4 + 2], qw = rot[o4 + 3];
+    const float px = point[o3 + 0], py = point[o3 + 1], pz = point[o3 + 2];
+
+    const float gtx = grad_result_point[o3 + 0];
+    const float gty = grad_result_point[o3 + 1];
+    const float gtz = grad_result_point[o3 + 2];
+
+    float gqix, gqiy, gqiz, gqiw;
+    float gpx, gpy, gpz;
+    quat_rotate_vector_bwd_impl<float>(
+        qx, qy, qz, qw, px, py, pz, gtx, gty, gtz, &gqix, &gqiy, &gqiz, &gqiw, &gpx, &gpy, &gpz
+    );
+
+    grad_trans[o3 + 0] = gtx;
+    grad_trans[o3 + 1] = gty;
+    grad_trans[o3 + 2] = gtz;
+    grad_rot[o4 + 0]   = gqix;
+    grad_rot[o4 + 1]   = gqiy;
+    grad_rot[o4 + 2]   = gqiz;
+    grad_rot[o4 + 3]   = gqiw;
+    grad_point[o3 + 0] = gpx;
+    grad_point[o3 + 1] = gpy;
+    grad_point[o3 + 2] = gpz;
+}
+
+// Row i: 7-D pose (tx,ty,tz, qx,qy,qz,qw) → new_q = fr⊗iq, new_t = scale * (R(fr)*it + fxyz); frame quat fr is xyzw.
+__forceinline__ __device__ void frame_transform_poses_tquat_fwd_device(
+    int64_t i,
+    int64_t n,
+    float frx,
+    float fry,
+    float frz,
+    float frw,
+    float ftx,
+    float fty,
+    float ftz,
+    float scale,
+    const float *__restrict__ input_poses,
+    float *__restrict__ output_poses
+)
+{
+    const int64_t o7 = i * 7;
+    const float itx = input_poses[o7 + 0], ity = input_poses[o7 + 1], itz = input_poses[o7 + 2];
+    const float iqx = input_poses[o7 + 3], iqy = input_poses[o7 + 4], iqz = input_poses[o7 + 5],
+                iqw = input_poses[o7 + 6];
+    float nqx = 0, nqy = 0, nqz = 0, nqw = 0;
+    quat_multiply_impl<float>(frx, fry, frz, frw, iqx, iqy, iqz, iqw, &nqx, &nqy, &nqz, &nqw);
+    float rtx = 0, rty = 0, rtz = 0;
+    quat_rotate_vector_fwd_impl<float>(frx, fry, frz, frw, itx, ity, itz, &rtx, &rty, &rtz);
+    const float ntx      = scale * (rtx + ftx);
+    const float nty      = scale * (rty + fty);
+    const float ntz      = scale * (rtz + ftz);
+    output_poses[o7 + 0] = ntx;
+    output_poses[o7 + 1] = nty;
+    output_poses[o7 + 2] = ntz;
+    output_poses[o7 + 3] = nqx;
+    output_poses[o7 + 4] = nqy;
+    output_poses[o7 + 5] = nqz;
+    output_poses[o7 + 6] = nqw;
+}
+
+namespace packed_track_cuda
+{
+    template<typename scalar_t>
+    __forceinline__ __device__ void atomic_add(scalar_t *__restrict__ address, scalar_t value)
+    {
+        atomicAdd(address, value);
+    }
+
+    template<typename time_t>
+    __forceinline__ __device__ time_t clamp_time(time_t value, time_t first, time_t last)
+    {
+        return value < first ? first : (value > last ? last : value);
+    }
+
+    template<typename time_t>
+    __forceinline__ __device__ int64_t
+        lower_bound_local(const time_t *__restrict__ times, int64_t start, int64_t count, time_t query)
+    {
+        int64_t lo = 0;
+        int64_t hi = count;
+        while(lo < hi)
+        {
+            const int64_t mid = lo + ((hi - lo) >> 1);
+            if(times[start + mid] < query)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    template<typename scalar_t, typename time_t>
+    __forceinline__ __device__ scalar_t interpolation_alpha(time_t left, time_t right, time_t query, bool valid)
+    {
+        if(!valid)
+        {
+            return scalar_t(0);
+        }
+        return static_cast<scalar_t>((query - left) / (right - left));
+    }
+
+    template<typename scalar_t>
+    __forceinline__ __device__ scalar_t interpolation_alpha(int64_t left, int64_t right, int64_t query, bool valid)
+    {
+        if(!valid)
+        {
+            return scalar_t(0);
+        }
+        const bool numerator_fits = !((left > 0 && query < INT64_MIN + left) || (left < 0 && query > INT64_MAX + left));
+        const bool denominator_fits
+            = !((left > 0 && right < INT64_MIN + left) || (left < 0 && right > INT64_MAX + left));
+        const double numerator   = numerator_fits ? static_cast<double>(query - left)
+                                                  : static_cast<double>(query) - static_cast<double>(left);
+        const double denominator = denominator_fits ? static_cast<double>(right - left)
+                                                    : static_cast<double>(right) - static_cast<double>(left);
+        return denominator != 0.0 ? static_cast<scalar_t>(numerator / denominator) : scalar_t(0);
+    }
+
+    __forceinline__ __device__ bool valid_track_range(int64_t start, int64_t count, int64_t n_poses)
+    {
+        return start >= 0 && count > 0 && start <= n_poses && count <= n_poses - start;
+    }
+
+    template<typename scalar_t, typename time_t>
+    __forceinline__ __device__ void accumulate_interpolation_time_grads(
+        time_t left_time,
+        time_t right_time,
+        time_t clamped_query,
+        bool valid,
+        int64_t left,
+        int64_t right,
+        int64_t track,
+        scalar_t grad_alpha,
+        time_t *__restrict__ grad_pose_times,
+        time_t *__restrict__ grad_query_times
+    )
+    {
+        const time_t d = right_time - left_time;
+        if(valid && d != time_t(0))
+        {
+            const time_t grad_alpha_t = static_cast<time_t>(grad_alpha);
+            const time_t d2           = d * d;
+            atomic_add(grad_pose_times + left, grad_alpha_t * (clamped_query - right_time) / d2);
+            atomic_add(grad_pose_times + right, -grad_alpha_t * (clamped_query - left_time) / d2);
+            grad_query_times[track] = grad_alpha_t / d;
+        }
+    }
+
+    template<typename scalar_t>
+    __forceinline__ __device__ void accumulate_interpolation_time_grads(
+        int64_t,
+        int64_t,
+        int64_t,
+        bool,
+        int64_t,
+        int64_t,
+        int64_t,
+        scalar_t,
+        int64_t *__restrict__,
+        int64_t *__restrict__
+    )
+    {
+    }
+
+    template<typename time_t>
+    __forceinline__ __device__ void track_interval(
+        const time_t *__restrict__ times,
+        int64_t start,
+        int64_t count,
+        time_t query,
+        int64_t *left_index,
+        int64_t *right_index,
+        bool *same_pose,
+        bool *valid_interval,
+        time_t *clamped_query,
+        time_t *left_time,
+        time_t *right_time
+    )
+    {
+        const time_t first_time  = times[start];
+        const time_t last_time   = times[start + count - 1];
+        const time_t clamped     = clamp_time(query, first_time, last_time);
+        int64_t right_local      = lower_bound_local(times, start, count, clamped);
+        const int64_t last_local = count - 1;
+        if(query <= first_time)
+        {
+            right_local = 0;
+        }
+        else if(query > last_time)
+        {
+            right_local = last_local;
+        }
+        else if(right_local > last_local)
+        {
+            right_local = last_local;
+        }
+
+        const int64_t right       = start + right_local;
+        const time_t rt           = times[right];
+        const bool exact_or_first = right_local == 0 || rt == clamped;
+        const int64_t left_local  = exact_or_first ? right_local : right_local - 1;
+        const int64_t left        = start + left_local;
+        const time_t lt           = times[left];
+        const bool same           = left == right;
+        *left_index               = left;
+        *right_index              = right;
+        *same_pose                = same;
+        *valid_interval           = !same && rt != lt;
+        *clamped_query            = clamped;
+        *left_time                = lt;
+        *right_time               = rt;
+    }
+} // namespace packed_track_cuda
+
+// Batch row i: out = R(q_i) p_i + t_i. translation/point (N,3), rotation (N,4) xyzw, contiguous row-major.
+template<typename scalar_t>
+__device__ void se3pose_transform_point_fwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ translation,
+    const scalar_t *__restrict__ rotation,
+    const scalar_t *__restrict__ point,
+    scalar_t *__restrict__ out
+)
+{
+    const int64_t ot  = i * 3;
+    const int64_t oq  = i * 4;
+    const scalar_t qx = rotation[oq + 0], qy = rotation[oq + 1], qz = rotation[oq + 2], qw = rotation[oq + 3];
+    const scalar_t px = point[ot + 0], py = point[ot + 1], pz = point[ot + 2];
+    const scalar_t tx = translation[ot + 0], ty = translation[ot + 1], tz = translation[ot + 2];
+    scalar_t rx = 0, ry = 0, rz = 0;
+    quat_rotate_vector_fwd_impl(qx, qy, qz, qw, px, py, pz, &rx, &ry, &rz);
+    out[ot + 0] = rx + tx;
+    out[ot + 1] = ry + ty;
+    out[ot + 2] = rz + tz;
+}
+
+// Batch row i: out = parent * child for SE(3) poses. Translation is
+// R(parent_q) child_t + parent_t; rotation is parent_q ⊗ child_q.
+template<typename scalar_t>
+__device__ void se3pose_compose_fwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ parent_translation,
+    const scalar_t *__restrict__ parent_rotation,
+    const scalar_t *__restrict__ child_translation,
+    const scalar_t *__restrict__ child_rotation,
+    scalar_t *__restrict__ out_translation,
+    scalar_t *__restrict__ out_rotation
+)
+{
+    const int64_t ot = i * 3;
+    const int64_t oq = i * 4;
+
+    const scalar_t pqx = parent_rotation[oq + 0];
+    const scalar_t pqy = parent_rotation[oq + 1];
+    const scalar_t pqz = parent_rotation[oq + 2];
+    const scalar_t pqw = parent_rotation[oq + 3];
+    const scalar_t ctx = child_translation[ot + 0];
+    const scalar_t cty = child_translation[ot + 1];
+    const scalar_t ctz = child_translation[ot + 2];
+
+    scalar_t rtx = 0, rty = 0, rtz = 0;
+    quat_rotate_vector_fwd_impl(pqx, pqy, pqz, pqw, ctx, cty, ctz, &rtx, &rty, &rtz);
+    out_translation[ot + 0] = rtx + parent_translation[ot + 0];
+    out_translation[ot + 1] = rty + parent_translation[ot + 1];
+    out_translation[ot + 2] = rtz + parent_translation[ot + 2];
+
+    quat_multiply_impl(
+        pqx,
+        pqy,
+        pqz,
+        pqw,
+        child_rotation[oq + 0],
+        child_rotation[oq + 1],
+        child_rotation[oq + 2],
+        child_rotation[oq + 3],
+        out_rotation + oq + 0,
+        out_rotation + oq + 1,
+        out_rotation + oq + 2,
+        out_rotation + oq + 3
+    );
+}
+
+// VJP for se3pose_compose_fwd_device.
+template<typename scalar_t>
+__device__ void se3pose_compose_bwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ parent_translation,
+    const scalar_t *__restrict__ parent_rotation,
+    const scalar_t *__restrict__ child_translation,
+    const scalar_t *__restrict__ child_rotation,
+    const scalar_t *__restrict__ grad_out_translation,
+    const scalar_t *__restrict__ grad_out_rotation,
+    scalar_t *__restrict__ grad_parent_translation,
+    scalar_t *__restrict__ grad_parent_rotation,
+    scalar_t *__restrict__ grad_child_translation,
+    scalar_t *__restrict__ grad_child_rotation
+)
+{
+    const int64_t ot = i * 3;
+    const int64_t oq = i * 4;
+
+    const scalar_t pqx = parent_rotation[oq + 0];
+    const scalar_t pqy = parent_rotation[oq + 1];
+    const scalar_t pqz = parent_rotation[oq + 2];
+    const scalar_t pqw = parent_rotation[oq + 3];
+    const scalar_t ctx = child_translation[ot + 0];
+    const scalar_t cty = child_translation[ot + 1];
+    const scalar_t ctz = child_translation[ot + 2];
+    const scalar_t gtx = grad_out_translation[ot + 0];
+    const scalar_t gty = grad_out_translation[ot + 1];
+    const scalar_t gtz = grad_out_translation[ot + 2];
+
+    scalar_t g_parent_q_tx = 0, g_parent_q_ty = 0, g_parent_q_tz = 0, g_parent_q_tw = 0;
+    scalar_t g_child_tx = 0, g_child_ty = 0, g_child_tz = 0;
+    quat_rotate_vector_bwd_impl(
+        pqx,
+        pqy,
+        pqz,
+        pqw,
+        ctx,
+        cty,
+        ctz,
+        gtx,
+        gty,
+        gtz,
+        &g_parent_q_tx,
+        &g_parent_q_ty,
+        &g_parent_q_tz,
+        &g_parent_q_tw,
+        &g_child_tx,
+        &g_child_ty,
+        &g_child_tz
+    );
+
+    grad_parent_translation[ot + 0] = gtx;
+    grad_parent_translation[ot + 1] = gty;
+    grad_parent_translation[ot + 2] = gtz;
+    grad_child_translation[ot + 0]  = g_child_tx;
+    grad_child_translation[ot + 1]  = g_child_ty;
+    grad_child_translation[ot + 2]  = g_child_tz;
+
+    scalar_t g_parent_q_rx = 0, g_parent_q_ry = 0, g_parent_q_rz = 0, g_parent_q_rw = 0;
+    quat_multiply_bwd_impl(
+        pqx,
+        pqy,
+        pqz,
+        pqw,
+        child_rotation[oq + 0],
+        child_rotation[oq + 1],
+        child_rotation[oq + 2],
+        child_rotation[oq + 3],
+        grad_out_rotation[oq + 0],
+        grad_out_rotation[oq + 1],
+        grad_out_rotation[oq + 2],
+        grad_out_rotation[oq + 3],
+        &g_parent_q_rx,
+        &g_parent_q_ry,
+        &g_parent_q_rz,
+        &g_parent_q_rw,
+        grad_child_rotation + oq + 0,
+        grad_child_rotation + oq + 1,
+        grad_child_rotation + oq + 2,
+        grad_child_rotation + oq + 3
+    );
+
+    grad_parent_rotation[oq + 0] = g_parent_q_tx + g_parent_q_rx;
+    grad_parent_rotation[oq + 1] = g_parent_q_ty + g_parent_q_ry;
+    grad_parent_rotation[oq + 2] = g_parent_q_tz + g_parent_q_rz;
+    grad_parent_rotation[oq + 3] = g_parent_q_tw + g_parent_q_rw;
+}
+
+// Batch row i: out = R(q_i) d_i (3-vector); rotation xyzw (N,4), direction/out (N,3).
+template<typename scalar_t>
+__device__ void se3pose_transform_direction_fwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ rotation,
+    const scalar_t *__restrict__ direction,
+    scalar_t *__restrict__ out
+)
+{
+    const int64_t ov  = i * 3;
+    const int64_t oq  = i * 4;
+    const scalar_t qx = rotation[oq + 0], qy = rotation[oq + 1], qz = rotation[oq + 2], qw = rotation[oq + 3];
+    const scalar_t dx = direction[ov + 0], dy = direction[ov + 1], dz = direction[ov + 2];
+    quat_rotate_vector_fwd_impl(qx, qy, qz, qw, dx, dy, dz, out + ov, out + ov + 1, out + ov + 2);
+}
+
+// Batch row i: out = R(q)^T (p - t) = rotate(q*, p-t) with conjugate q*=(-x,-y,-z,w) in xyzw storage.
+template<typename scalar_t>
+__device__ void se3pose_inverse_transform_point_fwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ translation,
+    const scalar_t *__restrict__ rotation,
+    const scalar_t *__restrict__ point,
+    scalar_t *__restrict__ out
+)
+{
+    const int64_t ov  = i * 3;
+    const int64_t oq  = i * 4;
+    const scalar_t qx = rotation[oq + 0], qy = rotation[oq + 1], qz = rotation[oq + 2], qw = rotation[oq + 3];
+    const scalar_t px = point[ov + 0], py = point[ov + 1], pz = point[ov + 2];
+    const scalar_t tx = translation[ov + 0], ty = translation[ov + 1], tz = translation[ov + 2];
+    const scalar_t vx = px - tx, vy = py - ty, vz = pz - tz;
+    quat_rotate_vector_fwd_impl(-qx, -qy, -qz, qw, vx, vy, vz, out + ov, out + ov + 1, out + ov + 2);
+}
+
+// Scalar form of the inverse transform: out = R(q)^T (p - t) = rotate(q*, p-t)
+// with conjugate q*=(-x,-y,-z,w) in xyzw storage.  Only equals R^T for unit q
+// (no normalize here).  Single-point args so dtype-templated sensor kernels can
+// route through it without the batched stride math.
+template<typename T>
+__device__ __forceinline__ void se3_inverse_transform_point(
+    T qx, T qy, T qz, T qw, T tx, T ty, T tz, T px, T py, T pz, T *ox, T *oy, T *oz
+)
+{
+    quat_rotate_vector_fwd_impl<T>(-qx, -qy, -qz, qw, px - tx, py - ty, pz - tz, ox, oy, oz);
+}
+
+// Batch row i: out = R(q)^T d (same conjugate trick as inverse point, without translation).
+template<typename scalar_t>
+__device__ void se3pose_inverse_transform_direction_fwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ rotation,
+    const scalar_t *__restrict__ direction,
+    scalar_t *__restrict__ out
+)
+{
+    const int64_t ov  = i * 3;
+    const int64_t oq  = i * 4;
+    const scalar_t qx = rotation[oq + 0], qy = rotation[oq + 1], qz = rotation[oq + 2], qw = rotation[oq + 3];
+    const scalar_t dx = direction[ov + 0], dy = direction[ov + 1], dz = direction[ov + 2];
+    quat_rotate_vector_fwd_impl(-qx, -qy, -qz, qw, dx, dy, dz, out + ov, out + ov + 1, out + ov + 2);
+}
+
+// Batch row i: out16[i*16..+15] = 4×4 row-major homogeneous [R|t; 0 0 0 1]; R9 row-major 3×3, t length-3.
+template<typename scalar_t>
+__device__ void se3pose_to_matrix_pack_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ translation,
+    const scalar_t *__restrict__ R9,
+    scalar_t *__restrict__ out16
+)
+{
+    const int64_t ot  = i * 3;
+    const int64_t or9 = i * 9;
+    const int64_t o16 = i * 16;
+    const scalar_t tx = translation[ot + 0], ty = translation[ot + 1], tz = translation[ot + 2];
+    const scalar_t r0 = R9[or9 + 0], r1 = R9[or9 + 1], r2 = R9[or9 + 2];
+    const scalar_t r3 = R9[or9 + 3], r4 = R9[or9 + 4], r5 = R9[or9 + 5];
+    const scalar_t r6 = R9[or9 + 6], r7 = R9[or9 + 7], r8 = R9[or9 + 8];
+    out16[o16 + 0]  = r0;
+    out16[o16 + 1]  = r1;
+    out16[o16 + 2]  = r2;
+    out16[o16 + 3]  = tx;
+    out16[o16 + 4]  = r3;
+    out16[o16 + 5]  = r4;
+    out16[o16 + 6]  = r5;
+    out16[o16 + 7]  = ty;
+    out16[o16 + 8]  = r6;
+    out16[o16 + 9]  = r7;
+    out16[o16 + 10] = r8;
+    out16[o16 + 11] = tz;
+    out16[o16 + 12] = scalar_t(0);
+    out16[o16 + 13] = scalar_t(0);
+    out16[o16 + 14] = scalar_t(0);
+    out16[o16 + 15] = scalar_t(1);
+}
+
+// Batch row i: inverse SE(3) as row-major 4×4 [R^T | -R^T t; 0 0 0 1]. rotation buffer xyzw if wxyz_format==0 else (w,x,y,z).
+template<typename scalar_t>
+__device__ void se3pose_to_inverse_matrix_fwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ translation,
+    const scalar_t *__restrict__ rotation,
+    scalar_t *__restrict__ out16,
+    const int wxyz_format
+)
+{
+    const int64_t ot = i * 3;
+    const int64_t oq = i * 4;
+    scalar_t qx, qy, qz, qw;
+    if(wxyz_format != 0)
+    {
+        qw = rotation[oq + 0];
+        qx = rotation[oq + 1];
+        qy = rotation[oq + 2];
+        qz = rotation[oq + 3];
+    }
+    else
+    {
+        qx = rotation[oq + 0];
+        qy = rotation[oq + 1];
+        qz = rotation[oq + 2];
+        qw = rotation[oq + 3];
+    }
+    const scalar_t tx = translation[ot + 0], ty = translation[ot + 1], tz = translation[ot + 2];
+    scalar_t r[9];
+    quat_to_matrix_fwd_write<scalar_t>(qx, qy, qz, qw, r);
+    const scalar_t ux = -(r[0] * tx + r[3] * ty + r[6] * tz);
+    const scalar_t uy = -(r[1] * tx + r[4] * ty + r[7] * tz);
+    const scalar_t uz = -(r[2] * tx + r[5] * ty + r[8] * tz);
+    const int64_t o16 = i * 16;
+    out16[o16 + 0]    = r[0];
+    out16[o16 + 1]    = r[3];
+    out16[o16 + 2]    = r[6];
+    out16[o16 + 3]    = ux;
+    out16[o16 + 4]    = r[1];
+    out16[o16 + 5]    = r[4];
+    out16[o16 + 6]    = r[7];
+    out16[o16 + 7]    = uy;
+    out16[o16 + 8]    = r[2];
+    out16[o16 + 9]    = r[5];
+    out16[o16 + 10]   = r[8];
+    out16[o16 + 11]   = uz;
+    out16[o16 + 12]   = scalar_t(0);
+    out16[o16 + 13]   = scalar_t(0);
+    out16[o16 + 14]   = scalar_t(0);
+    out16[o16 + 15]   = scalar_t(1);
+}
+
+// Batch row i: m16 row-major 4×4 → translation (3) from last column of upper 3×4; rotation xyzw via Shepperd + safe normalize.
+template<typename scalar_t>
+__device__ void se3pose_from_matrix_fwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ m16,
+    scalar_t *__restrict__ translation,
+    scalar_t *__restrict__ rotation
+)
+{
+    const int64_t o   = i * 16;
+    const scalar_t tx = m16[o + 3], ty = m16[o + 7], tz = m16[o + 11];
+    const int64_t ot    = i * 3;
+    translation[ot + 0] = tx;
+    translation[ot + 1] = ty;
+    translation[ot + 2] = tz;
+    const scalar_t r00 = m16[o + 0], r01 = m16[o + 1], r02 = m16[o + 2];
+    const scalar_t r10 = m16[o + 4], r11 = m16[o + 5], r12 = m16[o + 6];
+    const scalar_t r20 = m16[o + 8], r21 = m16[o + 9], r22 = m16[o + 10];
+    scalar_t qx = 0, qy = 0, qz = 0, qw = 0;
+    int br = 0;
+    shepperd_from_matrix_fwd<scalar_t>(r00, r01, r02, r10, r11, r12, r20, r21, r22, &qx, &qy, &qz, &qw, &br);
+    (void)br;
+    const int64_t oq = i * 4;
+    quat_normalize_safe_fwd_write<scalar_t>(
+        qx, qy, qz, qw, rotation + oq, rotation + oq + 1, rotation + oq + 2, rotation + oq + 3
+    );
+}
+
+// VJP: grad_translation (3), grad_rotation (xyzw per row) → grad_m16 row-major 4×4 (zeros then accumulates t and R blocks).
+template<typename scalar_t>
+__device__ void se3pose_from_matrix_bwd_device(
+    int64_t i,
+    int64_t n,
+    const scalar_t *__restrict__ m16,
+    const scalar_t *__restrict__ grad_translation,
+    const scalar_t *__restrict__ grad_rotation,
+    scalar_t *__restrict__ grad_m16
+)
+{
+    const int64_t o = i * 16;
+    for(int k = 0; k < 16; ++k)
+    {
+        grad_m16[o + k] = scalar_t(0);
+    }
+    const int64_t ot   = i * 3;
+    const int64_t oq   = i * 4;
+    grad_m16[o + 3]    = grad_translation[ot + 0];
+    grad_m16[o + 7]    = grad_translation[ot + 1];
+    grad_m16[o + 11]   = grad_translation[ot + 2];
+    const scalar_t r00 = m16[o + 0], r01 = m16[o + 1], r02 = m16[o + 2];
+    const scalar_t r10 = m16[o + 4], r11 = m16[o + 5], r12 = m16[o + 6];
+    const scalar_t r20 = m16[o + 8], r21 = m16[o + 9], r22 = m16[o + 10];
+    scalar_t qx = 0, qy = 0, qz = 0, qw = 0;
+    int br = 0;
+    shepperd_from_matrix_fwd<scalar_t>(r00, r01, r02, r10, r11, r12, r20, r21, r22, &qx, &qy, &qz, &qw, &br);
+    scalar_t gqx = 0, gqy = 0, gqz = 0, gqw = 0;
+    quat_normalize_safe_bwd_write<scalar_t>(
+        qx,
+        qy,
+        qz,
+        qw,
+        grad_rotation[oq + 0],
+        grad_rotation[oq + 1],
+        grad_rotation[oq + 2],
+        grad_rotation[oq + 3],
+        &gqx,
+        &gqy,
+        &gqz,
+        &gqw
+    );
+    scalar_t gR[9];
+    shepperd_from_matrix_bwd<scalar_t>(br, r00, r01, r02, r10, r11, r12, r20, r21, r22, gqx, gqy, gqz, gqw, gR);
+    grad_m16[o + 0]  += gR[0];
+    grad_m16[o + 1]  += gR[1];
+    grad_m16[o + 2]  += gR[2];
+    grad_m16[o + 4]  += gR[3];
+    grad_m16[o + 5]  += gR[4];
+    grad_m16[o + 6]  += gR[5];
+    grad_m16[o + 8]  += gR[6];
+    grad_m16[o + 9]  += gR[7];
+    grad_m16[o + 10] += gR[8];
+}
+} // namespace gsplat_geometry

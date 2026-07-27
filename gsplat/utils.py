@@ -287,7 +287,7 @@ def get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):
 #         Surface normals.
 #     """
 #     height, width = depths.shape[1:3]
-#     viewmats = torch.linalg.inv(camtoworlds)  # [C, 4, 4]
+#     viewmats = torch.linalg.inv_ex(camtoworlds).inverse  # [C, 4, 4]
 
 #     normals = []
 #     for cid, depth in enumerate(depths):
