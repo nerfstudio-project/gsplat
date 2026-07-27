@@ -419,8 +419,12 @@ class Parser:
                     + params[2] * theta**6
                     + params[3] * theta**8
                 )
-                mapx = (fx * x1 * r + width // 2).astype(np.float32)
-                mapy = (fy * y1 * r + height // 2).astype(np.float32)
+                # Re-center on the principal point (cx, cy), not the image
+                # center: with zero distortion (r == 1) this is the identity
+                # map, and it keeps the undistorted image consistent with the
+                # K_undist used at render time when cx/cy are off-center.
+                mapx = (fx * x1 * r + cx).astype(np.float32)
+                mapy = (fy * y1 * r + cy).astype(np.float32)
 
                 # Use mask to define ROI
                 mask = np.logical_and(
