@@ -111,14 +111,19 @@ def _camera_distortion(camera: Any) -> tuple[np.ndarray, str]:
         return np.array([params[3], params[4], 0.0, 0.0], dtype=np.float32), "fisheye"
     if model_name == "FULL_OPENCV":
         # params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
-        # The perspective undistortion path (OpenCV) supports the coefficients up to
-        # k3; the rational-model terms k4, k5, k6 are not handled here, so require
-        # them to be zero rather than silently dropping non-zero distortion.
+        # This loader undistorts with the [k1, k2, p1, p2, k3] coefficients
+        # only. OpenCV can represent the full rational model (an 8-element
+        # [k1, k2, p1, p2, k3, k4, k5, k6] vector), but that is not wired
+        # through here, so refuse cameras whose rational terms k4, k5, k6 are
+        # non-zero rather than silently dropping their distortion. Raise (not
+        # assert) so the check is not stripped under `python -O`.
         k4, k5, k6 = float(params[9]), float(params[10]), float(params[11])
-        assert np.allclose((k4, k5, k6), 0.0), (
-            "FULL_OPENCV camera has non-zero rational distortion terms "
-            f"(k4={k4}, k5={k5}, k6={k6}); only coefficients up to k3 are supported."
-        )
+        if not np.allclose((k4, k5, k6), 0.0):
+            raise ValueError(
+                "FULL_OPENCV camera has non-zero rational distortion terms "
+                f"(k4={k4}, k5={k5}, k6={k6}); only coefficients up to k3 are "
+                "supported by this loader."
+            )
         # keep k1, k2, p1, p2, k3 (OpenCV accepts a 5-element distortion vector)
         return np.array(params[4:9], dtype=np.float32), "perspective"
 
