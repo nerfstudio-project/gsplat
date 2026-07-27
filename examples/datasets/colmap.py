@@ -101,6 +101,14 @@ def _camera_distortion(camera: Any) -> tuple[np.ndarray, str]:
         return np.array(params[4:8], dtype=np.float32), "perspective"
     if model_name == "OPENCV_FISHEYE":
         return np.array(params[4:8], dtype=np.float32), "fisheye"
+    if model_name == "SIMPLE_RADIAL_FISHEYE":
+        # params: f, cx, cy, k. Equidistant fisheye with a single radial term;
+        # identical to OPENCV_FISHEYE with k2 = k3 = k4 = 0.
+        return np.array([params[3], 0.0, 0.0, 0.0], dtype=np.float32), "fisheye"
+    if model_name == "RADIAL_FISHEYE":
+        # params: f, cx, cy, k1, k2. Equidistant fisheye with two radial terms;
+        # identical to OPENCV_FISHEYE with k3 = k4 = 0.
+        return np.array([params[3], params[4], 0.0, 0.0], dtype=np.float32), "fisheye"
     if model_name == "FULL_OPENCV":
         # params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
         # The perspective undistortion path (OpenCV) supports the coefficients up to
