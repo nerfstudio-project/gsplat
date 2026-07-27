@@ -67,7 +67,7 @@ def parse_render_mode_comment(comments) -> Optional[str]:
         lowered = text.lower()
         if not lowered.startswith(prefix):
             continue
-        value = text[len(prefix):].strip().lower()
+        value = text[len(prefix) :].strip().lower()
         if value == "mip":
             result = "antialiased"
         elif value == "default":

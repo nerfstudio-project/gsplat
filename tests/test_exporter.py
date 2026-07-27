@@ -71,9 +71,7 @@ def test_parse_render_mode_comment():
     assert parse_render_mode_comment(None) is None
     # Last matching comment wins.
     assert (
-        parse_render_mode_comment(
-            ["SplatRenderMode: default", "SplatRenderMode: mip"]
-        )
+        parse_render_mode_comment(["SplatRenderMode: default", "SplatRenderMode: mip"])
         == "antialiased"
     )
 
