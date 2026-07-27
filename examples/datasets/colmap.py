@@ -101,6 +101,18 @@ def _camera_distortion(camera: Any) -> tuple[np.ndarray, str]:
         return np.array(params[4:8], dtype=np.float32), "perspective"
     if model_name == "OPENCV_FISHEYE":
         return np.array(params[4:8], dtype=np.float32), "fisheye"
+    if model_name == "FULL_OPENCV":
+        # params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+        # The perspective undistortion path (OpenCV) supports the coefficients up to
+        # k3; the rational-model terms k4, k5, k6 are not handled here, so require
+        # them to be zero rather than silently dropping non-zero distortion.
+        k4, k5, k6 = float(params[9]), float(params[10]), float(params[11])
+        assert np.allclose((k4, k5, k6), 0.0), (
+            "FULL_OPENCV camera has non-zero rational distortion terms "
+            f"(k4={k4}, k5={k5}, k6={k6}); only coefficients up to k3 are supported."
+        )
+        # keep k1, k2, p1, p2, k3 (OpenCV accepts a 5-element distortion vector)
+        return np.array(params[4:9], dtype=np.float32), "perspective"
 
     raise ValueError(
         f"Only perspective and fisheye cameras are supported, got {model_name}"
