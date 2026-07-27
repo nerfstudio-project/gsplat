@@ -1,0 +1,532 @@
+diff --git a/gsplat/cuda/csrc/Projection2DGSFused.cu b/gsplat/cuda/csrc/Projection2DGSFused.cu
+index 74c6c69..cab3b50 100644
+--- a/gsplat/cuda/csrc/Projection2DGSFused.cu
++++ b/gsplat/cuda/csrc/Projection2DGSFused.cu
+@@ -436,7 +436,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
+     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+ 
+     // Get warp context for dynamic reductions
+-    unsigned int warp_thread_id = threadIdx.x % 64;
++    unsigned int warp_thread_id = threadIdx.x % WARP_SIZE;
+     unsigned long long warp_active_mask = __activemask();
+ 
+     #if USE_ROCM
+@@ -445,7 +445,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
+ 
+         // Elect a leader for atomic write to global memory.
+         unsigned long long my_gid_mask = 0;
+-        for (int i = 0; i < 64; ++i) {
++        for (int i = 0; i < WARP_SIZE; ++i) {
+             long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+             if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                 my_gid_mask |= (1ULL << i);
+@@ -465,7 +465,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
+     manual_dynamic_reduce_sum_vec2(v_scale, gid, warp_thread_id, warp_active_mask);
+ 
+     unsigned long long my_gid_mask = 0;
+-    for (int i = 0; i < 64; ++i) {
++    for (int i = 0; i < WARP_SIZE; ++i) {
+         long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+         if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+             my_gid_mask |= (1ULL << i);
+@@ -518,7 +518,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
+         manual_dynamic_reduce_sum_vec3(v_t, cid, warp_thread_id, warp_active_mask);
+ 
+         unsigned long long my_cid_mask = 0;
+-        for (int i = 0; i < 64; ++i) {
++        for (int i = 0; i < WARP_SIZE; ++i) {
+             long long lane_cid_temp = __shfl_sync(warp_active_mask, cid, i);
+             if ((warp_active_mask & (1ULL << i)) && (lane_cid_temp == cid)) {
+                 my_cid_mask |= (1ULL << i);
+diff --git a/gsplat/cuda/csrc/Projection2DGSPacked.cu b/gsplat/cuda/csrc/Projection2DGSPacked.cu
+index a50c194..c47ba28 100644
+--- a/gsplat/cuda/csrc/Projection2DGSPacked.cu
++++ b/gsplat/cuda/csrc/Projection2DGSPacked.cu
+@@ -397,7 +397,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
+     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+     
+     // Get warp context for dynamic reductions
+-    unsigned int warp_thread_id = threadIdx.x % 64;
++    unsigned int warp_thread_id = threadIdx.x % WARP_SIZE;
+     unsigned long long warp_active_mask = __activemask();
+ 
+     if (sparse_grad) {
+@@ -428,7 +428,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
+ 
+             // Elect a leader for atomic write to global memory.
+             unsigned long long my_gid_mask = 0;
+-            for (int i = 0; i < 64; ++i) {
++            for (int i = 0; i < WARP_SIZE; ++i) {
+                 long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+                 if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                     my_gid_mask |= (1ULL << i);
+@@ -448,7 +448,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
+         manual_dynamic_reduce_sum_vec2(v_scale, gid, warp_thread_id, warp_active_mask);
+ 
+         unsigned long long my_gid_mask = 0;
+-        for (int i = 0; i < 64; ++i) {
++        for (int i = 0; i < WARP_SIZE; ++i) {
+             long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+             if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                 my_gid_mask |= (1ULL << i);
+@@ -501,7 +501,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
+         manual_dynamic_reduce_sum_vec3(v_t, cid, warp_thread_id, warp_active_mask);
+ 
+         unsigned long long my_cid_mask = 0;
+-        for (int i = 0; i < 64; ++i) {
++        for (int i = 0; i < WARP_SIZE; ++i) {
+             long long lane_cid_temp = __shfl_sync(warp_active_mask, cid, i);
+             if ((warp_active_mask & (1ULL << i)) && (lane_cid_temp == cid)) {
+                 my_cid_mask |= (1ULL << i);
+diff --git a/gsplat/cuda/csrc/ProjectionEWA3DGSFused.cu b/gsplat/cuda/csrc/ProjectionEWA3DGSFused.cu
+index 4d0d67a..d62c0e4 100644
+--- a/gsplat/cuda/csrc/ProjectionEWA3DGSFused.cu
++++ b/gsplat/cuda/csrc/ProjectionEWA3DGSFused.cu
+@@ -474,7 +474,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
+     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+ 
+     // Get warp context for dynamic reductions
+-    unsigned int warp_thread_id = threadIdx.x % 64;
++    unsigned int warp_thread_id = threadIdx.x % WARP_SIZE;
+     unsigned long long warp_active_mask = __activemask();
+ 
+     #if USE_ROCM
+@@ -487,7 +487,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
+ 
+         // Elect a leader for atomic write to global memory.
+         unsigned long long my_gid_mask = 0;
+-        for (int i = 0; i < 64; ++i) {
++        for (int i = 0; i < WARP_SIZE; ++i) {
+             long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+             if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                 my_gid_mask |= (1ULL << i);
+@@ -508,7 +508,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
+ 
+         // Elect a leader for atomic write to global memory.
+         unsigned long long my_gid_mask = 0;
+-        for (int i = 0; i < 64; ++i) {
++        for (int i = 0; i < WARP_SIZE; ++i) {
+             long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+             if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                 my_gid_mask |= (1ULL << i);
+@@ -536,7 +536,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
+             manual_dynamic_reduce_sum_vec3(v_scale, gid, warp_thread_id, warp_active_mask);
+ 
+             unsigned long long my_gid_mask = 0;
+-            for (int i = 0; i < 64; ++i) {
++            for (int i = 0; i < WARP_SIZE; ++i) {
+                 long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+                 if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                     my_gid_mask |= (1ULL << i);
+@@ -609,7 +609,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
+         manual_dynamic_reduce_sum_vec3(v_t, cid, warp_thread_id, warp_active_mask);
+ 
+         unsigned long long my_cid_mask = 0;
+-        for (int i = 0; i < 64; ++i) {
++        for (int i = 0; i < WARP_SIZE; ++i) {
+             long long lane_cid_temp = __shfl_sync(warp_active_mask, cid, i);
+             if ((warp_active_mask & (1ULL << i)) && (lane_cid_temp == cid)) {
+                 my_cid_mask |= (1ULL << i);
+diff --git a/gsplat/cuda/csrc/ProjectionEWA3DGSPacked.cu b/gsplat/cuda/csrc/ProjectionEWA3DGSPacked.cu
+index 8c54f9d..37fc83d 100644
+--- a/gsplat/cuda/csrc/ProjectionEWA3DGSPacked.cu
++++ b/gsplat/cuda/csrc/ProjectionEWA3DGSPacked.cu
+@@ -602,7 +602,7 @@ if (idx % 100000 == 0 && DEBUG_PRINT) {
+         printf("  v_t_local (after W2C_VJP): [%f, %f, %f]\n", v_t_local.x, v_t_local.y, v_t_local.z);
+     }
+     // Get warp context for dynamic reductions
+-    unsigned int warp_thread_id = threadIdx.x % 64;
++    unsigned int warp_thread_id = threadIdx.x % WARP_SIZE;
+     unsigned long long warp_active_mask = __activemask();
+     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+ 
+@@ -624,7 +624,7 @@ if (idx % 100000 == 0 && DEBUG_PRINT) {
+         }
+             // Elect a leader for atomic write to global memory.
+             unsigned long long my_gid_mask = 0;
+-            for (int i = 0; i < 64; ++i) {
++            for (int i = 0; i < WARP_SIZE; ++i) {
+                 long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+                 if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                     my_gid_mask |= (1ULL << i);
+@@ -649,7 +649,7 @@ if (idx % 100000 == 0 && DEBUG_PRINT) {
+             );
+ 
+             unsigned long long my_gid_mask = 0;
+-            for (int i = 0; i < 64; ++i) {
++            for (int i = 0; i < WARP_SIZE; ++i) {
+                 long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+                 if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                     my_gid_mask |= (1ULL << i);
+@@ -681,7 +681,7 @@ if (idx % 100000 == 0 && DEBUG_PRINT) {
+             manual_dynamic_reduce_sum_vec3(v_scale_local, gid, warp_thread_id, warp_active_mask);
+ 
+             unsigned long long my_gid_mask = 0;
+-            for (int i = 0; i < 64; ++i) {
++            for (int i = 0; i < WARP_SIZE; ++i) {
+                 long long lane_gid_temp = __shfl_sync(warp_active_mask, gid, i);
+                 if ((warp_active_mask & (1ULL << i)) && (lane_gid_temp == gid)) {
+                     my_gid_mask |= (1ULL << i);
+@@ -803,7 +803,7 @@ if (idx % 100000 == 0 && DEBUG_PRINT) {
+         manual_dynamic_reduce_sum_vec3(v_t_local, cid, warp_thread_id, warp_active_mask);
+ 
+         unsigned long long my_cid_mask = 0;
+-        for (int i = 0; i < 64; ++i) {
++        for (int i = 0; i < WARP_SIZE; ++i) {
+             long long lane_cid_temp = __shfl_sync(warp_active_mask, cid, i);
+             if ((warp_active_mask & (1ULL << i)) && (lane_cid_temp == cid)) {
+                 my_cid_mask |= (1ULL << i);
+diff --git a/gsplat/cuda/csrc/RasterizeToPixels2DGSBwd.cu b/gsplat/cuda/csrc/RasterizeToPixels2DGSBwd.cu
+index 979082f..952439f 100644
+--- a/gsplat/cuda/csrc/RasterizeToPixels2DGSBwd.cu
++++ b/gsplat/cuda/csrc/RasterizeToPixels2DGSBwd.cu
+@@ -179,7 +179,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
+     float *normals_batch = &rgbs_batch[block_size * CDIM]; // [block_size * 3]
+     
+     #if USE_ROCM
+-    using warp_reduce_float_t = rocprim::warp_reduce<float,64>;
++    using warp_reduce_float_t = rocprim::warp_reduce<float,WARP_SIZE>;
+     auto* warp_storage_base   =
+     (typename warp_reduce_float_t::storage_type*)
+         (normals_batch + block_size * 3);
+@@ -246,7 +246,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
+     const uint32_t tr = block.thread_rank();
+     
+     #if USE_ROCM
+-    cg::thread_block_tile<64> warp = cg::tiled_partition<64>(block);
++    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+     #else
+     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+     #endif
+@@ -634,16 +634,16 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
+              * ==================================================
+              */
+             #if USE_ROCM
+-            rocprim_warpSum<CDIM, 64>(v_rgb_local, warp_storage_base);   // CDIM-sized float array
+-            rocprim_warpSum<3, 64>(v_normal_local, warp_storage_base);   // 3-sized float array
+-            rocprim_warpSum<64>(v_xy_local, warp_storage_base);          // vec2
+-            rocprim_warpSum<64>(v_u_M_local, warp_storage_base);         // float
+-            rocprim_warpSum<64>(v_v_M_local, warp_storage_base);         // float
+-            rocprim_warpSum<64>(v_w_M_local, warp_storage_base);         // float
++            rocprim_warpSum<CDIM, WARP_SIZE>(v_rgb_local, warp_storage_base);   // CDIM-sized float array
++            rocprim_warpSum<3, WARP_SIZE>(v_normal_local, warp_storage_base);   // 3-sized float array
++            rocprim_warpSum<WARP_SIZE>(v_xy_local, warp_storage_base);          // vec2
++            rocprim_warpSum<WARP_SIZE>(v_u_M_local, warp_storage_base);         // float
++            rocprim_warpSum<WARP_SIZE>(v_v_M_local, warp_storage_base);         // float
++            rocprim_warpSum<WARP_SIZE>(v_w_M_local, warp_storage_base);         // float
+             if (v_means2d_abs != nullptr) {
+-                rocprim_warpSum<64>(v_xy_abs_local, warp_storage_base);  // vec2
++                rocprim_warpSum<WARP_SIZE>(v_xy_abs_local, warp_storage_base);  // vec2
+             }
+-            rocprim_warpSum<64>(v_opacity_local, warp_storage_base);     // float
++            rocprim_warpSum<WARP_SIZE>(v_opacity_local, warp_storage_base);     // float
+             #else
+             warpSum<CDIM>(v_rgb_local, warp);
+             warpSum<3>(v_normal_local, warp);
+@@ -767,9 +767,9 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
+     //rocPRIM shared memory allocation
+     const uint32_t block_size = tile_size * tile_size;
+     const uint32_t warps_per_block =
+-        (block_size + 63) / 64;                       // for 64-lane warp
++        (block_size + WARP_SIZE - 1) / WARP_SIZE;     // wave32 (RDNA) or wave64 (CDNA)
+     std::size_t warp_scratch_bytes =
+-        warps_per_block * sizeof(typename rocprim::warp_reduce<float,64>::storage_type);
++        warps_per_block * sizeof(typename rocprim::warp_reduce<float,WARP_SIZE>::storage_type);
+ 
+     int64_t shmem_size =
+         tile_size * tile_size *
+diff --git a/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu b/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
+index 37300ab..308e3f5 100644
+--- a/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
++++ b/gsplat/cuda/csrc/RasterizeToPixels3DGSBwd.cu
+@@ -473,7 +473,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
+         (float *)&conic_batch[batch_allocation_size]; // [batch_allocation_size * CDIM]
+     
+     #if USE_ROCM
+-    using warp_reduce_float_t = rocprim::warp_reduce<float,64>;
++    using warp_reduce_float_t = rocprim::warp_reduce<float,WARP_SIZE>;
+     auto* warp_storage_base   =
+     (typename warp_reduce_float_t::storage_type*)
+         (rgbs_batch + batch_allocation_size * CDIM);
+@@ -500,14 +500,14 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
+     const uint32_t tr = block.thread_rank();
+     
+     #if USE_ROCM
+-    cg::thread_block_tile<64> warp = cg::tiled_partition<64>(block);
++    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+     #else
+     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+     #endif
+-    
++
+     #if USE_ROCM
+-        __shared__ typename rocprim::warp_reduce<int32_t, 64>::storage_type warp_storage;
+-        rocprim::warp_reduce<int32_t, 64> wreduce;
++        __shared__ typename rocprim::warp_reduce<int32_t, WARP_SIZE>::storage_type warp_storage;
++        rocprim::warp_reduce<int32_t, WARP_SIZE> wreduce;
+         int32_t warp_bin_final;
+         wreduce.reduce( bin_final,            // 1) value held by this lane
+                 warp_bin_final,               // 2) reference that will receive the result
+@@ -644,12 +644,12 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
+                 }
+             }
+             #if USE_ROCM
+-            rocprim_warpSum<CDIM, 64>(v_rgb_local, warp_storage_base);   // CDIM-sized float array
+-            rocprim_warpSum<64>(v_conic_local, warp_storage_base); // float
+-            rocprim_warpSum<64>(v_xy_local, warp_storage_base);    // vec2
++            rocprim_warpSum<CDIM, WARP_SIZE>(v_rgb_local, warp_storage_base);   // CDIM-sized float array
++            rocprim_warpSum<WARP_SIZE>(v_conic_local, warp_storage_base); // float
++            rocprim_warpSum<WARP_SIZE>(v_xy_local, warp_storage_base);    // vec2
+             if (v_means2d_abs != nullptr)
+-                rocprim_warpSum<64>(v_xy_abs_local, warp_storage_base);// vec2
+-            rocprim_warpSum<64>(v_opacity_local, warp_storage_base);// float
++                rocprim_warpSum<WARP_SIZE>(v_xy_abs_local, warp_storage_base);// vec2
++            rocprim_warpSum<WARP_SIZE>(v_opacity_local, warp_storage_base);// float
+             if (warp.thread_rank() == 0) {
+                 int32_t g = id_batch[t]; // flatten index in [I * N] or [nnz]
+                 float *v_rgb_ptr = (float *)(v_colors) + CDIM * g;
+@@ -761,7 +761,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
+     const uint32_t block_size = tile_size * tile_size;
+     uint32_t max_batch_size;
+     int64_t shmem_size;
+-    if (block_size == 64) { // wave64-optimized path
++    if (block_size == 64 && WARP_SIZE == 64) { // wave64-only DPP path (CDNA)
+       max_batch_size = 32;
+       //max_batch_size = min(max_batch_size, block_size);
+       if (CDIM <= 32) {
+@@ -776,9 +776,9 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
+       if (CDIM <= 16) {
+         max_batch_size = block_size;
+       }
+-      const uint32_t warps_per_block = (block_size + 63) / 64; // for 64-lane warp
++      const uint32_t warps_per_block = (block_size + WARP_SIZE - 1) / WARP_SIZE;
+       std::size_t warp_scratch_bytes =
+-        warps_per_block * sizeof(typename rocprim::warp_reduce<float,64>::storage_type);
++        warps_per_block * sizeof(typename rocprim::warp_reduce<float,WARP_SIZE>::storage_type);
+       shmem_size =
+         max_batch_size *
+         (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(float) * CDIM) + warp_scratch_bytes;
+@@ -813,9 +813,20 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
+         );
+     }
+ #else
+-    auto KERNEL = (block_size == 64) ?
+-	    rasterize_bs64_to_pixels_3dgs_bwd_kernel<CDIM, float> :
+-	    rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>;
++    // The bs64 kernel reduces with rocprim::warp_reduce<...,64> (its hardware-DPP
++    // path is commented out upstream and replaced by rocprim_warpSum<64>). On a
++    // wave32 target that 64-lane instantiation hits rocprim's silent "invalid warp
++    // size" no-op -> wrong color/SH gradients. `if constexpr` ensures the bs64
++    // template is only odr-used (instantiated) on wave64, so the wrong-warp-size
++    // path is never compiled in for gfx1201; on wave64 (CDNA) the selection is
++    // byte-identical to upstream. Both kernels share one signature, so a single
++    // `auto` (deduced from the always-valid wave32 kernel) holds either pointer.
++    auto KERNEL = rasterize_to_pixels_3dgs_bwd_kernel<CDIM, float>;
++    if constexpr (WARP_SIZE == 64) {
++        if (block_size == 64) {
++            KERNEL = rasterize_bs64_to_pixels_3dgs_bwd_kernel<CDIM, float>;
++        }
++    }
+     hipError_t err = hipFuncSetAttribute(
+         reinterpret_cast<void*>(KERNEL), // Cast to void*
+         hipFuncAttributeMaxDynamicSharedMemorySize,
+diff --git a/gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSBwd.cu b/gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSBwd.cu
+index 2380afd..d70287b 100644
+--- a/gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSBwd.cu
++++ b/gsplat/cuda/csrc/RasterizeToPixelsFromWorld3DGSBwd.cu
+@@ -190,7 +190,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+         (float *)&quat_batch[block_size]; // [block_size * CDIM]
+         
+     #if USE_ROCM
+-    using warp_reduce_float_t = rocprim::warp_reduce<float,64>;
++    using warp_reduce_float_t = rocprim::warp_reduce<float,WARP_SIZE>;
+     auto* warp_storage_base   =
+     (typename warp_reduce_float_t::storage_type*)
+         (rgbs_batch + block_size * CDIM);
+@@ -216,7 +216,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+     // each thread loads one gaussian at a time before rasterizing
+     const uint32_t tr = block.thread_rank();
+     #if USE_ROCM
+-    cg::thread_block_tile<64> warp = cg::tiled_partition<64>(block);
++    cg::thread_block_tile<WARP_SIZE> warp = cg::tiled_partition<WARP_SIZE>(block);
+     #else
+     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+     #endif
+@@ -376,11 +376,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+                 }
+             }
+             #if USE_ROCM
+-            rocprim_warpSum<CDIM, 64>(v_rgb_local, warp_storage_base);   // CDIM-sized float array
+-            rocprim_warpSum<64>(v_mean_local, warp_storage_base);        // vec3
+-            rocprim_warpSum<64>(v_scale_local, warp_storage_base);       // vec3
+-            rocprim_warpSum<64>(v_quat_local, warp_storage_base);        // vec4
+-            rocprim_warpSum<64>(v_opacity_local, warp_storage_base);     // float
++            rocprim_warpSum<CDIM, WARP_SIZE>(v_rgb_local, warp_storage_base);   // CDIM-sized float array
++            rocprim_warpSum<WARP_SIZE>(v_mean_local, warp_storage_base);        // vec3
++            rocprim_warpSum<WARP_SIZE>(v_scale_local, warp_storage_base);       // vec3
++            rocprim_warpSum<WARP_SIZE>(v_quat_local, warp_storage_base);        // vec4
++            rocprim_warpSum<WARP_SIZE>(v_opacity_local, warp_storage_base);     // float
+             #else
+             warpSum<CDIM>(v_rgb_local, warp);
+             warpSum(v_mean_local, warp);
+@@ -482,9 +482,9 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+     //rocPRIM shared memory allocation
+     const uint32_t block_size = tile_size * tile_size;
+     const uint32_t warps_per_block =
+-        (block_size + 63) / 64;                       // for 64-lane warp
++        (block_size + WARP_SIZE - 1) / WARP_SIZE;     // wave32 (RDNA) or wave64 (CDNA)
+     std::size_t warp_scratch_bytes =
+-        warps_per_block * sizeof(typename rocprim::warp_reduce<float,64>::storage_type);
++        warps_per_block * sizeof(typename rocprim::warp_reduce<float,WARP_SIZE>::storage_type);
+ 
+     int64_t shmem_size =
+         tile_size * tile_size *
+diff --git a/gsplat/cuda/include/Common.cuh b/gsplat/cuda/include/Common.cuh
+index a43c87e..1107cec 100644
+--- a/gsplat/cuda/include/Common.cuh
++++ b/gsplat/cuda/include/Common.cuh
+@@ -21,6 +21,30 @@
+ 
+ namespace gsplat {
+ 
++// gfx1201 (RDNA 3.5 / Strix Halo) is wave32, while this fork was written for
++// CDNA wave64. WARP_SIZE is the one compile-time knob that makes the reduction /
++// tiling code correct on BOTH: 64 on CDNA, 32 on RDNA(gfx11/12), 32 on NVIDIA.
++//
++// We key off the __gfx9__ architecture predicate, NOT __AMDGCN_WAVEFRONT_SIZE:
++// only the gfx9 family (CDNA / GCN) is wave64; every gfx10/11/12 (RDNA) target is
++// wave32. AMD's rocPRIM maintainers recommend this arch predicate as the durable
++// form (ROCm/ROCm#4121) because __AMDGCN_WAVEFRONT_SIZE is deprecated as of ROCm
++// 7.0.2 and slated for removal, and warpSize is not a host-side constant (this
++// constant is also read in the host-side launch_* sizing code). The predicate is
++// a compile-time macro evaluated per --offload-arch, so the SAME source compiles
++// to a correct wave64 object on CDNA and a correct wave32 object on gfx1201.
++#ifdef USE_ROCM
++  #if defined(__gfx900__) || defined(__gfx906__) || defined(__gfx908__) ||      \
++      defined(__gfx90a__) || defined(__gfx940__) || defined(__gfx941__) ||      \
++      defined(__gfx942__) || defined(__gfx950__)
++    constexpr int WARP_SIZE = 64;   // CDNA / GCN (gfx9) is wave64
++  #else
++    constexpr int WARP_SIZE = 32;   // RDNA (gfx10/11/12), incl. gfx1201, is wave32
++  #endif
++#else
++    constexpr int WARP_SIZE = 32;   // NVIDIA
++#endif
++
+ #ifndef USE_ROCM
+ // https://github.com/pytorch/pytorch/blob/233305a852e1cd7f319b15b5137074c9eac455f6/aten/src/ATen/cuda/cub.cuh#L38-L46
+ // handle the temporary storage and 'twice' calls for cub API
+diff --git a/gsplat/cuda/include/Utils.cuh b/gsplat/cuda/include/Utils.cuh
+index ee6d46e..9982b57 100644
+--- a/gsplat/cuda/include/Utils.cuh
++++ b/gsplat/cuda/include/Utils.cuh
+@@ -159,7 +159,7 @@ inline __device__ int32_t reduce_max_shuffle(int32_t val) {
+     const unsigned long long mask = 0xFFFFFFFFFFFFFFFFULL;
+ 
+     #pragma unroll
+-    for (int offset = 32; offset > 0; offset /= 2) {
++    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+         val = max(val, __shfl_down_sync(mask, val, offset));
+     }
+     
+@@ -170,8 +170,8 @@ inline __device__ int32_t reduce_max_shuffle(int32_t val) {
+ inline __device__ void manual_warpSum(float& val) {  
+     unsigned long long warp_mask = __activemask();
+       
+-    // Perform warp-level sum  
+-    for (int offset = 32 ; offset > 0; offset /= 2) {  
++    // Perform warp-level sum
++    for (int offset = WARP_SIZE / 2 ; offset > 0; offset /= 2) {
+         float other = __shfl_down_sync(warp_mask, val, offset);  
+         val += other;  
+     }  
+@@ -233,7 +233,7 @@ inline __device__ void manual_warpSum(float val[N]) {
+     }  
+ }
+ 
+-template<int LOGICAL_WARP_SIZE = 64>
++template<int LOGICAL_WARP_SIZE = WARP_SIZE>
+ __device__ inline void rocprim_warpSum_scalar(float& val, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+             warp_storage_base)
+ {
+@@ -256,7 +256,7 @@ __device__ inline void rocprim_warpSum_scalar(float& val, typename rocprim::warp
+ 
+ //-----------------------------------------------------------------------------
+ //  1. float overload  ────────────────────────────────────────────────────────
+-template<int LOGICAL_WARP_SIZE = 64>
++template<int LOGICAL_WARP_SIZE = WARP_SIZE>
+ __device__ inline void rocprim_warpSum(float& x, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                     warp_storage_base)
+ {
+@@ -265,7 +265,7 @@ __device__ inline void rocprim_warpSum(float& x, typename rocprim::warp_reduce<f
+ 
+ //-----------------------------------------------------------------------------
+ //  2. vec2 / vec3 / vec4 overloads  ─────────────────────────────────────────-
+-template<int LOGICAL_WARP_SIZE = 64>
++template<int LOGICAL_WARP_SIZE = WARP_SIZE>
+ __device__ inline void rocprim_warpSum(vec2& v, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                     warp_storage_base)
+ {
+@@ -273,7 +273,7 @@ __device__ inline void rocprim_warpSum(vec2& v, typename rocprim::warp_reduce<fl
+     rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.y, warp_storage_base);
+ }
+ 
+-template<int LOGICAL_WARP_SIZE = 64>
++template<int LOGICAL_WARP_SIZE = WARP_SIZE>
+ __device__ inline void rocprim_warpSum(vec3& v, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                     warp_storage_base)
+ {
+@@ -282,7 +282,7 @@ __device__ inline void rocprim_warpSum(vec3& v, typename rocprim::warp_reduce<fl
+     rocprim_warpSum_scalar<LOGICAL_WARP_SIZE>(v.z, warp_storage_base);
+ }
+ 
+-template<int LOGICAL_WARP_SIZE = 64>
++template<int LOGICAL_WARP_SIZE = WARP_SIZE>
+ __device__ inline void rocprim_warpSum(vec4& v, typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                     warp_storage_base)
+ {
+@@ -294,7 +294,7 @@ __device__ inline void rocprim_warpSum(vec4& v, typename rocprim::warp_reduce<fl
+ 
+ //-----------------------------------------------------------------------------
+ //  3. fixed-size float array overload  ───────────────────────────────────────
+-template<int N, int LOGICAL_WARP_SIZE = 64>
++template<int N, int LOGICAL_WARP_SIZE = WARP_SIZE>
+ __device__ inline void rocprim_warpSum(float (&a)[N], typename rocprim::warp_reduce<float,LOGICAL_WARP_SIZE>::storage_type*
+                     warp_storage_base)
+ {
+@@ -311,7 +311,7 @@ inline __device__ void manual_dynamic_reduce_sum_vec2(
+ ) {  
+     // First, create a mask of all threads with matching labels  
+     unsigned long long my_label_mask = 0;  
+-    for (int i = 0; i < 64; ++i) {  
++    for (int i = 0; i < WARP_SIZE; ++i) {
+         if (warp_active_mask & (1ULL << i)) {  
+             long long lane_label = __shfl_sync(warp_active_mask, current_label, i);  
+             if (lane_label == current_label) {  
+@@ -361,7 +361,7 @@ inline __device__ void manual_dynamic_reduce_sum_vec3(
+ ) {  
+     // First, create a mask of all threads with matching labels  
+     unsigned long long my_label_mask = 0;  
+-    for (int i = 0; i < 64; ++i) {  
++    for (int i = 0; i < WARP_SIZE; ++i) {
+         if (warp_active_mask & (1ULL << i)) {  
+             long long lane_label = __shfl_sync(warp_active_mask, current_label, i);  
+             if (lane_label == current_label) {  
+@@ -414,7 +414,7 @@ inline __device__ void manual_dynamic_reduce_sum_vec4(
+ ) {  
+     // First, create a mask of all threads with matching labels  
+     unsigned long long my_label_mask = 0;  
+-    for (int i = 0; i < 64; ++i) {  
++    for (int i = 0; i < WARP_SIZE; ++i) {
+         if (warp_active_mask & (1ULL << i)) {  
+             long long lane_label = __shfl_sync(warp_active_mask, current_label, i);  
+             if (lane_label == current_label) {  
+@@ -471,7 +471,7 @@ inline __device__ void manual_dynamic_reduce_sum_mat3(
+ ) {  
+     // First, create a mask of all threads with matching labels  
+     unsigned long long my_label_mask = 0;  
+-    for (int i = 0; i < 64; ++i) {  
++    for (int i = 0; i < WARP_SIZE; ++i) {
+         if (warp_active_mask & (1ULL << i)) {  
+             long long lane_label = __shfl_sync(warp_active_mask, current_label, i);  
+             if (lane_label == current_label) {  

@@ -1,0 +1,182 @@
+# ============================================================
+# gsplat (ROCm fork) built for AMD gfx1201 / RDNA4 (wave32).
+#
+# Target:
+#   AMD Radeon AI PRO R9700 (RDNA4, gfx1201) — a wave32 part, like all
+#   gfx10/11/12 (RDNA). This matters: the ROCm gsplat fork was written for CDNA
+#   (gfx9, wave64) and hardcodes a 64-lane warp in its reduction / leader-election
+#   kernels. On a wave32 arch those paths either hit rocprim's NAVI "invalid warp
+#   size" no-op or silently corrupt the backward color/gradient results, so gfx1201
+#   needs the same wave32 source patch that the gfx1151 (Strix Halo) image uses.
+#
+# ROCm:    7.2.1     (stock rocm/pytorch base)
+# PyTorch: 2.9.1     (ROCm build shipped in the base image)
+#
+# Three build-time fixes are applied here (all needed for a correct gfx1201 .so):
+#   1. Honor PYTORCH_ROCM_ARCH so the kernels are compiled for gfx1201. Upstream
+#      setup.py runs rocminfo, which finds NO GPU at `docker build` time and falls
+#      back to gfx942 (CDNA) -> a .so with no gfx1201 code objects.
+#   2. Vendored-glm include dir first + -DTORCH_HIP_VERSION=8000 (satisfies the
+#      glm CUDA-version gate that hipify rewrites into an undefined-macro compare).
+#   3. glm .inl top-up after hipify (hipify copies glm's .hpp but not the sibling
+#      .inl files) — done as the cp between the two build passes below.
+#   4. guarded WARP_SIZE source patch (wave32 vs wave64), see above.
+# Fixes (1)+(2) live in patches/setup.py.gfx1201.patch; (4) in
+# patches/wave_size.gfx1201.patch; (3) is the cp between the two build passes.
+#
+# Build (no GPU needed):
+#   docker build -f Dockerfile.gfx1201 -t gsplat-rocm:gfx1201-rocm72 .
+# Run the GPU smoke test (needs a healthy gfx1201 GPU exposed to the container):
+#   docker run --rm --device=/dev/kfd --device=/dev/dri --group-add video \
+#     --security-opt seccomp=unconfined gsplat-rocm:gfx1201-rocm72
+# ============================================================
+
+
+# rocm/pytorch:rocm7.2.1_ubuntu24.04_py3.12_pytorch_release_2.9.1 — stock ROCm
+# 7.2.1 + torch 2.9.1. NOTE: pinned to a *mutable* tag, not a digest; AMD can
+# repush the tag with a different ROCm/torch/rocprim build. For a fully
+# reproducible image, resolve and pin the digest (rocm/pytorch@sha256:...) via:
+#   docker buildx imagetools inspect rocm/pytorch:rocm7.2.1_ubuntu24.04_py3.12_pytorch_release_2.9.1
+FROM rocm/pytorch:rocm7.2.1_ubuntu24.04_py3.12_pytorch_release_2.9.1
+
+
+# Pin the fork + glm submodule ref so the build is reproducible, and select the
+# target arch once. GPU_ARCH flows into both the runtime env (below) and, via
+# PYTORCH_ROCM_ARCH, into setup.py's --offload-arch (fix 1).
+ARG GSPLAT_REF=b01acd43e3c7fa942f95fda0974e9125e4de7395
+ARG GPU_ARCH=gfx1201
+ARG MAX_JOBS=8
+
+# PYTORCH_ROCM_ARCH is the one the patched setup.py reads to pick --offload-arch;
+# GPU_ARCHS mirrors it for tools that expect that name; MAX_JOBS caps the ninja
+# parallelism (the HIP compile is memory-hungry — 8 is a safe default).
+ENV GPU_ARCHS=${GPU_ARCH} \
+    PYTORCH_ROCM_ARCH=${GPU_ARCH} \
+    MAX_JOBS=${MAX_JOBS}
+
+
+# ------------------------------------------------------------
+# build dependencies
+# ------------------------------------------------------------
+# git + git submodule for the fork/glm checkout; ninja/cmake/build-essential for
+# the torch extension build. libglm-dev is a convenience fallback only — the build
+# actually uses the *vendored* glm submodule (setup.py patch puts it first on the
+# include path because system glm is API-incompatible), so it is harmless here.
+RUN apt-get update && apt-get install -y \
+    git \
+    ninja-build \
+    cmake \
+    build-essential \
+    libglm-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# setup.py's get_git_rev() reads the repo HEAD to stamp the version; allow git to
+# operate on the clone even though it is owned by a different uid inside the image.
+RUN git config --global --add safe.directory '*'
+
+
+# ------------------------------------------------------------
+# clone ROCm gsplat fork
+# ------------------------------------------------------------
+# Clone the ROCm fork at the pinned ref and pull the vendored glm submodule
+# (gsplat/cuda/csrc/third_party/glm) that the kernels include.
+RUN git clone https://github.com/ROCm/gsplat /opt/gsplat \
+    && cd /opt/gsplat \
+    && git checkout ${GSPLAT_REF} \
+    && git submodule update --init --recursive
+
+WORKDIR /opt/gsplat
+
+
+# ------------------------------------------------------------
+# gfx1201 build configuration
+# ------------------------------------------------------------
+# Empty TORCH_CUDA_ARCH_LIST so the torch helpers don't try to append NVIDIA SM
+# arches to the (HIP) build; HIP_ARCHITECTURES echoes the target for any CMake
+# path that reads it. The authoritative arch selection is PYTORCH_ROCM_ARCH above.
+ENV TORCH_CUDA_ARCH_LIST=""
+ENV HIP_ARCHITECTURES=${GPU_ARCH}
+
+# Fixes (1) + (2): honor PYTORCH_ROCM_ARCH for --offload-arch (else it silently
+# falls back to gfx942), put the vendored glm include first, and add
+# -DTORCH_HIP_VERSION=8000 to satisfy glm's hipify-rewritten CUDA-version gate.
+COPY patches/setup.py.gfx1201.patch /tmp/setup.py.gfx1201.patch
+RUN git apply --verbose /tmp/setup.py.gfx1201.patch
+
+# Fix (4): guarded WARP_SIZE on the CUDA sources (applied BEFORE hipify runs). The
+# patch threads a compile-time `constexpr int WARP_SIZE` (64 on CDNA/gfx9, 32 on
+# RDNA incl. gfx1201) through the reduction/tiling kernels and routes wave32 away
+# from the wave64-only DPP reduction, leaving the CDNA wave64 path byte-identical.
+COPY patches/wave_size.gfx1201.patch /tmp/wave_size.gfx1201.patch
+RUN git apply --verbose /tmp/wave_size.gfx1201.patch
+
+
+# ------------------------------------------------------------
+# build gsplat HIP extension
+# ------------------------------------------------------------
+# Two-pass build (fix 3):
+#   PASS 1 triggers hipify (cuda/csrc -> hip/csrc) and fails on a missing glm
+#          .inl — hipify copies glm's .hpp headers but not the sibling .inl. This
+#          failure is EXPECTED (the `|| echo` keeps the layer from erroring out).
+#   FIX    top up the hipified glm tree with a complete copy (adds the .inl files).
+#   PASS 2 compiles cleanly -> gsplat/csrc.so and installs the editable package.
+RUN pip install --no-build-isolation -e . 2>&1 | tail -8 \
+    || echo "pass1 expected-fail (glm .inl missing after hipify)"; \
+  cp -rf gsplat/cuda/csrc/third_party/glm/. gsplat/hip/csrc/third_party/glm/; \
+  pip install --no-build-isolation -e . 2>&1 | tail -8
+
+# GPU smoke test (rasterize) — the default CMD runs it; kept here so the file is
+# baked into the image at build time.
+COPY tests/smoke_test.py /opt/gsplat/smoke_test.py
+
+# P1 numerical-correctness test (run on the GPU post-build): compares the HIP
+# fwd+bwd against the fork's torch reference and is the wave32 merge gate. Run with:
+#   docker run ... gsplat-rocm:gfx1201-rocm72 python /opt/gsplat/correctness_test.py
+COPY tests/correctness_test.py /opt/gsplat/correctness_test.py
+
+# Build-time verification (no GPU op): the .so linked and the package imports.
+RUN test -f /opt/gsplat/gsplat/csrc.so && python /opt/gsplat/smoke_test.py import
+
+
+# ------------------------------------------------------------
+# trainer dependencies
+# ------------------------------------------------------------
+# examples/simple_trainer.py (the standard gsplat 3DGS trainer/benchmark) needs
+# extra deps: pycolmap, tyro, torchmetrics[image], imageio, nerfview, viser, ...
+# torchvision is ALREADY present in the rocm base, so torch is not reinstalled.
+RUN pip install --no-cache-dir -r examples/requirements.txt
+
+
+# ------------------------------------------------------------
+# ROCm replacement of CUDA fused_ssim
+# ------------------------------------------------------------
+# Upstream fused_ssim ships as a CUDA extension that does NOT build on ROCm. Drop
+# in a pure-torch standard-SSIM shim as a top-level module so
+# `from fused_ssim import fused_ssim` resolves with no PYTHONPATH wiring.
+COPY shims/fused_ssim.py /opt/venv/lib/python3.12/site-packages/fused_ssim.py
+
+
+# ------------------------------------------------------------
+# sanity test
+# ------------------------------------------------------------
+# Build-time sanity (no GPU op): every trainer import resolves.
+RUN python -c "import torch, torchvision, torchmetrics, pycolmap, tyro, imageio, cv2, \
+nerfview, viser, fused_ssim; print('TRAINER DEPS OK', torch.__version__, torch.version.hip)"
+
+
+# Build-time sanity (no GPU op): gsplat itself imports and reports the toolchain.
+RUN python - <<EOF
+import torch
+import gsplat
+
+print("Torch:", torch.__version__)
+print("HIP:", torch.version.hip)
+print("GPU available:", torch.cuda.is_available())
+print("gsplat:", gsplat.__file__)
+EOF
+
+
+# Default entrypoint: run the GPU rasterize smoke test (needs a gfx1201 GPU
+# exposed to the container — see the run command in the header).
+CMD ["python", "/opt/gsplat/smoke_test.py", "rasterize"]
