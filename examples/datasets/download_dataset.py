@@ -30,6 +30,7 @@ dataset_names = Literal[
     "bilarf_data",
     "zipnerf",
     "zipnerf_undistorted",
+    "endonerf",
 ]
 
 # dataset urls
@@ -71,6 +72,23 @@ class DownloadData:
         self.dataset_download(self.dataset)
 
     def dataset_download(self, dataset: dataset_names):
+        if dataset == "endonerf":
+            # EndoNeRF lives on a Google Drive folder hosted by the upstream
+            # `med-air/EndoNeRF <https://github.com/med-air/EndoNeRF>`_
+            # project. Folder downloads need `gdown` and a manual layout
+            # rename, so we point the user at the documented path instead of
+            # trying to script around the click-through.
+            raise NotImplementedError(
+                "Automated download for `endonerf` is not wired up yet.\n"
+                "Grab the `pulling_soft_tissues` folder from\n"
+                "  https://drive.google.com/drive/folders/1zTcX80c1yrbntY9c6-EK2W2UVESVEug8\n"
+                "and place it at  data/EndoNeRF/pulling  (or wherever your\n"
+                "`--data_dir` points). Expected layout:\n"
+                "  data/EndoNeRF/pulling/poses_bounds.npy\n"
+                "  data/EndoNeRF/pulling/images/, depth/, masks/\n"
+                "See docs/source/examples/dynamic_surgical.rst for the full\n"
+                "tutorial walkthrough."
+            )
         if isinstance(urls[dataset], list):
             for url in urls[dataset]:
                 url_file_name = Path(url).name

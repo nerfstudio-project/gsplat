@@ -46,13 +46,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 import gsplat
 
 try:
-    from gsplat_scene import GaussianScene
-    from gsplat_stage import Stage
+    from gsplat.scene import GaussianScene
+    from gsplat.stage import Stage
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
-        f"{e.name} is not installed. The example trainers require the local "
-        "scene/stage helper libraries. Install them with:\n"
-        "    python -m pip install -e libs/scene -e libs/stage"
+        f"{e.name} is not installed. The example trainers require the "
+        "scene/stage helper packages, which ship with gsplat. Install gsplat with:\n"
+        "    python -m pip install -e ."
     ) from e
 from gsplat.strategy import MCMCStrategy
 
@@ -87,7 +87,7 @@ def load_scene_npz(path: str, device: str = "cuda") -> SimpleNamespace:
     scene.Ks[:, 0, 1, 2] = cam_intrinsics[:, 3]  # y principal point
     scene.Ks[:, 0, 2, 2] = 1.0
 
-    scene.viewmats = torch.linalg.inv(cam_to_worlds)
+    scene.viewmats = torch.linalg.inv_ex(cam_to_worlds).inverse
 
     return scene
 
@@ -189,9 +189,9 @@ def _load_ncore_lidar_gt(
         T_start_scene = parser._ncore_world_to_scene_poses(
             T_start.reshape(1, 4, 4)
         ).reshape(4, 4)
-        viewmats[lfi] = torch.linalg.inv(
+        viewmats[lfi] = torch.linalg.inv_ex(
             torch.from_numpy(T_start_scene).float().to(device)
-        )
+        ).inverse
 
         # End pose (rolling shutter end-of-frame)
         T_end = lidar_sensor.get_frames_T_sensor_target(
@@ -202,9 +202,9 @@ def _load_ncore_lidar_gt(
         T_end_scene = parser._ncore_world_to_scene_poses(
             T_end.reshape(1, 4, 4)
         ).reshape(4, 4)
-        viewmats_rs[lfi] = torch.linalg.inv(
+        viewmats_rs[lfi] = torch.linalg.inv_ex(
             torch.from_numpy(T_end_scene).float().to(device)
-        )
+        ).inverse
 
     return gt_dist, valid, viewmats, viewmats_rs
 
@@ -683,6 +683,7 @@ def train(
     duration: float | None = None,
     max_lidar: int = 150_000,
     downscale: int = 1,
+    rigid_dynamic_track_class_ids: list[str] | None = None,
     # LiDAR rendering (addition over simple_trainer)
     lidar_render: bool = False,
     lidar_render_subsample: int = 112,
@@ -715,7 +716,16 @@ def train(
             camera_ids=cameras or None,
             duration_sec=duration,
             max_lidar_points=max_lidar,
+            rigid_dynamic_track_class_ids=rigid_dynamic_track_class_ids,
         )
+        if rigid_dynamic_track_class_ids is not None:
+            n_dyn_pts = sum(len(t.points_local) for t in parser.rigid_dynamic_tracks)
+            print(
+                f"  Rigid dynamic: {len(parser.rigid_dynamic_tracks)} tracks "
+                f"({n_dyn_pts} local points) for class IDs "
+                f"{sorted(rigid_dynamic_track_class_ids)}. Moving-object returns "
+                f"are kept in the static background."
+            )
         # Pre-stacking below requires every selected camera to share (W, H).
         # Mixed-resolution surround-view rigs (e.g. wide 120fov + tele 30fov)
         # would raise at torch.stack time; fail early with a clear message.
@@ -740,9 +750,9 @@ def train(
 
         def _stack_to_gpu(samples, dev):
             images = torch.stack([d["image"] for d in samples]).float().to(dev) / 255.0
-            viewmats = torch.linalg.inv(
+            viewmats = torch.linalg.inv_ex(
                 torch.stack([d["camtoworld"] for d in samples]).float().to(dev)
-            )
+            ).inverse
             Ks = torch.stack([d["K"] for d in samples]).to(dev)
             cam_idx = [d["camera_idx"] for d in samples]
             masks = None
@@ -1178,6 +1188,15 @@ def main():
     p.add_argument(
         "--duration", type=float, default=None, help="clip duration in seconds (NCore)"
     )
+    p.add_argument(
+        "--rigid-dynamic-track-class-ids",
+        type=str,
+        default=None,
+        help=(
+            "comma-separated NCore cuboid class IDs to load as rigid dynamic "
+            "tracks; moving returns stay in static init"
+        ),
+    )
     p.add_argument("--max-lidar", type=int, default=150_000)
     p.add_argument("--downscale", type=int, default=1)
     p.add_argument("--max-steps", type=int, default=15000)
@@ -1217,6 +1236,15 @@ def main():
         raise RuntimeError("CUDA required for gsplat rasterization.")
 
     cameras_list = args.cameras.split(",") if args.cameras else None
+    rigid_dynamic_track_class_ids = (
+        [
+            class_id.strip()
+            for class_id in args.rigid_dynamic_track_class_ids.split(",")
+            if class_id.strip()
+        ]
+        if args.rigid_dynamic_track_class_ids
+        else None
+    )
     train(
         scene_path=args.scene or default_scene_path,
         max_steps=args.max_steps,
@@ -1233,6 +1261,7 @@ def main():
         duration=args.duration,
         max_lidar=args.max_lidar,
         downscale=args.downscale,
+        rigid_dynamic_track_class_ids=rigid_dynamic_track_class_ids,
         lidar_render=args.lidar_render,
         lidar_render_subsample=args.lidar_render_subsample,
         lidar_render_weight=args.lidar_render_weight,

@@ -344,7 +344,7 @@ def cli(fn: Callable, args: Any, verbose: bool = False) -> bool:
         )
 
     world_size = torch.cuda.device_count()
-    distributed = world_size > 1
+    distributed = world_size > 1 and not getattr(args, "backend", None) == "dgx"
 
     if distributed:
         os.environ["MASTER_ADDR"] = "localhost"

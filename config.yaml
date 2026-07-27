@@ -1,0 +1,2 @@
+variables:
+    CLANG_FORMAT_VERSION: "22.1.5"

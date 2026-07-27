@@ -22,23 +22,26 @@
 
 // ---------------------------------------------------------------------------------------------
 
-namespace gsplat::extdist {
-
+namespace gsplat::extdist
+{
 // External Distortion Types
-enum class ModelType {
+enum class ModelType
+{
     BIVARIATE_WINDSHIELD = 0,
 };
 
-enum class ReferencePolynomialType {
-    FORWARD = 1,
+enum class ReferencePolynomialType
+{
+    FORWARD  = 1,
     BACKWARD = 2,
 };
 
 // Windshield distortion model support
-struct BivariateWindshieldModelParameters : public torch::CustomClassHolder {
-    BivariateWindshieldModelParameters() {};
+struct BivariateWindshieldModelParameters : public torch::CustomClassHolder
+{
+    BivariateWindshieldModelParameters() { }
 
-    static constexpr uint8_t MAX_ORDER = 5;
+    static constexpr uint8_t MAX_ORDER  = 5;
     static constexpr uint8_t MAX_COEFFS = 21;
 
     at::Tensor horizontal_poly;
@@ -48,5 +51,4 @@ struct BivariateWindshieldModelParameters : public torch::CustomClassHolder {
 
     ReferencePolynomialType reference_poly = ReferencePolynomialType::FORWARD;
 };
-
 } // namespace gsplat::extdist

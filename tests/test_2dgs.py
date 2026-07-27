@@ -20,6 +20,10 @@ import pytest
 import torch
 from typing_extensions import Tuple
 import gsplat
+from gsplat._helper import (
+    assert_close_with_boundary_band,
+    assert_grad_sparsity,
+)
 
 device = torch.device("cuda:0")
 
@@ -133,12 +137,39 @@ def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=6e-2, atol=1e-3)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
-    torch.testing.assert_close(
-        v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1
-    )
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
+    # Per-element band+sparsity check on the conditioning-sensitive gradients
+    # (2DGS projection backward; rtol blowup at near-zero gradient values).
+    # Note: v_scales is sliced to [..., :2] because 2DGS uses 2D scales for
+    # the on-plane covariance; the third axis is degenerate.
+    # interior_rtol = 1.05 x worst observed required rtol per gradient
+    # (msg suffix "(2dgs proj)").
+    for name, vc, vt, rtol in [
+        ("v_viewmats", v_viewmats, _v_viewmats, 1.9e-5),  # rtol_req=1.83e-5
+        ("v_quats", v_quats, _v_quats, 1e-5),  # rtol_req=0
+        (
+            "v_scales[:2]",
+            v_scales[..., :2],
+            _v_scales[..., :2],
+            1.9e-5,
+        ),  # rtol_req=1.83e-5
+        ("v_means", v_means, _v_means, 1.6e-5),  # rtol_req=1.52e-5
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+            msg=f"{name} backward (2dgs proj)",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -169,6 +200,7 @@ def test_fully_fused_projection_packed_2dgs(
         batch_ids,
         camera_ids,
         gaussian_ids,
+        indptr,
         radii,
         means2d,
         depths,
@@ -260,10 +292,30 @@ def test_fully_fused_projection_packed_2dgs(
         v_scales = v_scales.to_dense()
         v_means = v_means.to_dense()
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-2, atol=1e-2)
+    # Per-element band+sparsity check (2DGS packed projection backward).
+    # interior_rtol = 1.05 x worst required (probed; all 4 grads rtol_req=0).
+    for name, vc, vt, rtol in [
+        ("v_viewmats", v_viewmats, _v_viewmats, 1e-5),
+        ("v_quats", v_quats, _v_quats, 1e-5),
+        ("v_scales", v_scales, _v_scales, 1e-5),
+        ("v_means", v_means, _v_means, 1e-5),
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+            msg=f"{name} backward (2dgs packed)",
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -397,12 +449,323 @@ def test_rasterize_to_pixels_2dgs(
     torch.testing.assert_close(render_alphas, _render_alphas, atol=1e-3, rtol=1e-3)
     torch.testing.assert_close(render_normals, _render_normals, atol=1e-3, rtol=1e-3)
 
-    # assert close backward
-    torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(
-        v_ray_transforms, _v_ray_transforms, rtol=2e-1, atol=5e-2
+    # assert close backward.  Per-output band+sparsity check; v_ray_transforms
+    # used to be rtol=2e-1 (200x looser than the others) due to FP-noisy 3x3
+    # matrix backward; the band absorbs that noise without admitting bias.
+    # interior_rtol = 1.05 x worst observed required rtol per gradient
+    # (msg suffix "(2dgs raster)").
+    for name, vc, vt, rtol in [
+        ("v_means2d", v_means2d, _v_means2d, 1e-4),  # rtol_req=8.24e-5
+        (
+            "v_ray_transforms",
+            v_ray_transforms,
+            _v_ray_transforms,
+            2.5e-5,
+        ),  # rtol_req=2.34e-5 (RTX PRO 6000)
+        ("v_colors", v_colors, _v_colors, 3e-5),  # rtol_req=2.77e-5
+        ("v_opacities", v_opacities, _v_opacities, 1e-5),  # rtol_req=0
+        ("v_backgrounds", v_backgrounds, _v_backgrounds, 1e-5),  # rtol_req=0
+        ("v_normals", v_normals, _v_normals, 2.7e-5),  # rtol_req=2.48e-5
+    ]:
+        assert not (
+            torch.isnan(vc).any() or torch.isinf(vc).any()
+        ), f"{name}: CUDA produced NaN/Inf"
+        assert_grad_sparsity(vc, vt, min_ratio=0.1, msg=f"{name} sparsity")
+        nz_thresh = vt.abs().max().item() * 1e-5
+        assert_close_with_boundary_band(
+            vc,
+            vt,
+            boundary_mask=vt.abs() < nz_thresh,
+            interior_atol=nz_thresh,
+            interior_rtol=rtol,
+            boundary_max_flip_ratio=1e-3,
+            boundary_symmetry_tol=0.5,
+            flip_predicate=lambda a, e, _t=nz_thresh: a.abs() > 10 * _t,
+            msg=f"{name} backward (2dgs raster)",
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("batch_dims", [(2,), (1, 2)])
+def test_rasterization_packed_2dgs(test_data, batch_dims: Tuple[int, ...]):
+    from gsplat.rendering import rasterization_2dgs
+
+    torch.manual_seed(42)
+
+    N = test_data["means"].shape[-2]
+    C = test_data["viewmats"].shape[-3]
+    sh_degree = 3
+    K = (sh_degree + 1) ** 2
+
+    test_data = expand(test_data, batch_dims)
+    render_colors, *_ = rasterization_2dgs(
+        means=test_data["means"].contiguous(),
+        quats=test_data["quats"].contiguous(),
+        scales=test_data["scales"].contiguous(),
+        opacities=torch.rand(batch_dims + (N,), device=device) * 0.5,
+        colors=torch.randn(N, K, 3, device=device),
+        viewmats=test_data["viewmats"],
+        Ks=test_data["Ks"],
+        width=test_data["width"],
+        height=test_data["height"],
+        sh_degree=sh_degree,
+        packed=True,
     )
-    torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
-    torch.testing.assert_close(v_normals, _v_normals, rtol=1e-3, atol=1e-3)
+    assert render_colors.shape == batch_dims + (
+        C,
+        test_data["height"],
+        test_data["width"],
+        3,
+    )
+    assert torch.isfinite(render_colors).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterization_packed_2dgs_pose_grad_large_nnz():
+    # compute_directions switches to a per-(batch, camera) Python loop when
+    #   nnz / (B*C) > 10000 and viewmats.requires_grad
+    # (gsplat/rendering.py: _compute_view_dirs_packed). That loop reads
+    # indptr.cpu(); the 2DGS call site must thread indptr through or it
+    # crashes with AttributeError on None.
+    from gsplat.rendering import rasterization_2dgs
+
+    torch.manual_seed(42)
+
+    # N tuned so nnz/(B*C) > 10000: with C=3 default-frustum cameras roughly
+    # half the randn-positioned gaussians project, so N=80000 yields nnz ~ 1.2e5.
+    N = 80000
+    C = 2
+    means = torch.randn(N, 3, device=device)
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.ones(N, 3, device=device)
+    scales[..., :2] *= 0.1
+    opacities = torch.rand(N, device=device) * 0.5
+    sh_degree = 3
+    sh_coeffs = torch.randn(N, (sh_degree + 1) ** 2, 3, device=device)
+
+    viewmats = torch.eye(4, device=device).expand(C, 4, 4).clone()
+    viewmats.requires_grad = True
+    W, H = 640, 480
+    Ks = torch.tensor(
+        [[W, 0.0, W / 2], [0.0, W, H / 2], [0.0, 0.0, 1.0]], device=device
+    ).expand(C, 3, 3)
+
+    render_colors, *_ = rasterization_2dgs(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=sh_coeffs,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=W,
+        height=H,
+        sh_degree=sh_degree,
+        packed=True,
+    )
+    render_colors.sum().backward()
+    assert viewmats.grad is not None
+    assert torch.isfinite(viewmats.grad).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterize_to_pixels_2dgs_masked_tile_outputs_initialized():
+    # A masked-out tile takes the forward rasterizer's early-return branch,
+    # which must initialize ALL of its pixel outputs (the binding allocates
+    # them with at::empty, leaving render_alphas / render_normals /
+    # render_distort / render_median uninitialized otherwise). The op also
+    # returns the absgrad holder, plus last_ids / median_ids saved by the
+    # Python autograd's setup_context; the public rasterize_to_pixels_2dgs
+    # wrapper drops them. Stale allocator contents could
+    # coincidentally match these defaults, so this only reliably catches a
+    # missing store when uninitialized memory differs from the default.
+
+    tile_size = 16
+    width = height = tile_size  # single tile
+    channels = 3
+    N = 1
+
+    means2d = torch.tensor([[[width / 2.0, height / 2.0]]], device=device)  # [1, 1, 2]
+    ray_transforms = torch.eye(3, device=device).reshape(1, 1, 3, 3)  # [1, 1, 3, 3]
+    colors = torch.ones((1, N, channels), device=device)
+    opacities = torch.ones((1, N), device=device)
+    normals = torch.zeros((1, N, 3), device=device)
+    densify = torch.zeros((1, N, 2), device=device)
+    backgrounds = torch.tensor([[0.2, 0.4, 0.6]], device=device)
+    masks = torch.zeros((1, 1, 1), dtype=torch.bool, device=device)  # tile masked off
+    isect_offsets = torch.zeros((1, 1, 1), dtype=torch.int32, device=device)
+    flatten_ids = torch.empty((0,), dtype=torch.int32, device=device)
+
+    (
+        render_colors,
+        render_alphas,
+        render_normals,
+        render_distort,
+        render_median,
+        means2d_absgrad,
+        _last_ids,
+        _median_ids,
+    ) = torch.ops.gsplat.rasterize_to_pixels_2dgs(
+        means2d,
+        ray_transforms,
+        colors,
+        opacities,
+        normals,
+        densify,
+        backgrounds,
+        masks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        False,  # packed
+        False,  # absgrad
+        False,  # distloss
+    )
+
+    torch.testing.assert_close(
+        render_colors, backgrounds.reshape(1, 1, 1, channels).expand_as(render_colors)
+    )
+    torch.testing.assert_close(render_alphas, torch.zeros_like(render_alphas))
+    torch.testing.assert_close(render_normals, torch.zeros_like(render_normals))
+    torch.testing.assert_close(render_distort, torch.zeros_like(render_distort))
+    torch.testing.assert_close(render_median, torch.zeros_like(render_median))
+    assert means2d_absgrad.numel() == 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterize_to_pixels_2dgs_densify_gradient():
+    # The densification gradient is the gradient w.r.t. the `densify` input and
+    # equals the depth-scaled ray-transform z-gradients:
+    #   v_densify[..., 0] == v_ray_transforms[..., 0, 2] * depth
+    #   v_densify[..., 1] == v_ray_transforms[..., 1, 2] * depth
+    # The backward must accumulate it race-free (warp-reduce + atomicAdd), the
+    # same path as v_ray_transforms. Reading the still-accumulating global
+    # v_ray_transforms instead yields a last-writer-wins partial sum that
+    # undercounts whenever a gaussian spans multiple tiles, so the identity
+    # holds only for the race-free accumulation.
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_2dgs,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_2dgs,
+    )
+
+    torch.manual_seed(42)
+    C = 1
+    N = 1000
+    means = torch.randn(N, 3, device=device)
+    quats = torch.nn.functional.normalize(torch.randn(N, 4, device=device), dim=-1)
+    scales = torch.ones(N, 3, device=device)
+    scales[..., :2] *= 0.1
+    opacities = torch.rand(C, N, device=device) * 0.5
+    W, H = 640, 480
+    viewmats = torch.broadcast_to(torch.eye(4, device=device), (C, 4, 4))
+    Ks = torch.broadcast_to(
+        torch.tensor(
+            [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+            device=device,
+        ),
+        (C, 3, 3),
+    )
+    channels = 3
+    colors = torch.rand(C, N, channels, device=device)
+
+    radii, means2d, depths, ray_transforms, normals = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, W, H
+    )
+    colors = torch.cat([colors, depths[..., None]], dim=-1)
+    backgrounds = torch.zeros(C, channels + 1, device=device)
+
+    tile_size = 16
+    tile_width = math.ceil(W / float(tile_size))
+    tile_height = math.ceil(H / float(tile_size))
+    _, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    densify = torch.zeros_like(means2d)
+
+    ray_transforms.requires_grad = True
+    densify.requires_grad = True
+
+    render_colors, render_alphas, render_normals, _, _ = rasterize_to_pixels_2dgs(
+        means2d,
+        ray_transforms,
+        colors,
+        opacities,
+        normals,
+        densify,
+        W,
+        H,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+        distloss=True,
+    )
+
+    v_render_colors = torch.randn_like(render_colors)
+    v_densify, v_ray_transforms = torch.autograd.grad(
+        (render_colors * v_render_colors).sum(),
+        (densify, ray_transforms),
+    )
+
+    expected = torch.stack(
+        [
+            v_ray_transforms[..., 0, 2] * depths,
+            v_ray_transforms[..., 1, 2] * depths,
+        ],
+        dim=-1,
+    )
+
+    # The densify gradient is zero for non-contributing gaussians; compare only
+    # entries with meaningful magnitude.
+    scale = expected.abs().max().item()
+    mask = expected.abs() > 1e-4 * scale
+    torch.testing.assert_close(
+        v_densify[mask], expected[mask], rtol=2e-2, atol=1e-3 * scale
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_fully_fused_projection_packed_2dgs_empty():
+    # Packed 2DGS projection computed the batch count as numel/(N*3) before the
+    # empty-input guard; with N==0 that divisor is zero (host-side integer
+    # division by zero). An empty gaussian set must be a clean no-op returning
+    # empty packed tensors.
+    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+
+    W, H = 64, 64
+    means = torch.zeros(0, 3, device=device)
+    quats = torch.zeros(0, 4, device=device)
+    scales = torch.ones(0, 3, device=device)
+    viewmats = torch.eye(4, device=device)[None]
+    Ks = torch.tensor(
+        [[float(W), 0.0, W / 2.0], [0.0, float(W), H / 2.0], [0.0, 0.0, 1.0]],
+        device=device,
+    )[None]
+
+    (
+        batch_ids,
+        camera_ids,
+        gaussian_ids,
+        indptr,
+        radii,
+        means2d,
+        depths,
+        ray_transforms,
+        normals,
+    ) = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, W, H, packed=True
+    )
+
+    assert gaussian_ids.numel() == 0
+    assert means2d.shape[0] == 0
+    assert int(indptr[-1].item()) == 0

@@ -17,6 +17,17 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gsplat/releases/tag/v1.5.3) tag (not yet on PyPI).
 
+- [Jun 2026] **G-SHARP** -- dynamic surgical-scene reconstruction for Gaussian splatting.
+- [Jun 2026] **New camera & sensor support** in the sensors library: pinhole, FTheta, fisheye, and LiDAR models.
+- [Jun 2026] **Faster rasterization** -- a series of performance improvements across the 3DGS and 3DGUT rasterization paths. Noticing roughly 30% improvement on the 3DGUT MCMC path on an NVIDIA A100.
+- [Jun 2026] **Gaussian ID rasterization** -- a new op to rasterize Gaussian IDs, counts, and top contributors per pixel.
+- [Jun 2026] **Various performance and code improvements**:
+  - **Spherical-harmonics improvements** -- support for arbitrary channel counts and fp16.
+  - **Profiling and tracing tools** for diagnosing performance.
+  - **Robustness and stability fixes** across the library.
+  - **Stronger test coverage**, plus ahead-of-time (AOT) build/test CI.
+  - **CUDA 13 and NumPy 2 support**.
+  - **Simplified package layout** -- everything now lives under the `gsplat` namespace.
 - [May 2026] **Inference Rendering (HiGS)** -- An experimental inference-only rendering path based on HiGS (Hierarchically Tiled Gaussian Splatting) is now available under the `experimental` package. The inference path uses macro-tile fused rasterization with fp16 scene packing for low-latency rendering of pre-trained Gaussian scenes. For more details, see the [Inference Rendering](#inference-rendering) section and the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/).
 - [May 2026] Native CUDA **MCMC perturb** (`inject_noise`) speeds up the noise-injection step used in MCMC-style Gaussian optimization.
 - [Apr 2026] **AccuTile** adds a conservative ellipse-based tile–Gaussian intersection test on the 3DGS path for tighter work scheduling before rasterization ([PR #927](https://github.com/nerfstudio-project/gsplat/pull/927)).
@@ -28,9 +39,9 @@ Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gspla
 
 ### v1.5.3
 
-- [May 2025] Arbitrary batching (over multiple scenes and multiple viewpoints) is supported now!! Checkout [here](docs/batch.md) for more details! Kudos to [Junchen Liu](https://junchenliu77.github.io/).
+- [May 2025] Arbitrary batching (over multiple scenes and multiple viewpoints) is supported now!! Checkout the [batching guide](docs/batch.md) for more details! Kudos to [Junchen Liu](https://junchenliu77.github.io/).
 - [May 2025] [Jonathan Stephens](https://x.com/jonstephens85) makes a great [tutorial video](https://www.youtube.com/watch?v=ACPTiP98Pf8) for Windows users on how to install gsplat and get start with 3DGUT.
-- [April 2025] [NVIDIA 3DGUT](https://research.nvidia.com/labs/toronto-ai/3DGUT/) is now integrated in gsplat! Checkout [here](docs/3dgut.md) for more details. [[NVIDIA Tech Blog]](https://developer.nvidia.com/blog/revolutionizing-neural-reconstruction-and-rendering-in-gsplat-with-3dgut/) [[NVIDIA Sweepstakes]](https://www.nvidia.com/en-us/research/3dgut-sweepstakes/)
+- [April 2025] [NVIDIA 3DGUT](https://research.nvidia.com/labs/toronto-ai/3DGUT/) is now integrated in gsplat! Checkout the [3DGUT integration guide](docs/3dgut.md) for more details. [[NVIDIA Tech Blog]](https://developer.nvidia.com/blog/revolutionizing-neural-reconstruction-and-rendering-in-gsplat-with-3dgut/) [[NVIDIA Sweepstakes]](https://www.nvidia.com/en-us/research/3dgut-sweepstakes/)
 
 ## Installation
 
@@ -58,13 +69,12 @@ To build gsplat from source on Windows, please check [this instruction](docs/INS
 
 ## Evaluation
 
-This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
+This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found in the [evaluation results](https://docs.gsplat.studio/main/tests/eval.html).
 
 ```bash
+python -m pip install -e .
 cd examples
-pip install -r requirements.txt
-# install the scene/stage helper libraries the example trainers import
-python -m pip install -e ../libs/scene -e ../libs/stage
+python -m pip install -r requirements.txt
 # download mipnerf_360 benchmark data
 python datasets/download_dataset.py
 # run batch evaluation
@@ -74,8 +84,7 @@ bash benchmarks/basic.sh
 ## Examples
 
 We provide a set of examples to get you started! Below you can find the details about
-the examples (requires installing some extra dependencies via `pip install -r examples/requirements.txt --no-build-isolation`, plus the scene/stage helper
-libraries the trainers import via `python -m pip install -e libs/scene -e libs/stage`)
+the examples (requires installing some extra dependencies via `pip install -r examples/requirements.txt --no-build-isolation`)
 
 - [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
 - [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
@@ -88,7 +97,7 @@ libraries the trainers import via `python -m pip install -e libs/scene -e libs/s
 gsplat includes an experimental inference-only rendering path based on HiGS (Hierarchically Tiled Gaussian Splatting) in the standalone `experimental` package, designed for low-latency rendering of pre-trained Gaussian scenes where training gradients are not needed. The inference path packs scene data into compact fp16 layouts and uses a macro-tile fused rasterization pipeline for fast single-camera rendering.
 
 ```python
-from experimental import render_scene, GaussianInferenceScene
+from gsplat.experimental import render_scene, GaussianInferenceScene
 ```
 
 The `simple_viewer.py` example supports the Inference path via the `--use_gaussian_render_inference_scene` flag. A standalone benchmark comparing Inference rendering against the default `rasterization()` path is available in [examples/benchmarks/gaussian_render_inference_scene/](examples/benchmarks/gaussian_render_inference_scene/); run [`gaussian_render_inference_scene_bench.py`](examples/benchmarks/gaussian_render_inference_scene/gaussian_render_inference_scene_bench.py) from the repo root. For more details, see the [HiGS project page](https://research.nvidia.com/labs/sil/projects/higs/).
@@ -110,7 +119,7 @@ This project is developed by the contributors coming from following institutes (
 - Aalto University
 - CMU
 
-We also have a white paper with about the project with benchmarking and mathematical supplement with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
+We also have a white paper with about the project with benchmarking and mathematical supplement with conventions and derivations, available [on arXiv](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
 
 ```
 @article{ye2025gsplat,

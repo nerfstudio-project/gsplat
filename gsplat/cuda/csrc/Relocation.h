@@ -19,12 +19,13 @@
 
 #include <cstdint>
 
-namespace at {
+namespace at
+{
 class Tensor;
 }
 
-namespace gsplat {
-
+namespace gsplat
+{
 void launch_relocation_kernel(
     // inputs
     at::Tensor opacities, // [N]
@@ -32,9 +33,9 @@ void launch_relocation_kernel(
     at::Tensor ratios,    // [N]
     at::Tensor binoms,    // [n_max, n_max]
     const int n_max,
+    float min_opacity,
     // outputs
     at::Tensor new_opacities, // [N]
     at::Tensor new_scales     // [N, 3]
 );
-
 }
