@@ -17,6 +17,7 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gsplat/releases/tag/v1.5.3) tag (not yet on PyPI).
 
+- [Jul 2026] **Rasterize-mode PLY metadata** -- `export_splats` can record whether a splat was trained with antialiased (mip-splatting) rasterization as a `SplatRenderMode: mip|default` PLY header comment; `load_ply_to_splats` reads it back, and the viewer initializes and freezes its Anti-Aliasing control from a loaded PLY.
 - [Jun 2026] **G-SHARP** -- dynamic surgical-scene reconstruction for Gaussian splatting.
 - [Jun 2026] **New camera & sensor support** in the sensors library: pinhole, FTheta, fisheye, and LiDAR models.
 - [Jun 2026] **Faster rasterization** -- a series of performance improvements across the 3DGS and 3DGUT rasterization paths. Noticing roughly 30% improvement on the 3DGUT MCMC path on an NVIDIA A100.
