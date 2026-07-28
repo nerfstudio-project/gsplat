@@ -26,8 +26,8 @@
 
 #include "Common.h"
 
-namespace gsplat {
-
+namespace gsplat
+{
 // Base batch-state element ordering written by fwd, excluding CDIM. The full
 // state tensor is shaped
 // `[total_batches][1 + CDIM + (ReturnNormals ? 3 : 0)][pixels_per_tile]`
@@ -40,8 +40,8 @@ namespace gsplat {
 // pix_out/normal_out are accumulated from a fresh per-batch seed. Batch-scan
 // overwrites the same slot with absolute cumulative state before backward can
 // read it.
-constexpr uint32_t FWD_BATCH_STATE_T_OFFSET = 0;
-constexpr uint32_t FWD_BATCH_STATE_PIX_OFFSET = 1;
+constexpr uint32_t FWD_BATCH_STATE_T_OFFSET     = 0;
+constexpr uint32_t FWD_BATCH_STATE_PIX_OFFSET   = 1;
 // NORMAL offset depends on CDIM; callers compute it inline.
 constexpr uint32_t FWD_BATCH_STATE_NORMAL_EXTRA = 3;
 
@@ -52,15 +52,16 @@ constexpr uint32_t FWD_BATCH_STATE_NORMAL_EXTRA = 3;
 // - INVALID_RAY: inside pixel whose camera/lidar ray is invalid; no batch
 //   slot or backward walk is meaningful for that lane.
 constexpr uint16_t COMPOSE_C_STOP_INVALID_RAY = 0xFFFEu;
-constexpr uint16_t COMPOSE_C_STOP_NONE = 0xFFFFu;
+constexpr uint16_t COMPOSE_C_STOP_NONE        = 0xFFFFu;
 
-GSPLAT_HOST_DEVICE inline uint16_t encode_compose_c_stop(
-    int32_t c_stop
-) {
-    if (c_stop == -1) {
+GSPLAT_HOST_DEVICE inline uint16_t encode_compose_c_stop(int32_t c_stop)
+{
+    if(c_stop == -1)
+    {
         return COMPOSE_C_STOP_NONE;
     }
-    if (c_stop == -2) {
+    if(c_stop == -2)
+    {
         return COMPOSE_C_STOP_INVALID_RAY;
     }
     assert(c_stop >= 0);
@@ -68,13 +69,14 @@ GSPLAT_HOST_DEVICE inline uint16_t encode_compose_c_stop(
     return static_cast<uint16_t>(c_stop);
 }
 
-GSPLAT_HOST_DEVICE inline int32_t decode_compose_c_stop(
-    uint16_t packed
-) {
-    if (packed == COMPOSE_C_STOP_NONE) {
+GSPLAT_HOST_DEVICE inline int32_t decode_compose_c_stop(uint16_t packed)
+{
+    if(packed == COMPOSE_C_STOP_NONE)
+    {
         return -1;
     }
-    if (packed == COMPOSE_C_STOP_INVALID_RAY) {
+    if(packed == COMPOSE_C_STOP_INVALID_RAY)
+    {
         return -2;
     }
     return static_cast<int32_t>(packed);
@@ -92,8 +94,7 @@ GSPLAT_HOST_DEVICE inline int32_t decode_compose_c_stop(
 // int32, total_batches int64}. Definition lives in
 // `RasterizeToPixelsFromWorld3DGSParallelBatchBwd.cu` so the CUDA kernel launch +
 // cumsum can be emitted by nvcc.
-std::tuple<at::Tensor, at::Tensor, int64_t>
-compute_batch_csr(
+std::tuple<at::Tensor, at::Tensor, int64_t> compute_batch_csr(
     const at::Tensor &tile_offsets,
     int64_t n_isects,
     uint32_t num_tiles,
@@ -112,70 +113,69 @@ at::Tensor compute_bid_to_slot(
 );
 
 #ifdef __CUDACC__
-template <uint32_t CDIM, bool ReturnNormals, typename scalar_t>
-class FwdBatchSlotView {
+template<uint32_t CDIM, bool ReturnNormals, typename scalar_t>
+class FwdBatchSlotView
+{
 public:
-    static constexpr uint32_t StateDim =
-        FWD_BATCH_STATE_PIX_OFFSET + CDIM +
-        (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0u);
+    static constexpr uint32_t StateDim
+        = FWD_BATCH_STATE_PIX_OFFSET + CDIM + (ReturnNormals ? FWD_BATCH_STATE_NORMAL_EXTRA : 0u);
 
     __device__ FwdBatchSlotView(
-        scalar_t *__restrict__ fwd_batch_state,
-        int32_t slot,
-        int32_t pixels_per_tile,
-        int32_t pix
+        scalar_t *__restrict__ fwd_batch_state, int32_t slot, int32_t pixels_per_tile, int32_t pix
     )
-        : slot_base_(
-              fwd_batch_state
-              + slot_base_offset(slot, pixels_per_tile)),
-          pixels_per_tile_(pixels_per_tile),
-          pix_(pix) {
+        : slot_base_(fwd_batch_state + slot_base_offset(slot, pixels_per_tile))
+        , pixels_per_tile_(pixels_per_tile)
+        , pix_(pix)
+    {
         assert(pix >= 0 && pix < pixels_per_tile);
     }
 
-    __device__ float T() const {
+    __device__ float T() const
+    {
         const float t = static_cast<float>(raw(FWD_BATCH_STATE_T_OFFSET));
         assert(t >= 0.0f && t <= 1.0f + 1e-5f);
         return t;
     }
 
-    __device__ void setT(float value) {
+    __device__ void setT(float value)
+    {
         assert(value >= 0.0f && value <= 1.0f + 1e-5f);
         raw(FWD_BATCH_STATE_T_OFFSET) = static_cast<scalar_t>(value);
     }
 
-    __device__ float feature(uint32_t k) const {
+    __device__ float feature(uint32_t k) const
+    {
         assert(k < CDIM);
         return static_cast<float>(raw(FWD_BATCH_STATE_PIX_OFFSET + k));
     }
 
-    __device__ void setFeature(uint32_t k, float value) {
+    __device__ void setFeature(uint32_t k, float value)
+    {
         assert(k < CDIM);
         raw(FWD_BATCH_STATE_PIX_OFFSET + k) = static_cast<scalar_t>(value);
     }
 
-    __device__ vec3 normal() const {
-        static_assert(ReturnNormals,
-                      "normal slots are only read when ReturnNormals=true");
+    __device__ vec3 normal() const
+    {
+        static_assert(ReturnNormals, "normal slots are only read when ReturnNormals=true");
         return vec3(
             static_cast<float>(raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 0)),
             static_cast<float>(raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 1)),
-            static_cast<float>(raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 2)));
+            static_cast<float>(raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 2))
+        );
     }
 
-    __device__ void setNormal(const vec3 &value) {
-        static_assert(ReturnNormals,
-                      "normal slots are only written when ReturnNormals=true");
-        raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 0) =
-            static_cast<scalar_t>(value.x);
-        raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 1) =
-            static_cast<scalar_t>(value.y);
-        raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 2) =
-            static_cast<scalar_t>(value.z);
+    __device__ void setNormal(const vec3 &value)
+    {
+        static_assert(ReturnNormals, "normal slots are only written when ReturnNormals=true");
+        raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 0) = static_cast<scalar_t>(value.x);
+        raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 1) = static_cast<scalar_t>(value.y);
+        raw(FWD_BATCH_STATE_PIX_OFFSET + CDIM + 2) = static_cast<scalar_t>(value.z);
     }
 
 protected:
-    __device__ scalar_t &raw(uint32_t field) {
+    __device__ scalar_t &raw(uint32_t field)
+    {
         assert(field < StateDim);
         const int32_t field_idx = static_cast<int32_t>(field);
         assert(field_idx <= (INT32_MAX - pix_) / pixels_per_tile_);
@@ -183,7 +183,8 @@ protected:
         return slot_base_[offset];
     }
 
-    __device__ const scalar_t &raw(uint32_t field) const {
+    const __device__ scalar_t &raw(uint32_t field) const
+    {
         assert(field < StateDim);
         const int32_t field_idx = static_cast<int32_t>(field);
         assert(field_idx <= (INT32_MAX - pix_) / pixels_per_tile_);
@@ -192,10 +193,8 @@ protected:
     }
 
 private:
-    __device__ static int32_t slot_base_offset(
-        int32_t slot,
-        int32_t pixels_per_tile
-    ) {
+    static __device__ int32_t slot_base_offset(int32_t slot, int32_t pixels_per_tile)
+    {
         assert(slot >= 0);
         assert(pixels_per_tile > 0);
         const int32_t state_dim = static_cast<int32_t>(StateDim);
@@ -211,66 +210,65 @@ private:
     int32_t pix_;
 };
 
-template <typename PairT>
-class FwdPartialsMetaView {
+template<typename PairT>
+class FwdPartialsMetaView
+{
 public:
     __device__ FwdPartialsMetaView(
-        PairT *__restrict__ partials_meta,
-        int32_t slot,
-        int32_t pixels_per_tile,
-        int32_t pix
+        PairT *__restrict__ partials_meta, int32_t slot, int32_t pixels_per_tile, int32_t pix
     )
-        : value_(
-              partials_meta +
-              offset(slot, pixels_per_tile, pix)) {}
-
-    __device__ void set(
-        int32_t last_idx_global,
-        int32_t n_accumulated,
-        int32_t logical_batch_start,
-        bool terminal_batch = false
-    ) {
-        *value_ = make_ushort2(
-            encodeLast(last_idx_global, logical_batch_start),
-            encodeCount(n_accumulated, terminal_batch));
+        : value_(partials_meta + offset(slot, pixels_per_tile, pix))
+    {
     }
 
-    __device__ void reset() {
+    __device__ void set(
+        int32_t last_idx_global, int32_t n_accumulated, int32_t logical_batch_start, bool terminal_batch = false
+    )
+    {
+        *value_ = make_ushort2(
+            encodeLast(last_idx_global, logical_batch_start), encodeCount(n_accumulated, terminal_batch)
+        );
+    }
+
+    __device__ void reset()
+    {
         *value_ = make_ushort2(0u, 0u);
     }
 
-    __device__ bool needsBatchReplay() const {
+    __device__ bool needsBatchReplay() const
+    {
         const ushort2 pair = *value_;
         return (pair.y & BATCH_REPLAY_FLAG) != 0u;
     }
 
-    __device__ int32_t last(int32_t logical_batch_start) const {
+    __device__ int32_t last(int32_t logical_batch_start) const
+    {
         const ushort2 pair = *value_;
-        if (pair.x == 0u) {
+        if(pair.x == 0u)
+        {
             return -1;
         }
         return logical_batch_start + static_cast<int32_t>(pair.x) - 1;
     }
 
-    __device__ bool isTerminalBatch() const {
+    __device__ bool isTerminalBatch() const
+    {
         const ushort2 pair = *value_;
         return (pair.y & BATCH_REPLAY_FLAG) != 0u;
     }
 
-    __device__ int32_t count() const {
+    __device__ int32_t count() const
+    {
         const ushort2 pair = *value_;
         return static_cast<int32_t>(pair.y & COUNT_MASK);
     }
 
 private:
     static constexpr uint16_t BATCH_REPLAY_FLAG = 0x8000u;
-    static constexpr uint16_t COUNT_MASK = 0x7fffu;
+    static constexpr uint16_t COUNT_MASK        = 0x7FFFu;
 
-    __device__ static int32_t offset(
-        int32_t slot,
-        int32_t pixels_per_tile,
-        int32_t pix
-    ) {
+    static __device__ int32_t offset(int32_t slot, int32_t pixels_per_tile, int32_t pix)
+    {
         assert(slot >= 0);
         assert(pixels_per_tile > 0);
         assert(pix >= 0 && pix < pixels_per_tile);
@@ -289,14 +287,12 @@ private:
     // The full global last index is reconstructed from the batch's global
     // start. This keeps the transient partials tensor compact without changing
     // the final `last_ids` / `sample_counts` semantics.
-    __device__ static uint16_t encodeLast(
-        int32_t last_idx_global,
-        int32_t logical_batch_start
-    ) {
-        if (last_idx_global >= 0) {
+    static __device__ uint16_t encodeLast(int32_t last_idx_global, int32_t logical_batch_start)
+    {
+        if(last_idx_global >= 0)
+        {
             assert(last_idx_global >= logical_batch_start);
-            const int32_t last_local =
-                last_idx_global - logical_batch_start;
+            const int32_t last_local = last_idx_global - logical_batch_start;
             assert(last_local >= 0);
             assert(last_local < 0xFFFF);
             return static_cast<uint16_t>(last_local + 1);
@@ -304,52 +300,47 @@ private:
         return 0u;
     }
 
-    __device__ static uint16_t encodeCount(
-        int32_t n_accumulated,
-        bool terminal_batch
-    ) {
+    static __device__ uint16_t encodeCount(int32_t n_accumulated, bool terminal_batch)
+    {
         assert(n_accumulated >= 0);
         assert(n_accumulated <= COUNT_MASK);
-        return static_cast<uint16_t>(
-            n_accumulated | (terminal_batch ? BATCH_REPLAY_FLAG : 0u));
+        return static_cast<uint16_t>(n_accumulated | (terminal_batch ? BATCH_REPLAY_FLAG : 0u));
     }
 
     PairT *value_;
 };
 
-template <typename PairT>
-class FwdBatchReplayPreambleView {
+template<typename PairT>
+class FwdBatchReplayPreambleView
+{
 public:
     __device__ FwdBatchReplayPreambleView(
-        PairT *__restrict__ batch_replay_preamble,
-        int32_t tile_linear,
-        int32_t pixels_per_tile,
-        int32_t pix
+        PairT *__restrict__ batch_replay_preamble, int32_t tile_linear, int32_t pixels_per_tile, int32_t pix
     )
-        : value_(
-              batch_replay_preamble +
-              offset(tile_linear, pixels_per_tile, pix)) {}
+        : value_(batch_replay_preamble + offset(tile_linear, pixels_per_tile, pix))
+    {
+    }
 
-    __device__ void set(int32_t last_idx_global, int32_t n_accumulated) {
+    __device__ void set(int32_t last_idx_global, int32_t n_accumulated)
+    {
         *value_ = make_int2(last_idx_global, n_accumulated);
     }
 
-    __device__ int32_t last() const {
+    __device__ int32_t last() const
+    {
         const int2 pair = *value_;
         return pair.x;
     }
 
-    __device__ int32_t count() const {
+    __device__ int32_t count() const
+    {
         const int2 pair = *value_;
         return pair.y;
     }
 
 private:
-    __device__ static int32_t offset(
-        int32_t tile_linear,
-        int32_t pixels_per_tile,
-        int32_t pix
-    ) {
+    static __device__ int32_t offset(int32_t tile_linear, int32_t pixels_per_tile, int32_t pix)
+    {
         assert(tile_linear >= 0);
         assert(pixels_per_tile > 0);
         assert(pix >= 0 && pix < pixels_per_tile);
@@ -364,23 +355,24 @@ private:
 // tile t such that batch_offsets[t] <= bid < batch_offsets[t + 1]. Called
 // once per CTA in per-batch-dispatched fwd/bwd kernels; O(log num_tiles)
 // global-memory reads per CTA, which hit L2 after the first wave.
-__device__ __forceinline__ uint32_t find_tile_for_block(
-    const int32_t *__restrict__ batch_offsets,
-    uint32_t num_tiles,
-    uint32_t bid
-) {
+__device__ __forceinline__ uint32_t
+    find_tile_for_block(const int32_t *__restrict__ batch_offsets, uint32_t num_tiles, uint32_t bid)
+{
     uint32_t lo = 0;
     uint32_t hi = num_tiles;
-    while (lo < hi) {
+    while(lo < hi)
+    {
         const uint32_t mid = (lo + hi) >> 1;
-        if (static_cast<uint32_t>(batch_offsets[mid + 1]) <= bid) {
+        if(static_cast<uint32_t>(batch_offsets[mid + 1]) <= bid)
+        {
             lo = mid + 1;
-        } else {
+        }
+        else
+        {
             hi = mid;
         }
     }
     return lo;
 }
 #endif // __CUDACC__
-
 } // namespace gsplat

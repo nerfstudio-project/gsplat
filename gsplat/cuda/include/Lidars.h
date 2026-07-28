@@ -20,19 +20,24 @@
 #include <ATen/core/Tensor.h>
 #include <torch/custom_class.h>
 
-namespace gsplat {
-
+namespace gsplat
+{
 // Lidar Camera Model Support
 
 // Spinning direction enum
-enum class SpinningDirection {
-    CLOCKWISE = 0,
+enum class SpinningDirection
+{
+    CLOCKWISE         = 0,
     COUNTER_CLOCKWISE = 1
 };
 
 struct FOV : public torch::CustomClassHolder
 {
-    FOV(float start = 0.f, float span = 0.f) : start(start), span(span) {}
+    FOV(float start = 0.f, float span = 0.f)
+        : start(start)
+        , span(span)
+    {
+    }
 
     float start;
     float span;
@@ -74,25 +79,33 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
         at::Tensor tiles_pack_info,
         at::Tensor tiles_to_elements_map
     )
-        : row_elevations_rad(std::move(row_elevations_rad)),
-          column_azimuths_rad(std::move(column_azimuths_rad)),
-          row_azimuth_offsets_rad(std::move(row_azimuth_offsets_rad)),
-          spinning_direction(spinning_direction),
-          spinning_frequency_hz(spinning_frequency_hz),
-          fov_vert_rad(std::move(fov_vert_rad)),
-          fov_horiz_rad(std::move(fov_horiz_rad)),
-          fov_eps_rad(fov_eps_rad),
-          angles_to_columns_map(std::move(angles_to_columns_map)),
-          n_bins_azimuth(n_bins_azimuth),
-          n_bins_elevation(n_bins_elevation),
-          cdf_elevation(std::move(cdf_elevation)),
-          cdf_dense_ray_mask(std::move(cdf_dense_ray_mask)),
-          tiles_pack_info(std::move(tiles_pack_info)),
-          tiles_to_elements_map(std::move(tiles_to_elements_map))
-    {}
+        : row_elevations_rad(std::move(row_elevations_rad))
+        , column_azimuths_rad(std::move(column_azimuths_rad))
+        , row_azimuth_offsets_rad(std::move(row_azimuth_offsets_rad))
+        , spinning_direction(spinning_direction)
+        , spinning_frequency_hz(spinning_frequency_hz)
+        , fov_vert_rad(std::move(fov_vert_rad))
+        , fov_horiz_rad(std::move(fov_horiz_rad))
+        , fov_eps_rad(fov_eps_rad)
+        , angles_to_columns_map(std::move(angles_to_columns_map))
+        , n_bins_azimuth(n_bins_azimuth)
+        , n_bins_elevation(n_bins_elevation)
+        , cdf_elevation(std::move(cdf_elevation))
+        , cdf_dense_ray_mask(std::move(cdf_dense_ray_mask))
+        , tiles_pack_info(std::move(tiles_pack_info))
+        , tiles_to_elements_map(std::move(tiles_to_elements_map))
+    {
+    }
 
-    int n_rows() const { return this->row_elevations_rad.size(0); }
-    int n_columns() const { return this->column_azimuths_rad.size(0); }
+    int n_rows() const
+    {
+        return this->row_elevations_rad.size(0);
+    }
+
+    int n_columns() const
+    {
+        return this->column_azimuths_rad.size(0);
+    }
 
     // Actual parameters directly related to the lidar model
     at::Tensor row_elevations_rad;
@@ -116,9 +129,15 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
     at::Tensor cdf_dense_ray_mask;
     at::Tensor tiles_pack_info;
     at::Tensor tiles_to_elements_map;
-    int cdf_resolution_elevation() const { return this->cdf_dense_ray_mask.size(-2)-1; }
-    int cdf_resolution_azimuth() const { return this->cdf_dense_ray_mask.size(-1)-1; }
+
+    int cdf_resolution_elevation() const
+    {
+        return this->cdf_dense_ray_mask.size(-2) - 1;
+    }
+
+    int cdf_resolution_azimuth() const
+    {
+        return this->cdf_dense_ray_mask.size(-1) - 1;
+    }
 };
-
 } // namespace gsplat
-

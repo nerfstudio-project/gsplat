@@ -54,15 +54,16 @@ RowOffsetStructuredSpinningLidarModelParametersExtDevice::RowOffsetStructuredSpi
     CHECK_INPUT(params.tiles_pack_info);
     CHECK_INPUT(params.tiles_to_elements_map);
 
-    TORCH_CHECK(params.angles_to_columns_map.size(0) > 1 && params.angles_to_columns_map.size(1) > 1,
-                "angles_to_columns_map dimensions must be > 1");
+    TORCH_CHECK(
+        params.angles_to_columns_map.size(0) > 1 && params.angles_to_columns_map.size(1) > 1,
+        "angles_to_columns_map dimensions must be > 1"
+    );
 
     // fov_vert_rad / fov_horiz_rad are validated by checked_deref in the
     // member-init list above, so the FOVDevice members are guaranteed valid here.
-    this->map_resolution_rad = {
-        this->fov_horiz_rad.span/(params.angles_to_columns_map.size(1)-1),
-        this->fov_vert_rad.span/(params.angles_to_columns_map.size(0)-1)
-    };
+    this->map_resolution_rad
+        = {this->fov_horiz_rad.span / (params.angles_to_columns_map.size(1) - 1),
+           this->fov_vert_rad.span / (params.angles_to_columns_map.size(0) - 1)};
 
     if(params.angles_to_columns_map.dtype() != torch::kInt32)
     {

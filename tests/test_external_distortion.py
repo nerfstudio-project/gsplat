@@ -1016,6 +1016,80 @@ class TestRenderingWithExternalDistortion:
         assert not torch.isnan(renders).any()
         assert not torch.isinf(renders).any()
 
+    def test_ortho_identity_distortion_matches_no_distortion(self):
+        """Identity external distortion should be a no-op across the ortho plane."""
+        width = 64
+        height = 64
+        means = torch.tensor(
+            [
+                [0.10, -0.40, 2.0],
+                [-0.08, 0.40, 2.4],
+                [0.95, 0.0, 2.0],
+                [1.25, 0.40, 2.0],
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+        colors = torch.tensor(
+            [
+                [1.0, 0.2, 0.1],
+                [0.1, 0.8, 1.0],
+                [0.2, 1.0, 0.3],
+                [0.9, 0.1, 0.8],
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+        Ks = torch.tensor(
+            [[[20.0, 0.0, 32.0], [0.0, 20.0, 32.0], [0.0, 0.0, 1.0]]],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        quats = torch.tensor(
+            [[1.0, 0.0, 0.0, 0.0]],
+            dtype=torch.float32,
+            device=device,
+        ).expand(means.shape[0], -1)
+        scales = torch.full(
+            (means.shape[0], 3), 0.03, dtype=torch.float32, device=device
+        )
+        opacities = torch.full(
+            (means.shape[0],), 0.9, dtype=torch.float32, device=device
+        )
+        viewmats = torch.eye(4, dtype=torch.float32, device=device).unsqueeze(0)
+        kwargs = dict(
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,
+            colors=colors,
+            viewmats=viewmats,
+            Ks=Ks,
+            width=width,
+            height=height,
+            render_mode="RGB",
+            camera_model="ortho",
+            packed=False,
+            with_ut=True,
+            with_eval3d=True,
+            tile_size=8,
+        )
+
+        renders_none, alphas_none, _ = gsplat.rasterization(**kwargs)
+        identity_params = make_params(
+            h_poly=make_identity_horizontal_poly(),
+            v_poly=make_identity_vertical_poly(),
+            h_inv=make_identity_horizontal_poly(),
+            v_inv=make_identity_vertical_poly(),
+        )
+        renders_identity, alphas_identity, _ = gsplat.rasterization(
+            **kwargs, external_distortion_coeffs=identity_params
+        )
+
+        torch.testing.assert_close(renders_identity, renders_none, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(alphas_identity, alphas_none, atol=1e-4, rtol=1e-4)
+
     def test_identity_distortion_matches_no_distortion(self, test_data):
         """Identity external distortion should produce output close to no distortion."""
         renders_none, _ = self._render(test_data, external_distortion_coeffs=None)

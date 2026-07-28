@@ -8,6 +8,7 @@ Branch: vnath_gsharp. Seed is set to 42 by the autouse fixture in
 import pytest
 import torch
 
+from gsplat._helper import assert_grad_reference_close
 from gsplat.contrib.dynamic.regulation import (
     plane_smoothness,
     time_l1,
@@ -103,7 +104,17 @@ def test_time_l1_gradient_flows():
     out.backward()
     assert plane.grad is not None
     # |1 - 0.5| = 0.5, derivative w.r.t. plane is -1 / numel = -1/16.
-    assert torch.allclose(plane.grad, torch.full_like(plane, -1.0 / 16.0), atol=1e-6)
+    assert_grad_reference_close(
+        plane.grad,
+        torch.full_like(plane, -1.0 / 16.0),
+        rtol=0,
+        atol=1e-6,
+        max_rel_l2=1e-6,
+        max_rel_l1=1e-6,
+        min_cosine=1.0 - 1e-12,
+        max_signed_bias=1e-6,
+        msg="time_l1 plane.grad",
+    )
 
 
 # CUDA-gated regression: earlier impl initialised the accumulator on CPU and

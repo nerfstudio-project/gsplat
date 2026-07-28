@@ -27,6 +27,7 @@ def compute_relocation(
     scales: Tensor,  # [N, 3]
     ratios: Tensor,  # [N]
     binoms: Tensor,  # [n_max, n_max]
+    min_opacity: float = 0.005,
 ) -> Tuple[Tensor, Tensor]:
     """Compute new Gaussians from a set of old Gaussians.
 
@@ -41,6 +42,8 @@ def compute_relocation(
         ratios: The relative frequencies for each of the Gaussians. [N]
         binoms: Precomputed lookup table for binomial coefficients used in
           Equation 9 in the paper. [n_max, n_max]
+        min_opacity: Lower clamp applied to the new opacity before computing
+          new scales. Defaults to 0.005.
 
     Returns:
         A tuple:
@@ -59,6 +62,6 @@ def compute_relocation(
     ratios = ratios.int().contiguous()
 
     new_opacities, new_scales = _make_lazy_cuda_func("relocation")(
-        opacities, scales, ratios, binoms, n_max
+        opacities, scales, ratios, binoms, n_max, min_opacity
     )
     return new_opacities, new_scales

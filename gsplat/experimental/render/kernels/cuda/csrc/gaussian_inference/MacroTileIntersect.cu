@@ -25,17 +25,19 @@
 #include "SegmentedSort.h"
 #include "MacroTileIntersect.h"
 
-namespace higs {
-
-at::Tensor launch_mt_segmented_sort(int64_t n_macro_isects,
-                                    int32_t n_macro_tiles,
-                                    const at::Tensor in_mt_gauss_offsets,
-                                    at::Tensor inout_mt_depth_keys,
-                                    at::Tensor inout_mt_gauss_ids,
-                                    at::Tensor tmp_mt_depth_keys,
-                                    at::Tensor tmp_mt_gauss_ids)
+namespace higs
 {
-    if (n_macro_isects <= 0)
+at::Tensor launch_mt_segmented_sort(
+    int64_t n_macro_isects,
+    int32_t n_macro_tiles,
+    const at::Tensor in_mt_gauss_offsets,
+    at::Tensor inout_mt_depth_keys,
+    at::Tensor inout_mt_gauss_ids,
+    at::Tensor tmp_mt_depth_keys,
+    at::Tensor tmp_mt_gauss_ids
+)
+{
+    if(n_macro_isects <= 0)
     {
         return inout_mt_gauss_ids;
     }
@@ -64,5 +66,4 @@ at::Tensor launch_mt_segmented_sort(int64_t n_macro_isects,
     // zero-copy handle so the caller reads the right one without any copy/alias.
     return result_buf == 0 ? inout_mt_gauss_ids : tmp_mt_gauss_ids;
 }
-
 } // namespace higs

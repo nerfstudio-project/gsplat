@@ -14,11 +14,17 @@
 # limitations under the License.
 """Public-facing NHT (Neural Harmonic Textures) rendering parameters.
 
-The actual NHT raster dispatch lives in :mod:`gsplat.nht._wrapper` (the
-``rasterize_to_pixels_eval3d_nht_extra`` entry point); :func:`gsplat.rendering.rasterization`
-forwards ``nht_params`` through ``rasterize_to_pixels_eval3d_extra`` without
-any NHT-specific branches of its own. This module is therefore deliberately
-small: it just defines the ``NHTParams`` dataclass that users pass in.
+The actual NHT raster dispatch lives in the C++ orchestrator: ``rasterization_3dgs``
+(``gsplat/cuda/csrc/Rendering.cpp``) branches on the NHT flags and calls
+``rasterize_to_pixels_from_world_nht_3dgs`` (``gsplat/cuda/csrc/RasterizationNHT.cpp``),
+which owns the channel bookkeeping and the autograd wiring.
+:func:`gsplat.rendering.rasterization` only flattens this dataclass into the
+three scalars that op's schema takes. ``gsplat.nht._wrapper`` keeps a
+Python-level entry point (``rasterize_to_pixels_eval3d_nht_extra``) for callers
+that drive the rasterizer directly rather than through ``rasterization()``.
+
+This module is therefore deliberately small: it just defines the ``NHTParams``
+dataclass that users pass in.
 """
 
 from dataclasses import dataclass

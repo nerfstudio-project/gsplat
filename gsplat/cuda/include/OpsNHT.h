@@ -130,6 +130,58 @@ rasterize_to_pixels_from_world_nht_3dgs_bwd(
     const at::optional<at::Tensor> &v_render_normals
 );
 
+// Autograd-aware NHT rasterizer. This is the entry point the
+// `rasterization_3dgs` orchestrator calls; it owns the NHT channel bookkeeping
+// that used to live in `gsplat/nht/_wrapper.py`:
+//   * split the trailing projection-depth column out of `colors` (the
+//     orchestrator appends it for every render mode that needs depth, and NHT
+//     must not harmonically encode a plain scalar),
+//   * pad the remaining vertex features up to the next compiled CDIM,
+//   * run the fwd/bwd pair above, attaching gradients when any input needs them,
+//   * trim the padded feature columns back off the render.
+//
+// `renders` is [..., C, H, W, F + 3], i.e. the encoded features followed by the
+// three ray-direction channels. `depth` / `normals` are empty tensors when the
+// forward did not produce them.
+struct RasterizeToPixelsFromWorldNHT3DGSResult
+{
+    at::Tensor renders;
+    at::Tensor alphas;
+    at::Tensor depth;
+    at::Tensor normals;
+};
+
+RasterizeToPixelsFromWorldNHT3DGSResult rasterize_to_pixels_from_world_nht_3dgs(
+    const at::Tensor &means,
+    const at::Tensor &quats,
+    const at::Tensor &scales,
+    const at::Tensor &colors,
+    const at::Tensor &opacities,
+    const at::optional<at::Tensor> &backgrounds,
+    const at::optional<at::Tensor> &masks,
+    int64_t image_width,
+    int64_t image_height,
+    int64_t tile_size,
+    const at::Tensor &viewmats0,
+    const at::optional<at::Tensor> &viewmats1,
+    const at::Tensor &Ks,
+    int64_t camera_model,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
+    int64_t rs_type,
+    const at::optional<at::Tensor> &radial_coeffs,
+    const at::optional<at::Tensor> &tangential_coeffs,
+    const at::optional<at::Tensor> &thin_prism_coeffs,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
+    const at::Tensor &tile_offsets,
+    const at::Tensor &flatten_ids,
+    bool center_ray_mode,
+    double ray_dir_scale,
+    bool use_hit_distance,
+    bool with_normals
+);
+
 // ── Fully-fused NHT inference / training forward ─────────────────────────────
 // Rasterization + SH3 encoding + N-layer WMMA MLP + sigmoid in one kernel.
 // `mlp_params` must be in the fused-native fragment layout; convert tcnn

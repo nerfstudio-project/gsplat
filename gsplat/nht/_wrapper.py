@@ -15,8 +15,14 @@
 """Python wrappers around the NHT CUDA ops.
 
 Kept here (rather than in ``gsplat.cuda._wrapper``) so that the core wrapper
-module has no NHT-specific surface. ``rasterization(..., nht_params=...)`` from
-:mod:`gsplat.rendering` delegates here via :mod:`gsplat.nht._rendering`.
+module has no NHT-specific surface.
+
+``rasterization(..., nht_params=...)`` from :mod:`gsplat.rendering` does *not*
+come through here: it goes through the C++ orchestrator, which calls the
+``rasterize_to_pixels_from_world_nht_3dgs`` op directly. These wrappers remain
+the entry point for callers that drive the NHT kernels themselves — the
+fully-fused inference/training path, and ``rasterize_to_pixels_eval3d_extra``
+when it is handed ``nht_params`` directly.
 """
 
 from typing import Optional, Tuple

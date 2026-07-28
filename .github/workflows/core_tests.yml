@@ -24,7 +24,19 @@ jobs:
           python-version: "3.10"
       - name: Install dependencies
         run: |
-          pip install black[jupyter]==22.3.0 pytest
+          clang_format_version=$(python - <<'PY'
+          from pathlib import Path
+
+          for raw_line in Path("config.yaml").read_text().splitlines():
+              line = raw_line.strip()
+              if line.startswith("CLANG_FORMAT_VERSION:"):
+                  print(line.split(":", 1)[1].strip().strip("\"'"))
+                  break
+          else:
+              raise SystemExit("CLANG_FORMAT_VERSION is not set in config.yaml")
+          PY
+          )
+          pip install black[jupyter]==22.3.0 "clang-format==${clang_format_version}" pytest pytest-check
           pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           # tests/test_dataset_endonerf.py and tests/test_dynamic_surgical_trainer.py
           # import PIL + tqdm; install the [examples] extra so the test

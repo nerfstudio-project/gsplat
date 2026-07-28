@@ -18,6 +18,7 @@
 import pytest
 import torch
 
+from gsplat._helper import assert_grad_reference_close
 from gsplat.sensors.functional.return_types import ImagePointsReturn
 from gsplat.sensors.kernels.cameras import ShutterType
 from gsplat.sensors.models import CameraModel
@@ -188,7 +189,15 @@ def test_transform_preserves_grad(pinhole_model):
     pinhole_model.projection.focal_length.requires_grad_(True)
     transformed = pinhole_model.transform(0.5)
     transformed.projection.focal_length.sum().backward()
-    assert torch.allclose(
+    assert pinhole_model.projection.focal_length.grad is not None
+    assert_grad_reference_close(
         pinhole_model.projection.focal_length.grad,
         torch.full_like(pinhole_model.projection.focal_length, 0.5),
+        rtol=0.0,
+        atol=0.0,
+        max_rel_l2=0.0,
+        max_rel_l1=0.0,
+        min_cosine=1.0 - 1e-12,
+        max_signed_bias=0.0,
+        msg="pinhole transform focal_length.grad",
     )

@@ -20,6 +20,7 @@ import pytest
 import torch
 from torch import nn
 
+from gsplat._helper import assert_grad_reference_close
 from gsplat.sensors.functional.return_types import ImagePointsReturn
 from gsplat.sensors.kernels.cameras import ShutterType
 from gsplat.sensors.models import CameraModel, ImageFrame
@@ -261,9 +262,17 @@ def test_ftheta_transform_preserves_grad(ftheta_model):
     ftheta_model.projection.fw_poly.requires_grad_(True)
     transformed = ftheta_model.transform(0.5)
     transformed.projection.fw_poly.sum().backward()
-    assert torch.allclose(
+    assert ftheta_model.projection.fw_poly.grad is not None
+    assert_grad_reference_close(
         ftheta_model.projection.fw_poly.grad,
         torch.full_like(ftheta_model.projection.fw_poly, 0.5),
+        rtol=0.0,
+        atol=0.0,
+        max_rel_l2=0.0,
+        max_rel_l1=0.0,
+        min_cosine=1.0 - 1e-12,
+        max_signed_bias=0.0,
+        msg="ftheta transform fw_poly.grad",
     )
 
 

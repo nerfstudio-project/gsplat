@@ -30,8 +30,8 @@
 #include "IntersectCommon.h"
 #include "IntersectMTConfig.h"
 
-namespace higs {
-
+namespace higs
+{
 // CTA size for the persistent mt offset scan kernel. must be a multiple of
 // warp size. larger values process more elements per CTA, reducing the number
 // of grid barriers needed.
@@ -86,10 +86,12 @@ __global__ void mt_chunk_local_bases_kernel(MtChunkBasesArgs args)
     const int32_t chunk_tile = blockIdx.y;
     uint32_t *const meta_u32 = reinterpret_cast<uint32_t *>(args.mt_chunk_meta_words);
 
-    auto chunk_row_word_base = [=](const int32_t row_in_tile) {
+    auto chunk_row_word_base = [=](const int32_t row_in_tile)
+    {
         return ((chunk_tile * args.n_mt_tiles + mt_tile) * MT_CHUNK_TILE + row_in_tile) * MT_META_WORDS;
     };
-    auto chunk_tile_carry_idx = [=](const int32_t mt_lane) {
+    auto chunk_tile_carry_idx = [=](const int32_t mt_lane)
+    {
         return (chunk_tile * args.n_mt_tiles + mt_tile) * MT_META_TILE + mt_lane;
     };
 
@@ -113,23 +115,23 @@ __global__ void mt_chunk_local_bases_kernel(MtChunkBasesArgs args)
 
     const int32_t scan_chunk       = chunk_tile * MT_CHUNK_TILE + scan_row;
     const uint16_t base_lo_u16     = (scan_chunk < args.n_chunks && mt0 < args.n_macro_tiles)
-                                         ? static_cast<uint16_t>(base_lo)
-                                         : static_cast<uint16_t>(0);
+                                       ? static_cast<uint16_t>(base_lo)
+                                       : static_cast<uint16_t>(0);
     const uint16_t base_hi_u16     = (scan_chunk < args.n_chunks && mt1 < args.n_macro_tiles)
-                                         ? static_cast<uint16_t>(base_hi)
-                                         : static_cast<uint16_t>(0);
+                                       ? static_cast<uint16_t>(base_hi)
+                                       : static_cast<uint16_t>(0);
     smem_bases[scan_row][scan_col] = static_cast<uint32_t>(base_lo_u16) | (static_cast<uint32_t>(base_hi_u16) << 16);
 
-    if (scan_row == MT_CHUNK_TILE - 1)
+    if(scan_row == MT_CHUNK_TILE - 1)
     {
         const int32_t tile_base = chunk_tile_carry_idx(0);
 
-        reinterpret_cast<int2 *>(args.mt_chunk_tile_sums + tile_base)[scan_col] = {
-            static_cast<int32_t>(base_lo + count_lo), static_cast<int32_t>(base_hi + count_hi)};
+        reinterpret_cast<int2 *>(args.mt_chunk_tile_sums + tile_base)[scan_col]
+            = {static_cast<int32_t>(base_lo + count_lo), static_cast<int32_t>(base_hi + count_hi)};
     }
     __syncthreads();
 
-    if (global_chunk < args.n_chunks)
+    if(global_chunk < args.n_chunks)
     {
         meta_u32[tile_word_base + tid] = smem_bases[load_row][load_col];
     }
@@ -155,18 +157,20 @@ __global__ void mt_chunk_tile_carry_kernel(MtChunkBasesArgs args, int32_t *__res
     const int32_t chunk_block = blockIdx.y;
     const int32_t chunk_tile  = chunk_block * MT_CHUNK_CARRY_ROWS + load_row;
 
-    auto chunk_tile_carry_idx = [=](const int32_t row_chunk_tile, const int32_t mt_lane) {
+    auto chunk_tile_carry_idx = [=](const int32_t row_chunk_tile, const int32_t mt_lane)
+    {
         return (row_chunk_tile * args.n_mt_tiles + mt_tile) * MT_META_TILE + mt_lane;
     };
-    auto block_tile_carry_idx = [=](const int32_t mt_lane) {
+    auto block_tile_carry_idx = [=](const int32_t mt_lane)
+    {
         return (chunk_block * args.n_mt_tiles + mt_tile) * MT_META_TILE + mt_lane;
     };
 
-    if (chunk_tile < args.n_chunk_tiles)
+    if(chunk_tile < args.n_chunk_tiles)
     {
         const int32_t tile_base = chunk_tile_carry_idx(chunk_tile, 0);
-        reinterpret_cast<int2 *>(smem_sums[load_row])[load_col] =
-            reinterpret_cast<const int2 *>(args.mt_chunk_tile_sums + tile_base)[load_col];
+        reinterpret_cast<int2 *>(smem_sums[load_row])[load_col]
+            = reinterpret_cast<const int2 *>(args.mt_chunk_tile_sums + tile_base)[load_col];
     }
     else
     {
@@ -181,18 +185,18 @@ __global__ void mt_chunk_tile_carry_kernel(MtChunkBasesArgs args, int32_t *__res
     smem_carries[scan_row][pair_col] = scan_out;
     __syncthreads();
 
-    if (chunk_tile < args.n_chunk_tiles)
+    if(chunk_tile < args.n_chunk_tiles)
     {
         const int32_t tile_base = chunk_tile_carry_idx(chunk_tile, 0);
-        reinterpret_cast<int2 *>(args.mt_chunk_tile_carry + tile_base)[load_col] =
-            reinterpret_cast<int2 *>(smem_carries[load_row])[load_col];
+        reinterpret_cast<int2 *>(args.mt_chunk_tile_carry + tile_base)[load_col]
+            = reinterpret_cast<int2 *>(smem_carries[load_row])[load_col];
     }
 
-    if (scan_row == MT_CHUNK_CARRY_ROWS - 1)
+    if(scan_row == MT_CHUNK_CARRY_ROWS - 1)
     {
         const int32_t block_base = block_tile_carry_idx(0);
-        reinterpret_cast<int2 *>(out_block_sums + block_base)[pair_col] =
-            Int2Add{}(smem_carries[scan_row][pair_col], smem_sums[scan_row][pair_col]);
+        reinterpret_cast<int2 *>(out_block_sums + block_base)[pair_col]
+            = Int2Add{}(smem_carries[scan_row][pair_col], smem_sums[scan_row][pair_col]);
     }
 }
 
@@ -200,10 +204,14 @@ __global__ void mt_chunk_tile_carry_kernel(MtChunkBasesArgs args, int32_t *__res
 // stream for one packed int2 metadata column and writes a block prefix for
 // stage 2c. the final accumulated prefix becomes mt_gauss_counts.
 template<int32_t MT_TILE>
-__global__ void mt_chunk_tile_block_prefix_kernel(const int32_t n_chunk_blocks, const int32_t n_mt_tiles,
-                                                  const int32_t n_macro_tiles, const int32_t *__restrict__ block_sums,
-                                                  int32_t *__restrict__ block_prefixes,
-                                                  int32_t *__restrict__ mt_gauss_counts)
+__global__ void mt_chunk_tile_block_prefix_kernel(
+    const int32_t n_chunk_blocks,
+    const int32_t n_mt_tiles,
+    const int32_t n_macro_tiles,
+    const int32_t *__restrict__ block_sums,
+    int32_t *__restrict__ block_prefixes,
+    int32_t *__restrict__ mt_gauss_counts
+)
 {
     static_assert(MT_TILE == MT_META_TILE, "kernel launch must match metadata tile width");
 
@@ -212,13 +220,14 @@ __global__ void mt_chunk_tile_block_prefix_kernel(const int32_t n_chunk_blocks, 
     const int32_t mt0      = mt_tile * MT_TILE + pair_col * 2;
     const int32_t mt1      = mt0 + 1;
 
-    auto block_tile_carry_idx = [=](const int32_t chunk_block, const int32_t mt_lane) {
+    auto block_tile_carry_idx = [=](const int32_t chunk_block, const int32_t mt_lane)
+    {
         return (chunk_block * n_mt_tiles + mt_tile) * MT_META_TILE + mt_lane;
     };
 
     int2 running = {0, 0};
 #pragma unroll 1
-    for (int32_t chunk_block = 0; chunk_block < n_chunk_blocks; ++chunk_block)
+    for(int32_t chunk_block = 0; chunk_block < n_chunk_blocks; ++chunk_block)
     {
         const int32_t block_base = block_tile_carry_idx(chunk_block, 0);
 
@@ -228,11 +237,11 @@ __global__ void mt_chunk_tile_block_prefix_kernel(const int32_t n_chunk_blocks, 
         running        = Int2Add{}(running, sum);
     }
 
-    if (mt0 < n_macro_tiles)
+    if(mt0 < n_macro_tiles)
     {
         mt_gauss_counts[mt0] = running.x;
     }
-    if (mt1 < n_macro_tiles)
+    if(mt1 < n_macro_tiles)
     {
         mt_gauss_counts[mt1] = running.y;
     }
@@ -241,9 +250,12 @@ __global__ void mt_chunk_tile_block_prefix_kernel(const int32_t n_chunk_blocks, 
 // stage 2c: adds the per-block prefix from stage 2b to all local carries
 // produced by stage 2a.
 template<int32_t MT_TILE>
-__global__ void mt_chunk_tile_add_prefix_kernel(const int32_t n_chunk_tiles, const int32_t n_mt_tiles,
-                                                const int32_t *__restrict__ block_prefixes,
-                                                int32_t *__restrict__ mt_chunk_tile_carry)
+__global__ void mt_chunk_tile_add_prefix_kernel(
+    const int32_t n_chunk_tiles,
+    const int32_t n_mt_tiles,
+    const int32_t *__restrict__ block_prefixes,
+    int32_t *__restrict__ mt_chunk_tile_carry
+)
 {
     static_assert(MT_TILE == MT_META_TILE, "kernel launch must match metadata tile width");
 
@@ -254,15 +266,17 @@ __global__ void mt_chunk_tile_add_prefix_kernel(const int32_t n_chunk_tiles, con
     const int32_t chunk_block = blockIdx.y;
     const int32_t chunk_tile  = chunk_block * MT_CHUNK_CARRY_ROWS + load_row;
 
-    auto block_tile_carry_idx = [=](const int32_t block_idx, const int32_t mt_lane) {
+    auto block_tile_carry_idx = [=](const int32_t block_idx, const int32_t mt_lane)
+    {
         return (block_idx * n_mt_tiles + mt_tile) * MT_META_TILE + mt_lane;
     };
 
-    auto chunk_tile_carry_idx = [=](const int32_t row_chunk_tile, const int32_t mt_lane) {
+    auto chunk_tile_carry_idx = [=](const int32_t row_chunk_tile, const int32_t mt_lane)
+    {
         return (row_chunk_tile * n_mt_tiles + mt_tile) * MT_META_TILE + mt_lane;
     };
 
-    if (chunk_tile >= n_chunk_tiles)
+    if(chunk_tile >= n_chunk_tiles)
     {
         return;
     }
@@ -289,24 +303,33 @@ struct MtOffsetsArgs
     int32_t barrier_base;         // counter value at start of this invocation
 };
 
-void launch_mt_chunk_bases(at::Tensor inout_mt_chunk_meta_words, at::Tensor out_mt_chunk_tile_sums,
-                           at::Tensor out_mt_chunk_tile_carry, at::Tensor out_mt_gauss_counts, int32_t n_macro_tiles,
-                           int32_t n_chunks,
-                           at::Tensor* inout_block_sums, at::Tensor* inout_block_prefixes,
-                           int64_t* inout_scratch_capacity)
+void launch_mt_chunk_bases(
+    at::Tensor inout_mt_chunk_meta_words,
+    at::Tensor out_mt_chunk_tile_sums,
+    at::Tensor out_mt_chunk_tile_carry,
+    at::Tensor out_mt_gauss_counts,
+    int32_t n_macro_tiles,
+    int32_t n_chunks,
+    at::Tensor *inout_block_sums,
+    at::Tensor *inout_block_prefixes,
+    int64_t *inout_scratch_capacity
+)
 {
-    if (n_macro_tiles == 0)
+    if(n_macro_tiles == 0)
     {
         return;
     }
 
     out_mt_gauss_counts.zero_();
-    if (n_chunks == 0)
+    if(n_chunks == 0)
     {
         return;
     }
 
-    auto ceilDivInt = [](const int32_t x, const int32_t y) -> int32_t { return (x + y - 1) / y; };
+    auto ceilDivInt = [](const int32_t x, const int32_t y) -> int32_t
+    {
+        return (x + y - 1) / y;
+    };
 
     MtChunkBasesArgs args;
     args.n_macro_tiles       = n_macro_tiles;
@@ -328,24 +351,34 @@ void launch_mt_chunk_bases(at::Tensor inout_mt_chunk_meta_words, at::Tensor out_
     // Use caller-supplied cached scratch buffers when available (avoids 2x at::empty per frame).
     // Falls back to local temporaries when no cache pointers are provided.
     at::Tensor local_block_sums, local_block_prefixes;
-    at::Tensor& block_sums     = inout_block_sums     ? *inout_block_sums     : local_block_sums;
-    at::Tensor& block_prefixes = inout_block_prefixes ? *inout_block_prefixes : local_block_prefixes;
+    at::Tensor &block_sums     = inout_block_sums ? *inout_block_sums : local_block_sums;
+    at::Tensor &block_prefixes = inout_block_prefixes ? *inout_block_prefixes : local_block_prefixes;
 
     int64_t cap = inout_scratch_capacity ? *inout_scratch_capacity : 0;
-    if (required > cap) {
+    if(required > cap)
+    {
         block_sums     = at::empty({required}, opts_i32);
         block_prefixes = at::empty({required}, opts_i32);
-        if (inout_scratch_capacity) *inout_scratch_capacity = required;
+        if(inout_scratch_capacity)
+        {
+            *inout_scratch_capacity = required;
+        }
     }
 
     mt_chunk_local_bases_kernel<MT_META_TILE><<<local_grid, MT_CHUNK_LOCAL_THREADS, 0, stream>>>(args);
     mt_chunk_tile_carry_kernel<MT_META_TILE>
         <<<carry_grid, MT_CHUNK_CARRY_THREADS, 0, stream>>>(args, block_sums.data_ptr<int32_t>());
     mt_chunk_tile_block_prefix_kernel<MT_META_TILE><<<args.n_mt_tiles, MT_META_WORDS, 0, stream>>>(
-        n_chunk_blocks, args.n_mt_tiles, n_macro_tiles, block_sums.data_ptr<int32_t>(),
-        block_prefixes.data_ptr<int32_t>(), args.mt_gauss_counts);
+        n_chunk_blocks,
+        args.n_mt_tiles,
+        n_macro_tiles,
+        block_sums.data_ptr<int32_t>(),
+        block_prefixes.data_ptr<int32_t>(),
+        args.mt_gauss_counts
+    );
     mt_chunk_tile_add_prefix_kernel<MT_META_TILE><<<carry_grid, MT_CHUNK_CARRY_THREADS, 0, stream>>>(
-        args.n_chunk_tiles, args.n_mt_tiles, block_prefixes.data_ptr<int32_t>(), args.mt_chunk_tile_carry);
+        args.n_chunk_tiles, args.n_mt_tiles, block_prefixes.data_ptr<int32_t>(), args.mt_chunk_tile_carry
+    );
 }
 
 // single persistent kernel: phase 1 block-wide scan with carry, grid barrier,
@@ -366,16 +399,17 @@ __global__ void mt_offsets_kernel(MtOffsetsArgs args)
     // tracks how many times it's been called; signed subtraction handles int32
     // wraparound because the "window" (n_ctas) is tiny relative to the range.
     int32_t barrier_call_count = 0;
-    auto gridBarrier           = [&]() {
+    auto gridBarrier           = [&]()
+    {
         barrier_call_count++;
         const int32_t target = args.barrier_base + n_ctas * barrier_call_count;
         __threadfence();
-        if (tid == 0)
+        if(tid == 0)
         {
             int32_t arrived = atomicAdd(args.barrier_counter, 1) + 1;
-            if (arrived - target < 0)
+            if(arrived - target < 0)
             {
-                while (atomicAdd(args.barrier_counter, 0) - target < 0)
+                while(atomicAdd(args.barrier_counter, 0) - target < 0)
                 {
                 }
             }
@@ -393,13 +427,13 @@ __global__ void mt_offsets_kernel(MtOffsetsArgs args)
     int2 carry_gb = {0, 0};
 
 #pragma unroll 1
-    for (int32_t block = block_start; block < block_end; ++block)
+    for(int32_t block = block_start; block < block_end; ++block)
     {
         const int32_t mt = block * MT_OFFSETS_BLOCK_SIZE + tid;
 
         int32_t n_gauss   = 0;
         int32_t n_batches = 0;
-        if (mt < args.n_macro_tiles)
+        if(mt < args.n_macro_tiles)
         {
             n_gauss   = args.mt_gauss_counts[mt];
             n_batches = (n_gauss > 0) ? ((n_gauss - 1) >> args.gauss_batch_log2) + 1 : 0;
@@ -414,13 +448,13 @@ __global__ void mt_offsets_kernel(MtOffsetsArgs args)
         // add carry-in from previous scan blocks
         gb_inclusive = Int2Add{}(gb_inclusive, carry_gb);
 
-        if (mt < args.n_macro_tiles)
+        if(mt < args.n_macro_tiles)
         {
             args.mt_gauss_offsets[mt + 1] = gb_inclusive.x;
             args.mt_batch_offsets[mt + 1] = gb_inclusive.y;
         }
 
-        if (block == 0 && tid == 0)
+        if(block == 0 && tid == 0)
         {
             args.mt_gauss_offsets[0] = 0;
             args.mt_batch_offsets[0] = 0;
@@ -432,13 +466,13 @@ __global__ void mt_offsets_kernel(MtOffsetsArgs args)
     }
 
     // write per-CTA total to scratch
-    if (tid == 0)
+    if(tid == 0)
     {
         args.block_sums_gauss_batch[cta_id] = carry_gb;
     }
 
     // single-CTA fast path: no aggregate or propagate needed
-    if (n_ctas == 1)
+    if(n_ctas == 1)
     {
         return;
     }
@@ -447,13 +481,13 @@ __global__ void mt_offsets_kernel(MtOffsetsArgs args)
 
     // phase 2: CTA 0 computes in-place exclusive prefix over per-CTA totals
     // using block-wide scans in chunks of MT_OFFSETS_BLOCK_SIZE, with carry between chunks
-    if (cta_id == 0)
+    if(cta_id == 0)
     {
         int2 agg_carry_gb          = {0, 0};
         const int32_t n_agg_chunks = (n_ctas + MT_OFFSETS_BLOCK_SIZE - 1) / MT_OFFSETS_BLOCK_SIZE;
 
 #pragma unroll 1
-        for (int32_t chunk = 0; chunk < n_agg_chunks; ++chunk)
+        for(int32_t chunk = 0; chunk < n_agg_chunks; ++chunk)
         {
             const int32_t idx = chunk * MT_OFFSETS_BLOCK_SIZE + tid;
 
@@ -461,12 +495,11 @@ __global__ void mt_offsets_kernel(MtOffsetsArgs args)
 
             int2 gb_exclusive;
             int2 gb_aggregate;
-            BlockScanInt2(scan_storage)
-                .ExclusiveScan(gb_total, gb_exclusive, int2{0, 0}, Int2Add{}, gb_aggregate);
+            BlockScanInt2(scan_storage).ExclusiveScan(gb_total, gb_exclusive, int2{0, 0}, Int2Add{}, gb_aggregate);
 
             gb_exclusive = Int2Add{}(gb_exclusive, agg_carry_gb);
 
-            if (idx < n_ctas)
+            if(idx < n_ctas)
             {
                 args.block_sums_gauss_batch[idx] = gb_exclusive;
             }
@@ -481,7 +514,7 @@ __global__ void mt_offsets_kernel(MtOffsetsArgs args)
 
     // phase 3: each CTA (except CTA 0) reads its prefix and adds to all
     // output elements in its range. CTA 0's results are already globally correct.
-    if (cta_id == 0)
+    if(cta_id == 0)
     {
         return;
     }
@@ -489,12 +522,12 @@ __global__ void mt_offsets_kernel(MtOffsetsArgs args)
     const int2 prefix_gb = args.block_sums_gauss_batch[cta_id];
 
 #pragma unroll 1
-    for (int32_t block = block_start; block < block_end; ++block)
+    for(int32_t block = block_start; block < block_end; ++block)
     {
         const int32_t mt  = block * MT_OFFSETS_BLOCK_SIZE + tid;
         const int32_t pos = mt + 1;
 
-        if (mt < args.n_macro_tiles)
+        if(mt < args.n_macro_tiles)
         {
             args.mt_gauss_offsets[pos] += prefix_gb.x;
             args.mt_batch_offsets[pos] += prefix_gb.y;
@@ -522,10 +555,11 @@ MTOffsets::MTOffsets(int32_t n_macro_tiles, int32_t gauss_batch_log2)
     m_scratch                  = at::zeros({scratch_ints}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
 }
 
-void MTOffsets::execute(const at::Tensor &in_mt_gauss_counts, at::Tensor &out_mt_gauss_offsets,
-                        at::Tensor &out_mt_batch_offsets)
+void MTOffsets::execute(
+    const at::Tensor &in_mt_gauss_counts, at::Tensor &out_mt_gauss_offsets, at::Tensor &out_mt_batch_offsets
+)
 {
-    if (m_nMacroTiles == 0)
+    if(m_nMacroTiles == 0)
     {
         return;
     }
@@ -548,10 +582,9 @@ void MTOffsets::execute(const at::Tensor &in_mt_gauss_counts, at::Tensor &out_mt
     // TODO: this works quite well and we don't need to reset the counter ever, however the entire solution
     // is quite fragile from thread or stream safety POV. This counter is instance specific so we shouldn't be
     // submitting it to different streams or devices since they will all contend for the same counter.
-    args.barrier_base = m_barrierExpected;
+    args.barrier_base  = m_barrierExpected;
     m_barrierExpected += 2 * n_ctas;
 
     mt_offsets_kernel<<<n_ctas, MT_OFFSETS_BLOCK_SIZE, 0, at::cuda::getCurrentCUDAStream()>>>(args);
 }
-
 } // namespace higs

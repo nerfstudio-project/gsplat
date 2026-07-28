@@ -25,6 +25,9 @@ import torch
 
 from . import _backend
 
+_INTEGER_DTYPES = (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64)
+_POSE_TRACK_FLOAT_TIME_DTYPES = (torch.float32, torch.float64)
+
 
 def _expect_tensor(name: str, x: object) -> torch.Tensor:
     if not isinstance(x, torch.Tensor):
@@ -45,6 +48,29 @@ def _require_float32_or_float64(name: str, t: torch.Tensor) -> None:
 def _require_float32(name: str, t: torch.Tensor) -> None:
     if t.dtype != torch.float32:
         raise TypeError(f"{name} must have dtype float32, got {t.dtype}")
+
+
+def _require_integer(name: str, t: torch.Tensor) -> None:
+    if t.dtype not in _INTEGER_DTYPES:
+        raise TypeError(f"{name} must have an integer dtype, got {t.dtype}")
+
+
+def _require_numeric(name: str, t: torch.Tensor) -> None:
+    if not t.dtype.is_floating_point and t.dtype not in _INTEGER_DTYPES:
+        raise TypeError(
+            f"{name} must have a floating-point or integer dtype, got {t.dtype}"
+        )
+
+
+def _require_pose_track_time_dtype(name: str, t: torch.Tensor) -> None:
+    if t.dtype.is_floating_point and t.dtype not in _POSE_TRACK_FLOAT_TIME_DTYPES:
+        raise TypeError(
+            f"{name} must have dtype float32, float64, or integer, got {t.dtype}"
+        )
+    if not t.dtype.is_floating_point and t.dtype not in _INTEGER_DTYPES:
+        raise TypeError(
+            f"{name} must have dtype float32, float64, or integer, got {t.dtype}"
+        )
 
 
 def _same_device(names_tensors: Iterable[tuple[str, torch.Tensor]]) -> torch.device:
@@ -134,6 +160,159 @@ def _validate_se3_pose_pair(translation: torch.Tensor, rotation: torch.Tensor) -
             "translation and rotation must share the same batch size N; "
             f"got {translation.shape[0]} vs {rotation.shape[0]}"
         )
+
+
+def _validate_same_se3_pose_batch(
+    parent_translation: torch.Tensor,
+    parent_rotation: torch.Tensor,
+    child_translation: torch.Tensor,
+    child_rotation: torch.Tensor,
+) -> None:
+    _validate_se3_pose_pair(parent_translation, parent_rotation)
+    _validate_se3_pose_pair(child_translation, child_rotation)
+    if parent_translation.device != child_translation.device:
+        raise ValueError(
+            "parent and child poses must be on the same device; "
+            f"got {parent_translation.device} vs {child_translation.device}"
+        )
+    if parent_translation.dtype != child_translation.dtype:
+        raise TypeError(
+            "parent and child poses must have the same dtype; "
+            f"got {parent_translation.dtype} vs {child_translation.dtype}"
+        )
+    if parent_translation.shape[0] != child_translation.shape[0]:
+        raise ValueError(
+            "parent and child poses must share the same batch size N; "
+            f"got {parent_translation.shape[0]} vs {child_translation.shape[0]}"
+        )
+
+
+def _validate_se3_pose_tracks(
+    pose_translations: torch.Tensor,
+    pose_rotations: torch.Tensor,
+    pose_times: torch.Tensor,
+    pose_offsets: torch.Tensor,
+    pose_counts: torch.Tensor,
+) -> None:
+    pose_translations = _expect_tensor("pose_translations", pose_translations)
+    pose_rotations = _expect_tensor("pose_rotations", pose_rotations)
+    pose_times = _expect_tensor("pose_times", pose_times)
+    pose_offsets = _expect_tensor("pose_offsets", pose_offsets)
+    pose_counts = _expect_tensor("pose_counts", pose_counts)
+    for name, tensor in (
+        ("pose_translations", pose_translations),
+        ("pose_rotations", pose_rotations),
+        ("pose_times", pose_times),
+        ("pose_offsets", pose_offsets),
+        ("pose_counts", pose_counts),
+    ):
+        _require_cuda(name, tensor)
+    _require_float32_or_float64("pose_translations", pose_translations)
+    if pose_rotations.dtype != pose_translations.dtype:
+        raise TypeError(
+            "pose_translations and pose_rotations must have the same dtype; "
+            f"got {pose_translations.dtype} vs {pose_rotations.dtype}"
+        )
+    _require_pose_track_time_dtype("pose_times", pose_times)
+    _require_integer("pose_offsets", pose_offsets)
+    _require_integer("pose_counts", pose_counts)
+    _same_device(
+        [
+            ("pose_translations", pose_translations),
+            ("pose_rotations", pose_rotations),
+            ("pose_times", pose_times),
+            ("pose_offsets", pose_offsets),
+            ("pose_counts", pose_counts),
+        ]
+    )
+    if pose_translations.dim() != 2 or pose_translations.shape[1] != 3:
+        raise ValueError(
+            "pose_translations must have shape (M, 3); "
+            f"got {tuple(pose_translations.shape)}"
+        )
+    if pose_rotations.dim() != 2 or pose_rotations.shape[1] != 4:
+        raise ValueError(
+            "pose_rotations must have shape (M, 4) xyzw; "
+            f"got {tuple(pose_rotations.shape)}"
+        )
+    if pose_rotations.shape[0] != pose_translations.shape[0]:
+        raise ValueError(
+            "pose_translations and pose_rotations must share M rows; "
+            f"got {pose_translations.shape[0]} vs {pose_rotations.shape[0]}"
+        )
+    n_poses = pose_translations.shape[0]
+    if not (
+        (pose_times.dim() == 1 and pose_times.shape[0] == n_poses)
+        or (pose_times.dim() == 2 and pose_times.shape == (n_poses, 1))
+    ):
+        raise ValueError(
+            "pose_times must have shape (M,) or (M, 1) matching poses; "
+            f"got {tuple(pose_times.shape)} for M={n_poses}"
+        )
+    if pose_offsets.dim() == 1:
+        n_tracks = pose_offsets.shape[0]
+    elif pose_offsets.dim() == 2 and pose_offsets.shape[1] == 1:
+        n_tracks = pose_offsets.shape[0]
+    else:
+        raise ValueError(
+            f"pose_offsets must have shape (C,) or (C, 1); got {tuple(pose_offsets.shape)}"
+        )
+    pose_counts_valid = (
+        pose_counts.dim() == 1 and pose_counts.shape[0] == n_tracks
+    ) or (pose_counts.dim() == 2 and pose_counts.shape == (n_tracks, 1))
+    if not pose_counts_valid:
+        raise ValueError(
+            "pose_counts must have shape (C,) or (C, 1) matching pose_offsets; "
+            f"got {tuple(pose_counts.shape)} for C={n_tracks}"
+        )
+
+
+def _packed_pose_track_query_time(
+    query_time: float | torch.Tensor,
+    n_tracks: int,
+    ref: torch.Tensor,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if isinstance(query_time, (int, float)):
+        scalar_query_time = query_time if dtype == torch.int64 else float(query_time)
+        return torch.full(
+            (n_tracks,), scalar_query_time, device=ref.device, dtype=dtype
+        )
+
+    query_time = _expect_tensor("query_time", query_time)
+    _require_cuda("query_time", query_time)
+    _require_numeric("query_time", query_time)
+    if query_time.device != ref.device:
+        raise ValueError(
+            f"query_time must be on the same CUDA device as poses; got {query_time.device}"
+        )
+    query_time = query_time.to(dtype=dtype)
+    query_time_flat = query_time.reshape(-1)
+    if query_time_flat.numel() == 1:
+        return query_time_flat.expand(n_tracks)
+    if query_time_flat.numel() != n_tracks:
+        raise ValueError(
+            "query_time must be a scalar or flatten to one value per track; "
+            f"got {query_time_flat.numel()} values for C={n_tracks}"
+        )
+    return query_time_flat
+
+
+def _pose_track_time_dtype(
+    pose_times: torch.Tensor, query_time: float | torch.Tensor
+) -> torch.dtype:
+    if pose_times.is_floating_point():
+        if isinstance(query_time, torch.Tensor) and query_time.is_floating_point():
+            return torch.promote_types(pose_times.dtype, query_time.dtype)
+        return pose_times.dtype
+    if not pose_times.is_floating_point() and (
+        isinstance(query_time, int)
+        or (isinstance(query_time, torch.Tensor) and not query_time.is_floating_point())
+    ):
+        return torch.int64
+    if not pose_times.is_floating_point():
+        return torch.float64
+    raise TypeError(f"unsupported pose_times dtype: {pose_times.dtype}")
 
 
 def _validate_trajectory_time_tensor(
@@ -402,6 +581,63 @@ class SE3PoseInverseTransformDirectionFunction(torch.autograd.Function):
             translation, rotation, direction, grad_result
         )
         return grad_translation, grad_rotation, grad_direction
+
+
+class SE3PoseComposeFunction(torch.autograd.Function):
+    """Differentiable row-wise SE3 pose composition."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        parent_translation: torch.Tensor,
+        parent_rotation: torch.Tensor,
+        child_translation: torch.Tensor,
+        child_rotation: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        parent_translation = parent_translation.contiguous()
+        parent_rotation = parent_rotation.contiguous()
+        child_translation = child_translation.contiguous()
+        child_rotation = child_rotation.contiguous()
+        out_translation, out_rotation = _backend._GEOMETRY_CUDA.se3pose_compose(
+            parent_translation,
+            parent_rotation,
+            child_translation,
+            child_rotation,
+        )
+        ctx.save_for_backward(
+            parent_translation,
+            parent_rotation,
+            child_translation,
+            child_rotation,
+        )
+        return out_translation, out_rotation
+
+    @staticmethod
+    def backward(ctx, *grad_outputs: Any):
+        grad_out_translation = grad_outputs[0]
+        grad_out_rotation = grad_outputs[1]
+        (
+            parent_translation,
+            parent_rotation,
+            child_translation,
+            child_rotation,
+        ) = ctx.saved_tensors
+        if grad_out_translation is None:
+            grad_out_translation = torch.zeros_like(parent_translation)
+        else:
+            grad_out_translation = grad_out_translation.contiguous()
+        if grad_out_rotation is None:
+            grad_out_rotation = torch.zeros_like(parent_rotation)
+        else:
+            grad_out_rotation = grad_out_rotation.contiguous()
+        return _backend._GEOMETRY_CUDA.se3pose_compose_bwd(
+            parent_translation,
+            parent_rotation,
+            child_translation,
+            child_rotation,
+            grad_out_translation,
+            grad_out_rotation,
+        )
 
 
 class SE3PoseFromMatrixFunction(torch.autograd.Function):
@@ -765,6 +1001,102 @@ class TrajectoryTransformPoint1PoseFunction(torch.autograd.Function):
         return grad_trans, grad_rot, grad_time, grad_point, grad_query_time
 
 
+class SE3InterpolateTracksFunction(torch.autograd.Function):
+    """Differentiable packed SE3 pose-track interpolation."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        pose_translations: torch.Tensor,
+        pose_rotations: torch.Tensor,
+        pose_times: torch.Tensor,
+        pose_offsets: torch.Tensor,
+        pose_counts: torch.Tensor,
+        query_times: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        pose_translations = pose_translations.contiguous()
+        pose_rotations = pose_rotations.contiguous()
+        pose_times = pose_times.contiguous()
+        pose_offsets = pose_offsets.contiguous()
+        pose_counts = pose_counts.contiguous()
+        query_times = query_times.contiguous()
+        (
+            out_translations,
+            out_rotations,
+        ) = _backend._GEOMETRY_CUDA.se3_interpolate_tracks(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+        )
+        ctx.save_for_backward(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+            out_rotations,
+        )
+        ctx.times_are_floating = pose_times.is_floating_point()
+        return out_translations, out_rotations
+
+    @staticmethod
+    def backward(ctx, *grad_outputs: Any):
+        grad_out_translations = grad_outputs[0]
+        grad_out_rotations = grad_outputs[1]
+        (
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+            out_rotations,
+        ) = ctx.saved_tensors
+        if grad_out_translations is None:
+            grad_out_translations = torch.zeros(
+                (query_times.shape[0], 3),
+                device=pose_translations.device,
+                dtype=pose_translations.dtype,
+            )
+        else:
+            grad_out_translations = grad_out_translations.contiguous()
+        if grad_out_rotations is None:
+            grad_out_rotations = torch.zeros_like(out_rotations)
+        else:
+            grad_out_rotations = grad_out_rotations.contiguous()
+        (
+            grad_pose_translations,
+            grad_pose_rotations,
+            grad_pose_times,
+            grad_query_times,
+        ) = _backend._GEOMETRY_CUDA.se3_interpolate_tracks_bwd(
+            pose_translations,
+            pose_rotations,
+            pose_times,
+            pose_offsets,
+            pose_counts,
+            query_times,
+            out_rotations,
+            grad_out_translations,
+            grad_out_rotations,
+        )
+        if not ctx.times_are_floating:
+            grad_pose_times = None
+            grad_query_times = None
+        return (
+            grad_pose_translations,
+            grad_pose_rotations,
+            grad_pose_times,
+            None,
+            None,
+            grad_query_times,
+        )
+
+
 # ============================================================================
 # Public API - Differentiable Wrapper Functions
 # ============================================================================
@@ -882,6 +1214,92 @@ def se3pose_from_matrix(matrix: torch.Tensor) -> tuple[torch.Tensor, torch.Tenso
             "matrix must have shape (N, 4, 4) or (N, 16); " f"got {tuple(matrix.shape)}"
         )
     return SE3PoseFromMatrixFunction.apply(matrix)
+
+
+def se3pose_compose(
+    parent_translation: torch.Tensor,
+    parent_rotation: torch.Tensor,
+    child_translation: torch.Tensor,
+    child_rotation: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compose two batched SE3 poses row-wise.
+
+    The returned pose is ``parent * child``. Applying it to a point is equivalent
+    to first applying ``child`` and then applying ``parent``.
+
+    Args:
+        parent_translation: (N, 3) parent/world translations
+        parent_rotation: (N, 4) parent/world quaternions in xyzw format
+        child_translation: (N, 3) child/local translations
+        child_rotation: (N, 4) child/local quaternions in xyzw format
+
+    Returns:
+        Tuple ``(translation, rotation)`` with shapes ``(N, 3)`` and ``(N, 4)``.
+    """
+    _validate_same_se3_pose_batch(
+        parent_translation, parent_rotation, child_translation, child_rotation
+    )
+    return SE3PoseComposeFunction.apply(
+        parent_translation, parent_rotation, child_translation, child_rotation
+    )
+
+
+def se3_interpolate_tracks(
+    pose_translations: torch.Tensor,
+    pose_rotations: torch.Tensor,
+    pose_times: torch.Tensor,
+    pose_offsets: torch.Tensor,
+    pose_counts: torch.Tensor,
+    query_time: float | torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Interpolate packed SE3 pose tracks at one or more query times.
+
+    Tracks are represented by keyframe translations, keyframe rotations, and
+    per-track ``pose_offsets`` / ``pose_counts``. Offsets/counts must describe
+    valid packed ranges, and times must be sorted non-decreasing within each
+    track. Query times outside a track are clamped to that track's first or last
+    keyframe.
+
+    Args:
+        pose_translations: (M, 3) keyframe translations
+        pose_rotations: (M, 4) keyframe quaternions in xyzw format
+        pose_times: (M,) or (M, 1) keyframe times
+        pose_offsets: (C,) or (C, 1) start row for each track
+        pose_counts: (C,) or (C, 1) keyframe count for each track
+        query_time: Scalar time for all tracks or tensor with one time per track
+
+    Returns:
+        Tuple ``(translation, rotation)`` with shapes ``(C, 3)`` and ``(C, 4)``.
+    """
+    _validate_se3_pose_tracks(
+        pose_translations,
+        pose_rotations,
+        pose_times,
+        pose_offsets,
+        pose_counts,
+    )
+    offsets = pose_offsets.reshape(-1).to(dtype=torch.long)
+    counts = pose_counts.reshape(-1).to(dtype=torch.long)
+    n_tracks = offsets.numel()
+    if n_tracks == 0:
+        return pose_translations[:0], pose_rotations[:0]
+
+    time_dtype = _pose_track_time_dtype(pose_times, query_time)
+    query_times = _packed_pose_track_query_time(
+        query_time, n_tracks, pose_translations, time_dtype
+    )
+    times = pose_times.reshape(-1).to(dtype=time_dtype).contiguous()
+    offsets = offsets.contiguous()
+    counts = counts.contiguous()
+    query_times = query_times.contiguous()
+    return SE3InterpolateTracksFunction.apply(
+        pose_translations,
+        pose_rotations,
+        times,
+        offsets,
+        counts,
+        query_times,
+    )
 
 
 def se3pose_to_inverse_matrix(

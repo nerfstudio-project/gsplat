@@ -20,23 +20,23 @@
 
 #if GSPLAT_BUILD_2DGS
 
-#include <ATen/Dispatch.h>
-#include <ATen/core/Tensor.h>
-#include <ATen/cuda/Atomic.cuh>
-#include <c10/cuda/CUDAStream.h>
-#include <cooperative_groups.h>
-#include <cub/cub.cuh>
+#    include <ATen/Dispatch.h>
+#    include <ATen/core/Tensor.h>
+#    include <ATen/cuda/Atomic.cuh>
+#    include <c10/cuda/CUDAStream.h>
+#    include <cooperative_groups.h>
+#    include <cub/cub.cuh>
 
-#include "Common.h"
-#include "Projection.h"
-#include "Projection2DGS.cuh" // Utils for 2DGS Projection
-#include "Utils.cuh"
+#    include "Common.h"
+#    include "Projection.h"
+#    include "Projection2DGS.cuh" // Utils for 2DGS Projection
+#    include "Utils.cuh"
 
-namespace gsplat {
-
+namespace gsplat
+{
 namespace cg = cooperative_groups;
 
-template <typename scalar_t>
+template<typename scalar_t>
 __global__ void projection_2dgs_packed_fwd_kernel(
     const uint32_t B,
     const uint32_t C,
@@ -51,9 +51,8 @@ __global__ void projection_2dgs_packed_fwd_kernel(
     const scalar_t near_plane,
     const scalar_t far_plane,
     const scalar_t radius_clip,
-    const int32_t
-        *__restrict__ block_accum,    // [B * C * blocks_per_row] packing helper
-    int32_t *__restrict__ block_cnts, // [B * C * blocks_per_row] packing helper
+    const int32_t *__restrict__ block_accum, // [B * C * blocks_per_row] packing helper
+    int32_t *__restrict__ block_cnts,        // [B * C * blocks_per_row] packing helper
     // outputs
     int32_t *__restrict__ indptr,          // [B * C + 1]
     int64_t *__restrict__ batch_ids,       // [nnz]
@@ -64,24 +63,26 @@ __global__ void projection_2dgs_packed_fwd_kernel(
     scalar_t *__restrict__ depths,         // [nnz]
     scalar_t *__restrict__ ray_transforms, // [nnz, 3, 3]
     scalar_t *__restrict__ normals         // [nnz, 3]
-) {
+)
+{
     int32_t blocks_per_row = gridDim.x;
-    int32_t row_idx = blockIdx.y;
-    int32_t block_col_idx = blockIdx.x;
-    int32_t block_idx = row_idx * blocks_per_row + block_col_idx;
-    int32_t col_idx = block_col_idx * blockDim.x + threadIdx.x;
-    const int32_t bid = row_idx / C;
-    const int32_t cid = row_idx % C;
-    const int32_t gid = col_idx;
+    int32_t row_idx        = blockIdx.y;
+    int32_t block_col_idx  = blockIdx.x;
+    int32_t block_idx      = row_idx * blocks_per_row + block_col_idx;
+    int32_t col_idx        = block_col_idx * blockDim.x + threadIdx.x;
+    const int32_t bid      = row_idx / C;
+    const int32_t cid      = row_idx % C;
+    const int32_t gid      = col_idx;
 
     bool valid = (bid < B) && (cid < C) && (gid < N);
 
     // check if points are with camera near and far plane
     vec3 mean_c;
     mat3 R;
-    if (valid) {
+    if(valid)
+    {
         // shift pointers to the current camera and gaussian
-        means += bid * N * 3 + gid * 3;
+        means    += bid * N * 3 + gid * 3;
         viewmats += bid * C * 16 + cid * 16;
 
         // glm is column-major but input is row-major
@@ -100,7 +101,8 @@ __global__ void projection_2dgs_packed_fwd_kernel(
 
         // transform Gaussian center to camera space
         posW2C(R, t, glm::make_vec3(means), mean_c);
-        if (mean_c.z < near_plane || mean_c.z > far_plane) {
+        if(mean_c.z < near_plane || mean_c.z > far_plane)
+        {
             valid = false;
         }
     }
@@ -109,22 +111,21 @@ __global__ void projection_2dgs_packed_fwd_kernel(
     mat3 M;
     float radius_x, radius_y;
     vec3 normal;
-    if (valid) {
+    if(valid)
+    {
         // build ray transformation matrix and transform from world space to
         // camera space
-        quats += bid * N * 4 + gid * 4;
+        quats  += bid * N * 4 + gid * 4;
         scales += bid * N * 3 + gid * 3;
-        Ks += bid * C * 9 + cid * 9;
+        Ks     += bid * C * 9 + cid * 9;
 
-        mat3 RS_camera =
-            R * quat_to_rotmat(glm::make_vec4(quats)) *
-            mat3(scales[0], 0.0, 0.0, 0.0, scales[1], 0.0, 0.0, 0.0, 1.0);
+        mat3 RS_camera
+            = R * quat_to_rotmat(glm::make_vec4(quats)) * mat3(scales[0], 0.0, 0.0, 0.0, scales[1], 0.0, 0.0, 0.0, 1.0);
         ;
         mat3 WH = mat3(RS_camera[0], RS_camera[1], mean_c);
 
-        mat3 world_2_pix =
-            mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
-        M = glm::transpose(WH) * world_2_pix;
+        mat3 world_2_pix = mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
+        M                = glm::transpose(WH) * world_2_pix;
 
         // compute AABB
         const vec3 M0 = vec3(M[0][0], M[0][1], M[0][2]);
@@ -132,71 +133,87 @@ __global__ void projection_2dgs_packed_fwd_kernel(
         const vec3 M2 = vec3(M[2][0], M[2][1], M[2][2]);
 
         const vec3 temp_point = vec3(1.0f, 1.0f, -1.0f);
-        const float distance = sum(temp_point * M2 * M2);
+        const float distance  = sum(temp_point * M2 * M2);
 
-        if (distance == 0.0f)
+        if(distance == 0.0f)
+        {
             valid = false;
+        }
 
         const vec3 f = (1 / distance) * temp_point;
-        mean2d = vec2(sum(f * M0 * M2), sum(f * M1 * M2));
+        mean2d       = vec2(sum(f * M0 * M2), sum(f * M1 * M2));
 
-        const vec2 temp = {sum(f * M0 * M0), sum(f * M1 * M1)};
+        const vec2 temp        = {sum(f * M0 * M0), sum(f * M1 * M1)};
         const vec2 half_extend = mean2d * mean2d - temp;
-        radius_x = ceil(GAUSSIAN_EXTEND * sqrt(max(1e-4, half_extend.x)));
-        radius_y = ceil(GAUSSIAN_EXTEND * sqrt(max(1e-4, half_extend.y)));
+        radius_x               = ceil(GAUSSIAN_EXTEND * sqrt(max(1e-4, half_extend.x)));
+        radius_y               = ceil(GAUSSIAN_EXTEND * sqrt(max(1e-4, half_extend.y)));
 
-        if (radius_x <= radius_clip && radius_y <= radius_clip) {
+        if(radius_x <= radius_clip && radius_y <= radius_clip)
+        {
             valid = false;
         }
 
         // mask out gaussians outside the image region
-        if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
-            mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
+        if(mean2d.x + radius_x <= 0
+           || mean2d.x - radius_x >= image_width
+           || mean2d.y + radius_y <= 0
+           || mean2d.y - radius_y >= image_height)
+        {
             valid = false;
         }
 
         // normal dual visible
-        normal = RS_camera[2];
-        float multipler = glm::dot(-normal, mean_c) > 0 ? 1 : -1;
-        normal *= multipler;
+        normal           = RS_camera[2];
+        float multipler  = glm::dot(-normal, mean_c) > 0 ? 1 : -1;
+        normal          *= multipler;
     }
 
     int32_t thread_data = static_cast<int32_t>(valid);
-    if (block_cnts != nullptr) {
+    if(block_cnts != nullptr)
+    {
         // First pass: compute the block-wide sum
         int32_t aggregate;
-        if (__syncthreads_or(thread_data)) {
+        if(__syncthreads_or(thread_data))
+        {
             typedef cub::BlockReduce<int32_t, N_THREADS_PACKED> BlockReduce;
             __shared__ typename BlockReduce::TempStorage temp_storage;
             aggregate = BlockReduce(temp_storage).Sum(thread_data);
-        } else {
+        }
+        else
+        {
             aggregate = 0;
         }
-        if (threadIdx.x == 0) {
+        if(threadIdx.x == 0)
+        {
             block_cnts[block_idx] = aggregate;
         }
-    } else {
+    }
+    else
+    {
         // Second pass: write out the indices of the non zero elements
-        if (__syncthreads_or(thread_data)) {
+        if(__syncthreads_or(thread_data))
+        {
             typedef cub::BlockScan<int32_t, N_THREADS_PACKED> BlockScan;
             __shared__ typename BlockScan::TempStorage temp_storage;
             BlockScan(temp_storage).ExclusiveSum(thread_data, thread_data);
         }
-        if (valid) {
-            if (block_idx > 0) {
-                int32_t offset = block_accum[block_idx - 1];
-                thread_data += offset;
+        if(valid)
+        {
+            if(block_idx > 0)
+            {
+                int32_t offset  = block_accum[block_idx - 1];
+                thread_data    += offset;
             }
             // write to outputs
-            batch_ids[thread_data] = bid;
-            camera_ids[thread_data] = cid;
-            gaussian_ids[thread_data] = gid;
-            radii[thread_data * 2] = (int32_t)radius_x;
-            radii[thread_data * 2 + 1] = (int32_t)radius_y;
-            means2d[thread_data * 2] = mean2d.x;
-            means2d[thread_data * 2 + 1] = mean2d.y;
-            depths[thread_data] = mean_c.z;
-            ray_transforms[thread_data * 9] = M[0][0];
+            batch_ids[thread_data]              = bid;
+            camera_ids[thread_data]             = cid;
+            gaussian_ids[thread_data]           = gid;
+            radii[thread_data * 2]              = (int32_t)radius_x;
+            radii[thread_data * 2 + 1]          = (int32_t)radius_y;
+            means2d[thread_data * 2]            = mean2d.x;
+            means2d[thread_data * 2 + 1]        = mean2d.y;
+            depths[thread_data]                 = mean_c.z;
+            ray_transforms[thread_data * 9]     = M[0][0];
             ray_transforms[thread_data * 9 + 1] = M[0][1];
             ray_transforms[thread_data * 9 + 2] = M[0][2];
             ray_transforms[thread_data * 9 + 3] = M[1][0];
@@ -205,16 +222,20 @@ __global__ void projection_2dgs_packed_fwd_kernel(
             ray_transforms[thread_data * 9 + 6] = M[2][0];
             ray_transforms[thread_data * 9 + 7] = M[2][1];
             ray_transforms[thread_data * 9 + 8] = M[2][2];
-            normals[thread_data * 3] = normal.x;
-            normals[thread_data * 3 + 1] = normal.y;
-            normals[thread_data * 3 + 2] = normal.z;
+            normals[thread_data * 3]            = normal.x;
+            normals[thread_data * 3 + 1]        = normal.y;
+            normals[thread_data * 3 + 2]        = normal.z;
         }
         // lane 0 of the first block in each row writes the indptr
-        if (threadIdx.x == 0 && block_col_idx == 0) {
-            if (row_idx == 0) {
-                indptr[0] = 0;
+        if(threadIdx.x == 0 && block_col_idx == 0)
+        {
+            if(row_idx == 0)
+            {
+                indptr[0]     = 0;
                 indptr[B * C] = block_accum[B * C * blocks_per_row - 1];
-            } else {
+            }
+            else
+            {
                 indptr[row_idx] = block_accum[block_idx - 1];
             }
         }
@@ -233,26 +254,26 @@ void launch_projection_2dgs_packed_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const at::optional<at::Tensor>
-        block_accum, // [B * C * blocks_per_row] packing helper
+    const at::optional<at::Tensor> block_accum, // [B * C * blocks_per_row] packing helper
     // outputs
-    at::optional<at::Tensor> block_cnts, // [B * C * blocks_per_row] packing helper
-    at::optional<at::Tensor> indptr,     // [B * C + 1]
-    at::optional<at::Tensor> batch_ids,  // [nnz]
-    at::optional<at::Tensor> camera_ids, // [nnz]
+    at::optional<at::Tensor> block_cnts,     // [B * C * blocks_per_row] packing helper
+    at::optional<at::Tensor> indptr,         // [B * C + 1]
+    at::optional<at::Tensor> batch_ids,      // [nnz]
+    at::optional<at::Tensor> camera_ids,     // [nnz]
     at::optional<at::Tensor> gaussian_ids,   // [nnz]
     at::optional<at::Tensor> radii,          // [nnz, 2]
     at::optional<at::Tensor> means2d,        // [nnz, 2]
     at::optional<at::Tensor> depths,         // [nnz]
     at::optional<at::Tensor> ray_transforms, // [nnz, 3, 3]
     at::optional<at::Tensor> normals         // [nnz]
-) {
+)
+{
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t B = means.numel() / (N * 3); // number of batches
     uint32_t C = viewmats.size(-3);       // number of cameras
 
-    uint32_t nrows = B * C;
-    uint32_t ncols = N;
+    uint32_t nrows          = B * C;
+    uint32_t ncols          = N;
     uint32_t blocks_per_row = (ncols + N_THREADS_PACKED - 1) / N_THREADS_PACKED;
 
     dim3 threads(N_THREADS_PACKED);
@@ -269,49 +290,41 @@ void launch_projection_2dgs_packed_fwd_kernel(
     dim3 grid(blocks_per_row, nrows, 1);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
-    if (B == 0 || C == 0 || N == 0) {
+    if(B == 0 || C == 0 || N == 0)
+    {
         // skip the kernel launch if there are no elements
         return;
     }
 
-    projection_2dgs_packed_fwd_kernel<float>
-        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-            B,
-            C,
-            N,
-            means.const_data_ptr<float>(),
-            quats.const_data_ptr<float>(),
-            scales.const_data_ptr<float>(),
-            viewmats.const_data_ptr<float>(),
-            Ks.const_data_ptr<float>(),
-            image_width,
-            image_height,
-            near_plane,
-            far_plane,
-            radius_clip,
-            block_accum.has_value()
-                ? block_accum.value().const_data_ptr<int32_t>()
-                : nullptr,
-            block_cnts.has_value() ? block_cnts.value().data_ptr<int32_t>()
-                                   : nullptr,
-            indptr.has_value() ? indptr.value().data_ptr<int32_t>() : nullptr,
-            batch_ids.has_value() ? batch_ids.value().data_ptr<int64_t>()
-                                  : nullptr,
-            camera_ids.has_value() ? camera_ids.value().data_ptr<int64_t>()
-                                   : nullptr,
-            gaussian_ids.has_value() ? gaussian_ids.value().data_ptr<int64_t>()
-                                     : nullptr,
-            radii.has_value() ? radii.value().data_ptr<int32_t>() : nullptr,
-            means2d.has_value() ? means2d.value().data_ptr<float>() : nullptr,
-            depths.has_value() ? depths.value().data_ptr<float>() : nullptr,
-            ray_transforms.has_value()
-                ? ray_transforms.value().data_ptr<float>()
-                : nullptr,
-            normals.has_value() ? normals.value().data_ptr<float>() : nullptr
-        );
+    projection_2dgs_packed_fwd_kernel<float><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+        B,
+        C,
+        N,
+        means.const_data_ptr<float>(),
+        quats.const_data_ptr<float>(),
+        scales.const_data_ptr<float>(),
+        viewmats.const_data_ptr<float>(),
+        Ks.const_data_ptr<float>(),
+        image_width,
+        image_height,
+        near_plane,
+        far_plane,
+        radius_clip,
+        block_accum.has_value() ? block_accum.value().const_data_ptr<int32_t>() : nullptr,
+        block_cnts.has_value() ? block_cnts.value().data_ptr<int32_t>() : nullptr,
+        indptr.has_value() ? indptr.value().data_ptr<int32_t>() : nullptr,
+        batch_ids.has_value() ? batch_ids.value().data_ptr<int64_t>() : nullptr,
+        camera_ids.has_value() ? camera_ids.value().data_ptr<int64_t>() : nullptr,
+        gaussian_ids.has_value() ? gaussian_ids.value().data_ptr<int64_t>() : nullptr,
+        radii.has_value() ? radii.value().data_ptr<int32_t>() : nullptr,
+        means2d.has_value() ? means2d.value().data_ptr<float>() : nullptr,
+        depths.has_value() ? depths.value().data_ptr<float>() : nullptr,
+        ray_transforms.has_value() ? ray_transforms.value().data_ptr<float>() : nullptr,
+        normals.has_value() ? normals.value().data_ptr<float>() : nullptr
+    );
 }
 
-template <typename scalar_t>
+template<typename scalar_t>
 __global__ void projection_2dgs_packed_bwd_kernel(
     // fwd inputs
     const uint32_t B,
@@ -335,16 +348,18 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     const scalar_t *__restrict__ v_depths,         // [nnz]
     const scalar_t *__restrict__ v_ray_transforms, // [nnz, 3, 3]
     const scalar_t *__restrict__ v_normals,        // [nnz, 3]
-    const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
+    const bool sparse_grad,                        // whether the outputs are in COO format [nnz, ...]
     // grad inputs
     scalar_t *__restrict__ v_means,   // [B, N, 3] or [nnz, 3]
     scalar_t *__restrict__ v_quats,   // [B, N, 4] or [nnz, 4] Optional
     scalar_t *__restrict__ v_scales,  // [B, N, 3] or [nnz, 3] Optional
     scalar_t *__restrict__ v_viewmats // [B, C, 4, 4] Optional
-) {
+)
+{
     // parallelize over nnz.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= nnz) {
+    if(idx >= nnz)
+    {
         return;
     }
     const int64_t bid = batch_ids[idx];    // batch id
@@ -352,15 +367,15 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     const int64_t gid = gaussian_ids[idx]; // gaussian id
 
     // shift pointers to the current camera and gaussian
-    means += bid * N * 3 + gid * 3;
+    means    += bid * N * 3 + gid * 3;
     viewmats += bid * C * 16 + cid * 16;
-    Ks += bid * C * 9 + cid * 9;
+    Ks       += bid * C * 9 + cid * 9;
 
     ray_transforms += idx * 9;
 
-    v_means2d += idx * 2;
-    v_normals += idx * 3;
-    v_depths += idx;
+    v_means2d        += idx * 2;
+    v_normals        += idx * 3;
+    v_depths         += idx;
     v_ray_transforms += idx * 9;
 
     // transform Gaussian to camera space
@@ -375,14 +390,14 @@ __global__ void projection_2dgs_packed_bwd_kernel(
         viewmats[6],
         viewmats[10] // 3rd column
     );
-    vec3 t = vec3(viewmats[3], viewmats[7], viewmats[11]);
+    vec3 t      = vec3(viewmats[3], viewmats[7], viewmats[11]);
     vec3 mean_w = glm::make_vec3(means);
     vec3 mean_c;
     posW2C(R, t, mean_w, mean_c);
 
-    vec4 quat = glm::make_vec4(quats + bid * N * 4 + gid * 4);
+    vec4 quat  = glm::make_vec4(quats + bid * N * 4 + gid * 4);
     vec2 scale = glm::make_vec2(scales + bid * N * 3 + gid * 3);
-    mat3 P = mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
+    mat3 P     = mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
 
     mat3 _v_ray_transforms = mat3(
         v_ray_transforms[0],
@@ -425,34 +440,42 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     );
 
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
-    if (sparse_grad) {
+    if(sparse_grad)
+    {
         // write out results with sparse layout
-        if (v_means != nullptr) {
+        if(v_means != nullptr)
+        {
             v_means += idx * 3;
-#pragma unroll
-            for (uint32_t i = 0; i < 3; i++) {
+#    pragma unroll
+            for(uint32_t i = 0; i < 3; i++)
+            {
                 v_means[i] = v_mean[i];
             }
         }
-        v_quats += idx * 4;
-        v_scales += idx * 3;
-        v_quats[0] = v_quat[0];
-        v_quats[1] = v_quat[1];
-        v_quats[2] = v_quat[2];
-        v_quats[3] = v_quat[3];
-        v_scales[0] = v_scale[0];
-        v_scales[1] = v_scale[1];
-    } else {
+        v_quats     += idx * 4;
+        v_scales    += idx * 3;
+        v_quats[0]   = v_quat[0];
+        v_quats[1]   = v_quat[1];
+        v_quats[2]   = v_quat[2];
+        v_quats[3]   = v_quat[3];
+        v_scales[0]  = v_scale[0];
+        v_scales[1]  = v_scale[1];
+    }
+    else
+    {
         // write out results with dense layout
         // #if __CUDA_ARCH__ >= 700
         // write out results with warp-level reduction
         auto warp_group_g = cg::labeled_partition(warp, gid);
-        if (v_means != nullptr) {
+        if(v_means != nullptr)
+        {
             warpSum(v_mean, warp_group_g);
-            if (warp_group_g.thread_rank() == 0) {
+            if(warp_group_g.thread_rank() == 0)
+            {
                 v_means += bid * N * 3 + gid * 3;
-#pragma unroll
-                for (uint32_t i = 0; i < 3; i++) {
+#    pragma unroll
+                for(uint32_t i = 0; i < 3; i++)
+                {
                     gpuAtomicAdd(v_means + i, v_mean[i]);
                 }
             }
@@ -460,8 +483,9 @@ __global__ void projection_2dgs_packed_bwd_kernel(
         // Directly output gradients w.r.t. the quaternion and scale
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);
-        if (warp_group_g.thread_rank() == 0) {
-            v_quats += bid * N * 4 + gid * 4;
+        if(warp_group_g.thread_rank() == 0)
+        {
+            v_quats  += bid * N * 4 + gid * 4;
             v_scales += bid * N * 3 + gid * 3;
             gpuAtomicAdd(v_quats, v_quat[0]);
             gpuAtomicAdd(v_quats + 1, v_quat[1]);
@@ -472,16 +496,20 @@ __global__ void projection_2dgs_packed_bwd_kernel(
         }
     }
 
-    if (v_viewmats != nullptr) {
+    if(v_viewmats != nullptr)
+    {
         auto warp_group_c = cg::labeled_partition(warp, cid);
         warpSum(v_R, warp_group_c);
         warpSum(v_t, warp_group_c);
-        if (warp_group_c.thread_rank() == 0) {
+        if(warp_group_c.thread_rank() == 0)
+        {
             v_viewmats += bid * C * 16 + cid * 16;
-#pragma unroll
-            for (uint32_t i = 0; i < 3; i++) {
-#pragma unroll
-                for (uint32_t j = 0; j < 3; j++) {
+#    pragma unroll
+            for(uint32_t i = 0; i < 3; i++)
+            {
+#    pragma unroll
+                for(uint32_t j = 0; j < 3; j++)
+                {
                     gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
                 gpuAtomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
@@ -515,51 +543,50 @@ void launch_projection_2dgs_packed_bwd_kernel(
     at::Tensor v_quats,                 // [..., N, 4] or [nnz, 4]
     at::Tensor v_scales,                // [..., N, 3] or [nnz, 3]
     at::optional<at::Tensor> v_viewmats // [..., C, 4, 4] Optional
-) {
-    uint32_t N = means.size(-2);          // number of gaussians
-    uint32_t B = (N == 0) ? 0 : means.numel() / (N * 3); // number of batches
-    uint32_t C = viewmats.size(-3);       // number of cameras
+)
+{
+    uint32_t N   = means.size(-2);                         // number of gaussians
+    uint32_t B   = (N == 0) ? 0 : means.numel() / (N * 3); // number of batches
+    uint32_t C   = viewmats.size(-3);                      // number of cameras
     uint32_t nnz = camera_ids.size(0);
 
     dim3 threads(256);
     dim3 grid((nnz + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
-    if (nnz == 0) {
+    if(nnz == 0)
+    {
         // skip the kernel launch if there are no elements
         return;
     }
 
-    projection_2dgs_packed_bwd_kernel<float>
-        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-            B,
-            C,
-            N,
-            nnz,
-            means.const_data_ptr<float>(),
-            quats.const_data_ptr<float>(),
-            scales.const_data_ptr<float>(),
-            viewmats.const_data_ptr<float>(),
-            Ks.const_data_ptr<float>(),
-            image_width,
-            image_height,
-            batch_ids.const_data_ptr<int64_t>(),
-            camera_ids.const_data_ptr<int64_t>(),
-            gaussian_ids.const_data_ptr<int64_t>(),
-            ray_transforms.const_data_ptr<float>(),
-            v_means2d.const_data_ptr<float>(),
-            v_depths.const_data_ptr<float>(),
-            v_ray_transforms.const_data_ptr<float>(),
-            v_normals.const_data_ptr<float>(),
-            sparse_grad,
-            v_means.data_ptr<float>(),
-            v_quats.data_ptr<float>(),
-            v_scales.data_ptr<float>(),
-            v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>()
-                                   : nullptr
-        );
+    projection_2dgs_packed_bwd_kernel<float><<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+        B,
+        C,
+        N,
+        nnz,
+        means.const_data_ptr<float>(),
+        quats.const_data_ptr<float>(),
+        scales.const_data_ptr<float>(),
+        viewmats.const_data_ptr<float>(),
+        Ks.const_data_ptr<float>(),
+        image_width,
+        image_height,
+        batch_ids.const_data_ptr<int64_t>(),
+        camera_ids.const_data_ptr<int64_t>(),
+        gaussian_ids.const_data_ptr<int64_t>(),
+        ray_transforms.const_data_ptr<float>(),
+        v_means2d.const_data_ptr<float>(),
+        v_depths.const_data_ptr<float>(),
+        v_ray_transforms.const_data_ptr<float>(),
+        v_normals.const_data_ptr<float>(),
+        sparse_grad,
+        v_means.data_ptr<float>(),
+        v_quats.data_ptr<float>(),
+        v_scales.data_ptr<float>(),
+        v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr
+    );
 }
-
 } // namespace gsplat
 
 #endif

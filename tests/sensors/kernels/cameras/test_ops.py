@@ -30,6 +30,7 @@ import pytest
 import torch
 from torch import Tensor
 
+from gsplat._helper import assert_grad_reference_close
 from gsplat.sensors.kernels.cameras import (
     BivariateWindshieldDistortion,
     FThetaProjection,
@@ -685,7 +686,13 @@ def test_bivariate_camera_rays_to_image_points_distortion_grad_slice(
     assert grad is not None
     inactive = slice(21, 42) if active_slice.start == 0 else slice(0, 21)
     assert grad[active_slice].abs().sum() > 0
-    assert torch.count_nonzero(grad[inactive]).item() == 0
+    assert_grad_reference_close(
+        grad[inactive],
+        torch.zeros_like(grad[inactive]),
+        rtol=0.0,
+        atol=0.0,
+        msg="inactive bivariate coeff gradient slice",
+    )
 
 
 def test_identity_bivariate_backward_smoke_all_public_ops(
@@ -775,6 +782,14 @@ def test_identity_bivariate_backward_smoke_all_public_ops(
         op().sum().backward()
         assert coeffs.grad is not None
         assert coeffs.grad[active_slice].abs().sum() > 0
+        inactive = slice(0, 21) if active_slice.start == 21 else slice(21, 42)
+        assert_grad_reference_close(
+            coeffs.grad[inactive],
+            torch.zeros_like(coeffs.grad[inactive]),
+            rtol=0.0,
+            atol=0.0,
+            msg="inactive FORWARD-reference bivariate coeff gradients",
+        )
 
 
 def test_identity_bivariate_backward_smoke_all_public_ops_backward_reference(
@@ -870,7 +885,13 @@ def test_identity_bivariate_backward_smoke_all_public_ops_backward_reference(
         assert coeffs.grad is not None
         assert coeffs.grad[active_slice].abs().sum() > 0
         inactive = slice(0, 21) if active_slice.start == 21 else slice(21, 42)
-        assert torch.count_nonzero(coeffs.grad[inactive]).item() == 0
+        assert_grad_reference_close(
+            coeffs.grad[inactive],
+            torch.zeros_like(coeffs.grad[inactive]),
+            rtol=0.0,
+            atol=0.0,
+            msg="inactive BACKWARD-reference bivariate coeff gradients",
+        )
 
 
 def test_camera_rays_to_image_points_scratch_is_grad_gated(
@@ -1064,7 +1085,17 @@ def test_bivariate_distortion_grad_accumulates_uniformly(
 
     assert coeffs_full.grad is not None
     assert coeffs_split.grad is not None
-    assert torch.allclose(coeffs_full.grad, coeffs_split.grad, atol=1e-4)
+    assert_grad_reference_close(
+        coeffs_full.grad,
+        coeffs_split.grad,
+        rtol=1e-5,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="bivariate distortion coeff gradients",
+    )
 
 
 def test_bivariate_image_points_to_world_rays_shutter_pose_generated(
@@ -1448,8 +1479,17 @@ def test_intrinsics_gradient(ideal_projection, no_external):
         rays, ideal_projection, no_external, allow_device_transfer=True
     )
     image_points.sum().backward()
-    assert torch.allclose(
-        ideal_projection.focal_length.grad, torch.tensor([0.1, 0.2], device=rays.device)
+    assert ideal_projection.focal_length.grad is not None
+    assert_grad_reference_close(
+        ideal_projection.focal_length.grad,
+        torch.tensor([0.1, 0.2], device=rays.device),
+        rtol=1e-5,
+        atol=1e-8,
+        max_rel_l2=1e-5,
+        max_rel_l1=1e-5,
+        min_cosine=1.0 - 1e-10,
+        max_signed_bias=1e-5,
+        msg="pinhole focal_length.grad",
     )
 
 
@@ -2493,7 +2533,17 @@ def test_camera_rays_to_image_points_ftheta_saturated_branch_backward(no_externa
     )
     r_star = fw_poly.detach()[1] * theta
     expected_bw_grad = -(r_star ** torch.arange(6, device=device))
-    assert torch.allclose(bw_poly.grad, expected_bw_grad, atol=1e-4, rtol=1e-4)
+    assert_grad_reference_close(
+        bw_poly.grad,
+        expected_bw_grad,
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="bw_poly saturated-branch gradient",
+    )
     assert camera_rays.grad is not None
     assert torch.isfinite(camera_rays.grad).all()
     assert camera_rays.grad.abs().sum() > 0
@@ -2523,7 +2573,17 @@ def test_image_points_to_camera_rays_ftheta_saturated_branch_backward(no_externa
 
     theta_star = image_points.detach()[0, 0]
     expected_fw_grad = -(theta_star ** torch.arange(6, device=device))
-    assert torch.allclose(fw_poly.grad, expected_fw_grad, atol=1e-4, rtol=1e-4)
+    assert_grad_reference_close(
+        fw_poly.grad,
+        expected_fw_grad,
+        rtol=1e-4,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="fw_poly saturated-branch gradient",
+    )
     assert image_points.grad is not None
     assert torch.isfinite(image_points.grad).all()
     assert image_points.grad.abs().sum() > 0
@@ -4121,7 +4181,13 @@ def test_fisheye_camera_rays_to_image_points_distortion_grad_slice(
     assert grad is not None
     inactive = slice(21, 42) if active_slice.start == 0 else slice(0, 21)
     assert grad[active_slice].abs().sum() > 0
-    assert torch.count_nonzero(grad[inactive]).item() == 0
+    assert_grad_reference_close(
+        grad[inactive],
+        torch.zeros_like(grad[inactive]),
+        rtol=0.0,
+        atol=0.0,
+        msg="inactive fisheye bivariate coeff gradient slice",
+    )
 
 
 def test_fisheye_identity_bivariate_backward_smoke_all_public_ops(
@@ -4212,6 +4278,14 @@ def test_fisheye_identity_bivariate_backward_smoke_all_public_ops(
         op().sum().backward()
         assert coeffs.grad is not None
         assert coeffs.grad[active_slice].abs().sum() > 0
+        inactive = slice(0, 21) if active_slice.start == 21 else slice(21, 42)
+        assert_grad_reference_close(
+            coeffs.grad[inactive],
+            torch.zeros_like(coeffs.grad[inactive]),
+            rtol=0.0,
+            atol=0.0,
+            msg="inactive FORWARD-reference fisheye coeff gradients",
+        )
 
 
 def test_fisheye_identity_bivariate_backward_smoke_all_public_ops_backward_reference(
@@ -4305,7 +4379,13 @@ def test_fisheye_identity_bivariate_backward_smoke_all_public_ops_backward_refer
         assert coeffs.grad is not None
         assert coeffs.grad[active_slice].abs().sum() > 0
         inactive = slice(0, 21) if active_slice.start == 21 else slice(21, 42)
-        assert torch.count_nonzero(coeffs.grad[inactive]).item() == 0
+        assert_grad_reference_close(
+            coeffs.grad[inactive],
+            torch.zeros_like(coeffs.grad[inactive]),
+            rtol=0.0,
+            atol=0.0,
+            msg="inactive BACKWARD-reference fisheye coeff gradients",
+        )
 
 
 def test_fisheye_bivariate_distortion_grad_accumulates_uniformly(
@@ -4345,7 +4425,17 @@ def test_fisheye_bivariate_distortion_grad_accumulates_uniformly(
 
     assert coeffs_full.grad is not None
     assert coeffs_split.grad is not None
-    assert torch.allclose(coeffs_full.grad, coeffs_split.grad, atol=1e-4)
+    assert_grad_reference_close(
+        coeffs_full.grad,
+        coeffs_split.grad,
+        rtol=1e-5,
+        atol=1e-4,
+        max_rel_l2=1e-3,
+        max_rel_l1=1e-3,
+        min_cosine=0.999999,
+        max_signed_bias=1e-3,
+        msg="fisheye bivariate distortion coeff gradients",
+    )
 
 
 def test_fisheye_projection_approx_backward_factor_no_grad(
@@ -4365,7 +4455,18 @@ def test_fisheye_projection_approx_backward_factor_no_grad(
         rays, projection, no_external, allow_device_transfer=True
     )[0].sum().backward()
 
-    assert ab.grad is None or ab.grad.abs().sum() == 0
+    ab_grad = torch.zeros_like(ab) if ab.grad is None else ab.grad
+    assert_grad_reference_close(
+        ab_grad,
+        torch.zeros_like(ab),
+        rtol=0.0,
+        atol=0.0,
+        max_rel_l2=0.0,
+        max_rel_l1=0.0,
+        min_cosine=1.0,
+        max_signed_bias=0.0,
+        msg="fisheye forward approx_backward_factor.grad",
+    )
     assert fw.grad is not None and fw.grad.abs().sum() > 0
     assert focal.grad is not None and focal.grad.abs().sum() > 0
 

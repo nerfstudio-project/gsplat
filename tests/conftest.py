@@ -22,6 +22,7 @@ in this directory and subdirectories.
 
 import gc
 import os
+import socket
 import threading
 import time
 from types import SimpleNamespace
@@ -354,6 +355,17 @@ def setup_test_environment():
         torch.cuda.empty_cache()
 
 
+def _free_port() -> int:
+    """Return an OS-assigned free TCP port.
+
+    Used for the distributed rendezvous so concurrent test runs sharing the
+    GPU each get their own port instead of colliding on a fixed one.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
 @pytest.fixture(scope="session")
 def dist_init():
     """Initialize a single-process distributed group for testing distributed code paths.
@@ -367,7 +379,7 @@ def dist_init():
 
     if not torch.distributed.is_initialized():
         os.environ.setdefault("MASTER_ADDR", "localhost")
-        os.environ.setdefault("MASTER_PORT", "29500")
+        os.environ.setdefault("MASTER_PORT", str(_free_port()))
         torch.distributed.init_process_group(backend="nccl", world_size=1, rank=0)
         # Warm up the communicator required by batch_isend_irecv.
         _ = [None]

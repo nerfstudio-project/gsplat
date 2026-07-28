@@ -39,6 +39,41 @@ def _binomial_table(n_max: int, device: torch.device) -> torch.Tensor:
     return binoms
 
 
+def _reference_relocation(
+    opacities: torch.Tensor,
+    scales: torch.Tensor,
+    ratios: torch.Tensor,
+    binoms: torch.Tensor,
+    min_opacity: float,
+):
+    opacities = opacities.cpu()
+    scales = scales.cpu()
+    ratios = ratios.cpu().to(torch.int64)
+    binoms = binoms.cpu()
+
+    new_opacities = torch.empty_like(opacities)
+    new_scales = torch.empty_like(scales)
+    eps = torch.finfo(opacities.dtype).eps
+    for idx in range(opacities.shape[0]):
+        n_idx = int(ratios[idx].item())
+        new_opacity = 1.0 - (1.0 - float(opacities[idx])) ** (1.0 / n_idx)
+        new_opacity = min(max(new_opacity, min_opacity), 1.0 - eps)
+        new_opacities[idx] = new_opacity
+
+        denom_sum = 0.0
+        for i in range(1, n_idx + 1):
+            for k in range(i):
+                sign = 1.0 if k % 2 == 0 else -1.0
+                denom_sum += (
+                    float(binoms[i - 1, k])
+                    * sign
+                    * (new_opacity ** (k + 1))
+                    / math.sqrt(k + 1)
+                )
+        new_scales[idx] = scales[idx] * (float(opacities[idx]) / denom_sum)
+    return new_opacities.to(opacities.device), new_scales.to(scales.device)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="relocation is a CUDA op")
 @pytest.mark.parametrize("n_max", [5, 51])
 def test_compute_relocation_smoke(n_max: int):
@@ -51,10 +86,38 @@ def test_compute_relocation_smoke(n_max: int):
     # indexes binoms by ratio so the table must be (n_max, n_max) or larger.
     ratios = torch.randint(1, n_max + 1, (N,), device=device).float()
 
-    new_opacities, new_scales = compute_relocation(opacities, scales, ratios, binoms)
+    new_opacities, new_scales = compute_relocation(
+        opacities, scales, ratios, binoms, min_opacity=0.0
+    )
 
     assert new_opacities.shape == (N,)
     assert new_scales.shape == (N, 3)
     assert (new_opacities > 0).all() and (new_opacities <= 1).all()
     assert torch.isfinite(new_scales).all()
     assert (new_scales >= 0).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="relocation is a CUDA op")
+def test_compute_relocation_min_opacity_clamps_before_scale():
+    n_max = 8
+    binoms = _binomial_table(n_max, device)
+    opacities = torch.tensor([1e-6, 2e-3, 0.2], device=device, dtype=torch.float32)
+    scales = torch.tensor(
+        [[1.0, 0.5, 0.25], [0.25, 0.5, 1.0], [1.5, 0.75, 0.5]],
+        device=device,
+        dtype=torch.float32,
+    )
+    ratios = torch.tensor([8.0, 4.0, 2.0], device=device, dtype=torch.float32)
+    min_opacity = 0.005
+
+    new_opacities, new_scales = compute_relocation(
+        opacities, scales, ratios, binoms, min_opacity=min_opacity
+    )
+    ref_opacities, ref_scales = _reference_relocation(
+        opacities, scales, ratios, binoms, min_opacity
+    )
+
+    torch.testing.assert_close(new_opacities.cpu(), ref_opacities, rtol=1e-6, atol=1e-7)
+    torch.testing.assert_close(new_scales.cpu(), ref_scales, rtol=1e-5, atol=1e-6)
+    assert torch.all(new_opacities[:2] >= min_opacity)
+    assert torch.all(new_opacities[:2] <= min_opacity + 1e-8)

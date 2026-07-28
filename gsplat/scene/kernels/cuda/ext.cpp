@@ -26,13 +26,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> pack_gaussian_inference_scene(
     const at::Tensor &colors,
     int64_t sh_degree,
     int64_t sh_compression_mode
-) {
+)
+{
     return gsplat::scene::pack_gaussian_inference_scene_cuda(
         means, quats, scales, opacities, colors, sh_degree, sh_compression_mode
     );
 }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+{
     m.def(
         "pack_gaussian_inference_scene",
         &pack_gaussian_inference_scene,

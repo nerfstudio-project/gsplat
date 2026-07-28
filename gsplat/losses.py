@@ -29,6 +29,7 @@ from __future__ import annotations
 import math
 import os
 from typing import Callable, Optional
+import warnings
 
 import torch
 import torch.nn.functional as F
@@ -180,10 +181,15 @@ def ssim_loss(
     try:
         from fused_ssim import fused_ssim
 
-        if window_size == 11 and not img2.requires_grad and img1.is_cuda:
+        if window_size == 11 and not img2.requires_grad and not img1.is_cpu:
             return 1.0 - fused_ssim(img1, img2, padding="valid")
     except ImportError:
         pass
+    except NotImplementedError:
+        warnings.warn(
+            f"fused_ssim implementation not available for {img1.device}. Falling back to reference implementation.",
+            stacklevel=2,
+        )
 
     channel = img1.shape[1]
     key = (window_size, channel, img1.device, img1.dtype)

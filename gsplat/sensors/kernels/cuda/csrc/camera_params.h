@@ -29,7 +29,7 @@
 #include <cstdint>
 
 struct CUstream_st;
-using cudaStream_t = CUstream_st*;
+using cudaStream_t = CUstream_st *;
 
 // Hard upper bound on the rolling-shutter iterative solve loop used by
 // project_world_points_shutter_pose (forward and backward).  check_max_iterations
@@ -62,14 +62,15 @@ constexpr int64_t kFisheyeMaxNewtonIterations = 32;
 // device code references the same constant for register-allocated POD members.
 constexpr int kFThetaMaxPolynomialTerms = 6;
 
-struct OpenCVPinholeProjection_KernelParameters {
-    const float* __restrict__ focal_length;      // (2,) float32 — [fx, fy]
-    const float* __restrict__ principal_point;   // (2,) float32 — [cx, cy]
-    const float* __restrict__ radial_coeffs;     // (6,) float32 — [k1..k6]
-    const float* __restrict__ tangential_coeffs; // (2,) float32 — [p1, p2]
-    const float* __restrict__ thin_prism_coeffs; // (4,) float32 — [s1..s4]
-    int64_t width;  // sensor width in pixels; required for rolling-shutter kernels
-    int64_t height; // sensor height in pixels; required for rolling-shutter kernels
+struct OpenCVPinholeProjection_KernelParameters
+{
+    const float *__restrict__ focal_length;      // (2,) float32 — [fx, fy]
+    const float *__restrict__ principal_point;   // (2,) float32 — [cx, cy]
+    const float *__restrict__ radial_coeffs;     // (6,) float32 — [k1..k6]
+    const float *__restrict__ tangential_coeffs; // (2,) float32 — [p1, p2]
+    const float *__restrict__ thin_prism_coeffs; // (4,) float32 — [s1..s4]
+    int64_t width;                               // sensor width in pixels; required for rolling-shutter kernels
+    int64_t height;                              // sensor height in pixels; required for rolling-shutter kernels
 };
 
 // FThetaProjection_KernelParameters mirrors the OpenCVPinhole layout but for
@@ -82,17 +83,18 @@ struct OpenCVPinholeProjection_KernelParameters {
 // Pointer fields are `const float* __restrict__`: callers building this POD
 // must guarantee the five component tensors do not alias one another (the
 // per-component nn.Parameter pattern satisfies this trivially).
-struct FThetaProjection_KernelParameters {
-    const float* __restrict__ principal_point;     // (2,)
-    const float* __restrict__ fw_poly;             // (kFThetaMaxPolynomialTerms,)
-    const float* __restrict__ bw_poly;             // (kFThetaMaxPolynomialTerms,)
-    const float* __restrict__ A;                   // (4,) row-major 2x2
-    const float* __restrict__ Ainv;                // (4,) row-major 2x2
+struct FThetaProjection_KernelParameters
+{
+    const float *__restrict__ principal_point; // (2,)
+    const float *__restrict__ fw_poly;         // (kFThetaMaxPolynomialTerms,)
+    const float *__restrict__ bw_poly;         // (kFThetaMaxPolynomialTerms,)
+    const float *__restrict__ A;               // (4,) row-major 2x2
+    const float *__restrict__ Ainv;            // (4,) row-major 2x2
     int64_t width;
     int64_t height;
-    int64_t reference_polynomial;                  // 0=FORWARD, 1=BACKWARD
-    int64_t fw_poly_degree;                        // <= kFThetaMaxPolynomialTerms - 1
-    int64_t bw_poly_degree;                        // <= kFThetaMaxPolynomialTerms - 1
+    int64_t reference_polynomial; // 0=FORWARD, 1=BACKWARD
+    int64_t fw_poly_degree;       // <= kFThetaMaxPolynomialTerms - 1
+    int64_t bw_poly_degree;       // <= kFThetaMaxPolynomialTerms - 1
     int64_t newton_iterations;
     float max_angle;
     float min_2d_norm;
@@ -117,11 +119,12 @@ constexpr int kFisheyeForwardPolyTerms = 4;
 // Pointer fields are `const float* __restrict__`: callers building this POD
 // must guarantee the four component tensors do not alias one another (the
 // per-component nn.Parameter pattern satisfies this trivially).
-struct OpenCVFisheyeProjection_KernelParameters {
-    const float* __restrict__ principal_point;        // (2,) — [cx, cy]
-    const float* __restrict__ focal_length;           // (2,) — [fx, fy]
-    const float* __restrict__ forward_poly;           // (kFisheyeForwardPolyTerms,) — [k1..k4]
-    const float* __restrict__ approx_backward_factor; // (1,)
+struct OpenCVFisheyeProjection_KernelParameters
+{
+    const float *__restrict__ principal_point;        // (2,) — [cx, cy]
+    const float *__restrict__ focal_length;           // (2,) — [fx, fy]
+    const float *__restrict__ forward_poly;           // (kFisheyeForwardPolyTerms,) — [k1..k4]
+    const float *__restrict__ approx_backward_factor; // (1,)
     int64_t width;
     int64_t height;
     int64_t newton_iterations;
@@ -135,11 +138,7 @@ struct OpenCVFisheyeProjection_KernelParameters {
 
 // Kernel 1 — generate_image_points
 // Fills image_points (H, W, 2) with pixel-centre coordinates (x, y).
-void generate_image_points_launch(
-    int64_t width,
-    int64_t height,
-    float* image_points,
-    cudaStream_t stream);
+void generate_image_points_launch(int64_t width, int64_t height, float *image_points, cudaStream_t stream);
 
 // Kernel 2 — camera_rays_to_image_points (forward, no external distortion)
 // Projects (N, 3) camera-space rays to (N, 2) image points via OpenCV pinhole
@@ -147,11 +146,12 @@ void generate_image_points_launch(
 void camera_rays_to_image_points_forward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* camera_rays,
-    float* image_points,
-    bool* valid_flags,
-    float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    float *image_points,
+    bool *valid_flags,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 3 — image_points_to_camera_rays (forward, no external distortion)
 // Unprojects (N, 2) image points to (N, 3) normalised camera rays.
@@ -159,10 +159,11 @@ void camera_rays_to_image_points_forward_launch(
 void image_points_to_camera_rays_forward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* image_points,
-    float* camera_rays,
-    float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    float *camera_rays,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 4 — project_world_points_mean_pose (forward, no external distortion)
 // Projects (N, 3) world points using the interpolated camera pose at the
@@ -172,19 +173,20 @@ void image_points_to_camera_rays_forward_launch(
 void project_world_points_mean_pose_forward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t mean_timestamp_us,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 5 — project_world_points_shutter_pose (forward, no external distortion)
 // Projects (N, 3) world points with per-point rolling-shutter pose solve.
@@ -193,11 +195,11 @@ void project_world_points_mean_pose_forward_launch(
 void project_world_points_shutter_pose_forward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
@@ -205,13 +207,14 @@ void project_world_points_shutter_pose_forward_launch(
     float stop_mean_error_px,
     float stop_delta_mean_error_px,
     float initial_relative_time,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 6 — image_points_to_world_rays_static_pose (forward, no external distortion)
 // Unprojects (N, 2) image points to (N, 6) world rays using a single static
@@ -219,16 +222,17 @@ void project_world_points_shutter_pose_forward_launch(
 void image_points_to_world_rays_static_pose_forward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* translations,
-    const float* rotations,
+    const float *image_points,
+    const float *translations,
+    const float *rotations,
     int64_t timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 7 — image_points_to_world_rays_shutter_pose (forward, no external distortion)
 // Unprojects (N, 2) image points to (N, 6) world rays with per-pixel shutter
@@ -237,20 +241,21 @@ void image_points_to_world_rays_static_pose_forward_launch(
 void image_points_to_world_rays_shutter_pose_forward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // ===========================================================================
 // bivariate_windshield distortion — forward launch prototypes
@@ -263,11 +268,12 @@ void camera_rays_to_image_points_opencv_pinhole_bivariate_windshield_forward_lau
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* camera_rays,
-    float* image_points,
-    bool* valid_flags,
-    float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    float *image_points,
+    bool *valid_flags,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 9 — image_points_to_camera_rays (forward, bivariate windshield)
 // Same as Kernel 3 but applies the inverse bivariate windshield distortion to
@@ -277,10 +283,11 @@ void image_points_to_camera_rays_opencv_pinhole_bivariate_windshield_forward_lau
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    float* camera_rays,
-    float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    float *camera_rays,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 10 — project_world_points_mean_pose (forward, bivariate windshield)
 // Same as Kernel 4 plus bivariate distortion.  scratch is (N, 9) float32.
@@ -288,19 +295,20 @@ void project_world_points_mean_pose_opencv_pinhole_bivariate_windshield_forward_
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t mean_timestamp_us,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 11 — project_world_points_shutter_pose (forward, bivariate windshield)
 // Same as Kernel 5 plus bivariate distortion.  scratch is (N, 10) float32.
@@ -308,11 +316,11 @@ void project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield_forwa
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
@@ -320,13 +328,14 @@ void project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield_forwa
     float stop_mean_error_px,
     float stop_delta_mean_error_px,
     float initial_relative_time,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 12 — image_points_to_world_rays_static_pose (forward, bivariate windshield)
 // Same as Kernel 6 plus bivariate distortion.  scratch is (N, 9) float32.
@@ -334,16 +343,17 @@ void image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield_
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* translations,
-    const float* rotations,
+    const float *image_points,
+    const float *translations,
+    const float *rotations,
     int64_t timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 13 — image_points_to_world_rays_shutter_pose (forward, bivariate windshield)
 // Same as Kernel 7 plus bivariate distortion.  scratch is (N, 12) float32.
@@ -351,20 +361,21 @@ void image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 // ===========================================================================
 // no_external distortion — backward launch prototypes
@@ -378,16 +389,17 @@ void image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield
 void camera_rays_to_image_points_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* camera_rays,
-    const float* grad_image_points,
-    float* grad_camera_rays,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    const float *grad_image_points,
+    float *grad_camera_rays,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ===========================================================================
 // bivariate_windshield distortion — backward launch prototypes
@@ -399,231 +411,242 @@ void camera_rays_to_image_points_opencv_pinhole_bivariate_windshield_backward_la
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* camera_rays,
-    const float* grad_image_points,
-    float* grad_camera_rays,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    const float *grad_image_points,
+    float *grad_camera_rays,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 9b — image_points_to_camera_rays backward (bivariate windshield)
 void image_points_to_camera_rays_opencv_pinhole_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* grad_camera_rays,
-    float* grad_image_points,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *grad_camera_rays,
+    float *grad_image_points,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 10b — project_world_points_mean_pose backward (bivariate windshield)
 void project_world_points_mean_pose_opencv_pinhole_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 11b — project_world_points_shutter_pose backward (bivariate windshield)
 void project_world_points_shutter_pose_opencv_pinhole_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t max_iterations,
     float initial_relative_time,
-    const bool* valid_flags,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const bool *valid_flags,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 12b — image_points_to_world_rays_static_pose backward (bivariate windshield)
 void image_points_to_world_rays_static_pose_opencv_pinhole_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_translation,
-    float* grad_rotation,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_translation,
+    float *grad_rotation,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 13b — image_points_to_world_rays_shutter_pose backward (bivariate windshield)
 void image_points_to_world_rays_shutter_pose_opencv_pinhole_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* start_rotation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_rotation,
+    const float *end_rotation,
     int64_t shutter_type,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 3b — image_points_to_camera_rays backward (no external distortion)
 void image_points_to_camera_rays_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* grad_camera_rays,
-    float* grad_image_points,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *grad_camera_rays,
+    float *grad_image_points,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 4b — project_world_points_mean_pose backward (no external distortion)
 void project_world_points_mean_pose_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 5b — project_world_points_shutter_pose backward (no external distortion)
 void project_world_points_shutter_pose_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t max_iterations,
     float initial_relative_time,
-    const bool* valid_flags,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const bool *valid_flags,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 6b — image_points_to_world_rays_static_pose backward (no external distortion)
 void image_points_to_world_rays_static_pose_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_translation,
-    float* grad_rotation,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_translation,
+    float *grad_rotation,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // Kernel 7b — image_points_to_world_rays_shutter_pose backward (no external distortion)
 void image_points_to_world_rays_shutter_pose_backward_launch(
     int64_t count,
     OpenCVPinholeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* start_rotation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_rotation,
+    const float *end_rotation,
     int64_t shutter_type,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_focal_length,
-    float* grad_principal_point,
-    float* grad_radial_coeffs,
-    float* grad_tangential_coeffs,
-    float* grad_thin_prism_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_focal_length,
+    float *grad_principal_point,
+    float *grad_radial_coeffs,
+    float *grad_tangential_coeffs,
+    float *grad_thin_prism_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // =============================================================================
 // FTheta launchers -- 12 forward + 12 backward (6 ops x 2 distortions each).
@@ -637,49 +660,53 @@ void image_points_to_world_rays_shutter_pose_backward_launch(
 void camera_rays_to_image_points_ftheta_no_external_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* camera_rays,
-    float* image_points,
-    bool* valid_flags,
-    float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    float *image_points,
+    bool *valid_flags,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void camera_rays_to_image_points_ftheta_no_external_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* camera_rays,
-    const float* grad_image_points,
-    float* grad_camera_rays,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    const float *grad_image_points,
+    float *grad_camera_rays,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D2 (no_external) ------------------------------------------------------
 
 void image_points_to_camera_rays_ftheta_no_external_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* image_points,
-    float* camera_rays,
-    float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    float *camera_rays,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_camera_rays_ftheta_no_external_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* image_points,
-    const float* grad_camera_rays,
-    float* grad_image_points,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *grad_camera_rays,
+    float *grad_image_points,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D3 (bivariate_windshield) --------------------------------------------
 
@@ -687,211 +714,223 @@ void camera_rays_to_image_points_ftheta_bivariate_windshield_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* camera_rays,
-    float* image_points,
-    bool* valid_flags,
-    float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    float *image_points,
+    bool *valid_flags,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void camera_rays_to_image_points_ftheta_bivariate_windshield_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* camera_rays,
-    const float* grad_image_points,
-    float* grad_camera_rays,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    const float *grad_image_points,
+    float *grad_camera_rays,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_camera_rays_ftheta_bivariate_windshield_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    float* camera_rays,
-    float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    float *camera_rays,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_camera_rays_ftheta_bivariate_windshield_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* grad_camera_rays,
-    float* grad_image_points,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *grad_camera_rays,
+    float *grad_image_points,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D4 (mean-pose, no_external + bivariate) ------------------------------
 
 void project_world_points_mean_pose_ftheta_no_external_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t mean_timestamp_us,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_mean_pose_ftheta_no_external_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_mean_pose_ftheta_bivariate_windshield_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t mean_timestamp_us,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_mean_pose_ftheta_bivariate_windshield_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D5 (static-pose image -> world rays, no_external + bivariate) --------
 
 void image_points_to_world_rays_static_pose_ftheta_no_external_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
     int64_t timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_static_pose_ftheta_no_external_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_translation,
-    float* grad_rotation,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_translation,
+    float *grad_rotation,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
     int64_t timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_static_pose_ftheta_bivariate_windshield_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_translation,
-    float* grad_rotation,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_translation,
+    float *grad_rotation,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D6 (shutter-pose project_world_points, no_external + bivariate) ------
 
 void project_world_points_shutter_pose_ftheta_no_external_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
@@ -899,47 +938,49 @@ void project_world_points_shutter_pose_ftheta_no_external_forward_launch(
     float stop_mean_error_px,
     float stop_delta_mean_error_px,
     float initial_relative_time,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_shutter_pose_ftheta_no_external_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t max_iterations,
     float initial_relative_time,
-    const bool* valid_flags,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    const float* scratch,
-    cudaStream_t stream);
+    const bool *valid_flags,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_shutter_pose_ftheta_bivariate_windshield_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
@@ -947,122 +988,128 @@ void project_world_points_shutter_pose_ftheta_bivariate_windshield_forward_launc
     float stop_mean_error_px,
     float stop_delta_mean_error_px,
     float initial_relative_time,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_shutter_pose_ftheta_bivariate_windshield_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t max_iterations,
     float initial_relative_time,
-    const bool* valid_flags,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const bool *valid_flags,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D7 (shutter-pose image_points -> world rays, no_external + bivariate) -
 
 void image_points_to_world_rays_shutter_pose_ftheta_no_external_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* image_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_shutter_pose_ftheta_no_external_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
-    const float* image_points,
-    const float* start_rotation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_rotation,
+    const float *end_rotation,
     int64_t shutter_type,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_forward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backward_launch(
     int64_t count,
     FThetaProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* start_rotation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_rotation,
+    const float *end_rotation,
     int64_t shutter_type,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_fw_poly,
-    float* grad_bw_poly,
-    float* grad_A,
-    float* grad_Ainv,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_fw_poly,
+    float *grad_bw_poly,
+    float *grad_A,
+    float *grad_Ainv,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // =============================================================================
 // OpenCV-fisheye launchers -- 12 forward + 12 backward (6 ops x 2 distortions).
@@ -1077,45 +1124,49 @@ void image_points_to_world_rays_shutter_pose_ftheta_bivariate_windshield_backwar
 void camera_rays_to_image_points_opencv_fisheye_no_external_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* camera_rays,
-    float* image_points,
-    bool* valid_flags,
-    float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    float *image_points,
+    bool *valid_flags,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void camera_rays_to_image_points_opencv_fisheye_no_external_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* camera_rays,
-    const float* grad_image_points,
-    float* grad_camera_rays,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    const float *grad_image_points,
+    float *grad_camera_rays,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D2 (no_external) ------------------------------------------------------
 
 void image_points_to_camera_rays_opencv_fisheye_no_external_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* image_points,
-    float* camera_rays,
-    float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    float *camera_rays,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_camera_rays_opencv_fisheye_no_external_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* grad_camera_rays,
-    float* grad_image_points,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *grad_camera_rays,
+    float *grad_image_points,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D1/D2 (bivariate_windshield) -----------------------------------------
 
@@ -1123,134 +1174,142 @@ void camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_forward_lau
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* camera_rays,
-    float* image_points,
-    bool* valid_flags,
-    float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    float *image_points,
+    bool *valid_flags,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void camera_rays_to_image_points_opencv_fisheye_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* camera_rays,
-    const float* grad_image_points,
-    float* grad_camera_rays,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *camera_rays,
+    const float *grad_image_points,
+    float *grad_camera_rays,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    float* camera_rays,
-    float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    float *camera_rays,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_camera_rays_opencv_fisheye_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* grad_camera_rays,
-    float* grad_image_points,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *grad_camera_rays,
+    float *grad_image_points,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D3 (mean-pose, no_external + bivariate) ------------------------------
 
 void project_world_points_mean_pose_opencv_fisheye_no_external_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t mean_timestamp_us,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_mean_pose_opencv_fisheye_no_external_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t mean_timestamp_us,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_mean_pose_opencv_fisheye_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *world_points,
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D4 (shutter-pose project, no_external + bivariate) -------------------
 
 void project_world_points_shutter_pose_opencv_fisheye_no_external_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
@@ -1258,40 +1317,42 @@ void project_world_points_shutter_pose_opencv_fisheye_no_external_forward_launch
     float stop_mean_error_px,
     float stop_delta_mean_error_px,
     float initial_relative_time,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_shutter_pose_opencv_fisheye_no_external_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* world_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *world_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
@@ -1299,171 +1360,181 @@ void project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_forwa
     float stop_mean_error_px,
     float stop_delta_mean_error_px,
     float initial_relative_time,
-    float* image_points,
-    bool* valid_flags,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *image_points,
+    bool *valid_flags,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void project_world_points_shutter_pose_opencv_fisheye_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_image_points,
-    float* grad_world_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_image_points,
+    float *grad_world_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D5 (static-pose image -> world rays, no_external + bivariate) --------
 
 void image_points_to_world_rays_static_pose_opencv_fisheye_no_external_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
     int64_t timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_static_pose_opencv_fisheye_no_external_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_translation,
-    float* grad_rotation,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_translation,
+    float *grad_rotation,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
     int64_t timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_static_pose_opencv_fisheye_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* translation,
-    const float* rotation,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_translation,
-    float* grad_rotation,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *translation,
+    const float *rotation,
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_translation,
+    float *grad_rotation,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 // ---- D6 (shutter-pose image -> world rays, no_external + bivariate) -------
 
 void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_shutter_pose_opencv_fisheye_no_external_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
-    const float* image_points,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    const float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_forward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* start_translation,
-    const float* start_rotation,
-    const float* end_translation,
-    const float* end_rotation,
+    const float *image_points,
+    const float *start_translation,
+    const float *start_rotation,
+    const float *end_translation,
+    const float *end_rotation,
     int64_t shutter_type,
     int64_t start_timestamp_us,
     int64_t end_timestamp_us,
-    float* world_rays,
-    int64_t* timestamps_us,
-    float* pose_translations,
-    float* pose_rotations,
-    float* scratch,
-    cudaStream_t stream);
+    float *world_rays,
+    int64_t *timestamps_us,
+    float *pose_translations,
+    float *pose_rotations,
+    float *scratch,
+    cudaStream_t stream
+);
 
 void image_points_to_world_rays_shutter_pose_opencv_fisheye_bivariate_windshield_backward_launch(
     int64_t count,
     OpenCVFisheyeProjection_KernelParameters projection,
     BivariateWindshieldDistortion_KernelParameters distortion,
-    const float* image_points,
-    const float* start_rotation,
-    const float* end_rotation,
-    const float* grad_world_rays,
-    float* grad_image_points,
-    float* grad_start_translation,
-    float* grad_end_translation,
-    float* grad_start_rotation,
-    float* grad_end_rotation,
-    float* grad_principal_point,
-    float* grad_focal_length,
-    float* grad_forward_poly,
-    float* grad_distortion_coeffs,
-    const float* scratch,
-    cudaStream_t stream);
+    const float *image_points,
+    const float *start_rotation,
+    const float *end_rotation,
+    const float *grad_world_rays,
+    float *grad_image_points,
+    float *grad_start_translation,
+    float *grad_end_translation,
+    float *grad_start_rotation,
+    float *grad_end_rotation,
+    float *grad_principal_point,
+    float *grad_focal_length,
+    float *grad_forward_poly,
+    float *grad_distortion_coeffs,
+    const float *scratch,
+    cudaStream_t stream
+);

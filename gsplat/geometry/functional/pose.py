@@ -17,6 +17,8 @@
 
 from ..kernels.pose_ops import (
     frame_transform_poses_tquat,
+    se3_interpolate_tracks,
+    se3pose_compose,
     se3pose_from_matrix,
     se3pose_inverse_transform_direction,
     se3pose_inverse_transform_point,
@@ -31,6 +33,8 @@ from ..kernels.pose_ops import (
 
 __all__ = [
     "frame_transform_poses_tquat",
+    "se3_interpolate_tracks",
+    "se3pose_compose",
     "se3pose_from_matrix",
     "se3pose_inverse_transform_direction",
     "se3pose_inverse_transform_point",

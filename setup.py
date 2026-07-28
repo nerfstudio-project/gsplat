@@ -41,6 +41,23 @@ BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 BUILD_EXPERIMENTAL = os.getenv("BUILD_EXPERIMENTAL", "1") == "1"
 
 
+def _read_config_variable(name: str) -> str:
+    """Read a scalar variable from the repository's simple ``config.yaml``."""
+
+    config_path = os.path.join(_SETUP_DIR, "config.yaml")
+    if not os.path.exists(config_path):
+        raise RuntimeError(f"{config_path} is required to read {name}")
+
+    prefix = f"{name}:"
+    with open(config_path, "r") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if line.startswith(prefix):
+                return line.split(":", 1)[1].strip().strip("\"'")
+
+    raise RuntimeError(f"{name} is not set in {config_path}")
+
+
 def _detect_cupy_requirement() -> str:
     """Pick a CuPy distribution that matches the local CUDA toolkit.
 
@@ -119,7 +136,9 @@ INSTALL_REQUIRES = [
     # However, PyTorch >= 2.11 still provides a prebuilt CUDA 12.6 wheel
     # for compatibility with older CUDA drivers and versions which can be installed
     # by passing --index-url https://download.pytorch.org/whl/cu126
-    "torch>=2.0",
+    # torch.library.register_autograd needs PyTorch >=2.4;
+    # Blackwell (sm_120) support needs PyTorch >=2.7
+    "torch>=2.7",
     "typing_extensions; python_version<'3.8'",
 ]
 
@@ -149,9 +168,11 @@ def get_extras_require() -> dict:
         # dev dependencies. Install them by `pip install gsplat[dev]`
         "dev": [
             "black[jupyter]==22.3.0",
+            f"clang-format=={_read_config_variable('CLANG_FORMAT_VERSION')}",
             "isort==5.10.1",
             "pylint==2.13.4",
             "pytest",
+            "pytest-check",
             "pytest-env",
             "pytest-xdist==2.5.0",
             # Tests for examples/datasets/endonerf.py and the dynamic-surgical
