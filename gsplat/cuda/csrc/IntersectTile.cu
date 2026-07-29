@@ -35,8 +35,7 @@ namespace gsplat {
 namespace cg = cooperative_groups;
 
 // ============================================================
-// SNUGBOX + AccuTile helper functions
-// (ported from test_viewer/src/cuda/Intersect.cu)
+// SNUGBOX + AccuTile helper functions as propsed by SpeedySplat: https://arxiv.org/pdf/2412.00578
 // ============================================================
 
 __device__ inline float2 accutile_ellipse_intersection(
