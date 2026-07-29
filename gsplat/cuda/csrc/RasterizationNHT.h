@@ -118,7 +118,8 @@ void dispatch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
     const at::Tensor& v_render_alphas,  // [.., H, W] fp32 upstream grad
     at::Tensor& v_means, at::Tensor& v_quats, at::Tensor& v_scales,
     at::Tensor& v_colors, at::Tensor& v_opacities,
-    at::Tensor& v_mlp_params            // [n_params] fp32, tcnn linear layout
+    at::Tensor& v_mlp_params,           // [n_dw_slots * n_params] fp32, tcnn linear layout
+    uint32_t n_dw_slots                 // replicated dW accumulators (caller reduces)
 );
 
 // Backward: gradient math in FP32, color fetches templated for FP16 vectorized loads.

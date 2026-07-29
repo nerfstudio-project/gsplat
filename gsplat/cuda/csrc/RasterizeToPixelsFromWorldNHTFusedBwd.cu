@@ -117,7 +117,8 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
     vec3  *__restrict__ v_scales,
     float *__restrict__ v_colors,
     float *__restrict__ v_opacities,
-    float *__restrict__ v_mlp_params             // [n_params] fp32, linear layout
+    float *__restrict__ v_mlp_params,            // [n_dw_slots * n_params] fp32, linear layout
+    const uint32_t n_dw_slots                    // replicated dW accumulators (host reduces)
 ) {
     static_assert(CDIM >= 4 && CDIM % VERTEX_PER_PRIM == 0,
         "CDIM must be >= 4 and divisible by VERTEX_PER_PRIM");
@@ -129,6 +130,8 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
     constexpr uint32_t N_HIDDEN_LAYERS = N_HIDDEN_LAYERS_T;
     constexpr uint32_t BASE_CDIM  = constexpr_max_fb(1U, CDIM / 4);
     constexpr uint32_t OUT_DIM    = constexpr_max_fb(1U, CDIM * ENCF / 4);
+    constexpr bool     MMA_FEAT_REDUCE = (BASE_CDIM >= 8);
+    constexpr uint32_t VPAD = ((BASE_CDIM + 15u) / 16u) * 16u;
 
     const auto block = cg::this_thread_block();
     const uint32_t iid     = block.group_index().x;
@@ -273,8 +276,6 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
     const uint32_t block_size  = block.size();
     const uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
     const uint32_t tr          = block.thread_rank();
-    const uint32_t warp_id     = tr / nht_mlp::WARP;
-    const uint32_t num_warps   = block_size / nht_mlp::WARP;
 
     // ── Shared memory: the MLP prologue region and the Gaussian-batch region
     //    overlap (union) — the prologue completes before the loop's first
@@ -315,11 +316,23 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
         rz = fmaf(ray_d.z, ray_dir_scale, 1.f) * 0.5f;
     }
 
+    // Spread the per-block dW flush over n_dw_slots replicated global
+    // accumulators 
+    float *v_mlp_slot = v_mlp_params;
+    if (v_mlp_params != nullptr && n_dw_slots > 1u) {
+        constexpr uint32_t N_PARAMS = ENC_DIM * MLP_HIDDEN +
+            (N_HIDDEN_LAYERS - 1u) * MLP_HIDDEN * MLP_HIDDEN + MLP_HIDDEN * 16u;
+        const uint32_t slot =
+            (block.group_index().x + block.group_index().y * tile_width +
+             block.group_index().z) % n_dw_slots;
+        v_mlp_slot += (size_t)slot * N_PARAMS;
+    }
+
     const auto v_feat = nht_mlp::nht_fused_shade_bwd<
         FEAT_OUT, ENC_DIM, MLP_HIDDEN, N_HIDDEN_LAYERS>(
             pix_feat, rx, ry, rz, v_rgb, loss_scale,
-            mlp_params, v_mlp_params,
-            dw_slab, warp_id, num_warps, tr, block_size);
+            mlp_params, v_mlp_slot,
+            dw_slab, tr, block_size);
 
     float v_render_c[OUT_DIM];
     #pragma unroll
@@ -422,7 +435,7 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
 
             if (!warp.any(valid)) continue;
 
-            float v_rgb_local[CDIM] = {0.f};
+            float v_rgb_local[MMA_FEAT_REDUCE ? 1 : CDIM] = {0.f};
             vec3 v_mean_local  = {0.f, 0.f, 0.f};
             vec3 v_scale_local = {0.f, 0.f, 0.f};
             vec4 v_quat_local  = {0.f, 0.f, 0.f, 0.f};
@@ -435,21 +448,29 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
             const float *v3 = f_base_ptr + 3 * BASE_CDIM;
             float f_interp[BASE_CDIM];
             float3 v_sample_pos_local = make_float3(0.f, 0.f, 0.f);
-            float *v_v0_local = v_rgb_local + 0 * BASE_CDIM;
-            float *v_v1_local = v_rgb_local + 1 * BASE_CDIM;
-            float *v_v2_local = v_rgb_local + 2 * BASE_CDIM;
-            float *v_v3_local = v_rgb_local + 3 * BASE_CDIM;
+            // MMA path: weights and dL/dinterp survive the valid-branch (zeros
+            // on inactive lanes, they feed the warp-uniform mma reduction).
+            float w_bary[4] = {0.f, 0.f, 0.f, 0.f};
+            float v_f_interp_local[BASE_CDIM] = {};
 
             if (valid) {
                 const float ra = 1.0f / fmaxf(MIN_ONE_MINUS_ALPHA, 1.0f - alpha);
                 T *= ra;
                 const float fac = alpha * T;
 
-                barycentric_interpolate_cuda_fwd<BASE_CDIM>(sample_pos,
-                    (float *)v0, (float *)v1, (float *)v2, (float *)v3,
-                    reinterpret_cast<float *>(f_interp));
+                if constexpr (MMA_FEAT_REDUCE) {
+                    gsplat::interp::tet_barycentric_weights(
+                        sample_pos, w_bary[0], w_bary[1], w_bary[2], w_bary[3]);
+                    #pragma unroll
+                    for (uint32_t k = 0; k < BASE_CDIM; ++k)
+                        f_interp[k] = w_bary[0] * v0[k] + w_bary[1] * v1[k] +
+                                      w_bary[2] * v2[k] + w_bary[3] * v3[k];
+                } else {
+                    barycentric_interpolate_cuda_fwd<BASE_CDIM>(sample_pos,
+                        (float *)v0, (float *)v1, (float *)v2, (float *)v3,
+                        reinterpret_cast<float *>(f_interp));
+                }
 
-                float v_f_interp_local[BASE_CDIM] = {};
                 float v_alpha = 0.f;
                 #pragma unroll
                 for (uint32_t k = 0; k < BASE_CDIM; ++k) {
@@ -479,21 +500,39 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
                 }
                 v_alpha = fmaf(T_final * ra, v_render_a, v_alpha);
 
-                float v_v0_l[BASE_CDIM] = {};
-                float v_v1_l[BASE_CDIM] = {};
-                float v_v2_l[BASE_CDIM] = {};
-                float v_v3_l[BASE_CDIM] = {};
-                barycentric_interpolate_cuda_bwd<BASE_CDIM>(sample_pos,
-                    (float *)v0, (float *)v1, (float *)v2, (float *)v3,
-                    reinterpret_cast<float *>(v_f_interp_local),
-                    &v_sample_pos_local,
-                    (float *)v_v0_l, (float *)v_v1_l, (float *)v_v2_l, (float *)v_v3_l);
-                #pragma unroll
-                for (uint32_t k = 0; k < BASE_CDIM; ++k) {
-                    v_v0_local[k] += v_v0_l[k];
-                    v_v1_local[k] += v_v1_l[k];
-                    v_v2_local[k] += v_v2_l[k];
-                    v_v3_local[k] += v_v3_l[k];
+                if constexpr (MMA_FEAT_REDUCE) {
+                    float v_w0 = 0.f, v_w1 = 0.f, v_w2 = 0.f, v_w3 = 0.f;
+                    #pragma unroll
+                    for (uint32_t k = 0; k < BASE_CDIM; ++k) {
+                        const float vr = v_f_interp_local[k];
+                        v_w0 = fmaf(v0[k], vr, v_w0);
+                        v_w1 = fmaf(v1[k], vr, v_w1);
+                        v_w2 = fmaf(v2[k], vr, v_w2);
+                        v_w3 = fmaf(v3[k], vr, v_w3);
+                    }
+                    using namespace gsplat::interp;
+                    v_sample_pos_local = make_float3(
+                        (TET_N0_X * v_w0 + TET_N1_X * v_w1 + TET_N2_X * v_w2) * TET_INV_H,
+                        (TET_N0_Y * v_w0 + TET_N1_Y * v_w1 + TET_N2_Y * v_w2) * TET_INV_H,
+                        (TET_N0_Z * v_w0 + TET_N1_Z * v_w1 + TET_N2_Z * v_w2 +
+                         TET_N3_Z * v_w3) * TET_INV_H);
+                } else {
+                    float v_v0_l[BASE_CDIM] = {};
+                    float v_v1_l[BASE_CDIM] = {};
+                    float v_v2_l[BASE_CDIM] = {};
+                    float v_v3_l[BASE_CDIM] = {};
+                    barycentric_interpolate_cuda_bwd<BASE_CDIM>(sample_pos,
+                        (float *)v0, (float *)v1, (float *)v2, (float *)v3,
+                        reinterpret_cast<float *>(v_f_interp_local),
+                        &v_sample_pos_local,
+                        (float *)v_v0_l, (float *)v_v1_l, (float *)v_v2_l, (float *)v_v3_l);
+                    #pragma unroll
+                    for (uint32_t k = 0; k < BASE_CDIM; ++k) {
+                        v_rgb_local[0 * BASE_CDIM + k] += v_v0_l[k];
+                        v_rgb_local[1 * BASE_CDIM + k] += v_v1_l[k];
+                        v_rgb_local[2 * BASE_CDIM + k] += v_v2_l[k];
+                        v_rgb_local[3 * BASE_CDIM + k] += v_v3_l[k];
+                    }
                 }
 
                 if (opac * vis <= MAX_ALPHA) {
@@ -521,7 +560,60 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
                 }
             }
 
-            warpSum<CDIM>(v_rgb_local, warp);
+            if constexpr (MMA_FEAT_REDUCE) {
+                float vmax = 0.f;
+                #pragma unroll
+                for (uint32_t k = 0; k < BASE_CDIM; ++k)
+                    vmax = fmaxf(vmax, fabsf(v_f_interp_local[k]));
+                #pragma unroll
+                for (uint32_t off = 16; off > 0; off >>= 1)
+                    vmax = fmaxf(vmax,
+                        __shfl_xor_sync(0xFFFFFFFFu, vmax, off));
+                int vexp = 0;
+                if (vmax > 0.f) frexpf(vmax, &vexp);   // vmax = m·2^vexp
+                const float q_scale   = ldexpf(1.f, 13 - vexp);
+                const float q_descale = ldexpf(1.f, vexp - 13);
+
+                nht_mlp::tvec<__half, 16> w_h;
+                #pragma unroll
+                for (uint32_t k = 0; k < 16; ++k)
+                    w_h[k] = (k < 4) ? __float2half(w_bary[k]) : __float2half(0.f);
+                nht_mlp::tvec<__half, VPAD> vf_h;
+                #pragma unroll
+                for (uint32_t k = 0; k < VPAD; ++k)
+                    vf_h[k] = (k < BASE_CDIM)
+                        ? __float2half(v_f_interp_local[k] * q_scale)
+                        : __float2half(0.f);
+                nht_mlp::mma_frag_f32 c_red[VPAD / 16] = {};
+                nht_mlp::warp_rank1_reduce<VPAD>(w_h, vf_h, c_red);
+
+                // D-fragment rows 0..3 (the four vertices) live in lanes 0..15:
+                // row = lane/4 in regs r[0],r[1] (cols 2·(lane%4)+{0,1}) and
+                // r[4],r[5] (cols 8+2·(lane%4)+{0,1}).
+                const uint32_t lid = nht_mlp::lane_id();
+                if (lid < 16u) {
+                    const int32_t isect_id_f = id_batch[t];
+                    const uint32_t kv    = lid >> 2;
+                    const uint32_t cbase = (lid & 3u) * 2u;
+                    float *dst = (float *)(v_colors) +
+                        (size_t)CDIM * isect_id_f + kv * BASE_CDIM;
+                    #pragma unroll
+                    for (uint32_t c16 = 0; c16 < VPAD / 16; ++c16) {
+                        const uint32_t i0 = c16 * 16 + cbase;
+                        const uint32_t i8 = c16 * 16 + 8 + cbase;
+                        if (i0 < BASE_CDIM)
+                            gpuAtomicAdd(dst + i0, c_red[c16].r[0] * q_descale);
+                        if (i0 + 1 < BASE_CDIM)
+                            gpuAtomicAdd(dst + i0 + 1, c_red[c16].r[1] * q_descale);
+                        if (i8 < BASE_CDIM)
+                            gpuAtomicAdd(dst + i8, c_red[c16].r[4] * q_descale);
+                        if (i8 + 1 < BASE_CDIM)
+                            gpuAtomicAdd(dst + i8 + 1, c_red[c16].r[5] * q_descale);
+                    }
+                }
+            } else {
+                warpSum<CDIM>(v_rgb_local, warp);
+            }
             warpSum(v_mean_local, warp);
             warpSum(v_scale_local, warp);
             warpSum(v_quat_local, warp);
@@ -530,10 +622,12 @@ __global__ void rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
                 const int32_t isect_id  = id_batch[t];
                 const int32_t isect_bid = isect_id / (C * N);
                 const int32_t isect_gid = isect_id % N;
-                float *v_rgb_ptr = (float *)(v_colors) + CDIM * isect_id;
-                #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                if constexpr (!MMA_FEAT_REDUCE) {
+                    float *v_rgb_ptr = (float *)(v_colors) + CDIM * isect_id;
+                    #pragma unroll
+                    for (uint32_t k = 0; k < CDIM; ++k) {
+                        gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                    }
                 }
 
                 float *v_mean_ptr = (float *)(v_means) + 3 * (isect_bid * N + isect_gid);
@@ -584,7 +678,8 @@ void launch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
     const at::Tensor& last_ids,
     const at::Tensor& v_render_rgb, const at::Tensor& v_render_alphas,
     at::Tensor& v_means, at::Tensor& v_quats, at::Tensor& v_scales,
-    at::Tensor& v_colors, at::Tensor& v_opacities, at::Tensor& v_mlp_params
+    at::Tensor& v_colors, at::Tensor& v_opacities, at::Tensor& v_mlp_params,
+    uint32_t n_dw_slots
 ) {
     constexpr uint32_t RGBS_STRIDE = CDIM + ((CDIM % 32 == 0) ? 1 : 0);
 
@@ -605,6 +700,9 @@ void launch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
     const int64_t shmem_gauss = (int64_t)block_size *
         (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(float) * RGBS_STRIDE);
     // dW slab (largest layer) only — fragment staging is shuffle-based.
+    // NB keep this at largest-layer size: an all-layers 80 KB slab measures
+    // slower (larger smem request → smaller L1 carveout for the whole
+    // kernel; see nht_fused_shade_bwd).
     const int64_t shmem_mlp =
         (int64_t)MLP_HIDDEN_T * MLP_HIDDEN_T * sizeof(__half);
     const int64_t shmem_total = shmem_gauss > shmem_mlp ? shmem_gauss : shmem_mlp;
@@ -666,7 +764,8 @@ void launch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel(
         v_colors.data_ptr<float>(),
         v_opacities.data_ptr<float>(),
         // empty tensor => skip in-kernel MLP weight gradients
-        v_mlp_params.numel() > 0 ? v_mlp_params.data_ptr<float>() : nullptr
+        v_mlp_params.numel() > 0 ? v_mlp_params.data_ptr<float>() : nullptr,
+        n_dw_slots
     );
 }
 
@@ -692,7 +791,8 @@ static void nht_fbwd_wrapper_##C##_##H##_##L( \
     const at::Tensor& last_ids, \
     const at::Tensor& v_render_rgb, const at::Tensor& v_render_alphas, \
     at::Tensor& v_means, at::Tensor& v_quats, at::Tensor& v_scales, \
-    at::Tensor& v_colors, at::Tensor& v_opacities, at::Tensor& v_mlp_params) \
+    at::Tensor& v_colors, at::Tensor& v_opacities, at::Tensor& v_mlp_params, \
+    uint32_t n_dw_slots) \
 { \
     launch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd_kernel \
         <C, at::Half, H, L>( \
@@ -702,7 +802,8 @@ static void nht_fbwd_wrapper_##C##_##H##_##L( \
             lidar_coeffs, external_distortion_params, tile_offsets, flatten_ids, \
             center_ray_mode, center_ray_dirs, ray_dir_scale, mlp_params, loss_scale, \
             render_feat, render_alphas, last_ids, v_render_rgb, v_render_alphas, \
-            v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_params); \
+            v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_params, \
+            n_dw_slots); \
 }
 
 // Channel set {4,8,12,16,24,32,48,64,96} × each (hidden, layers) config.
@@ -740,7 +841,8 @@ void dispatch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
     const at::Tensor& last_ids,
     const at::Tensor& v_render_rgb, const at::Tensor& v_render_alphas,
     at::Tensor& v_means, at::Tensor& v_quats, at::Tensor& v_scales,
-    at::Tensor& v_colors, at::Tensor& v_opacities, at::Tensor& v_mlp_params
+    at::Tensor& v_colors, at::Tensor& v_opacities, at::Tensor& v_mlp_params,
+    uint32_t n_dw_slots
 ) {
     const uint32_t channels = (uint32_t)colors.size(-1);
 
@@ -751,7 +853,7 @@ void dispatch_rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
         lidar_coeffs, external_distortion_params, tile_offsets, flatten_ids, \
         center_ray_mode, center_ray_dirs, ray_dir_scale, mlp_params, loss_scale, \
         render_feat, render_alphas, last_ids, v_render_rgb, v_render_alphas, \
-        v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_params)
+        v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_params, n_dw_slots)
 
 #define __NHT_FB_SWITCH__(H_VAL, L_VAL) \
     switch (channels) { \

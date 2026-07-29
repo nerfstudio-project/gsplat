@@ -48,10 +48,7 @@ def _require_tcnn() -> Any:
 TCNN_FULLY_FUSED_MAX_OUTPUT_DIM: int = 128
 
 # Per-call batch-size cap when invoking a tcnn module.
-# Large single calls may exceed the FullyFusedMLP compile-time batch cap and abort;
-# many small calls cause tcnn's cuMemMap arena to fragment.  A single call under
-# this threshold is both faster and more stable.
-DEFAULT_TCNN_FORWARD_CHUNK: int = 12_000_000
+DEFAULT_TCNN_FORWARD_CHUNK: int = 2_000_000
 
 
 class HarmonicFeatures:
@@ -283,7 +280,13 @@ class DeferredShaderModule(torch.nn.Module):
         for start in range(0, n, chunk):
             sl = mlp_inputs[start : start + chunk]
             if sl.requires_grad:
-                outs.append(checkpoint(_fwd, sl, use_reentrant=False))
+                # MUST be reentrant: tcnn stores its activation context as a
+                # plain attribute on the autograd ctx (not save_for_backward),
+                # so non-reentrant checkpointing keeps every chunk's
+                # activations alive in the tcnn arena and saves nothing.
+                # The reentrant path runs this forward under no_grad (no
+                # native ctx kept) and recomputes per chunk during backward.
+                outs.append(checkpoint(_fwd, sl, use_reentrant=True))
             else:
                 outs.append(_fwd(sl))
         return torch.cat(outs, dim=0)

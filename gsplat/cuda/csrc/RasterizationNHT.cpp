@@ -475,8 +475,11 @@ rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
     at::Tensor v_colors    = at::zeros(colors.sizes(),
         colors.options().dtype(at::kFloat));
     at::Tensor v_opacities = at::zeros_like(opacities);
-    at::Tensor v_mlp_params = at::zeros(
-        {compute_mlp_grad ? mlp_params.numel() : 0},
+
+    constexpr int64_t kDwSlots = 16;
+    const int64_t n_mlp_params = mlp_params.numel();
+    at::Tensor v_mlp_ws = at::zeros(
+        {compute_mlp_grad ? kDwSlots * n_mlp_params : 0},
         mlp_params.options().dtype(at::kFloat));
 
     at::Tensor center_ray_dirs = viewmats0.select(-2, 2).narrow(-1, 0, 3).contiguous();
@@ -495,7 +498,12 @@ rasterize_to_pixels_from_world_nht_3dgs_fused_bwd(
         (float)loss_scale,
         render_feat, render_alphas, last_ids,
         v_render_rgb, v_render_alphas,
-        v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_params);
+        v_means, v_quats, v_scales, v_colors, v_opacities, v_mlp_ws,
+        (uint32_t)kDwSlots);
+
+    at::Tensor v_mlp_params = compute_mlp_grad
+        ? v_mlp_ws.view({kDwSlots, n_mlp_params}).sum(0)
+        : at::zeros({0}, mlp_params.options().dtype(at::kFloat));
 
     // v_mlp_params is still multiplied by loss_scale; the Python wrapper
     // divides after the kernel (keeps the fp16 fragment path well-scaled).

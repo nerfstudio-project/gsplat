@@ -355,6 +355,7 @@ def _binning(
         calc_compensations=False,
         camera_model="pinhole",
         ut_params=UnscentedTransformParameters(),
+        ftheta_coeffs=FThetaCameraDistortionParameters(),
         rolling_shutter=RollingShutterType.GLOBAL,
         viewmats_rs=None,
         global_z_order=True,
