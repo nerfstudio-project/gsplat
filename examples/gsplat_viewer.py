@@ -68,6 +68,60 @@ def apply_ortho_scale_to_K(K, width: int, height: int, ortho_scale: float):
     return K
 
 
+# ── NHT fused-kernel UI restrictions ─────────────────────────────────────────
+#
+# The fully-fused NHT rasterize+MLP kernel emits RGB + alpha through a pinhole
+# camera only: it has no depth/normal outputs, no 2D-covariance compensation
+# (antialiased rasterization) and no projected-radius clip. Rather than
+# silently rendering those through the slower two-stage path — which makes the
+# viewer's measured framerate misleading — the NHT viewers restrict the
+# render-mode dropdown to what the fused kernel can do and grey out the
+# controls it cannot honour, with a note on how to get them back.
+#
+# viser has no per-option disabling for dropdowns, so unsupported render modes
+# are removed from the list rather than shown greyed out; the markdown note
+# below is what tells the user they exist and how to reach them.
+
+NHT_FUSED_RENDER_MODES = ("rgb", "alpha")
+
+NHT_FUSED_UNSUPPORTED_RENDER_MODES = (
+    "depth(accumulated)",
+    "depth(expected)",
+    "normal",
+)
+
+_NHT_FUSED_DISABLED_HANDLES = (
+    "camera_model_dropdown",
+    "ortho_scale_slider",
+    "rasterize_mode_dropdown",
+    "radius_clip_slider",
+)
+
+
+def apply_nht_fused_ui_restrictions(viewer: "GsplatViewer", relaunch_hint: str) -> None:
+    """Grey out the viewer controls the fully-fused NHT kernel cannot honour.
+
+    Args:
+        viewer: a populated :class:`GsplatViewer`.
+        relaunch_hint: the exact flag to pass to get the two-stage path back.
+            Differs between the standalone viewer and the trainer's embedded
+            viewer, so the caller supplies it.
+    """
+    for name in _NHT_FUSED_DISABLED_HANDLES:
+        handle = viewer._rendering_tab_handles.get(name)
+        if handle is not None:
+            handle.disabled = True
+
+    modes = ", ".join(f"`{m}`" for m in NHT_FUSED_UNSUPPORTED_RENDER_MODES)
+    with viewer._rendering_folder:
+        viewer.server.gui.add_markdown(
+            "**Fused NHT kernel active** — RGB and alpha, pinhole camera only.\n\n"
+            f"Unavailable here: {modes}, non-pinhole cameras, antialiased "
+            "rasterization, and radius clipping.\n\n"
+            f"To use any of them, relaunch the viewer with `{relaunch_hint}`."
+        )
+
+
 class GsplatViewer(Viewer):
     """
     Viewer for gsplat.

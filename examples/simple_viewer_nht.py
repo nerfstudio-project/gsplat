@@ -36,9 +36,11 @@ from gsplat.nht import (
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer import (
+    apply_nht_fused_ui_restrictions,
     apply_ortho_scale_to_K,
     GsplatViewer,
     GsplatRenderTabState,
+    NHT_FUSED_RENDER_MODES,
 )
 
 
@@ -113,13 +115,19 @@ def main(local_rank: int, world_rank, world_size: int, args):
         print("Applied EMA weights to deferred module")
     deferred_module.eval()
 
-    # Fused single-kernel renderer (rasterize + inline MLP). Only available
-    # when the shader config has a compiled fused-kernel instantiation, and
-    # only for RGB / alpha modes — depth, normal, and AOV modes fall back to
-    # the standard NHT path.
+    # Fused single-kernel renderer (rasterize + inline MLP). On by default;
+    # --no_fused opts back into the two-stage rasterize + tcnn path, which is
+    # what you need for depth, normal, non-pinhole cameras, antialiasing and
+    # radius clipping. Fused is also unavailable when the checkpoint's shader
+    # config has no compiled fused-kernel instantiation, in which case we fall
+    # back to the two-stage path and say why.
     fused_ok, fused_reason = nht_fused_supported(deferred_module, for_training=False)
-    if not fused_ok:
-        print(f"Fused kernel unavailable for this shader config: {fused_reason}")
+    if args.use_fused and not fused_ok:
+        print(
+            f"Fused kernel unavailable for this shader config: {fused_reason}\n"
+            "Falling back to the two-stage rasterize + tcnn path."
+        )
+    use_fused = args.use_fused and fused_ok
     fused_renderer = (
         NHTInferenceRenderer(
             deferred_module,
@@ -128,7 +136,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 center_ray_mode=args.center_ray_encoding,
             ),
         )
-        if fused_ok
+        if use_fused
         else None
     )
     fused_splats = {
@@ -139,7 +147,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
         "opacities": torch.logit(opacities.clamp(1e-6, 1 - 1e-6)),
         "features": features,
     }
-    ui_state = {"use_fused": fused_ok}
 
     @torch.no_grad()
     def viewer_render_fn(camera_state: CameraState, render_tab_state: RenderTabState):
@@ -159,13 +166,24 @@ def main(local_rank: int, world_rank, world_size: int, args):
         viewmat = c2w.inverse()
 
         # ── Fused single-kernel path (RGB / alpha, pinhole only) ───────────
-        use_fused = (
-            ui_state["use_fused"]
-            and fused_renderer is not None
-            and render_tab_state.render_mode in ("rgb", "alpha")
-            and render_tab_state.camera_model == "pinhole"
-        )
-        if use_fused:
+        # The GUI is restricted to what the fused kernel supports when it is
+        # active (see apply_nht_fused_ui_restrictions), so no per-frame mode
+        # check is needed here.
+        if fused_renderer is not None:
+            # Near/far/eps2d are read per-render by the projection pre-pass, so
+            # the sliders stay live — but the pre-pass result is cached on the
+            # view, and that cache is not keyed on them.
+            cfg_f = fused_renderer.config
+            if (
+                cfg_f.near_plane != render_tab_state.near_plane
+                or cfg_f.far_plane != render_tab_state.far_plane
+                or cfg_f.eps2d != render_tab_state.eps2d
+            ):
+                cfg_f.near_plane = render_tab_state.near_plane
+                cfg_f.far_plane = render_tab_state.far_plane
+                cfg_f.eps2d = render_tab_state.eps2d
+                fused_renderer.invalidate_cache()
+
             rgb_f, alpha_f, _ = fused_renderer.render(
                 fused_splats, viewmat, K, width, height
             )
@@ -276,23 +294,14 @@ def main(local_rank: int, world_rank, world_size: int, args):
         render_fn=viewer_render_fn,
         output_dir=Path(args.output_dir),
         mode="rendering",
+        render_modes=(
+            NHT_FUSED_RENDER_MODES
+            if fused_renderer is not None
+            else ("rgb", "depth(accumulated)", "depth(expected)", "normal", "alpha")
+        ),
     )
     if fused_renderer is not None:
-        with viewer._rendering_folder:
-            fused_checkbox = server.gui.add_checkbox(
-                "NHT fused kernel",
-                initial_value=ui_state["use_fused"],
-                hint=(
-                    "Render with the fully-fused rasterize+MLP kernel. "
-                    "RGB and alpha only — depth, normal, and AOV modes "
-                    "automatically fall back to the standard NHT path."
-                ),
-            )
-
-            @fused_checkbox.on_update
-            def _(_) -> None:
-                ui_state["use_fused"] = fused_checkbox.value
-                viewer.rerender(_)
+        apply_nht_fused_ui_restrictions(viewer, "--no_fused")
 
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(100000)
@@ -338,6 +347,17 @@ if __name__ == "__main__":
         default=16,
         help="tile size for rasterization",
     )
+    parser.add_argument(
+        "--no_fused",
+        dest="use_fused",
+        action="store_false",
+        help=(
+            "disable the fully-fused rasterize+MLP kernel and render through "
+            "the two-stage rasterize + tcnn path. Required for depth, normal, "
+            "non-pinhole cameras, antialiased rasterization and radius clipping"
+        ),
+    )
+    parser.set_defaults(use_fused=True)
     # Deferred shading module configuration
     # These defaults match simple_trainer_nht.py Config defaults
     parser.add_argument(

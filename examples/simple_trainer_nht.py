@@ -64,9 +64,11 @@ from gsplat.optimizers import SelectiveAdam
 from gsplat.scene import GaussianNHTScene
 from gsplat.experimental.render.functional.render_scene import render_scene
 from gsplat_viewer import (
+    apply_nht_fused_ui_restrictions,
     apply_ortho_scale_to_K,
     GsplatViewer,
     GsplatRenderTabState,
+    NHT_FUSED_RENDER_MODES,
 )
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
@@ -309,8 +311,11 @@ class Config:
     # Step to start EMA updates (allow MLP to warm up first)
     deferred_mlp_ema_start_step: int = 0
     # Use fully-fused NHT kernels (single fwd+bwd kernel for training,
-    # NHTInferenceRenderer for eval). Incompatible with depth/normal/AOV losses,
-    # post-processing, and packed rasterization.
+    # NHTInferenceRenderer for eval). On by default. Automatically disabled when
+    # aov_target_key is set (AOV always runs on the two-stage tcnn path); a hard
+    # error when combined with the explicit opt-ins it cannot support
+    # (depth/normal losses, post-processing, packed, sparse_grad, visible_adam,
+    # pose_opt, antialiased, batch_size != 1, non-pinhole cameras).
     nht_fused: bool = True
 
     ##### AOV OPTIONS #####
@@ -625,14 +630,27 @@ class Runner:
             self.deferred_module = DDP(self.deferred_module)
 
         self._inference_renderer = None
+        if cfg.nht_fused and cfg.aov_target_key:
+            # AOV is a whole rendering mode rather than an opt-in feature: its
+            # shaders decode hundreds of auxiliary channels through a split
+            # head, which the RGB-only fused kernel cannot emit. Since
+            # --nht_fused is on by default, AOV runs quietly drop to the
+            # two-stage tcnn path -- erroring out would make every AOV run
+            # carry an extra flag just to undo a default it never asked for.
+            # (The other entries below are explicit opt-ins, so asking for one
+            # of them together with the fused kernel stays a hard error.)
+            print(
+                "[NHT] AOV mode requested (--aov_target_key): disabling the "
+                "fused rasterize+MLP kernels, using the two-stage "
+                "rasterize + tcnn path."
+            )
+            cfg.nht_fused = False
         if cfg.nht_fused:
             incompatible = []
             if cfg.depth_loss:
                 incompatible.append("depth_loss")
             if cfg.normal_loss:
                 incompatible.append("normal_loss")
-            if cfg.aov_target_key:
-                incompatible.append("aov_target_key")
             if cfg.post_processing:
                 incompatible.append("post_processing")
             if cfg.packed:
@@ -729,33 +747,33 @@ class Runner:
         ).to(self.device)
 
         # Viewer
-        self._viewer_fused_checkbox = None
         if not self.cfg.disable_viewer:
             self.server = viser.ViserServer(port=cfg.port, verbose=False)
+            # The embedded viewer previews through the same path training uses.
+            # When that is the fused kernel, restrict the GUI to what it can
+            # actually render instead of silently falling back per frame --
+            # otherwise the previewed framerate does not reflect the fused path.
+            # ``for_training=True`` support (validated above) implies
+            # ``for_training=False`` support, so no second check is needed.
             self.viewer = GsplatViewer(
                 server=self.server,
                 render_fn=self._viewer_render_fn,
                 output_dir=Path(cfg.result_dir),
                 mode="training",
-            )
-            # Fused-kernel preview toggle (only when the shader config has
-            # compiled fused-kernel support).
-            fused_ok, _ = nht_fused_supported(self._deferred_mod(), for_training=False)
-            if fused_ok:
-                with self.viewer._rendering_folder:
-                    self._viewer_fused_checkbox = self.server.gui.add_checkbox(
-                        "NHT fused kernel",
-                        initial_value=cfg.nht_fused,
-                        hint=(
-                            "Render with the fully-fused rasterize+MLP kernel. "
-                            "RGB and alpha only — depth, normal, and AOV modes "
-                            "automatically fall back to the standard NHT path."
-                        ),
+                render_modes=(
+                    NHT_FUSED_RENDER_MODES
+                    if cfg.nht_fused
+                    else (
+                        "rgb",
+                        "depth(accumulated)",
+                        "depth(expected)",
+                        "normal",
+                        "alpha",
                     )
-
-                    @self._viewer_fused_checkbox.on_update
-                    def _(_) -> None:
-                        self.viewer.rerender(_)
+                ),
+            )
+            if cfg.nht_fused:
+                apply_nht_fused_ui_restrictions(self.viewer, "--no-nht_fused")
 
         # Track if Gaussians are frozen (for controller distillation)
         self._gaussians_frozen = False
@@ -1943,19 +1961,11 @@ class Runner:
         }
         need_normals = render_tab_state.render_mode == "normal"
 
-        # Fused-kernel preview: from the GUI toggle when present, else the
-        # training config. The fused path only produces RGB + alpha, so
-        # depth/normal preview modes (and non-pinhole cameras) automatically
-        # fall back to the standard NHT rasterizer.
-        want_fused = (
-            self._viewer_fused_checkbox.value
-            if self._viewer_fused_checkbox is not None
-            else self.cfg.nht_fused
-        )
-        viewer_use_fused = want_fused and (
-            render_tab_state.render_mode in ("rgb", "alpha")
-            and render_tab_state.camera_model == "pinhole"
-        )
+        # Preview through the same path training uses. The GUI is restricted to
+        # the fused kernel's capabilities when it is active (see
+        # apply_nht_fused_ui_restrictions), so no per-frame mode check is
+        # needed here.
+        viewer_use_fused = self.cfg.nht_fused
 
         render_colors, render_alphas, info = self.rasterize_splats(
             camtoworlds=c2w[None],
