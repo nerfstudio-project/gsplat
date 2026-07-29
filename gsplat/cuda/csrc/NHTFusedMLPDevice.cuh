@@ -467,67 +467,52 @@ mma_mat<M, K_OUT, ML::RM> matmul_native_T(const mma_mat<M, N_IN, ML::RM>& dY,
     return C;
 }
 
-// dW(K×N) += Xᵀ(K×M) @ dY(M×N) accumulated into a shared fp16 slab kept in
-// NATIVE fragment layout (16 B per lane per fragment — coalesced, conflict
-// free, vectorized half2 adds). The flush converts to tcnn linear layout.
-//
-// Warps are serialized by the caller-supplied loop (block-uniform!): warp w
-// adds its outer product on iteration w; everyone else waits at the barrier.
-// One streamed 16×16 fragment is live at a time (no dW materialization).
+// In-place per-register movmatrix on every fragment: toggles each 16×16
+// fragment between its RM and CM register serialization. movmatrix is an
+// involution, so applying this twice restores the original registers.
+template <uint32_t M, uint32_t N>
+__device__ __forceinline__ void mat_toggle_layout(mma_mat<M, N, ML::RM>& A) {
+    #pragma unroll
+    for (uint32_t i = 0; i < mma_mat<M, N, ML::RM>::NR; ++i)
+        #pragma unroll
+        for (uint32_t k = 0; k < 4; ++k)
+            A.frags[i].r[k] = transpose_reg(A.frags[i].r[k]);
+}
+
 template <uint32_t M, uint32_t K, uint32_t N>
 __device__ __forceinline__ void outer_product_into_slab(
     const mma_mat<M, K, ML::RM>& X,
-    const mma_mat<M, N, ML::RM>& dY,
-    __half* __restrict__ slab,
-    uint32_t warp_id,
-    uint32_t num_warps
+    const mma_mat<M, N, ML::RM>& dY_cm,   // pre-toggled (CM register form)
+    __half* __restrict__ slab
 ) {
     constexpr uint32_t FS  = K / 16;
     constexpr uint32_t NRT = (K / 16) * (N / 16);
-    // Process fragments in register-resident chunks: every warp computes its
-    // chunk in parallel (mma + movmatrix), then only the cheap slab adds are
-    // serialized across warps. Keeps at most CHUNK fragments (4 regs each)
-    // live per thread.
-    constexpr uint32_t CHUNK = NRT < 8u ? NRT : 8u;
     const uint32_t lid = lane_id();
 
-    // Fully unrolled: base/fr/fc must be compile-time constants, otherwise the
-    // fragment register arrays (X, dY, accs) spill to local memory.
     #pragma unroll
-    for (uint32_t base = 0; base < NRT; base += CHUNK) {
-        mma_frag<ML::CM> accs[CHUNK];
+    for (uint32_t fid = 0; fid < NRT; ++fid) {   // CM ordering: fid = fc*FS + fr
+        const uint32_t fr = fid % FS;
+        const uint32_t fc = fid / FS;
+        mma_frag<ML::RM> acc = {0u, 0u, 0u, 0u};
         #pragma unroll
-        for (uint32_t c = 0; c < CHUNK; ++c) {
-            const uint32_t fid = base + c;     // CM ordering: fid = fc*FS + fr
-            if (fid >= NRT) break;
-            const uint32_t fr = fid % FS;
-            const uint32_t fc = fid / FS;
-            mma_frag<ML::RM> acc = {0u, 0u, 0u, 0u};
+        for (uint32_t kb = 0; kb < M/16; ++kb) {
+            // Xᵀ tile (fr, kb) = transpose of X tile (kb, fr)
+            mma_frag<ML::RM> a = frag_transpose(X.frag(kb, fr));
+            mma_frag<ML::CM> b;
             #pragma unroll
-            for (uint32_t kb = 0; kb < M/16; ++kb) {
-                // Xᵀ tile (fr, kb) = transpose of X tile (kb, fr)
-                mma_frag<ML::RM> a = frag_transpose(X.frag(kb, fr));
-                mma_frag<ML::CM> b = frag_flip_to_cm(dY.frag(kb, fc));
-                mma_frag_accum(acc, a, b);
-            }
-            accs[c] = frag_flip_to_cm(acc);
+            for (uint32_t r = 0; r < 4; ++r)
+                b.r[r] = dY_cm.frag(kb, fc).r[r];
+            mma_frag_accum(acc, a, b);
         }
-        for (uint32_t w = 0; w < num_warps; ++w) {
-            if (w == warp_id) {
-                #pragma unroll
-                for (uint32_t c = 0; c < CHUNK; ++c) {
-                    const uint32_t fid = base + c;
-                    if (fid >= NRT) break;
-                    // One 16-byte lane-private entry, 4 vectorized half2 adds.
-                    __half2* entry = (__half2*)&slab[(fid * WARP + lid) * 8u];
-                    #pragma unroll
-                    for (uint32_t r = 0; r < 4; ++r) {
-                        __half2 v; memcpy(&v, &accs[c].r[r], 4);
-                        entry[r] = __hadd2(entry[r], v);
-                    }
-                }
-            }
-            __syncthreads();
+        const mma_frag<ML::CM> out = frag_flip_to_cm(acc);
+        // Reg-major slab layout: half2 index = fid*128 + r*32 + lane. Lanes
+        // land on consecutive 4-byte banks → conflict-free atomic wavefronts
+        // (the lane-major 16 B-entry layout was a 4-way bank conflict per add).
+        __half2* entry = (__half2*)slab + fid * (WARP * 4u) + lid;
+        #pragma unroll
+        for (uint32_t r = 0; r < 4; ++r) {
+            __half2 v; memcpy(&v, &out.r[r], 4);
+            atomicAdd(&entry[r * WARP], v);
         }
     }
 }
@@ -543,8 +528,10 @@ __device__ __forceinline__ void slab_zero(
 
 // Flush the block's fp16 native-fragment partial into the global fp32
 // gradient buffer in tcnn LINEAR (column-major, k + n*K) order.
-// Each half2 covers rows (k, k+1) of one column n → two consecutive linear
-// elements, i.e. two coalesced-ish fp32 atomics.
+// Slab is reg-major: half2 index = fid*128 + reg*32 + lane (see
+// outer_product_into_slab). Each half2 covers rows (k, k+1) of one column n;
+// consecutive threads sweep lanes, so groups of 4 threads write 8 consecutive
+// linear elements (32 B coalesced atomic chunks).
 template <uint32_t K>
 __device__ __forceinline__ void slab_flush_atomic(
     const __half* slab, uint32_t n_halves, float* __restrict__ g,
@@ -553,11 +540,10 @@ __device__ __forceinline__ void slab_flush_atomic(
     constexpr uint32_t FS = K / 16;
     const __half2* s2 = (const __half2*)slab;
     for (uint32_t i = tid; i < n_halves / 2; i += nthreads) {
-        const uint32_t p    = i * 2;
-        const uint32_t fid  = p >> 8;          // 256 halves per fragment
-        const uint32_t rem  = p & 255u;
-        const uint32_t lane = rem >> 3;
-        const uint32_t reg  = (rem >> 1) & 3u;
+        const uint32_t fid  = i >> 7;          // 128 half2 per fragment
+        const uint32_t rem  = i & 127u;
+        const uint32_t reg  = rem >> 5;
+        const uint32_t lane = rem & 31u;
         // CM fragment → (k, n): rx = reg%2 (row block), ry = reg/2 (col block)
         const uint32_t k = (fid % FS) * 16 + (lane % 4) * 2 + (reg % 2) * 8;
         const uint32_t n = (fid / FS) * 16 + (lane / 4) + (reg / 2) * 8;
@@ -568,6 +554,69 @@ __device__ __forceinline__ void slab_flush_atomic(
         if (vx != 0.f) atomicAdd(dst,     vx);
         if (vy != 0.f) atomicAdd(dst + 1, vy);
     }
+}
+
+// ── Warp-cooperative rank-1 reduction via tensor cores ──────────────────────
+//
+// The rasterizer backward needs, per Gaussian,
+//   R[k][i] = Σ_{lanes l} w^l[k] · v^l[i]      (k < 4 vertices, i < BASE_CDIM)
+// i.e. the warp-reduced barycentric outer product of per-lane weight/gradient
+// vectors. A 48-wide fp32 shuffle butterfly costs ~480 instructions per
+// Gaussian; the same contraction is one tiny matmul C(16×NV) = Wᵀ(16×32) ×
+// V(32×NV) on the tensor cores. Inputs are quantized to fp16 (callers should
+// pre-scale v by the loss scale so values sit in fp16's normal range);
+// accumulation is exact fp32 via the f32-accumulator HMMA variant.
+
+// One 16×16 fp32 accumulator tile: two m16n8k16 D-fragments (4 regs each).
+// r[0..3] cover columns 0..7, r[4..7] columns 8..15. Element mapping per the
+// PTX m16n8k16 D layout: r[j] holds (row = lane/4 + (j%4 > 1 ? 8 : 0),
+// col = colbase + 2*(lane%4) + (j%2)).
+struct mma_frag_f32 { float r[8]; };
+
+__device__ __forceinline__ void mma_frag_accum_f32(
+    mma_frag_f32& acc,
+    const mma_frag<ML::RM>& a,
+    const mma_frag<ML::CM>& b
+) {
+#if __CUDA_ARCH__ >= 800
+    asm volatile(
+        "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
+        "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+        : "+f"(acc.r[0]), "+f"(acc.r[1]), "+f"(acc.r[2]), "+f"(acc.r[3])
+        : "r"(a.r[0]), "r"(a.r[1]), "r"(a.r[2]), "r"(a.r[3]),
+          "r"(b.r[0]), "r"(b.r[1]));
+    asm volatile(
+        "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
+        "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+        : "+f"(acc.r[4]), "+f"(acc.r[5]), "+f"(acc.r[6]), "+f"(acc.r[7])
+        : "r"(a.r[0]), "r"(a.r[1]), "r"(a.r[2]), "r"(a.r[3]),
+          "r"(b.r[2]), "r"(b.r[3]));
+#endif
+}
+
+// C[k][i] += Σ_lanes w[k]·v[i], k < 16, i < NV. All 32 lanes must call
+// together; inactive lanes must pass all-zero w AND v (a NaN/Inf in either
+// poisons the whole warp's tile). Same Xᵀ@Y fragment pattern as
+// outer_product_into_slab, with fp32 accumulation.
+template <uint32_t NV>
+__device__ __forceinline__ void warp_rank1_reduce(
+    const tvec<__half, 16>& w,
+    const tvec<__half, NV>& v,
+    mma_frag_f32 (&C)[NV / 16]
+) {
+    static_assert(NV % 16 == 0, "NV must be a multiple of 16");
+    const auto Wm = vec_to_mma<16>(w);   // 32×16 RM, one row per lane
+    const auto Vm = vec_to_mma<NV>(v);   // 32×NV RM, one row per lane
+    mma_frag<ML::RM> aT[2];
+    #pragma unroll
+    for (uint32_t r16 = 0; r16 < 2; ++r16)
+        aT[r16] = frag_transpose(Wm.frag(r16, 0));
+    #pragma unroll
+    for (uint32_t c16 = 0; c16 < NV / 16; ++c16)
+        #pragma unroll
+        for (uint32_t r16 = 0; r16 < 2; ++r16)
+            mma_frag_accum_f32(
+                C[c16], aT[r16], frag_flip_to_cm(Vm.frag(r16, c16)));
 }
 
 // ── nht_fused_shade_bwd ──────────────────────────────────────────────────────
@@ -581,7 +630,8 @@ __device__ __forceinline__ void slab_flush_atomic(
 //                   layout (still multiplied by loss_scale; divide on host)
 //
 // Block-uniform: ALL threads of the block must call this together (the dW
-// slab reduction serializes warps with __syncthreads).
+// slab zero/flush phases synchronize with __syncthreads; the accumulation
+// itself is barrier-free shared-memory f16x2 atomics).
 //
 // dw_slab must hold MLP_HIDDEN*MLP_HIDDEN halves (largest layer).
 //
@@ -596,8 +646,6 @@ tvec<float, FEAT_OUT> nht_fused_shade_bwd(
     const __half* __restrict__ params,      // native fragment layout
     float* __restrict__ v_params,           // [n_params] fp32, linear layout
     __half* __restrict__ dw_slab,            // shared, H*H halves, block-shared
-    const uint32_t warp_id,
-    const uint32_t num_warps,
     const uint32_t tid,
     const uint32_t nthreads
 ) {
@@ -651,13 +699,27 @@ tvec<float, FEAT_OUT> nht_fused_shade_bwd(
     const bool want_dw = (v_params != nullptr);
 
     // ── Output layer: dW_out += h_lastᵀ @ dz; dh = dz × W_outᵀ ─────────────
+    // dY (dz/dh) is toggled to CM register form in place around each dW
+    // round (movmatrix is an involution) so the outer product consumes it
+    // directly — this removes every per-fragment b-flip from the streamed
+    // chain without changing register liveness or round ordering.
+    //
+    // NB the per-layer slab-reuse rounds are deliberate: an all-layers slab
+    // (80 KB, one zero + one flush, only 2 barriers) measures SLOWER — the
+    // larger dynamic-smem request shrinks the L1 carveout for the WHOLE
+    // kernel (~64→28 KB), costing more everywhere than the ~9 removed
+    // barriers save. The 32 KB largest-layer slab rides inside the Gaussian
+    // batch region for free.
     if (want_dw) {
+        mat_toggle_layout(dz);
         slab_zero(dw_slab, MLP_HIDDEN * OUT_PAD, tid, nthreads);
         __syncthreads();
         outer_product_into_slab<32, MLP_HIDDEN, OUT_PAD>(
-            h[N_HIDDEN_LAYERS - 1], dz, dw_slab, warp_id, num_warps);
+            h[N_HIDDEN_LAYERS - 1], dz, dw_slab);
+        __syncthreads();
         slab_flush_atomic<MLP_HIDDEN>(dw_slab, MLP_HIDDEN * OUT_PAD,
                                       v_params + WOUT_OFF, tid, nthreads);
+        mat_toggle_layout(dz);
     }
 
     auto dh = matmul_native_T<32, OUT_PAD, MLP_HIDDEN>(dz, params + WOUT_OFF);
@@ -669,13 +731,16 @@ tvec<float, FEAT_OUT> nht_fused_shade_bwd(
         const uint32_t w_off =
             ENC_DIM * MLP_HIDDEN + (li - 1) * MLP_HIDDEN * MLP_HIDDEN;
         if (want_dw) {
+            mat_toggle_layout(dh);
             __syncthreads();
             slab_zero(dw_slab, MLP_HIDDEN * MLP_HIDDEN, tid, nthreads);
             __syncthreads();
             outer_product_into_slab<32, MLP_HIDDEN, MLP_HIDDEN>(
-                h[li - 1], dh, dw_slab, warp_id, num_warps);
+                h[li - 1], dh, dw_slab);
+            __syncthreads();
             slab_flush_atomic<MLP_HIDDEN>(dw_slab, MLP_HIDDEN * MLP_HIDDEN,
                                           v_params + w_off, tid, nthreads);
+            mat_toggle_layout(dh);
         }
 
         auto dh_prev = matmul_native_T<32, MLP_HIDDEN, MLP_HIDDEN>(dh, params + w_off);
@@ -685,13 +750,16 @@ tvec<float, FEAT_OUT> nht_fused_shade_bwd(
 
     // ── Input layer: dW0 += encᵀ @ dh; dEnc = dh × W0ᵀ ─────────────────────
     if (want_dw) {
+        mat_toggle_layout(dh);
         __syncthreads();
         slab_zero(dw_slab, ENC_DIM * MLP_HIDDEN, tid, nthreads);
         __syncthreads();
         outer_product_into_slab<32, ENC_DIM, MLP_HIDDEN>(
-            enc_mma, dh, dw_slab, warp_id, num_warps);
+            enc_mma, dh, dw_slab);
+        __syncthreads();
         slab_flush_atomic<ENC_DIM>(dw_slab, ENC_DIM * MLP_HIDDEN,
                                    v_params + W0_OFF, tid, nthreads);
+        mat_toggle_layout(dh);
     }
 
     auto denc = matmul_native_T<32, MLP_HIDDEN, ENC_DIM>(dh, params + W0_OFF);

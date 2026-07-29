@@ -92,9 +92,14 @@ class NHTInferenceRenderer:
         self.shader = shader
         self.config = config or NHTInferenceConfig()
 
-        # Projection cache (invalidated whenever geometry or the view changes)
+        # Projection cache (invalidated whenever geometry, the view, or the
+        # camera intrinsics/resolution change, K and width/height are part
+        # of the key: reusing projections across a focal-length change
+        # produces stale tile intersections and visible splat dropout)
         self._cached_proj: Optional[Tuple[Tensor, Tensor, Tensor]] = None
         self._cached_viewmat: Optional[Tensor] = None
+        self._cached_K: Optional[Tensor] = None
+        self._cached_wh: Optional[Tuple[int, int]] = None
         self._cached_geom_key: Optional[tuple] = None
 
         # Converted MLP params — re-converted whenever the source parameter
@@ -105,6 +110,8 @@ class NHTInferenceRenderer:
     def invalidate_cache(self) -> None:
         self._cached_proj = None
         self._cached_viewmat = None
+        self._cached_K = None
+        self._cached_wh = None
         self._cached_geom_key = None
         self._mlp_params_native = None
         self._mlp_params_key = None
@@ -164,6 +171,9 @@ class NHTInferenceRenderer:
         view_changed = (
             self._cached_viewmat is None
             or not torch.equal(self._cached_viewmat, viewmat)
+            or self._cached_K is None
+            or not torch.equal(self._cached_K, K)
+            or self._cached_wh != (width, height)
             or self._cached_geom_key != geom_key
         )
         if self._cached_proj is None or view_changed:
@@ -188,6 +198,8 @@ class NHTInferenceRenderer:
             )
             self._cached_proj = (radii, means2d, depths)
             self._cached_viewmat = viewmat.clone()
+            self._cached_K = K.clone()
+            self._cached_wh = (width, height)
             self._cached_geom_key = geom_key
         else:
             radii, means2d, depths = self._cached_proj
