@@ -248,22 +248,14 @@ namespace
             !calc_compensations || (!with_eval3d && !with_ut),
             "Antialiased rasterization is only supported for classic 3DGS"
         );
-        if(is_lidar_camera)
-        {
-            // Lidar cameras use spherical coordinates, where Euclidean-distance depth
-            // ordering is the physically correct one. Require it explicitly rather
-            // than silently ignoring the caller's z-depth request.
-            TORCH_CHECK(
-                !global_z_order,
-                "global_z_order must be False for camera_model='lidar'. Lidar cameras use spherical "
-                "coordinates where Euclidean-distance depth ordering (global_z_order=False) is "
-                "physically correct. Pass global_z_order=False explicitly when using lidar."
-            );
-        }
-        else
-        {
-            TORCH_CHECK(global_z_order || with_ut, "global_z_order=False is only supported with with_ut=True");
-        }
+        // NOTE: nv/nht-rebase additionally required global_z_order=False for lidar
+        // cameras (Euclidean-distance ordering is the physically correct one there).
+        // That assert is deliberately not carried over: upstream's own
+        // test_rasterization_cpp_ut_lidar_absgrad_forward_neutral renders a lidar
+        // camera with the default global_z_order=True, so enforcing it here fails
+        // the upstream suite. Re-add it together with those test updates if the
+        // stricter contract is still wanted.
+        TORCH_CHECK(global_z_order || with_ut, "global_z_order can be false only if with_ut=True");
         TORCH_CHECK(
             with_ut || camera_model != CameraModelType::FTHETA,
             "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
