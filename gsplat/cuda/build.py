@@ -63,7 +63,7 @@ except ImportError:
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 DEBUG = os.getenv("DEBUG", "0") == "1"
-FAST_MATH = os.getenv("FAST_MATH", "1") == "1"
+FAST_MATH = os.getenv("FAST_MATH", "0" if torch.version.hip else "1") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "1" if DEBUG else "0") == "1"
 NVCC_FLAGS = os.getenv("NVCC_FLAGS", "")
 MAX_JOBS = os.getenv("MAX_JOBS")
@@ -98,12 +98,17 @@ def format_jit_cuda_cflags(cuda_cflags):
 def get_build_parameters():
     name = "gsplat_cuda"
     current_dir = os.path.dirname(os.path.abspath(__file__))
+    is_rocm = torch.version.hip is not None
 
     # Include paths -----------------------------------
     extra_include_paths = [
         os.path.join(PATH, "include/"),
         os.path.join(current_dir, "csrc", "third_party", "glm"),
     ]
+    if is_rocm:
+        # PyTorch hipifies CUDA translation units into ``gsplat/hip/csrc`` but
+        # quoted project headers continue to live in ``gsplat/cuda/csrc``.
+        extra_include_paths.append(os.path.join(current_dir, "csrc"))
     # Fix for CUDA 12+ in conda environment
     if CUDA_HOME and os.path.isdir(os.path.join(CUDA_HOME, "targets")):
         for arch in os.listdir(os.path.join(CUDA_HOME, "targets")):
@@ -145,7 +150,8 @@ def get_build_parameters():
         extra_cflags += ["-arch", "arm64"]
         extra_ldflags += ["-arch", "arm64"]
 
-    extra_cuda_cflags += ["--forward-unknown-opts"]
+    if not is_rocm:
+        extra_cuda_cflags += ["--forward-unknown-opts"]
 
     # Debug/Release mode
     # MSVC (cl) does not support -O3/-O0; use -O2/-Od (torch converts - to /)
@@ -155,13 +161,15 @@ def get_build_parameters():
         # so no need to add it here; WITH_SYMBOLS is the single source of truth.
         if sys.platform != "win32":  # MSVC equivalent (/W4 /WX) is untested
             extra_cflags += ["-Wall"]
-            extra_cuda_cflags += [
-                # nvcc intercepts bare -Werror as its own --Werror flag, so
-                # pass it via -Xcompiler instead of --forward-unknown-opts.
-                "-Xcompiler=-Werror",
-                "--Werror",
-                "all-warnings",
-            ]
+            if not is_rocm:
+                extra_cuda_cflags += [
+                    # nvcc intercepts bare -Werror as its own --Werror flag, so
+                    # pass it via -Xcompiler instead of
+                    # --forward-unknown-opts.
+                    "-Xcompiler=-Werror",
+                    "--Werror",
+                    "all-warnings",
+                ]
         else:
             extra_cflags += ["/Zi", "/Od"]
             extra_cuda_cflags += ["-Od"]
@@ -172,14 +180,16 @@ def get_build_parameters():
             extra_cflags += ["/O2", "-DNDEBUG"]
             extra_cuda_cflags += ["-O2", "-DNDEBUG"]
 
-    extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
+    if FAST_MATH:
+        extra_cuda_cflags += ["-ffast-math" if is_rocm else "-use_fast_math"]
 
     # Silencing of warnings
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses.
     # 3189: C++20 makes `module` a contextual keyword. PyTorch's
     #       torch::python::module member is valid code, but nvcc emits
     #       a noisy compatibility diagnostic when parsing it as an identifier.
-    extra_cuda_cflags += ["-diag-suppress", "3189,20012,186"]
+    if not is_rocm:
+        extra_cuda_cflags += ["-diag-suppress", "3189,20012,186"]
     if not os.name == "nt":
         extra_cflags += ["-Wno-attributes"]
         # PyTorch headers trip this under GCC when gsplat's debug build enables -Werror.
@@ -222,12 +232,15 @@ def get_build_parameters():
     extra_ldflags += [] if WITH_SYMBOLS or sys.platform == "win32" else ["-s"]
 
     if WITH_SYMBOLS:
-        extra_cuda_cflags += ["-lineinfo"]
+        extra_cuda_cflags += ["-gline-tables-only" if is_rocm else "-lineinfo"]
 
-    if torch.version.hip:
+    if is_rocm:
         # USE_ROCM was added to later versions of PyTorch.
         # Define here to support older PyTorch versions as well:
         extra_cflags += ["-DUSE_ROCM", "-U__HIP_NO_HALF_CONVERSIONS__"]
+        # Current HIP headers gate CUDA-compatible complex min/max builtins
+        # behind this Clang opt-in.
+        extra_cuda_cflags += ["-D__CLANG_CUDA_COMPLEX_BUILTINS=1"]
     else:
         extra_cuda_cflags += ["--expt-relaxed-constexpr"]
 
