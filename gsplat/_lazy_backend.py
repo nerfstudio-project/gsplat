@@ -57,7 +57,7 @@ _UNSET = object()
 
 
 def cuda_toolkit_available() -> bool:
-    """Return True if a usable CUDA toolkit (nvcc) is discoverable.
+    """Return True if a usable CUDA or ROCm toolkit is discoverable.
 
     Shared by the native-extension loaders so the probe lives in one place.
     ``torch.utils.cpp_extension`` is imported lazily so importing this module
@@ -65,7 +65,23 @@ def cuda_toolkit_available() -> bool:
     """
     from subprocess import DEVNULL, call
 
+    import torch
     import torch.utils.cpp_extension as jit
+
+    if torch.version.hip:
+        # PyTorch's HIP extension machinery keys off ROCM_HOME and invokes
+        # hipcc after hipifying CUDA sources.  CUDA_HOME/nvcc are intentionally
+        # absent in a normal ROCm installation, so a CUDA-only probe leaves the
+        # backend disabled even though jit.load() can build it.
+        rocm_home = getattr(jit, "ROCM_HOME", None)
+        if rocm_home:
+            hipcc_path = os.path.join(rocm_home, "bin", "hipcc")
+            if os.path.isfile(hipcc_path):
+                return True
+        try:
+            return call(["hipcc", "--version"], stdout=DEVNULL, stderr=DEVNULL) == 0
+        except OSError:
+            return False
 
     cuda_home = jit._find_cuda_home()  # tries various heuristics
     if not cuda_home:
