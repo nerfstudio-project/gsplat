@@ -1023,11 +1023,9 @@
             <span class="c1"># features is already [..., C, N, D]</span>
             <span class="k">pass</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="n">camtoworlds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">inverse</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span>  <span class="c1"># [..., C, 4, 4]</span>
-        <span class="n">dirs</span> <span class="o">=</span> <span class="n">means</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span> <span class="o">-</span> <span class="n">camtoworlds</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>  <span class="c1"># [..., C, N, 3]</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="p">(</span><span class="n">radii</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># [..., C, N]</span>
         <span class="n">features</span> <span class="o">=</span> <span class="n">spherical_harmonics</span><span class="p">(</span>
-            <span class="n">sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">features</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="n">masks</span>
+            <span class="n">sh_degree</span><span class="p">,</span> <span class="n">means</span><span class="p">,</span> <span class="n">viewmats</span><span class="p">,</span> <span class="n">features</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="n">masks</span>
         <span class="p">)</span>  <span class="c1"># [..., C, N, D]</span>
         <span class="k">if</span> <span class="n">clamp</span><span class="p">:</span>
             <span class="c1"># make it apple-to-apple with Inria&#39;s CUDA Backend.</span>
@@ -1485,7 +1483,7 @@
 <span class="c1">#             # viewdirs = F.normalize(viewdirs, dim=-1).detach()</span>
 <span class="c1">#             if sh_degree is None:</span>
 <span class="c1">#                 sh_degree = int(math.sqrt(colors.shape[1]) - 1)</span>
-<span class="c1">#             colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]</span>
+<span class="c1">#             colors = spherical_harmonics(sh_degree, means, viewmats, colors)</span>
 
 <span class="c1">#         background = (</span>
 <span class="c1">#             backgrounds[cid]</span>

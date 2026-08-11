@@ -407,6 +407,8 @@
     <span class="k">if</span> <span class="n">_AUTOGRAD_REGISTRATIONS_DONE</span><span class="p">:</span>
         <span class="k">return</span>
     <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterSphericalHarmonics</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterSphericalHarmonicsL0</span><span class="p">)</span>
+    <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterSphericalHarmonicsL1Plus</span><span class="p">)</span>
     <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterQuatScaleToCovarPreci</span><span class="p">)</span>
     <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterProjectionEWASimple</span><span class="p">)</span>
     <span class="n">_register_autograd</span><span class="p">(</span><span class="n">RegisterProjectionEWA3DGSFused</span><span class="p">)</span>
@@ -748,31 +750,130 @@
 <span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-fwd&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics</span><span class="p">(</span>
     <span class="n">degrees_to_use</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">dirs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
+    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
     <span class="n">coeffs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, K, D]</span>
-    <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., N]</span>
+    <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, N] or [nnz]</span>
+    <span class="n">batch_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">camera_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">gaussian_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Computes spherical harmonics.</span>
 
 <span class="sd">    The output channel count ``D`` is taken from the last dim of ``coeffs`` and</span>
 <span class="sd">    can be any positive integer (e.g. 3 for RGB, 1 for scalar features).</span>
 
-<span class="sd">    In packed mode, callers pre-gather coeffs by ``gaussian_ids`` so ``N`` is</span>
-<span class="sd">    ``nnz`` and ``dirs`` has no leading dims.</span>
+<span class="sd">    In packed mode, callers pre-gather coefficients by ``gaussian_ids`` so the</span>
+<span class="sd">    first coefficient dimension is ``nnz``.</span>
+
+<span class="sd">    The camera position is recovered from each view matrix as ``-R^T t``. This</span>
+<span class="sd">    assumes that the upper-left 3x3 rotation block ``R`` is orthonormal. Results</span>
+<span class="sd">    are approximate when a view matrix contains scale or shear, or when a raw</span>
+<span class="sd">    matrix optimization does not preserve orthonormality.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        degrees_to_use: SH degree to evaluate.</span>
-<span class="sd">        dirs: View directions. ``[..., N, 3]``; any leading shape, rank ≥ 2.</span>
-<span class="sd">        coeffs: SH coefficients. ``[N, K, D]``, with ``N`` matching ``dirs.shape[-2]``.</span>
-<span class="sd">        masks: Optional boolean masks. ``[..., N]`` matching ``dirs.shape[:-1]``.</span>
+<span class="sd">        means: World-space Gaussian means. ``[..., N, 3]``.</span>
+<span class="sd">        viewmats: Rigid world-to-camera matrices with orthonormal rotation</span>
+<span class="sd">            blocks. ``[..., C, 4, 4]``.</span>
+<span class="sd">        coeffs: SH coefficients. ``[N, K, D]`` in dense mode or</span>
+<span class="sd">            ``[nnz, K, D]`` in packed mode.</span>
+<span class="sd">        masks: Optional boolean masks. ``[..., C, N]`` or ``[nnz]``.</span>
+<span class="sd">        batch_ids: Batch indices in packed mode.</span>
+<span class="sd">        camera_ids: Camera indices in packed mode.</span>
+<span class="sd">        gaussian_ids: Gaussian indices in packed mode.</span>
+<span class="sd">        viewmats_rs: Optional rolling-shutter endpoint matrices. When provided,</span>
+<span class="sd">            SH uses the camera position averaged across both endpoints.</span>
 
 <span class="sd">    Returns:</span>
-<span class="sd">        Spherical harmonics. ``[..., N, D]``.</span>
+<span class="sd">        Spherical harmonics. ``[..., C, N, D]`` or ``[nnz, D]``.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;spherical_harmonics&quot;</span><span class="p">)(</span>
-        <span class="n">degrees_to_use</span><span class="p">,</span> <span class="n">dirs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span> <span class="n">masks</span>
+        <span class="n">degrees_to_use</span><span class="p">,</span>
+        <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">masks</span><span class="p">,</span>
+        <span class="kc">None</span> <span class="k">if</span> <span class="n">batch_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">batch_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="kc">None</span> <span class="k">if</span> <span class="n">camera_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">camera_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="kc">None</span> <span class="k">if</span> <span class="n">gaussian_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">gaussian_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="kc">None</span> <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="spherical_harmonics_l0">
+<a class="viewcode-back" href="../../../apis/utils.html#gsplat.spherical_harmonics_l0">[docs]</a>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-l0-fwd&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics_l0</span><span class="p">(</span>
+    <span class="n">sh0</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 1, D]</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Computes the l=0 component of spherical harmonics.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        sh0: SH coefficients for l=0. ``[N, 1, D]``.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        l=0 features. ``[N, D]``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;spherical_harmonics_l0&quot;</span><span class="p">)(</span><span class="n">sh0</span><span class="o">.</span><span class="n">contiguous</span><span class="p">())</span></div>
+
+
+
+<div class="viewcode-block" id="spherical_harmonics_l1_plus">
+<a class="viewcode-back" href="../../../apis/utils.html#gsplat.spherical_harmonics_l1_plus">[docs]</a>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;sh-l1-plus-fwd&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics_l1_plus</span><span class="p">(</span>
+    <span class="n">degrees_to_use</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
+    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
+    <span class="n">shN</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, K - 1, D]</span>
+    <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, N] or [nnz]</span>
+    <span class="n">batch_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">camera_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">gaussian_ids</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Computes the l&gt;=1 components of spherical harmonics.</span>
+
+<span class="sd">    Unlike :func:`spherical_harmonics`, ``shN`` starts at the degree-one SH</span>
+<span class="sd">    basis; the degree-zero coefficient is intentionally omitted.</span>
+
+<span class="sd">    As in :func:`spherical_harmonics`, camera positions are computed as</span>
+<span class="sd">    ``-R^T t`` and therefore assume orthonormal rotation blocks. Results are</span>
+<span class="sd">    approximate for non-rigid view matrices.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        degrees_to_use: SH degree to evaluate.</span>
+<span class="sd">        means: World-space Gaussian means. ``[..., N, 3]``.</span>
+<span class="sd">        viewmats: Rigid world-to-camera matrices with orthonormal rotation</span>
+<span class="sd">            blocks. ``[..., C, 4, 4]``.</span>
+<span class="sd">        shN: SH coefficients for l&gt;=1. ``[N, K - 1, D]``.</span>
+<span class="sd">        masks: Optional boolean masks. ``[..., C, N]`` or ``[nnz]``.</span>
+<span class="sd">        batch_ids: Batch indices in packed mode.</span>
+<span class="sd">        camera_ids: Camera indices in packed mode.</span>
+<span class="sd">        gaussian_ids: Gaussian indices in packed mode.</span>
+<span class="sd">        viewmats_rs: Optional rolling-shutter endpoint matrices. When provided,</span>
+<span class="sd">            SH uses the camera position averaged across both endpoints.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        l&gt;=1 features. ``[..., C, N, D]`` or ``[nnz, D]``.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;spherical_harmonics_l1_plus&quot;</span><span class="p">)(</span>
+        <span class="n">degrees_to_use</span><span class="p">,</span>
+        <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">shN</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">masks</span><span class="p">,</span>
+        <span class="kc">None</span> <span class="k">if</span> <span class="n">batch_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">batch_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="kc">None</span> <span class="k">if</span> <span class="n">camera_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">camera_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="kc">None</span> <span class="k">if</span> <span class="n">gaussian_ids</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">gaussian_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="kc">None</span> <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
     <span class="p">)</span></div>
 
 
@@ -784,30 +885,95 @@
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">degrees_to_use</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="p">(</span>
+            <span class="n">degrees_to_use</span><span class="p">,</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">coeffs</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">viewmats_rs</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">inputs</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">degrees_to_use</span> <span class="o">=</span> <span class="n">degrees_to_use</span>
         <span class="c1"># save_for_backward round-trips None as None, so the optional masks save directly.</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span><span class="p">)</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">coeffs</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">viewmats_rs</span><span class="p">,</span>
+        <span class="p">)</span>
 
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
-        <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
-        <span class="c1"># dirs is forward input index 1; its gradient is wanted only when requested.</span>
-        <span class="n">compute_v_dirs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
-        <span class="n">v_coeffs</span><span class="p">,</span> <span class="n">v_dirs</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span>
-            <span class="n">ctx</span><span class="o">.</span><span class="n">degrees_to_use</span><span class="p">,</span>
-            <span class="n">dirs</span><span class="p">,</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
             <span class="n">coeffs</span><span class="p">,</span>
             <span class="n">masks</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">viewmats_rs</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="n">v_coeffs</span><span class="p">,</span> <span class="n">v_means</span><span class="p">,</span> <span class="n">v_viewmats</span><span class="p">,</span> <span class="n">v_viewmats_rs</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span>
+        <span class="p">)(</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">degrees_to_use</span><span class="p">,</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">coeffs</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">batch_ids</span><span class="p">,</span>
+            <span class="n">camera_ids</span><span class="p">,</span>
+            <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">viewmats_rs</span><span class="p">,</span>
             <span class="n">v_colors</span><span class="p">,</span>
-            <span class="n">compute_v_dirs</span><span class="p">,</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>
+            <span class="c1"># PyTorch omits trailing schema-default arguments from</span>
+            <span class="c1"># needs_input_grad, even though setup_context receives them after</span>
+            <span class="c1"># fill_defaults(). viewmats_rs is therefore absent when it is None.</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">8</span> <span class="ow">and</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">8</span><span class="p">],</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="p">(</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># degrees_to_use</span>
-            <span class="n">v_dirs</span><span class="p">,</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_viewmats</span><span class="p">,</span>
             <span class="n">v_coeffs</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>  <span class="c1"># masks</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># batch_ids</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># camera_ids</span>
+            <span class="kc">None</span><span class="p">,</span>  <span class="c1"># gaussian_ids</span>
+            <span class="n">v_viewmats_rs</span><span class="p">,</span>
         <span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterSphericalHarmonicsL0</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the l=0 SH op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;spherical_harmonics_l0&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">setup_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="p">(</span><span class="n">sh0</span><span class="p">,)</span> <span class="o">=</span> <span class="n">inputs</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">sh0</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
+        <span class="p">(</span><span class="n">sh0</span><span class="p">,)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">cls</span><span class="o">.</span><span class="n">base</span><span class="si">}</span><span class="s2">_bwd&quot;</span><span class="p">)(</span><span class="n">sh0</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">),)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RegisterSphericalHarmonicsL1Plus</span><span class="p">(</span><span class="n">RegisterSphericalHarmonics</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Python autograd hooks for the l&gt;=1 SH op.&quot;&quot;&quot;</span>
+
+    <span class="n">base</span> <span class="o">=</span> <span class="s2">&quot;spherical_harmonics_l1_plus&quot;</span>
 
 
 <div class="viewcode-block" id="quat_scale_to_covar_preci">
