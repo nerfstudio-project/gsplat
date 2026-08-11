@@ -1102,6 +1102,7 @@ class Runner:
                     shN=shN,
                     format="ply",
                     save_to=f"{self.ply_dir}/point_cloud_{step}.ply",
+                    antialiased=self.cfg.antialiased,
                 )
 
             # Turn Gradients into Sparse Tensor before running optimizer

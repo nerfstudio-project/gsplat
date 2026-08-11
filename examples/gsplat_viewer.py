@@ -16,7 +16,7 @@
 
 import viser
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 from typing import Tuple, Callable
 from nerfview import Viewer, RenderTabState
 
@@ -45,6 +45,10 @@ class GsplatRenderTabState(RenderTabState):
         "turbo", "viridis", "magma", "inferno", "cividis", "gray"
     ] = "turbo"
     rasterize_mode: RasterizeMode = "classic"
+    # When True, the Anti-Aliasing dropdown is frozen (disabled) in the UI.
+    # Set e.g. when the rasterize mode was read from a loaded PLY's
+    # ``SplatRenderMode`` comment and must not be changed by the user.
+    rasterize_mode_locked: bool = False
     camera_model: CameraModel = "pinhole"
 
 
@@ -60,15 +64,26 @@ class GsplatViewer(Viewer):
         output_dir: Path,
         mode: Literal["rendering", "training"] = "rendering",
         render_modes: tuple = ("rgb", "depth(accumulated)", "depth(expected)", "alpha"),
+        rasterize_mode: Optional[RasterizeMode] = None,
+        lock_rasterize_mode: bool = False,
     ):
         if len(render_modes) == 0:
             raise ValueError("render_modes must contain at least one mode")
         self._render_modes = render_modes
+        # Optional initial rasterize mode (e.g. read from a loaded PLY's
+        # ``SplatRenderMode`` comment) and whether the UI control for it should
+        # be frozen. Stored before ``super().__init__`` because the base class
+        # constructor calls ``_init_rendering_tab`` (which creates the state).
+        self._initial_rasterize_mode = rasterize_mode
+        self._lock_rasterize_mode = lock_rasterize_mode
         super().__init__(server, render_fn, output_dir, mode)
         server.gui.set_panel_label("gsplat viewer")
 
     def _init_rendering_tab(self):
         self.render_tab_state = GsplatRenderTabState()
+        if self._initial_rasterize_mode is not None:
+            self.render_tab_state.rasterize_mode = self._initial_rasterize_mode
+        self.render_tab_state.rasterize_mode_locked = self._lock_rasterize_mode
         self._rendering_tab_handles = {}
         self._rendering_folder = self.server.gui.add_folder("Rendering")
 
@@ -226,11 +241,19 @@ class GsplatViewer(Viewer):
                     "Anti-Aliasing",
                     ("classic", "antialiased"),
                     initial_value=self.render_tab_state.rasterize_mode,
-                    hint="Whether to use classic or antialiased rasterization.",
+                    disabled=self.render_tab_state.rasterize_mode_locked,
+                    hint=(
+                        "Whether to use classic or antialiased rasterization. "
+                        "Frozen when set from a loaded PLY's 'SplatRenderMode' "
+                        "comment."
+                    ),
                 )
 
                 @rasterize_mode_dropdown.on_update
                 def _(_) -> None:
+                    # Ignore updates while frozen (e.g. mode came from the PLY).
+                    if self.render_tab_state.rasterize_mode_locked:
+                        return
                     self.render_tab_state.rasterize_mode = rasterize_mode_dropdown.value
                     self.rerender(_)
 
