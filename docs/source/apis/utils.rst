@@ -11,6 +11,10 @@ Below are the basic functions that supports the rasterization.
 
 .. autofunction:: spherical_harmonics
 
+.. autofunction:: spherical_harmonics_l0
+
+.. autofunction:: spherical_harmonics_l1_plus
+
 .. autofunction:: quat_scale_to_covar_preci
 
 .. autofunction:: proj
