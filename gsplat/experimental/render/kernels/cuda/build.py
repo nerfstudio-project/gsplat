@@ -88,6 +88,14 @@ def get_build_parameters():
                     p := os.path.join(CUDA_HOME, "targets", arch, "include", "cccl")
                 ):
                     extra_include_paths.append(p)
+    elif CUDA_HOME:
+        # Windows CUDA installs don't use the targets/<arch>/include layout;
+        # headers live directly under CUDA_HOME/include. Since CCCL 3.0
+        # (bundled with CUDA 13.0 and later), CCCL headers (cuda/std/*,
+        # thrust, cub) live in a separate cccl subdirectory that isn't added
+        # to the include path automatically.
+        if os.path.isdir(p := os.path.join(CUDA_HOME, "include", "cccl")):
+            extra_include_paths.append(p)
 
     # Source files ------------------------------------
     sources = [os.path.join(current_dir, "ext.cpp")]
