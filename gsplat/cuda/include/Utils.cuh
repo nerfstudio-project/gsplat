@@ -58,6 +58,15 @@ constexpr __host__ __device__ bool is_near_zero(T x)
     return abs(x) < cuda::std::numeric_limits<T>::epsilon();
 }
 
+// Ceiling division. Equivalent to cuda::ceil_div from <cuda/cmath>, which
+// isn't available on CUDA toolkits older than 12.8; implemented directly
+// here so it also works on CUDA 12.6.
+template<typename T>
+constexpr __host__ __device__ T ceil_div(T n, T d)
+{
+    return (n + d - 1) / d;
+}
+
 template<bool kUseProvided, typename ConstructedT, typename ProvidedT, typename... Args>
 inline __device__ auto select_provided_or_construct(const ProvidedT &provided, Args &&...args)
     -> std::conditional_t<kUseProvided, const ProvidedT &, ConstructedT>

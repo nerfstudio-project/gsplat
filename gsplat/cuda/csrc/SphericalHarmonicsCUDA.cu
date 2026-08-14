@@ -26,7 +26,6 @@
 #include <c10/cuda/CUDAStream.h>
 #include <array>
 #include <cooperative_groups.h>
-#include <cuda/cmath>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -615,7 +614,7 @@ void launch_spherical_harmonics_fwd_kernel(
     {
         int64_t n_elements             = E;
         constexpr unsigned int threads = 256;
-        unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+        unsigned int blocks            = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
 
         auto *masks_ptr = masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr;
 
@@ -668,7 +667,7 @@ void launch_spherical_harmonics_fwd_kernel(
     {
         int64_t n_elements             = static_cast<int64_t>(E) * D;
         constexpr unsigned int threads = 256;
-        unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+        unsigned int blocks            = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
 
         // Dispatch on the coeff dtype (fp16/fp32); colors use opmath_t (float).
         AT_DISPATCH_V2(
@@ -740,7 +739,7 @@ void launch_spherical_harmonics_fwd_kernels(
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
         int64_t n_elements                        = static_cast<int64_t>(B) * C * gaussian_count * D;
-        unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+        unsigned int blocks = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_V2(
@@ -924,7 +923,7 @@ void launch_spherical_harmonics_bwd_kernel(
     const int64_t coefficient_rows = batch_ids.has_value() ? E : N;
     int64_t n_elements             = coefficient_rows * D;
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+    unsigned int blocks            = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -1660,7 +1659,7 @@ void launch_spherical_harmonics_bwd_kernels(
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
         int64_t n_elements                        = gaussian_count * static_cast<int64_t>(D);
-        unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+        unsigned int blocks = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_V2(

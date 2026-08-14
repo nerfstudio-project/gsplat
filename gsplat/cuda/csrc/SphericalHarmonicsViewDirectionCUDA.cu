@@ -26,7 +26,6 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cub/block/block_reduce.cuh>
-#include <cuda/cmath>
 
 #include "SphericalHarmonics.h"
 #include "SphericalHarmonics.cuh"
@@ -281,7 +280,7 @@ namespace
     )
     {
         const int64_t num_viewmats   = viewmats.numel() / 16;
-        const int64_t tiles_per_view = ::cuda::ceil_div<int64_t>(gaussian_count, kShReductionTileSize);
+        const int64_t tiles_per_view = ceil_div<int64_t>(gaussian_count, kShReductionTileSize);
 
         // Below four tiles, the extra allocation and kernel launch cost more
         // than the parallelism they expose. Larger views use unique CTA
@@ -363,7 +362,7 @@ at::Tensor precompute_spherical_harmonics_camera_offsets(
         return camera_offsets;
     }
 
-    const unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(num_viewmats, kShReductionThreads));
+    const unsigned int blocks = static_cast<unsigned int>(ceil_div<int64_t>(num_viewmats, kShReductionThreads));
     precompute_camera_offsets<<<blocks, kShReductionThreads, 0, stream>>>(
         num_viewmats,
         viewmats.const_data_ptr<float>(),
@@ -417,7 +416,7 @@ void launch_spherical_harmonics_view_direction_vjp_reduction(
         {
             at::Tensor reduced_v_viewdirs = at::zeros({num_viewmats, 3}, v_viewdirs.options());
             const unsigned int reduction_blocks
-                = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(E, kShReductionThreads));
+                = static_cast<unsigned int>(ceil_div<int64_t>(E, kShReductionThreads));
             reduce_packed_view_direction_gradients<<<reduction_blocks, kShReductionThreads, 0, stream>>>(
                 E,
                 C,
@@ -429,7 +428,7 @@ void launch_spherical_harmonics_view_direction_vjp_reduction(
             C10_CUDA_KERNEL_LAUNCH_CHECK();
 
             const unsigned int viewmat_blocks
-                = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(num_viewmats, kShReductionThreads));
+                = static_cast<unsigned int>(ceil_div<int64_t>(num_viewmats, kShReductionThreads));
             view_direction_gradients_to_viewmats<<<viewmat_blocks, kShReductionThreads, 0, stream>>>(
                 num_viewmats,
                 viewmat_scale,

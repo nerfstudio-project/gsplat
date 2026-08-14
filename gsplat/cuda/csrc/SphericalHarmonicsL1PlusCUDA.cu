@@ -26,7 +26,6 @@
 #include <c10/cuda/CUDAStream.h>
 #include <array>
 #include <cooperative_groups.h>
-#include <cuda/cmath>
 #include <vector>
 
 #include "Common.h"
@@ -517,7 +516,7 @@ void launch_spherical_harmonics_l1_plus_fwd_kernel(
     // parallelize over B * N * D
     int64_t n_elements             = static_cast<int64_t>(E) * D;
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+    unsigned int blocks            = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -602,7 +601,7 @@ void launch_spherical_harmonics_l1_plus_fwd_kernels(
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
         int64_t n_elements                        = static_cast<int64_t>(B) * C * gaussian_count * D;
-        unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+        unsigned int blocks = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_V2(
@@ -806,7 +805,7 @@ void launch_spherical_harmonics_l1_plus_bwd_kernel(
     const int64_t coefficient_rows = batch_ids.has_value() ? E : N;
     int64_t n_elements             = coefficient_rows * D;
     constexpr unsigned int threads = 256;
-    unsigned int blocks            = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+    unsigned int blocks            = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
 
     if(n_elements == 0)
     {
@@ -1046,7 +1045,7 @@ void launch_spherical_harmonics_l1_plus_bwd_kernels(
         int64_t gaussian_offset, gaussian_count;
         std::tie(gaussian_offset, gaussian_count) = chunk(N, device_id);
         int64_t n_elements                        = gaussian_count * static_cast<int64_t>(D);
-        unsigned int blocks = static_cast<unsigned int>(::cuda::ceil_div<int64_t>(n_elements, threads));
+        unsigned int blocks = static_cast<unsigned int>(ceil_div<int64_t>(n_elements, threads));
         if(blocks > 0)
         {
             AT_DISPATCH_V2(
