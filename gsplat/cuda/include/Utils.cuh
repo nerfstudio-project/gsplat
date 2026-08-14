@@ -67,6 +67,15 @@ constexpr __host__ __device__ T ceil_div(T n, T d)
     return (n + d - 1) / d;
 }
 
+// Equivalent to std::isfinite / cuda::std::isfinite, implemented directly
+// to avoid both: (1) std::isfinite being an unqualified host function that
+// nvcc's MSVC frontend refuses to call from device code, and (2)
+// <cuda/std/cmath>, whose fp16/bf16 overloads fail to compile on CUDA 12.6.
+constexpr __host__ __device__ bool is_finite(float x)
+{
+    return x == x && x != HUGE_VALF && x != -HUGE_VALF;
+}
+
 template<bool kUseProvided, typename ConstructedT, typename ProvidedT, typename... Args>
 inline __device__ auto select_provided_or_construct(const ProvidedT &provided, Args &&...args)
     -> std::conditional_t<kUseProvided, const ProvidedT &, ConstructedT>

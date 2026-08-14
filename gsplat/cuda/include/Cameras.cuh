@@ -25,7 +25,6 @@
 #include <cmath>
 #include <limits>
 #include <type_traits>
-#include <cuda/std/cmath>
 #include <cuda_runtime.h>
 
 // Silence warnings / errors of the form
@@ -780,7 +779,7 @@ struct OrthographicCameraModel
         }
 
         const auto point = glm::fvec2{ray.x, ray.y} / ray.z;
-        if(!cuda::std::isfinite(point.x) || !cuda::std::isfinite(point.y))
+        if(!gsplat::is_finite(point.x) || !gsplat::is_finite(point.y))
         {
             return {
                 glm::fvec2{0.f, 0.f},
