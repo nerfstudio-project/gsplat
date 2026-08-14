@@ -26,6 +26,7 @@
 #include <c10/cuda/CUDAStream.h>
 #include <array>
 #include <cooperative_groups.h>
+#include <cuda/cmath>
 #include <vector>
 
 #include "Common.h"

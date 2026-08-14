@@ -18,6 +18,8 @@
 
 #include "Config.h"
 
+#include <cuda/cmath>
+
 #if GSPLAT_BUILD_3DGS
 
 #    include <ATen/Dispatch.h>

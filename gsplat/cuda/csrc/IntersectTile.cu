@@ -21,6 +21,7 @@
 #include <c10/cuda/CUDAStream.h>
 #include <cassert>
 #include <cooperative_groups.h>
+#include <cuda/cmath>
 #include <cuda/std/functional>
 #include <tuple>
 #include <vector>

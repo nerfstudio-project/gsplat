@@ -779,7 +779,7 @@ struct OrthographicCameraModel
         }
 
         const auto point = glm::fvec2{ray.x, ray.y} / ray.z;
-        if(!std::isfinite(point.x) || !std::isfinite(point.y))
+        if(!isfinite(point.x) || !isfinite(point.y))
         {
             return {
                 glm::fvec2{0.f, 0.f},
