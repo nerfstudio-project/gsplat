@@ -13,10 +13,20 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 ## News
 
-### Unreleased
+### v1.6.0
 
 Changes on `main` since the [v1.5.3](https://github.com/nerfstudio-project/gsplat/releases/tag/v1.5.3) tag (not yet on PyPI).
 
+- [Aug 2026] **Spherical-harmonics updates** -- split diffuse and view-dependent operators, fused view-direction computation, and optimized backward kernels.
+- [Jul 2026] **Sparse 3DGS rasterization** -- active-tile rendering with forward/backward support and sparse Gaussian ID, count, and top-contributor queries.
+- [Jul 2026] **Multi-GPU dense 3DGS** -- distributed support for the dense rendering path.
+- [Jul 2026] **PPISP across densification strategies** -- post-processing now works with both the default and MCMC strategies.
+- [Jul 2026] **Additional performance and code improvements**:
+  - **Faster 3DGS and 3DGUT kernels** -- optimized dense rasterization, spherical-harmonics feature assembly, and projection across sensor models.
+  - **Orthographic-camera support** for 3DGUT.
+  - **Fused SE(3) operations** for pose composition and trajectory interpolation.
+  - **More configurable MCMC operations** for perturbation and relocation.
+  - **PyTorch 2.7+ is now required**, with improved CUDA 12.8 and 13.2 build compatibility.
 - [Jun 2026] **G-SHARP** -- dynamic surgical-scene reconstruction for Gaussian splatting.
 - [Jun 2026] **New camera & sensor support** in the sensors library: pinhole, FTheta, fisheye, and LiDAR models.
 - [Jun 2026] **Faster rasterization** -- a series of performance improvements across the 3DGS and 3DGUT rasterization paths. Noticing roughly 30% improvement on the 3DGUT MCMC path on an NVIDIA A100.
