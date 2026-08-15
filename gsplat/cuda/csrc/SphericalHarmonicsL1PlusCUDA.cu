@@ -927,7 +927,7 @@ void launch_spherical_harmonics_l1_plus_bwd_kernels(
     {
         C10_CUDA_CHECK(cudaSetDevice(device_id));
         auto stream = c10::cuda::getCurrentCUDAStream(device_id);
-        C10_CUDA_CHECK(cudaEventCreate(&events[device_id], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[device_id], cudaEventDisableTiming));
         C10_CUDA_CHECK(cudaEventRecord(events[device_id], stream));
     }
 
