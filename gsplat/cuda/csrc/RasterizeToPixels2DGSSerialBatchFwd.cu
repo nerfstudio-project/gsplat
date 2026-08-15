@@ -45,6 +45,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
     const uint32_t N,                            // number of gaussians
     const uint32_t n_isects,                     // number of ray-primitive intersections.
     const bool packed,                           // whether the input tensors are packed
+    const bool has_depth_channel,                // #863: last color channel carries depth
     const vec2 *__restrict__ means2d,            // Projected Gaussian means. [..., N, 2] if
                                                  // packed is False, [nnz, 2] if packed is True.
     const scalar_t *__restrict__ ray_transforms, // transformation matrices that transforms
@@ -393,10 +394,19 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
             int32_t g          = id_batch[t];
             const float vis    = alpha * T;
             const float *c_ptr = colors + g * CDIM;
+            // #863: ray-splat intersection depth. s is the hit point in the
+            // splat's UV frame; its camera-space depth is the z-row of the
+            // ray transform evaluated at s.
+            const float isect_depth = s.x * w_M.x + s.y * w_M.y + w_M.z;
 #    pragma unroll
             for(uint32_t k = 0; k < CDIM; ++k)
             {
                 pix_out[k] += c_ptr[k] * vis;
+            }
+            if(has_depth_channel)
+            {
+                // render intersection depth instead of the packed center depth
+                pix_out[CDIM - 1] += (isect_depth - c_ptr[CDIM - 1]) * vis;
             }
 
             const float *n_ptr = normals + g * 3;
@@ -408,8 +418,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
 
             if(render_distort != nullptr)
             {
-                // the last channel of colors is depth
-                const float depth         = c_ptr[CDIM - 1];
+                const float depth         = isect_depth;
                 // in nerfacc, loss_bi_0 = weights * t_mids *
                 // exclusive_sum(weights)
                 const float distort_bi_0  = vis * depth * (1.0f - T);
@@ -423,7 +432,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
             // compute median depth
             if(T > 0.5)
             {
-                median_depth = c_ptr[CDIM - 1];
+                median_depth = isect_depth;
                 median_idx   = batch_start + t;
             }
 
@@ -480,6 +489,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool has_depth_channel,  // #863
     // outputs
     at::Tensor renders,        // [..., image_height, image_width, channels]
     at::Tensor alphas,         // [..., image_height, image_width]
@@ -535,6 +545,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
                 N,
                 n_isects,
                 packed,
+                has_depth_channel,
                 reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
                 ray_transforms.const_data_ptr<float>(),
                 colors.const_data_ptr<float>(),

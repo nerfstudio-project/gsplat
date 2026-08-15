@@ -2618,7 +2618,7 @@ class RegisterProjection2DGSFused:
             radii,
             ray_transforms,
             v_means2d,
-            v_depths,
+            v_depths.contiguous() if v_depths is not None else None,
             v_ray_transforms,
             v_normals,
             ctx.needs_input_grad[
@@ -2766,6 +2766,7 @@ def rasterize_to_pixels_2dgs(
     packed: bool = False,
     absgrad: bool = False,
     distloss: bool = False,
+    has_depth_channel: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterize Gaussians to pixels.
 
@@ -2785,6 +2786,7 @@ def rasterize_to_pixels_2dgs(
         masks: Optional tile mask to skip rendering GS to masked tiles. [..., tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+        has_depth_channel: If True, the last channel of `colors` is treated as depth and the kernel renders the ray-splat intersection depth for it instead of the alpha-blended per-Gaussian center depth. Default: False.
 
     Returns:
         A tuple:
@@ -2828,6 +2830,7 @@ def rasterize_to_pixels_2dgs(
         packed,
         absgrad,
         distloss,
+        has_depth_channel,
     )
     if absgrad:
         means2d.absgrad = means2d_absgrad
@@ -2859,6 +2862,7 @@ class RegisterRasterizeToPixels2DGS:
             _packed,
             absgrad,
             _distloss,
+            has_depth_channel,
         ) = inputs
         (
             render_colors,
@@ -2877,6 +2881,7 @@ class RegisterRasterizeToPixels2DGS:
         ctx.height = image_height
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
+        ctx.has_depth_channel = has_depth_channel
         ctx.save_for_backward(
             means2d,
             ray_transforms,
@@ -2953,6 +2958,7 @@ class RegisterRasterizeToPixels2DGS:
             ctx.height,
             ctx.tile_size,
             ctx.absgrad,
+            ctx.has_depth_channel,
             v_render_colors,
             v_render_alphas,
             v_render_normals,
@@ -2981,6 +2987,7 @@ class RegisterRasterizeToPixels2DGS:
             None,  # packed
             None,  # absgrad
             None,  # distloss
+            None,  # has_depth_channel
         )
 
 

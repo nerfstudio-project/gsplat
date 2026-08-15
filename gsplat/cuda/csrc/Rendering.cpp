@@ -1969,7 +1969,7 @@ Rasterization2DGSResult rasterization_2dgs(
         means2d,
         ray_transforms,
         feature,
-        projected_opacities,
+        projected_opacities.contiguous(),
         normals,
         densify,
         raster_backgrounds,
@@ -1981,7 +1981,8 @@ Rasterization2DGSResult rasterization_2dgs(
         isects.flatten_ids.contiguous(),
         packed,
         absgrad,
-        distloss
+        distloss,
+        append_depth // #863: last feature channel is depth
     );
     at::Tensor render_colors   = raster.renders;
     at::Tensor render_alphas   = raster.alphas;
