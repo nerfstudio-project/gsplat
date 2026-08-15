@@ -29,6 +29,9 @@
 #    include <cooperative_groups.h>
 #    include <cstdint>
 #    include <cuda/std/optional>
+#    if defined(_MSC_VER)
+#        include <intrin.h>
+#    endif
 
 #    include "Common.h"
 #    include "ExternalDistortion.cuh"
@@ -186,7 +189,13 @@ namespace
         {
             return 0;
         }
+#if defined(_MSC_VER)
+        unsigned long index;
+        _BitScanReverse64(&index, x - 1);
+        return static_cast<uint32_t>(index) + 1u;
+#else
         return 64u - static_cast<uint32_t>(__builtin_clzll(x - 1));
+#endif
     }
 } // namespace
 

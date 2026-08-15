@@ -143,6 +143,12 @@ def get_build_parameters():
             "-Xcompiler",
             "/Zc:preprocessor",
             "-DWIN32_LEAN_AND_MEAN",
+            # Some kernels (e.g. RasterizeToPixelsFromWorld3DGSParallelBatchFwd.cu)
+            # instantiate thousands of template combinations, producing a huge
+            # generated .fatbin.c; MSVC's default heap budget runs out parsing it
+            # ("fatal error C1060: compiler is out of heap space"). /Zm raises it.
+            "-Xcompiler",
+            "/Zm256",
         ]
     else:
         extra_cflags = ["-std=c++20"]
