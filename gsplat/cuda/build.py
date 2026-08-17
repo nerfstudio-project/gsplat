@@ -148,8 +148,17 @@ def get_build_parameters():
             # generated .fatbin.c; MSVC's default heap budget runs out parsing it
             # ("fatal error C1060: compiler is out of heap space"). /Zm raises it.
             "-Xcompiler",
-            "/Zm256",
+            "/Zm0",
         ]
+        # nvcc compiles the generated tmpxft_*.fatbin.c wrapper via a separate,
+        # internally-spawned cl.exe invocation that does not inherit -Xcompiler
+        # flags passed to the main nvcc command line. cl.exe independently reads
+        # the CL env var on every invocation, so that's the only way to raise
+        # its heap budget (/Zm0 = unlimited) for that phase too.
+        cl_env_flags = "/Zm0"
+        os.environ["CL"] = (
+            f"{os.environ['CL']} {cl_env_flags}" if os.environ.get("CL") else cl_env_flags
+        )
     else:
         extra_cflags = ["-std=c++20"]
 

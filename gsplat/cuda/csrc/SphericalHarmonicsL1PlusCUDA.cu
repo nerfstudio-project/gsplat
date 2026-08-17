@@ -701,73 +701,78 @@ __global__ void spherical_harmonics_l1_plus_bwd_kernel(
         {
             v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(0.f);
         }
-        return;
     }
-
-    std::array<opmath_t, MAX_K> acc{};
-
-    const scalar_t *coeffs_ptr = coeffs + coeff_id * K * D;
-    const uint32_t image_count = packed ? 1 : B * C;
-    for(uint32_t dense_image_id = 0; dense_image_id < image_count; ++dense_image_id)
+    else
     {
-        const int64_t output_id = packed ? coeff_id : static_cast<int64_t>(dense_image_id) * N + coeff_id;
-        if(masks != nullptr && !masks[output_id])
+        // MAX_K > 0 here; std::array<opmath_t, MAX_K> would be a zero-length
+        // array (whose operator[] MSVC's STL doesn't mark device-callable)
+        // if this branch were compiled for DEGREE == 0, so it must live in
+        // the `else` of an `if constexpr` rather than after an early return.
+        std::array<opmath_t, MAX_K> acc{};
+
+        const scalar_t *coeffs_ptr = coeffs + coeff_id * K * D;
+        const uint32_t image_count = packed ? 1 : B * C;
+        for(uint32_t dense_image_id = 0; dense_image_id < image_count; ++dense_image_id)
         {
-            continue;
+            const int64_t output_id = packed ? coeff_id : static_cast<int64_t>(dense_image_id) * N + coeff_id;
+            if(masks != nullptr && !masks[output_id])
+            {
+                continue;
+            }
+
+            const int64_t batch_id     = packed ? batch_ids[output_id] : dense_image_id / C;
+            const int64_t camera_id    = packed ? camera_ids[output_id] : dense_image_id % C;
+            const int64_t gaussian_id  = packed ? gaussian_ids[output_id] : coeff_id;
+            const int64_t image_offset = batch_id * C + camera_id;
+            const float *mean          = means + (batch_id * N + gaussian_id) * 3;
+            const vec3 dir             = view_direction_from_camera_data(mean, viewmats, camera_offsets, image_offset);
+            vec3 v_dir                 = {0.f, 0.f, 0.f};
+            sh_l1_plus_coeffs_to_color_fast_vjp<scalar_t>(
+                DEGREE,
+                D,
+                c,
+                dir,
+                coeffs_ptr,
+                v_colors + output_id * D,
+                acc.data(),
+                v_means == nullptr && v_viewdirs == nullptr ? nullptr : &v_dir
+            );
+
+            // Adjacent threads handle channels of the same coefficient row. Combine
+            // their direction gradients before touching the geometry outputs.
+            if((v_means != nullptr || v_viewdirs != nullptr) && reduce_view_direction_channels(coeff_id, v_dir))
+            {
+                if(v_means != nullptr)
+                {
+                    float *v_mean = v_means + (batch_id * N + gaussian_id) * 3;
+                    gpuAtomicAdd(v_mean, v_dir.x);
+                    gpuAtomicAdd(v_mean + 1, v_dir.y);
+                    gpuAtomicAdd(v_mean + 2, v_dir.z);
+                }
+                if(v_viewdirs != nullptr)
+                {
+                    float *v_dir_out = v_viewdirs + output_id * 3;
+                    gpuAtomicAdd(v_dir_out, v_dir.x);
+                    gpuAtomicAdd(v_dir_out + 1, v_dir.y);
+                    gpuAtomicAdd(v_dir_out + 2, v_dir.z);
+                }
+            }
         }
 
-        const int64_t batch_id     = packed ? batch_ids[output_id] : dense_image_id / C;
-        const int64_t camera_id    = packed ? camera_ids[output_id] : dense_image_id % C;
-        const int64_t gaussian_id  = packed ? gaussian_ids[output_id] : coeff_id;
-        const int64_t image_offset = batch_id * C + camera_id;
-        const float *mean          = means + (batch_id * N + gaussian_id) * 3;
-        const vec3 dir             = view_direction_from_camera_data(mean, viewmats, camera_offsets, image_offset);
-        vec3 v_dir                 = {0.f, 0.f, 0.f};
-        sh_l1_plus_coeffs_to_color_fast_vjp<scalar_t>(
-            DEGREE,
-            D,
-            c,
-            dir,
-            coeffs_ptr,
-            v_colors + output_id * D,
-            acc.data(),
-            v_means == nullptr && v_viewdirs == nullptr ? nullptr : &v_dir
-        );
-
-        // Adjacent threads handle channels of the same coefficient row. Combine
-        // their direction gradients before touching the geometry outputs.
-        if((v_means != nullptr || v_viewdirs != nullptr) && reduce_view_direction_channels(coeff_id, v_dir))
-        {
-            if(v_means != nullptr)
-            {
-                float *v_mean = v_means + (batch_id * N + gaussian_id) * 3;
-                gpuAtomicAdd(v_mean, v_dir.x);
-                gpuAtomicAdd(v_mean + 1, v_dir.y);
-                gpuAtomicAdd(v_mean + 2, v_dir.z);
-            }
-            if(v_viewdirs != nullptr)
-            {
-                float *v_dir_out = v_viewdirs + output_id * 3;
-                gpuAtomicAdd(v_dir_out, v_dir.x);
-                gpuAtomicAdd(v_dir_out + 1, v_dir.y);
-                gpuAtomicAdd(v_dir_out + 2, v_dir.z);
-            }
-        }
-    }
-
-    scalar_t *v_coeffs_ptr = v_coeffs + coeff_id * K * D;
+        scalar_t *v_coeffs_ptr = v_coeffs + coeff_id * K * D;
 #pragma unroll
-    for(int k = 0; k < MAX_K; ++k)
-    {
-        if(static_cast<uint32_t>(k) < K)
+        for(int k = 0; k < MAX_K; ++k)
         {
-            v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(acc[k]);
+            if(static_cast<uint32_t>(k) < K)
+            {
+                v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(acc[k]);
+            }
         }
-    }
-    // Padded bases may allocate K > MAX_K; zero the tail so at::empty outputs are defined.
-    for(uint32_t k = MAX_K; k < K; ++k)
-    {
-        v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(0.f);
+        // Padded bases may allocate K > MAX_K; zero the tail so at::empty outputs are defined.
+        for(uint32_t k = MAX_K; k < K; ++k)
+        {
+            v_coeffs_ptr[k * D + c] = static_cast<scalar_t>(0.f);
+        }
     }
 }
 
