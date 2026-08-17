@@ -24,10 +24,11 @@
 #    include <ATen/Functions.h>
 #    include <ATen/core/Tensor.h>
 #    include <ATen/cuda/Atomic.cuh>
-#    include <ATen/cuda/cub.h>
+#    include <c10/cuda/CUDACachingAllocator.h>
 #    include <c10/cuda/CUDAStream.h>
 #    include <cooperative_groups.h>
 #    include <cstdint>
+#    include <cub/cub.cuh>
 #    include <cuda/std/optional>
 #    if defined(_MSC_VER)
 #        include <intrin.h>
@@ -239,15 +240,24 @@ at::Tensor compute_bid_to_slot(
     // Sort by `(batch_round, tile)` while carrying the original tile-major
     // slot as the value. The sorted values are the launch-index to slot
     // permutation; no extra scatter is needed.
-    at::cuda::cub::radix_sort_pairs<int64_t, int32_t>(
+    //
+    // Called directly against CUB (rather than at::cuda::cub::radix_sort_pairs)
+    // because libtorch only pre-instantiates a subset of
+    // radix_sort_pairs_impl<key_t, sizeof(value_t)> combinations in its
+    // exported symbols, and <int64_t, 4> (this call's key/value types) is
+    // missing from some torch/CUDA builds on Windows, causing an unresolved
+    // external symbol at link time. Instantiating our own copy here, as
+    // IntersectTile.cu / SparseTileLayout.cu already do, sidesteps that gap.
+    CUB_WRAPPER(
+        cub::DeviceRadixSort::SortPairs,
         sort_keys.const_data_ptr<int64_t>(),
         sorted_keys.data_ptr<int64_t>(),
         sort_values.const_data_ptr<int32_t>(),
         bid_to_slot.data_ptr<int32_t>(),
         total_batches,
-        /*descending=*/false,
-        /*begin_bit=*/0,
-        /*end_bit=*/static_cast<int64_t>(total_bits == 0 ? 1u : total_bits)
+        0,
+        static_cast<int>(total_bits == 0 ? 1u : total_bits),
+        at::cuda::getCurrentCUDAStream()
     );
 
     return bid_to_slot;
