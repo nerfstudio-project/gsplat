@@ -63,6 +63,7 @@ __global__ void
         const float far_plane,
         const float radius_clip,
         const bool global_z_order,
+        const bool use_radial_culling,
         // uncented transform
         const UnscentedTransformParameters ut_params,
         // sensor model parameters
@@ -127,7 +128,7 @@ __global__ void
     const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
     const vec3 mean_c       = glm::rotate(shutter_pose.q, mean) + shutter_pose.t;
 
-    const float cull_depth = global_z_order ? mean_c.z : glm::length(mean_c);
+    const float cull_depth = use_radial_culling ? glm::length(mean_c) : mean_c.z;
     if(cull_depth < near_plane || cull_depth > far_plane)
     {
         radii[idx * 2]     = 0;
@@ -399,6 +400,16 @@ void launch_projection_ut_3dgs_fused_kernel(
     // Default unscented-transform parameters when the caller leaves them unset.
     const auto ut = ut_params.has_value() ? ut_params.value() : c10::make_intrusive<UnscentedTransformParameters>();
 
+    // Near/far cull depth. Signed camera-space z unless Euclidean depth sorting
+    // is requested, in which case:
+    //  - LiDAR and FTheta: radial. Their projection accepts rays with z <= 0, so
+    //    a signed-z cull would drop centres they can still image.
+    //  - every other model: still signed z. Its projection rejects z <= 0 rays.
+    // This is per model, not per calibration: a max_angle <= pi/2 FTheta fit
+    // images nothing behind the plane but still takes the radial branch.
+    const bool use_radial_culling
+        = !global_z_order && (camera_model == CameraModelType::LIDAR || camera_model == CameraModelType::FTHETA);
+
     auto launch_kernel = [&]<typename SensorModel>()
     {
         projection_ut_3dgs_fused_kernel<SensorModel, float>
@@ -419,6 +430,7 @@ void launch_projection_ut_3dgs_fused_kernel(
                 far_plane,
                 radius_clip,
                 global_z_order,
+                use_radial_culling,
                 // uncented transform
                 *ut,
                 std::get<typename SensorModel::KernelParameters>(sensor_model_params),
