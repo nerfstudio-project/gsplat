@@ -338,10 +338,13 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
 
     auto launch_kernel = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
-
+        // CDIM is declared inside `launch_variant` rather than the enclosing lambda:
+        // MSVC/nvcc on Windows does not reliably treat a constexpr from an outer
+        // generic lambda as a constant expression in the inner lambda's template
+        // arguments, so the kernel instantiation below fails to compile there.
         auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
         {
+            constexpr uint32_t CDIM  = ChannelsT::value;
             const dim3 threads       = dim3{CTA_SIZE, 1, 1};
             const int64_t shmem_size = CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 
@@ -456,10 +459,13 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernels(
 
     auto launch_kernels = [&]<typename ChannelsT>()
     {
-        constexpr uint32_t CDIM = ChannelsT::value;
-
         auto launch_variant = [&]<uint32_t TILE_SIZE, uint32_t CTA_SIZE>()
         {
+            // CDIM is declared inside `launch_variant` rather than the enclosing
+            // lambda: MSVC rejects an outer generic lambda's constexpr local as a
+            // simple capture (C3495), so the kernel instantiations below fail to
+            // compile on Windows when it lives one scope up.
+            constexpr uint32_t CDIM  = ChannelsT::value;
             const dim3 threads       = dim3{CTA_SIZE, 1, 1};
             const int64_t shmem_size = CTA_SIZE * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 

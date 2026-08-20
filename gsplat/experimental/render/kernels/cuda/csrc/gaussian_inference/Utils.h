@@ -20,6 +20,10 @@
 #include <cuda_fp16.h>
 #include <cstdint>
 
+#ifdef _WIN32
+using uint = unsigned int;
+#endif
+
 // Type-punning helper: reinterpret the bits of v as type T and assign to u.
 template<typename T, typename U, typename V>
 __device__ __forceinline__ void AssignAs(U &u, const V &v)
