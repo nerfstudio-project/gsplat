@@ -1835,7 +1835,8 @@ RasterizeToPixels2DGSFwdResult rasterize_to_pixels_2dgs_fwd(
     const at::Tensor &flatten_ids,  // [n_isects]
     bool packed,
     bool absgrad,
-    bool distloss
+    bool distloss,
+    bool has_depth_channel // #863
 )
 {
     (void)distloss;
@@ -1917,6 +1918,7 @@ RasterizeToPixels2DGSFwdResult rasterize_to_pixels_2dgs_fwd(
         tile_size,
         tile_offsets,
         flatten_ids,
+        has_depth_channel,
         renders,
         alphas,
         render_normals,
@@ -2029,6 +2031,7 @@ RasterizeToPixels2DGSBwdResult rasterize_to_pixels_2dgs_bwd(
     int64_t image_height,
     int64_t tile_size,
     bool absgrad,
+    bool has_depth_channel, // #863
     // gradients of outputs
     const RasterizeToPixels2DGSGrad &grad,
     bool compute_v_backgrounds
@@ -2097,6 +2100,7 @@ RasterizeToPixels2DGSBwdResult rasterize_to_pixels_2dgs_bwd(
         tile_size,
         tile_offsets,
         flatten_ids,
+        has_depth_channel,
         render_colors,
         render_alphas,
         last_ids,
@@ -2165,7 +2169,8 @@ RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
     const at::Tensor &flatten_ids,
     bool packed,
     bool absgrad,
-    bool distloss
+    bool distloss,
+    bool has_depth_channel // #863
 )
 {
     // Invoke the op through the dispatcher so its registered autograd is
@@ -2189,7 +2194,8 @@ RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
         flatten_ids,
         packed,
         absgrad,
-        distloss
+        distloss,
+        has_depth_channel
     );
     return {
         .renders         = fwd.renders,

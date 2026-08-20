@@ -1186,14 +1186,16 @@ TORCH_LIBRARY(gsplat, m)
     m.def(
         "rasterize_to_pixels_2dgs(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor "
         "normals, Tensor densify, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int "
-        "tile_size, Tensor tile_offsets, Tensor flatten_ids, bool packed, bool absgrad, bool distloss) -> (Tensor, "
+        "tile_size, Tensor tile_offsets, Tensor flatten_ids, bool packed, bool absgrad, bool distloss, bool "
+        "has_depth_channel=False) -> (Tensor, "
         "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
     );
     m.def(
         "rasterize_to_pixels_2dgs_bwd(Tensor means2d, Tensor ray_transforms, Tensor colors, Tensor opacities, Tensor "
         "normals, Tensor densify, Tensor? backgrounds, Tensor? masks, Tensor tile_offsets, Tensor flatten_ids, Tensor "
         "render_colors, Tensor render_alphas, Tensor last_ids, Tensor median_ids, int image_width, int image_height, "
-        "int tile_size, bool absgrad, Tensor v_render_colors, Tensor v_render_alphas, Tensor v_render_normals, Tensor "
+        "int tile_size, bool absgrad, bool has_depth_channel, Tensor v_render_colors, Tensor v_render_alphas, Tensor "
+        "v_render_normals, Tensor "
         "v_render_distort, Tensor v_render_median, bool compute_v_backgrounds) -> (Tensor?, Tensor, Tensor, Tensor, "
         "Tensor, Tensor, Tensor, Tensor?)"
     );

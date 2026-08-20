@@ -92,7 +92,8 @@ RasterizeToPixels2DGSResult rasterize_to_pixels_2dgs(
     const at::Tensor &flatten_ids,
     bool packed,
     bool absgrad,
-    bool distloss
+    bool distloss,
+    bool has_depth_channel // #863
 );
 
 /////////////////////////////////////////////////
@@ -422,6 +423,7 @@ void launch_rasterize_to_pixels_2dgs_fwd_kernel(
     // intersections
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool has_depth_channel,  // #863
     // outputs
     at::Tensor renders,        // [..., image_height, image_width, channels]
     at::Tensor alphas,         // [..., image_height, image_width, 1]
@@ -448,6 +450,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // ray_crossions
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool has_depth_channel,  // #863
     // forward outputs
     const at::Tensor render_colors, // [..., image_height, image_width, CDIM]
     const at::Tensor render_alphas, // [..., image_height, image_width, 1]

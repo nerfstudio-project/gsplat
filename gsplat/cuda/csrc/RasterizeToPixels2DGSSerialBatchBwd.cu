@@ -43,6 +43,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     const uint32_t N,        // number of gaussians
     const uint32_t n_isects, // number of ray-primitive intersections.
     const bool packed,       // whether the input tensors are packed
+    const bool has_depth_channel, // #863: last color channel carries depth
     // fwd inputs
     const vec2 *__restrict__ means2d,            // Projected Gaussian means. [..., N, 2] if
                                                  // packed is False, [nnz, 2] if packed is True.
@@ -439,6 +440,10 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
             // opacity gradients
             float v_opacity_local = 0.f;
 
+            // #863: adjoint of the ray-splat intersection depth, fed by the
+            // depth channel, distortion, and median outputs
+            float v_depth = 0.f;
+
             // initialize everything to 0, only set if the lane is valid
             /**
              * ==================================================
@@ -448,12 +453,15 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
             if(valid)
             {
 
+                // #863: intersection depth, recomputed to match forward
+                const float isect_depth = s.x * w_M.x + s.y * w_M.y + w_M.z;
+
                 // gradient contribution from median depth
                 if(batch_end - t == median_idx)
                 {
-                    // v_median is a special gradient input from forward pass
-                    // not yet clear what this is for
-                    v_rgb_local[CDIM - 1] += v_median;
+                    // median output is the intersection depth of this
+                    // primitive -> its adjoint feeds the depth path
+                    v_depth += v_median;
                 }
 
                 /**
@@ -477,6 +485,14 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 {
                     v_rgb_local[k] += fac * v_render_c[k];
                 }
+                if(has_depth_channel)
+                {
+                    // the depth channel rendered isect_depth, not
+                    // colors[CDIM-1]: route its adjoint to the depth path and
+                    // cancel the center-depth term added by the loop above
+                    v_depth               += fac * v_render_c[CDIM - 1];
+                    v_rgb_local[CDIM - 1] -= fac * v_render_c[CDIM - 1];
+                }
 
                 // contribution from this pixel to alpha
                 // we have d(alpha)/d(c_i) = c_i * G_i * T + [grad contribution
@@ -486,6 +502,12 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     v_alpha += (rgbs_batch[t * CDIM + k] * T - buffer[k] * ra) * v_render_c[k];
+                }
+                if(has_depth_channel)
+                {
+                    // correct the depth channel's contribution to v_alpha:
+                    // the rendered value is isect_depth, not colors[CDIM-1]
+                    v_alpha += (isect_depth - rgbs_batch[t * CDIM + CDIM - 1]) * T * v_render_c[CDIM - 1];
                 }
 
 /*
@@ -528,8 +550,8 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 // contribution from distortion
                 if(v_render_distort != nullptr)
                 {
-                    // last channel of colors is depth
-                    float depth = rgbs_batch[t * CDIM + CDIM - 1];
+                    // #863: distortion recurrence uses the intersection depth
+                    float depth = isect_depth;
                     float dl_dw
                         = 2.0f * (2.0f * (depth * accum_w_buffer - accum_d_buffer) + (accum_d - depth * accum_w));
                     // df / d(alpha)
@@ -537,8 +559,8 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                     accum_d_buffer        -= fac * depth;
                     accum_w_buffer        -= fac;
                     distort_buffer        += dl_dw * fac;
-                    // df / d(depth). put it in the last channel of v_rgb
-                    v_rgb_local[CDIM - 1] += 2.0f * fac * (2.0f - 2.0f * T - accum_w + fac) * v_distort;
+                    // df / d(depth) flows to the depth path, not v_rgb
+                    v_depth += 2.0f * fac * (2.0f - 2.0f * T - accum_w + fac) * v_distort;
                 }
 
                 /** ==================================================
@@ -548,38 +570,23 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                  */
                 if(opac * vis <= MAX_ALPHA)
                 {
-                    float v_depth   = 0.f;
                     // d(a_i * G_i) / d(G_i) = a_i
                     const float v_G = opac * v_alpha;
+
+                    // #863: v_s collects the depth adjoint on BOTH footprint
+                    // branches -- depth = s.x*w_M.x + s.y*w_M.y + w_M.z always
+                    // depends on s -- plus the Gaussian-weight adjoint on the
+                    // 3D-footprint branch only.
+                    vec2 v_s = {v_depth * w_M.x, v_depth * w_M.y};
 
                     // case 1: in the forward pass, the proper ray-primitive
                     // intersection is used
                     if(gauss_weight_3d <= gauss_weight_2d)
                     {
-
                         // derivative of G_i w.r.t. ray-primitive intersection
                         // uv coordinates
-                        const vec2 v_s = {v_G * -vis * s.x + v_depth * w_M.x, v_G * -vis * s.y + v_depth * w_M.y};
-
-                        // backward through the projective transform
-                        // @see rasterize_to_pixels_2dgs_fwd.cu to understand
-                        // what is going on here
-                        const vec3 v_z_w_M     = {s.x, s.y, 1.0};
-                        const float v_sx_pz    = v_s.x / ray_cross.z;
-                        const float v_sy_pz    = v_s.y / ray_cross.z;
-                        const vec3 v_ray_cross = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
-                        const vec3 v_h_u       = glm::cross(h_v, v_ray_cross);
-                        const vec3 v_h_v       = glm::cross(v_ray_cross, h_u);
-
-                        // derivative of ray-primitive intersection uv
-                        // coordinates w.r.t. transformation (geometry)
-                        // coefficients
-                        v_u_M_local = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
-                        v_v_M_local = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
-                        v_w_M_local
-                            = {px * v_h_u.x + py * v_h_v.x + v_depth * v_z_w_M.x,
-                               px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_M.y,
-                               px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_M.z};
+                        v_s.x += v_G * -vis * s.x;
+                        v_s.y += v_G * -vis * s.y;
 
                         // case 2: in the forward pass, the 2D gaussian
                         // projected gaussian weight is used
@@ -596,6 +603,31 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                             v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
                         }
                     }
+
+                    if(gauss_weight_3d <= gauss_weight_2d || v_depth != 0.f)
+                    {
+                        // backward through the projective transform
+                        // @see rasterize_to_pixels_2dgs_fwd.cu to understand
+                        // what is going on here
+                        const float v_sx_pz    = v_s.x / ray_cross.z;
+                        const float v_sy_pz    = v_s.y / ray_cross.z;
+                        const vec3 v_ray_cross = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
+                        const vec3 v_h_u       = glm::cross(h_v, v_ray_cross);
+                        const vec3 v_h_v       = glm::cross(v_ray_cross, h_u);
+
+                        // derivative of ray-primitive intersection uv
+                        // coordinates w.r.t. transformation (geometry)
+                        // coefficients. The px/py terms carry the dependence
+                        // of s on w_M (through h_u, h_v); the v_depth terms
+                        // are the direct dependence of depth on w_M holding s
+                        // fixed: (s.x, s.y, 1).
+                        v_u_M_local = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
+                        v_v_M_local = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
+                        v_w_M_local
+                            = {px * v_h_u.x + py * v_h_v.x + v_depth * s.x,
+                               px * v_h_u.y + py * v_h_v.y + v_depth * s.y,
+                               px * v_h_u.z + py * v_h_v.z + v_depth * 1.0f};
+                    }
                     v_opacity_local = vis * v_alpha;
                 }
 
@@ -607,6 +639,12 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 for(uint32_t k = 0; k < CDIM; ++k)
                 {
                     buffer[k] += rgbs_batch[t * CDIM + k] * fac;
+                }
+                if(has_depth_channel)
+                {
+                    // reverse-compositing buffer must track the rendered
+                    // (intersection) depth, not the packed center depth
+                    buffer[CDIM - 1] += (isect_depth - rgbs_batch[t * CDIM + CDIM - 1]) * fac;
                 }
 
 /**
@@ -718,6 +756,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // ray_crossions
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool has_depth_channel,  // #863
     // forward outputs
     const at::Tensor render_colors, // [..., image_height, image_width, channels]
     const at::Tensor render_alphas, // [..., image_height, image_width, 1]
@@ -797,6 +836,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
                 N,
                 n_isects,
                 packed,
+                has_depth_channel,
                 reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
                 ray_transforms.const_data_ptr<float>(),
                 colors.const_data_ptr<float>(),

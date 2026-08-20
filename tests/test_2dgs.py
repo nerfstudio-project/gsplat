@@ -769,3 +769,254 @@ def test_fully_fused_projection_packed_2dgs_empty():
     assert gaussian_ids.numel() == 0
     assert means2d.shape[0] == 0
     assert int(indptr[-1].item()) == 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterize_to_pixels_2dgs_has_depth_channel(test_data):
+    """#863: with has_depth_channel=True, the depth channel is ray-splat
+    intersection depth and its gradient is routed to ray_transforms
+    (not colors[..., -1])."""
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_2dgs,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_2dgs,
+    )
+
+    torch.manual_seed(42)
+    channels = 3
+
+    Ks = test_data["Ks"]
+    viewmats = test_data["viewmats"]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"]
+    scales = test_data["scales"]
+    means = test_data["means"]
+    opacities = test_data["opacities"]
+    C = viewmats.shape[0]
+    N = means.shape[0]
+    rgb = torch.rand(C, N, channels, device=device)
+
+    radii, means2d, depths, ray_transforms, normals = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, width, height
+    )
+    # Last channel is the packed Gaussian-center depth (what the caller stuffs in).
+    colors_with_depth = torch.cat([rgb, depths[..., None]], dim=-1)
+    backgrounds = torch.zeros(C, channels + 1, device=device)
+
+    tile_size = 16
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    _, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    densify = torch.zeros_like(means2d, device=device)
+
+    def _run(has_depth_channel: bool):
+        c = colors_with_depth.detach().clone().requires_grad_(True)
+        rt = ray_transforms.detach().clone().requires_grad_(True)
+        out, alphas, _, _, _ = rasterize_to_pixels_2dgs(
+            means2d,
+            rt,
+            c,
+            opacities,
+            normals,
+            densify,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            has_depth_channel=has_depth_channel,
+        )
+        return out, alphas, c, rt
+
+    out_false, alphas_false, _, _ = _run(False)
+    out_true, alphas_true, c_true, rt_true = _run(True)
+
+    # Alphas and non-depth channels are unaffected by the flag.
+    torch.testing.assert_close(alphas_true, alphas_false, atol=1e-6, rtol=1e-6)
+    torch.testing.assert_close(
+        out_true[..., :channels], out_false[..., :channels], atol=1e-5, rtol=1e-5
+    )
+    # Depth channel must differ: ray-splat intersection != alpha-blended center.
+    depth_delta = (out_true[..., -1] - out_false[..., -1]).abs()
+    assert depth_delta.max().item() > 1e-3, (
+        "has_depth_channel=True should change the depth channel "
+        f"(max|delta| = {depth_delta.max().item():.3e})"
+    )
+
+    # Backward: drive a unit gradient only into the depth channel.
+    v = torch.zeros_like(out_true)
+    v[..., -1] = 1.0
+    out_true.backward(v)
+
+    # The 'undo center-depth grad' path must zero out colors[..., -1].grad.
+    assert c_true.grad is not None
+    max_depth_color_grad = c_true.grad[..., -1].abs().max().item()
+    assert max_depth_color_grad < 1e-5, (
+        f"colors[..., -1].grad should be ~0 when has_depth_channel=True, "
+        f"got max abs {max_depth_color_grad:.3e}"
+    )
+    # RGB channels of colors get no depth-channel gradient either (v has 0 there).
+    assert c_true.grad[..., :channels].abs().max().item() < 1e-5
+    # ray_transforms must absorb the depth gradient instead.
+    assert rt_true.grad is not None
+    assert rt_true.grad.abs().sum().item() > 0.0, (
+        "ray_transforms must receive gradient from the depth channel "
+        "when has_depth_channel=True"
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+def test_rasterize_to_pixels_2dgs_depth_grad_finite_diff():
+    """#863: finite-difference check on the depth-channel backward for the
+    has_depth_channel=True path (opacities gradients)."""
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_2dgs,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_2dgs,
+    )
+
+    torch.manual_seed(0)
+
+    # Small scene to keep finite differences tractable.
+    C, N = 1, 32
+    means = torch.randn(N, 3, device=device)
+    means[:, 2] += 3.0  # push in front of camera
+    quats = torch.nn.functional.normalize(
+        torch.randn(N, 4, device=device), dim=-1
+    )
+    scales = torch.ones(N, 3, device=device)
+    scales[..., :2] *= 0.1
+    opacities = torch.rand(C, N, device=device).clamp(0.1, 0.9)
+    viewmats = torch.eye(4, device=device).expand(C, 4, 4).contiguous()
+    W, H = 32, 32
+    Ks = torch.tensor(
+        [[W, 0.0, W / 2], [0.0, W, H / 2], [0.0, 0.0, 1.0]], device=device
+    ).expand(C, 3, 3).contiguous()
+
+    radii, means2d, depths, ray_transforms, normals = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, W, H
+    )
+    rgb = torch.rand(C, N, 3, device=device)
+    colors = torch.cat([rgb, depths[..., None]], dim=-1)
+
+    tile_size = 16
+    tw = math.ceil(W / float(tile_size))
+    th = math.ceil(H / float(tile_size))
+    _, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tw, th
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tw, th)
+    densify = torch.zeros_like(means2d)
+
+    def _render(op):
+        out, _, _, _, _ = rasterize_to_pixels_2dgs(
+            means2d,
+            ray_transforms,
+            colors,
+            op,
+            normals,
+            densify,
+            W,
+            H,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            has_depth_channel=True,
+        )
+        return out
+
+    # Analytical gradient w.r.t. opacities through the depth channel.
+    op = opacities.detach().clone().requires_grad_(True)
+    loss = _render(op)[..., -1].sum()
+    loss.backward()
+    analytical = op.grad.detach().clone()
+
+    # Finite-difference gradient at a few indices.
+    eps = 1e-3
+    sampled = torch.randperm(N, device=device)[:5]
+    for i in sampled.tolist():
+        op_p = opacities.detach().clone()
+        op_m = opacities.detach().clone()
+        op_p[0, i] += eps
+        op_m[0, i] -= eps
+        fd = (
+            _render(op_p)[..., -1].sum() - _render(op_m)[..., -1].sum()
+        ) / (2 * eps)
+        torch.testing.assert_close(
+            analytical[0, i],
+            fd,
+            atol=1e-2,
+            rtol=5e-2,
+            msg=f"opacities grad mismatch at i={i}",
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
+@pytest.mark.parametrize("render_mode", ["RGB+D", "RGB+ED", "D", "ED"])
+def test_rasterization_2dgs_depth_render_modes(test_data, render_mode):
+    """#863: rasterization_2dgs with depth render modes wires has_depth_channel
+    and produces a finite, non-negative, differentiable depth channel."""
+    from gsplat.rendering import rasterization_2dgs
+
+    torch.manual_seed(0)
+
+    # Keep every splat in front of the camera and make its plane front-facing.
+    # The shared fixture deliberately includes arbitrary positions and rotations,
+    # for which ray-plane intersections are not necessarily positive.
+    means = test_data["means"].detach().clone()
+    means[:, 2] = means[:, 2].abs() + 3.0
+    means.requires_grad_(True)
+    quats = torch.zeros_like(test_data["quats"])
+    quats[:, 0] = 1.0  # Identity quaternion in wxyz convention.
+    scales = test_data["scales"].detach().clone()
+    # rasterization_2dgs expects per-Gaussian opacities and per-camera colors.
+    opacities = test_data["opacities"][0].detach().clone()
+    colors = test_data["colors"].detach().clone()
+    viewmats = test_data["viewmats"]
+    Ks = test_data["Ks"]
+    W, H = test_data["width"], test_data["height"]
+    C = viewmats.shape[0]
+
+    out = rasterization_2dgs(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=W,
+        height=H,
+        render_mode=render_mode,
+    )
+    render_colors = out[0]
+    render_alphas = out[1]
+
+    if render_mode in ("RGB+D", "RGB+ED"):
+        expected_C = 4  # RGB + 1 depth
+    else:
+        expected_C = 1  # depth-only
+    assert render_colors.shape == (C, H, W, expected_C), render_colors.shape
+    assert render_alphas.shape == (C, H, W, 1), render_alphas.shape
+
+    depth = render_colors[..., -1]
+    assert torch.isfinite(depth).all(), "depth must be finite"
+    assert (depth >= 0).all(), f"depth must be >= 0 (min={depth.min().item():.3e})"
+
+    # Backprop through the depth channel must reach `means` (and not blow up).
+    depth.sum().backward()
+    assert means.grad is not None
+    assert torch.isfinite(means.grad).all()
+    assert means.grad.abs().sum().item() > 0.0, (
+        f"means must receive gradient through depth render_mode={render_mode}"
+    )
