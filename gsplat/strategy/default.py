@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import torch
 from typing_extensions import Literal
@@ -67,6 +67,15 @@ class DefaultStrategy(Strategy):
         refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
         refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
         reset_every (int): Reset opacities every this steps. Default is 3000.
+        reset_max_age (Optional[int]): If set, the periodic opacity reset only
+          affects Gaussians created (via duplicate/split) within the last this
+          many steps; mature Gaussians keep their opacities. This avoids the
+          alpha-cutoff gradient deadlock ("support collapse"): after a full
+          reset, a Gaussian's effective per-pixel alpha can fall below the
+          rasterizer's 1/255 cutoff at every contributing pixel, in which case
+          the skipped fragments supply exactly zero image-driven opacity
+          gradient and the Gaussian cannot recover through the image loss.
+          Default is None (reset all Gaussians; previous behavior).
         refine_every (int): Refine GSs every this steps. Default is 100.
         pause_refine_after_reset (int): Pause refining GSs until this number of steps after
           reset, Default is 0 (no pause at all) and one might want to set this number to the
@@ -106,6 +115,7 @@ class DefaultStrategy(Strategy):
     refine_start_iter: int = 500
     refine_stop_iter: int = 15_000
     reset_every: int = 3000
+    reset_max_age: Optional[int] = None
     refine_every: int = 100
     pause_refine_after_reset: int = 0
     absgrad: bool = False
@@ -127,6 +137,10 @@ class DefaultStrategy(Strategy):
         state = {"grad2d": None, "count": None, "scene_scale": scene_scale}
         if self.refine_scale2d_stop_iter > 0:
             state["radii"] = None
+        if self.reset_max_age is not None:
+            # birth step of each Gaussian; maintained generically by
+            # duplicate/split/remove and re-stamped for newly created Gaussians.
+            state["birth_step"] = None
         return state
 
     def check_sanity(
@@ -216,11 +230,17 @@ class DefaultStrategy(Strategy):
             torch.cuda.empty_cache()
 
         if step % self.reset_every == 0 and step > 0:
+            reset_mask = None
+            if self.reset_max_age is not None and isinstance(
+                state.get("birth_step"), torch.Tensor
+            ):
+                reset_mask = (step - state["birth_step"]) <= self.reset_max_age
             reset_opa(
                 params=params,
                 optimizers=optimizers,
                 state=state,
                 value=self.prune_opa * 2.0,
+                mask=reset_mask,
             )
 
     def _update_state(
@@ -255,6 +275,10 @@ class DefaultStrategy(Strategy):
             state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
         if state["count"] is None:
             state["count"] = torch.zeros(n_gaussian, device=grads.device)
+        if self.reset_max_age is not None and state.get("birth_step") is None:
+            state["birth_step"] = torch.zeros(
+                n_gaussian, dtype=torch.long, device=grads.device
+            )
         if self.refine_scale2d_stop_iter > 0 and state["radii"] is None:
             assert "radii" in info, "radii is required but missing."
             state["radii"] = torch.zeros(n_gaussian, device=grads.device)
@@ -318,6 +342,9 @@ class DefaultStrategy(Strategy):
                 mask=is_dupli,
                 scene=scene,
             )
+            if isinstance(state.get("birth_step"), torch.Tensor):
+                # duplicates are appended at the end
+                state["birth_step"][-n_dupli:] = step
 
         # new GSs added by duplication will not be split
         is_split = torch.cat(
@@ -337,6 +364,9 @@ class DefaultStrategy(Strategy):
                 revised_opacity=self.revised_opacity,
                 scene=scene,
             )
+            if isinstance(state.get("birth_step"), torch.Tensor):
+                # split() reorders to [kept, 2 * n_split new]
+                state["birth_step"][-2 * n_split :] = step
         return n_dupli, n_split
 
     @torch.no_grad()
