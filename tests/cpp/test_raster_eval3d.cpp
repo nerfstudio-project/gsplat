@@ -215,6 +215,7 @@ protected:
             scene.isect_offsets,
             scene.flatten_ids,
             false, // use_hit_distance
+            false, // use_median_hit_distance
             gsplat::RendererConfig::MIXED_BATCH,
             fwd_only,
             return_last_ids,
@@ -427,6 +428,7 @@ TEST_P(FwdBatchStateTest, LastSlotMatchesTerminalAfterEarlyExit)
         scene.isect_offsets,
         scene.flatten_ids,
         false, // use_hit_distance
+        false, // use_median_hit_distance
         gsplat::RendererConfig::MIXED_BATCH,
         false,        // fwd_only
         true,         // return_last_ids
@@ -501,6 +503,7 @@ TEST_P(FwdBatchStateTest, ParallelBatchSaturatedSlotMatchesTerminal)
         scene.isect_offsets,
         scene.flatten_ids,
         false, // use_hit_distance
+        false, // use_median_hit_distance
         gsplat::RendererConfig::PARALLEL_BATCH,
         false,        // fwd_only
         true,         // return_last_ids
@@ -570,6 +573,7 @@ TEST_P(FwdBatchStateTest, ParallelBatchFwdOnlyMatchesExactWithoutMetadata)
             scene.isect_offsets,
             scene.flatten_ids,
             false, // use_hit_distance
+            false, // use_median_hit_distance
             gsplat::RendererConfig::PARALLEL_BATCH,
             fwd_only,
             return_last_ids,
@@ -752,6 +756,7 @@ TEST_P(InvalidRayStateTest, SkipsBatchStateForInvalidRays)
         scene.isect_offsets,
         scene.flatten_ids,
         false, // use_hit_distance
+        false, // use_median_hit_distance
         gsplat::RendererConfig::PARALLEL_BATCH,
         false, // fwd_only
         true,  // return_last_ids
@@ -825,6 +830,7 @@ TEST_P(FwdBatchStateTest, NonContiguousExternalDistortionPolyThrows)
             scene.isect_offsets,
             scene.flatten_ids,
             false, // use_hit_distance
+            false, // use_median_hit_distance
             gsplat::RendererConfig::MIXED_BATCH,
             false,        // fwd_only
             false,        // return_last_ids

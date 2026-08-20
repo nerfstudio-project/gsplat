@@ -96,6 +96,7 @@ __global__ void
         // intersections
         const int32_t *__restrict__ isect_offsets, // [B, C, tile_height, tile_width]
         const int32_t *__restrict__ flatten_ids,   // [n_isects]
+        const bool use_median_hit_distance,
         float *__restrict__ render_colors,         // [B, C, image_height, image_width, CDIM]
         float *__restrict__ render_alphas,         // [B, C, image_height, image_width, 1]
         float *__restrict__ render_normals,        // [B, C, image_height, image_width, 3] optional
@@ -440,6 +441,7 @@ __global__ void
             scales,
             opacities,
             colors,
+            use_median_hit_distance,
             C,
             N,
             // Per-pixel rays and accumulation state.
@@ -564,6 +566,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
     const at::Tensor isect_offsets, // [..., C, grid_h, grid_w]
     const at::Tensor flatten_ids,   // [n_isects]
     const bool use_hit_distance,
+    const bool use_median_hit_distance,
     const bool unsafe_masked_tile_outputs,
     // CSR batch structure (precomputed by caller, shared with bwd)
     const at::Tensor batches_per_tile, // [num_tiles] int32
@@ -726,6 +729,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_impl(
             // intersections
             isect_offsets.const_data_ptr<int32_t>(),
             flatten_ids.const_data_ptr<int32_t>(),
+            use_median_hit_distance,
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
             data_ptr_or_null<float>(normals),
@@ -780,6 +784,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
     const at::Tensor isect_offsets, // [..., C, grid_h, grid_w]
     const at::Tensor flatten_ids,   // [n_isects]
     const bool use_hit_distance,
+    const bool use_median_hit_distance,
     const bool unsafe_masked_tile_outputs,
     // CSR batch structure (precomputed by caller, shared with bwd)
     const at::Tensor batches_per_tile, // [num_tiles] int32
@@ -821,6 +826,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_serial_batch_fwd_kernel(
         isect_offsets,
         flatten_ids,
         use_hit_distance,
+        use_median_hit_distance,
         unsafe_masked_tile_outputs,
         batches_per_tile,
         batch_offsets,

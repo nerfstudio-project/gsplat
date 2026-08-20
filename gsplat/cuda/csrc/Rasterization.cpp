@@ -2402,6 +2402,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     const bool use_hit_distance,
+    const bool use_median_hit_distance,
     const RendererConfig renderer_config,
     const bool fwd_only,
     const bool return_last_ids,
@@ -2449,6 +2450,18 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
         !fwd_only || !sample_counts.has_value(),
         "fwd-only eval3d rasterization cannot return sample_counts; "
         "request exact metadata instead"
+    );
+    TORCH_CHECK(
+        !use_median_hit_distance || use_hit_distance,
+        "use_median_hit_distance requires use_hit_distance=True"
+    );
+    TORCH_CHECK(
+        !use_median_hit_distance || camera_model == CameraModelType::LIDAR,
+        "use_median_hit_distance requires camera_model=LIDAR"
+    );
+    TORCH_CHECK(
+        !use_median_hit_distance || renderer_config == RendererConfig::MIXED_BATCH,
+        "use_median_hit_distance only supports RendererConfig::MIXED_BATCH"
     );
 
     // Validate inputs.
@@ -2733,6 +2746,7 @@ RasterizeToPixelsFromWorld3DGSFwdResult rasterize_to_pixels_from_world_3dgs_fwd(
             tile_offsets,
             flatten_ids,
             use_hit_distance,
+            use_median_hit_distance,
             unsafe_masked_tile_outputs,
             batches_per_tile,
             batch_offsets,
@@ -3251,6 +3265,7 @@ namespace
                 tile_offsets,
                 flatten_ids,
                 use_hit_distance,
+                false, // use_median_hit_distance (autograd path unsupported)
                 parsed_renderer_config,
                 /*fwd_only=*/false,
                 /*return_last_ids=*/true,
@@ -3475,7 +3490,8 @@ RasterizeToPixelsFromWorld3DGSResult rasterize_to_pixels_from_world_3dgs(
     bool return_normals,
     int64_t renderer_config,
     bool return_last_ids,
-    bool unsafe_masked_tile_outputs
+    bool unsafe_masked_tile_outputs,
+    bool use_median_hit_distance
 )
 {
 #if !GSPLAT_BUILD_3DGUT
@@ -3538,6 +3554,7 @@ RasterizeToPixelsFromWorld3DGSResult rasterize_to_pixels_from_world_3dgs(
             tile_offsets,
             flatten_ids,
             use_hit_distance,
+            use_median_hit_distance,
             parsed_renderer_config,
             /*fwd_only=*/fwd_only,
             return_last_ids,
@@ -3554,6 +3571,10 @@ RasterizeToPixelsFromWorld3DGSResult rasterize_to_pixels_from_world_3dgs(
         };
     }
 
+    TORCH_CHECK(
+        !use_median_hit_distance,
+        "use_median_hit_distance is inference-only and does not support autograd"
+    );
     return RasterizeToPixelsFromWorld3DGSAutograd::call(
         means,
         quats,
